@@ -38,6 +38,30 @@ async def test_hostex_checks_error_code_even_when_http_is_200() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hostex_accepts_200_business_success_code() -> None:
+    """百居易真实接口以业务码 200 表示成功时应正常解析数据。"""
+    transport = json_transport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "request_id": "RT-200",
+                "error_code": 200,
+                "error_msg": "Done.",
+                "data": {"properties": [], "total": 0},
+            },
+        )
+    )
+    client = HostexClient("secret", transport=transport)
+
+    try:
+        properties = await client.list_properties()
+    finally:
+        await client.aclose()
+
+    assert properties == []
+
+
+@pytest.mark.asyncio
 async def test_list_availabilities_sends_token_and_parses_days() -> None:
     """房态查询必须使用正确请求头、查询参数并解析每日可用性。"""
 

@@ -13,7 +13,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.asyncio
 async def test_live_hostex_can_list_properties() -> None:
-    """使用已轮换的新 Token 验证百居易全部只读查询契约。"""
+    """使用临时注入的 Token 验证百居易全部只读查询契约。"""
     token = os.environ["HOSTEX_ACCESS_TOKEN"]
     client = HostexClient(token)
     start_date = date.today() + timedelta(days=30)

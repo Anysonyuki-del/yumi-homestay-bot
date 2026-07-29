@@ -7,6 +7,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 HOSTEX_BASE_URL = "https://api.myhostex.com/v3"
+HOSTEX_SUCCESS_CODES = {0, 200}
 TRANSIENT_ERROR_CODES = {429, 500, 502, 503, 504}
 
 
@@ -216,7 +217,7 @@ class HostexClient:
                 continue
 
             error_code = int(envelope.get("error_code", -1))
-            if error_code == 0:
+            if error_code in HOSTEX_SUCCESS_CODES:
                 return envelope
 
             retry_after_header = response.headers.get("Retry-After")
