@@ -1,6 +1,6 @@
 import re
 from datetime import date
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlparse
 
 WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
@@ -71,49 +71,6 @@ def is_tourism_query(messages: list[dict[str, str]]) -> bool:
     if _BOOKING_PATTERN.search(content):
         return False
     return _TOURISM_PATTERN.search(content) is not None
-
-
-def web_search_tool() -> dict[str, Any]:
-    """返回 Fenno/OpenAI Responses 兼容的武汉联网工具定义。"""
-    return {
-        "type": "web_search",
-        "search_context_size": "low",
-        "user_location": {
-            "type": "approximate",
-            "country": "CN",
-            "city": "Wuhan",
-            "region": "Hubei",
-        },
-    }
-
-
-def extract_url_citations(response: Any) -> list[tuple[str, str]]:
-    """从正文注解或 web_search_call 提取并按 URL 去重来源。"""
-    citations: list[tuple[str, str]] = []
-    seen_urls: set[str] = set()
-    for output_item in getattr(response, "output", []):
-        item_type = getattr(output_item, "type", None)
-        if item_type == "message":
-            candidates = [
-                getattr(annotation, "url_citation", annotation)
-                for content_item in getattr(output_item, "content", [])
-                for annotation in getattr(content_item, "annotations", [])
-                if getattr(annotation, "type", None) == "url_citation"
-            ]
-        elif item_type == "web_search_call":
-            action = getattr(output_item, "action", None)
-            candidates = list(getattr(action, "sources", None) or [])
-        else:
-            candidates = []
-
-        for candidate in candidates:
-            url = str(getattr(candidate, "url", "")).strip()
-            title = str(getattr(candidate, "title", "")).strip()
-            title = title or urlparse(url).netloc or url
-            if url and url not in seen_urls:
-                citations.append((title, url))
-                seen_urls.add(url)
-    return citations
 
 
 def _source_display_name(title: str, url: str) -> str:

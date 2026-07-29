@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+from anthropic import AsyncAnthropic
 from fastapi import FastAPI
 from openai import AsyncOpenAI
 from pydantic import ValidationError
@@ -21,11 +22,12 @@ from homestay_bot.config import Settings
 from homestay_bot.db import create_engine, create_session_factory
 from homestay_bot.domain.models import BookingApproval, Employee
 from homestay_bot.domain.schemas import ConfirmBookingCommand
-from homestay_bot.integrations.hostex_client import HostexClient
-from homestay_bot.integrations.openai_client import (
-    GuestAssistant,
+from homestay_bot.integrations.deepseek_client import (
+    DeepSeekGuestAssistant,
     HostexReadOnlyToolExecutor,
 )
+from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
+from homestay_bot.integrations.hostex_client import HostexClient
 from homestay_bot.integrations.tourism import WebSearchState
 from homestay_bot.integrations.wecom.api_client import (
     WeComApiClient,
@@ -437,20 +439,29 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.wecom_kf_secret,
         settings.wecom_agent_secret,
     )
-    openai = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
+    deepseek_chat = AsyncOpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+    )
+    deepseek_anthropic = AsyncAnthropic(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_anthropic_base_url,
     )
     queue = DurableJobQueue(factory)
     knowledge = KnowledgeService(SessionKnowledgeRepository(factory))
     web_search_state = WebSearchState()
-    assistant = GuestAssistant(
-        client=openai,
+    tourism_searcher = DeepSeekTourismSearcher(
+        client=deepseek_anthropic,
+        model=settings.deepseek_model,
+        status_setter=web_search_state.set,
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=deepseek_chat,
+        tourism_searcher=tourism_searcher,
         knowledge=knowledge,
-        model=settings.openai_model,
+        model=settings.deepseek_model,
         safety_hmac_key=settings.session_secret.encode(),
         tool_executor=HostexReadOnlyToolExecutor(hostex),
-        web_search_status_setter=web_search_state.set,
     )
     duty_userids = [item.strip() for item in settings.wecom_duty_userids.split(",") if item.strip()]
 
@@ -561,7 +572,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         ):
             if hasattr(app.state, state_name):
                 delattr(app.state, state_name)
-        await openai.close()
+        await deepseek_chat.close()
+        await deepseek_anthropic.close()
         await hostex.aclose()
         await wecom.aclose()
         await engine.dispose()

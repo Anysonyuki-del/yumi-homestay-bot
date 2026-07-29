@@ -5,8 +5,11 @@ import pytest
 
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import Conversation
-from homestay_bot.integrations.deepseek_client import AssistantUnavailableError
-from homestay_bot.integrations.openai_client import AssistantDecision, BookingFields
+from homestay_bot.integrations.deepseek_client import (
+    AssistantDecision,
+    AssistantUnavailableError,
+    BookingFields,
+)
 from homestay_bot.integrations.tourism import (
     TourismSearchError,
     WebSearchStatus,
@@ -97,7 +100,7 @@ class AssistantStub:
 
 
 class FailingTourismAssistantStub(AssistantStub):
-    """模拟 Fenno 联网超时或不支持。"""
+    """模拟 DeepSeek 联网超时或不支持。"""
 
     def __init__(self, status: WebSearchStatus) -> None:
         """保存预期失败分类。"""

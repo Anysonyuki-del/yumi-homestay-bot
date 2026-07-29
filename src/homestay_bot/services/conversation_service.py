@@ -6,8 +6,10 @@ from pydantic import ValidationError
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import BookingApproval, Conversation
 from homestay_bot.domain.schemas import BookingRequest
-from homestay_bot.integrations.deepseek_client import AssistantUnavailableError
-from homestay_bot.integrations.openai_client import AssistantDecision
+from homestay_bot.integrations.deepseek_client import (
+    AssistantDecision,
+    AssistantUnavailableError,
+)
 from homestay_bot.integrations.tourism import TourismSearchError
 from homestay_bot.services.emergency_service import (
     EmergencyClassification,
