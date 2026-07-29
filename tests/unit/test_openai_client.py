@@ -9,6 +9,7 @@ from homestay_bot.integrations.hostex_client import AvailabilityDay, Property, P
 from homestay_bot.integrations.openai_client import (
     GuestAssistant,
     HostexReadOnlyToolExecutor,
+    assistant_decision_schema,
 )
 from homestay_bot.integrations.tourism import TourismSearchError
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
@@ -381,23 +382,77 @@ async def test_response_executes_read_only_tool_and_returns_final_decision() -> 
     ]
 
 
+def test_decision_schema_requires_fallback_status_fields() -> None:
+    """兼容端点的严格 Schema 必须要求全部知识缺口字段。"""
+    schema = assistant_decision_schema()
+    required = set(schema["required"])
+    assert {
+        "knowledge_gap",
+        "knowledge_gap_topic",
+        "staff_confirmation_required",
+        "staff_confirmation_reason",
+    } <= required
+
+
 @pytest.mark.asyncio
-async def test_low_confidence_response_forces_human_handoff() -> None:
-    """即使模型漏填原因，低置信度结果也必须进入人工接管。"""
+async def test_low_confidence_general_answer_does_not_handoff() -> None:
+    """普通问题低置信度时保留谨慎回答，但不得自动切人工。"""
     assistant = GuestAssistant(
         client=LowConfidenceOpenAIStub(),
         knowledge=KnowledgeStub(),
-        model="gpt-5.6-terra",
+        model="gpt-5.4-mini",
         safety_hmac_key=b"test-key",
     )
 
     decision = await assistant.respond(
         guest_identifier="wm-guest",
         language=Language.ZH,
-        messages=[{"role": "user", "content": "能不能帮我处理一个特殊问题？"}],
+        messages=[{"role": "user", "content": "怎样和同行朋友协调旅行安排？"}],
     )
 
-    assert decision.handoff_reason == "low_confidence"
+    assert decision.handoff_reason is None
+    assert decision.knowledge_gap is False
+    assert decision.staff_confirmation_required is False
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_property_question_becomes_knowledge_gap() -> None:
+    """民宿专属问题低置信度时应提醒补知识，而不是转人工。"""
+    assistant = GuestAssistant(
+        client=LowConfidenceOpenAIStub(),
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+    )
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "你们有停车场吗？"}],
+    )
+    assert decision.handoff_reason is None
+    assert decision.knowledge_gap is True
+    assert decision.knowledge_gap_topic == "property_information"
+    assert decision.staff_confirmation_required is False
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_transaction_requires_staff_confirmation() -> None:
+    """未解决交易问题应通知员工，但不切换人工会话。"""
+    assistant = GuestAssistant(
+        client=LowConfidenceOpenAIStub(),
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+    )
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "这个订单能退款多少？"}],
+    )
+    assert decision.handoff_reason is None
+    assert decision.knowledge_gap is False
+    assert decision.staff_confirmation_required is True
+    assert decision.staff_confirmation_reason == "low_confidence_transaction"
 
 
 @pytest.mark.asyncio

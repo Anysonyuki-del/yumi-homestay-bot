@@ -20,6 +20,10 @@ from homestay_bot.integrations.tourism import (
     latest_user_question,
     web_search_tool,
 )
+from homestay_bot.services.answer_policy import (
+    is_property_specific,
+    is_transaction_sensitive,
+)
 from homestay_bot.services.knowledge_service import KnowledgeService
 
 logger = logging.getLogger(__name__)
@@ -102,7 +106,7 @@ class BookingFields(BaseModel):
 
 
 class AssistantDecision(BaseModel):
-    """约束模型每轮回复、意图和人工接管决定。"""
+    """约束模型每轮回复、风险标记和员工提醒决定。"""
 
     reply_text: str
     language: Language
@@ -110,6 +114,10 @@ class AssistantDecision(BaseModel):
     confidence: float = Field(ge=0, le=1)
     handoff_reason: str | None = None
     booking_fields: BookingFields | None = None
+    knowledge_gap: bool = False
+    knowledge_gap_topic: str | None = None
+    staff_confirmation_required: bool = False
+    staff_confirmation_reason: str | None = None
 
 
 def assistant_decision_schema() -> dict[str, Any]:
@@ -151,6 +159,10 @@ def assistant_decision_schema() -> dict[str, Any]:
                 {"type": "null"},
             ]
         },
+        "knowledge_gap": {"type": "boolean"},
+        "knowledge_gap_topic": nullable_string,
+        "staff_confirmation_required": {"type": "boolean"},
+        "staff_confirmation_reason": nullable_string,
     }
     return {
         "type": "object",
@@ -218,12 +230,44 @@ class GuestAssistant:
             },
         ]
 
-    def _validate_decision(self, output_text: str) -> AssistantDecision:
-        """校验结构化结果，并对低置信度回复强制标记人工接管。"""
+    def _validate_decision(
+        self,
+        output_text: str,
+        question_text: str,
+    ) -> AssistantDecision:
+        """校验模型结果，并用本地风险分类约束低置信度处理。"""
         decision = AssistantDecision.model_validate_json(output_text)
-        if decision.confidence < 0.7 and decision.handoff_reason is None:
-            return decision.model_copy(update={"handoff_reason": "low_confidence"})
-        return decision
+        updates: dict[str, Any] = {"handoff_reason": None}
+
+        # 交易提醒优先级最高，避免同一问题同时产生两类员工提醒。
+        if decision.staff_confirmation_required:
+            updates.update(
+                {
+                    "knowledge_gap": False,
+                    "knowledge_gap_topic": None,
+                }
+            )
+        elif decision.confidence < 0.7 and is_transaction_sensitive(question_text):
+            updates.update(
+                {
+                    "knowledge_gap": False,
+                    "knowledge_gap_topic": None,
+                    "staff_confirmation_required": True,
+                    "staff_confirmation_reason": "low_confidence_transaction",
+                }
+            )
+        elif decision.confidence < 0.7 and is_property_specific(question_text):
+            updates.update(
+                {
+                    "knowledge_gap": True,
+                    "knowledge_gap_topic": (
+                        decision.knowledge_gap_topic or "property_information"
+                    ),
+                    "staff_confirmation_required": False,
+                    "staff_confirmation_reason": None,
+                }
+            )
+        return decision.model_copy(update=updates)
 
     def _set_web_search_status(self, status: WebSearchStatus) -> None:
         """只记录能力状态，不写入问题正文或搜索结果。"""
@@ -316,6 +360,7 @@ class GuestAssistant:
         messages: list[dict[str, str]],
     ) -> AssistantDecision:
         """关闭 OpenAI 状态存储，并返回经过结构校验的客服决定。"""
+        question_text = latest_user_question(messages)["content"]
         tourism_query = is_tourism_query(messages)
         local_today = self._local_date_provider()
         local_tomorrow = local_today + timedelta(days=1)
@@ -334,6 +379,15 @@ class GuestAssistant:
             "你是武汉一家7间房民宿的客服。只能依据审核知识和查询工具回答。"
             "不得确认最终价格、收款、具体房间、退款、取消或改期；"
             "缺少入住或退房日期时应直接追问，不得仅因此转人工；"
+            "审核知识未覆盖普通常识时，可以使用通用知识给出合理、谨慎的回答，"
+            "不得仅因知识库没有答案而追问或转人工；"
+            "涉及本民宿设施、服务、政策或距离且审核知识未确认时，"
+            "必须明确说明当前资料未确认，提供不依赖未知事实的替代建议，"
+            "并设置 knowledge_gap=true 和简短的 knowledge_gap_topic；"
+            "涉及价格、房态、退款、取消、改期、付款或订单状态且知识和工具无法确认时，"
+            "不得猜测，必须设置 staff_confirmation_required=true，"
+            "并填写 staff_confirmation_reason；"
+            "缺少房态或价格查询的必要日期时可以追问，这不属于知识缺口；"
             f"\n武汉当前日期：{local_today.isoformat()}。"
             f"相对日期换算：今天/今晚/今日={local_today.isoformat()}，"
             f"明天/明日={local_tomorrow.isoformat()}，"
@@ -391,7 +445,10 @@ class GuestAssistant:
             )
             response = await self._create_tourism_response(request)
             try:
-                decision = self._validate_decision(response.output_text)
+                decision = self._validate_decision(
+                    response.output_text,
+                    question_text,
+                )
                 citations = extract_url_citations(response)
                 if not citations:
                     raise TourismSearchError("degraded")
@@ -424,7 +481,10 @@ class GuestAssistant:
                 if getattr(item, "type", None) == "function_call"
             ]
             if not function_calls:
-                return self._validate_decision(response.output_text)
+                return self._validate_decision(
+                    response.output_text,
+                    question_text,
+                )
             if self._tool_executor is None:
                 raise RuntimeError("模型请求了查询工具，但系统未配置工具执行器")
 
