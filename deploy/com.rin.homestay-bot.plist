@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rin.homestay-bot</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/rin/Library/Application Support/HomestayBot/.venv/bin/python</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>homestay_bot.main:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8010</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/rin/Library/Application Support/HomestayBot</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key>
+    <string>/Users/rin/Library/Application Support/HomestayBot/src</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/homestay-bot.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/homestay-bot.stderr.log</string>
+</dict>
+</plist>
