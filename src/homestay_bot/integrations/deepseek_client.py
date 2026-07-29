@@ -256,6 +256,9 @@ class DeepSeekGuestAssistant:
                 continue
             cleaned.append(item)
 
+        # DeepSeek V4 Flash 在结构化输出和工具同时启用时，
+        # 超过五条有效历史消息可能只返回空白；始终保留最新五条。
+        cleaned = cleaned[-5:]
         combined = "\n".join(item.get("content", "") for item in cleaned)
         if re.search(
             r"预订|订房|下单|booking|reservation|reserve",

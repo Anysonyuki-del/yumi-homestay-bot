@@ -331,6 +331,43 @@ async def test_previous_assistant_failure_reply_is_excluded_from_model_context()
 
 
 @pytest.mark.asyncio
+async def test_deepseek_context_keeps_only_five_latest_valid_messages() -> None:
+    """DeepSeek 结构化对话只携带最近五条有效消息。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {"role": "user", "content": "第一条"},
+            {"role": "assistant", "content": "第二条"},
+            {"role": "user", "content": "第三条"},
+            {"role": "assistant", "content": "第四条"},
+            {"role": "user", "content": "第五条"},
+            {"role": "assistant", "content": "第六条"},
+            {"role": "user", "content": "怎样和朋友协调旅行安排？"},
+        ],
+    )
+
+    context = client.chat.completions.requests[0]["messages"][1:]
+    assert len(context) == 5
+    assert [message["content"] for message in context] == [
+        "第三条",
+        "第四条",
+        "第五条",
+        "第六条",
+        "怎样和朋友协调旅行安排？",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ungrounded_property_claim_is_forced_to_knowledge_gap() -> None:
     """审核知识未包含停车时，模型高置信度回答也必须标记缺口。"""
     payload = decision_payload()
