@@ -389,6 +389,77 @@ async def test_booking_query_keeps_hostex_tools_without_web_search() -> None:
     assert "include" not in client.responses.kwargs
 ```
 
+同时增加异常转换测试：
+
+```python
+class UnsupportedWebSearchError(RuntimeError):
+    """模拟兼容端点明确拒绝 web_search 工具。"""
+
+    status_code = 400
+
+
+class FailingResponsesStub:
+    """模拟 Fenno 明确不支持联网工具。"""
+
+    async def create(self, **kwargs):
+        """抛出包含工具名称的 400 错误。"""
+        raise UnsupportedWebSearchError("web_search unsupported")
+
+
+class MissingCitationResponsesStub(TourismResponsesStub):
+    """模拟模型给出正文但没有可验证来源。"""
+
+    async def create(self, **kwargs):
+        """返回没有 url_citation 的结构化结果。"""
+        response = await super().create(**kwargs)
+        response.output[0].content[0].annotations = []
+        return response
+
+
+@pytest.mark.asyncio
+async def test_unsupported_web_search_is_classified_for_handoff() -> None:
+    """兼容端点明确拒绝工具时应归类为 unsupported。"""
+    statuses: list[str] = []
+    client = SimpleNamespace(responses=FailingResponsesStub())
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+        web_search_status_setter=statuses.append,
+    )
+    with pytest.raises(TourismSearchError) as caught:
+        await assistant.respond(
+            guest_identifier="wm-guest",
+            language=Language.ZH,
+            messages=[{"role": "user", "content": "武汉有哪些地方好玩？"}],
+        )
+    assert caught.value.status == "unsupported"
+    assert statuses == ["unsupported"]
+
+
+@pytest.mark.asyncio
+async def test_tourism_answer_without_citations_is_degraded() -> None:
+    """没有 URL 引用的旅游正文不得作为实时答案发送。"""
+    statuses: list[str] = []
+    client = SimpleNamespace(responses=MissingCitationResponsesStub())
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+        web_search_status_setter=statuses.append,
+    )
+    with pytest.raises(TourismSearchError) as caught:
+        await assistant.respond(
+            guest_identifier="wm-guest",
+            language=Language.ZH,
+            messages=[{"role": "user", "content": "武汉有哪些地方好玩？"}],
+        )
+    assert caught.value.status == "degraded"
+    assert statuses == ["degraded"]
+```
+
 - [ ] **Step 2：运行新增测试确认失败**
 
 Run: `.venv/bin/pytest tests/unit/test_openai_client.py -k "tourism or booking_query_keeps" -v`

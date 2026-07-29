@@ -9,6 +9,7 @@ from homestay_bot.integrations.openai_client import (
     GuestAssistant,
     HostexReadOnlyToolExecutor,
 )
+from homestay_bot.integrations.tourism import TourismSearchError
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
 
 
@@ -128,6 +129,66 @@ class ToolCallingOpenAIStub:
 
     def __init__(self) -> None:
         self.responses = ToolCallingResponsesStub()
+
+
+class TourismResponsesStub:
+    """返回带官方来源注解的旅游结构化结果。"""
+
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    async def create(self, **kwargs):
+        """记录唯一请求并返回旅游推荐和来源。"""
+        self.requests.append(kwargs)
+        payload = {
+            "reply_text": "推荐黄鹤楼、东湖和湖北省博物馆。",
+            "language": "zh",
+            "intent": "tourism",
+            "confidence": 0.95,
+            "handoff_reason": None,
+            "booking_fields": None,
+        }
+        citation = SimpleNamespace(
+            type="url_citation",
+            url="https://wlj.wuhan.gov.cn/",
+            title="武汉市文化和旅游局",
+        )
+        message = SimpleNamespace(
+            type="message",
+            content=[SimpleNamespace(annotations=[citation])],
+        )
+        return SimpleNamespace(output=[message], output_text=json.dumps(payload))
+
+
+class TourismOpenAIStub:
+    """暴露带引用的旅游 Responses 模拟资源。"""
+
+    def __init__(self) -> None:
+        self.responses = TourismResponsesStub()
+
+
+class UnsupportedWebSearchError(RuntimeError):
+    """模拟兼容端点明确拒绝 web_search 工具。"""
+
+    status_code = 400
+
+
+class FailingResponsesStub:
+    """模拟 Fenno 明确不支持联网工具。"""
+
+    async def create(self, **kwargs):
+        """抛出包含工具名称的 400 错误。"""
+        raise UnsupportedWebSearchError("web_search unsupported")
+
+
+class MissingCitationResponsesStub(TourismResponsesStub):
+    """模拟模型给出正文但没有可验证来源。"""
+
+    async def create(self, **kwargs):
+        """返回没有 url_citation 的结构化结果。"""
+        response = await super().create(**kwargs)
+        response.output[0].content[0].annotations = []
+        return response
 
 
 class HostexStub:
@@ -363,3 +424,146 @@ async def test_hostex_tool_executor_rejects_unknown_or_write_tool() -> None:
 
     with pytest.raises(ValueError, match="不允许"):
         await executor.execute("create_reservation", {})
+
+
+@pytest.mark.asyncio
+async def test_tourism_query_uses_one_required_web_search_request() -> None:
+    """旅游问题应只发起一次联网请求，并固定武汉位置和来源明细。"""
+    client = TourismOpenAIStub()
+    statuses: list[str] = []
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+        web_search_status_setter=statuses.append,
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "武汉有哪些地方好玩？"}],
+    )
+
+    assert len(client.responses.requests) == 1
+    request = client.responses.requests[0]
+    assert request["tools"] == [
+        {
+            "type": "web_search",
+            "search_context_size": "low",
+            "user_location": {
+                "type": "approximate",
+                "country": "CN",
+                "city": "Wuhan",
+                "region": "Hubei",
+            },
+        }
+    ]
+    assert request["tool_choice"] == {"type": "web_search"}
+    assert request["include"] == ["web_search_call.action.sources"]
+    assert "武汉市文化和旅游局" in decision.reply_text
+    assert "https://wlj.wuhan.gov.cn/" in decision.reply_text
+    assert decision.handoff_reason is None
+    assert statuses == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_tourism_search_sends_only_redacted_latest_question() -> None:
+    """联网请求不得携带历史姓名、手机号或企业微信 ID。"""
+    client = TourismOpenAIStub()
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-sensitive-id",
+        language=Language.ZH,
+        messages=[
+            {"role": "user", "content": "我叫张三，手机号13800138000"},
+            {"role": "assistant", "content": "您好"},
+            {"role": "user", "content": "武汉最近有什么展览？"},
+        ],
+    )
+
+    request_text = json.dumps(client.responses.requests[0], ensure_ascii=False)
+    assert "张三" not in request_text
+    assert "13800138000" not in request_text
+    assert "wm-sensitive-id" not in request_text
+    assert client.responses.requests[0]["input"] == [
+        {"role": "user", "content": "武汉最近有什么展览？"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_booking_query_keeps_hostex_tools_without_web_search() -> None:
+    """房态问题不得获得 web_search 工具。"""
+    client = OpenAIStub()
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "8月1日还有房吗？"}],
+    )
+
+    assert all(
+        tool["type"] == "function" for tool in client.responses.kwargs["tools"]
+    )
+    assert "tool_choice" not in client.responses.kwargs
+    assert "include" not in client.responses.kwargs
+
+
+@pytest.mark.asyncio
+async def test_unsupported_web_search_is_classified_for_handoff() -> None:
+    """兼容端点明确拒绝工具时应归类为 unsupported。"""
+    statuses: list[str] = []
+    client = SimpleNamespace(responses=FailingResponsesStub())
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+        web_search_status_setter=statuses.append,
+    )
+
+    with pytest.raises(TourismSearchError) as caught:
+        await assistant.respond(
+            guest_identifier="wm-guest",
+            language=Language.ZH,
+            messages=[{"role": "user", "content": "武汉有哪些地方好玩？"}],
+        )
+
+    assert caught.value.status == "unsupported"
+    assert statuses == ["unsupported"]
+
+
+@pytest.mark.asyncio
+async def test_tourism_answer_without_citations_is_degraded() -> None:
+    """没有 URL 引用的旅游正文不得作为实时答案发送。"""
+    statuses: list[str] = []
+    client = SimpleNamespace(responses=MissingCitationResponsesStub())
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+        web_search_status_setter=statuses.append,
+    )
+
+    with pytest.raises(TourismSearchError) as caught:
+        await assistant.respond(
+            guest_identifier="wm-guest",
+            language=Language.ZH,
+            messages=[{"role": "user", "content": "武汉有哪些地方好玩？"}],
+        )
+
+    assert caught.value.status == "degraded"
+    assert statuses == ["degraded"]
