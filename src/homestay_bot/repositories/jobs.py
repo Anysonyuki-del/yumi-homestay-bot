@@ -1,0 +1,103 @@
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
+
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from homestay_bot.domain.enums import JobStatus
+from homestay_bot.domain.models import Job
+
+
+class SQLAlchemyJobRepository:
+    """使用数据库行锁实现可恢复的持久化任务队列。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        """绑定当前 worker 数据库会话。"""
+        self._session = session
+
+    async def enqueue(
+        self,
+        job_type: str,
+        payload: dict[str, Any],
+        *,
+        available_at: datetime | None = None,
+    ) -> Job:
+        """创建待执行任务并立即刷新主键。"""
+        job = Job(
+            job_type=job_type,
+            payload=payload,
+            status=JobStatus.PENDING,
+            attempts=0,
+            available_at=available_at or datetime.now(UTC),
+        )
+        self._session.add(job)
+        await self._session.flush()
+        return job
+
+    async def claim_next(self, *, now: datetime | None = None) -> Job | None:
+        """使用 FOR UPDATE SKIP LOCKED 领取一项到期任务。"""
+        claim_time = now or datetime.now(UTC)
+        statement = (
+            select(Job)
+            .where(
+                Job.status == JobStatus.PENDING,
+                Job.available_at <= claim_time,
+            )
+            .order_by(Job.available_at, Job.id)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        job = await self._session.scalar(statement)
+        if job is None:
+            return None
+        job.status = JobStatus.RUNNING
+        job.attempts += 1
+        job.locked_at = claim_time
+        await self._session.flush()
+        return job
+
+    async def recover_stale(self, *, before: datetime) -> int:
+        """把锁超时的运行任务恢复为待领取，支持进程重启续跑。"""
+        statement = (
+            update(Job)
+            .where(
+                Job.status == JobStatus.RUNNING,
+                Job.locked_at < before,
+            )
+            .values(
+                status=JobStatus.PENDING,
+                locked_at=None,
+                last_error_code="stale_lock_recovered",
+            )
+        )
+        result = cast(CursorResult[Any], await self._session.execute(statement))
+        await self._session.flush()
+        return int(result.rowcount)
+
+    async def mark_completed(self, job: Job) -> None:
+        """标记任务完成并清除锁时间。"""
+        job.status = JobStatus.COMPLETED
+        job.locked_at = None
+        job.last_error_code = None
+        await self._session.flush()
+
+    async def mark_failed(
+        self,
+        job: Job,
+        *,
+        error_code: str,
+        retry_allowed: bool,
+        max_attempts: int,
+    ) -> None:
+        """按明确重试策略延迟重排，禁止写任务被自动重放。"""
+        job.last_error_code = error_code[:64]
+        job.locked_at = None
+        if retry_allowed and job.attempts < max_attempts:
+            job.status = JobStatus.PENDING
+            job.available_at = datetime.now(UTC) + timedelta(
+                seconds=2 ** max(job.attempts, 1)
+            )
+        else:
+            job.status = JobStatus.FAILED
+        await self._session.flush()

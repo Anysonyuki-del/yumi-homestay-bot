@@ -1,5 +1,5 @@
 import re
-from typing import Any, Protocol
+from typing import Protocol
 
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import Conversation
@@ -38,7 +38,13 @@ class ConversationMessageService(Protocol):
 class GuestAssistantPort(Protocol):
     """定义会话层调用客服模型的最小接口。"""
 
-    async def respond(self, **kwargs: Any) -> AssistantDecision:
+    async def respond(
+        self,
+        *,
+        guest_identifier: str,
+        language: Language,
+        messages: list[dict[str, str]],
+    ) -> AssistantDecision:
         """返回经过结构校验的客服决定。"""
 
 

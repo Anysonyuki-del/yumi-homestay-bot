@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+from datetime import date
 from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,15 +12,15 @@ from homestay_bot.services.booking_service import BookingService
 class ApprovalHostexPort(Protocol):
     """定义审批详情页读取百居易字典和参考数据的接口。"""
 
-    async def list_properties(self) -> list[Any]:
+    async def list_properties(self) -> Sequence[Any]:
         """返回可供员工最终选择的物理房间。"""
 
     async def list_reference_prices(
-        self, start_date: object, end_date: object
-    ) -> list[Any]:
+        self, start_date: date | str, end_date: date | str
+    ) -> Sequence[Any]:
         """返回入住区间的渠道日历参考价。"""
 
-    async def list_income_methods(self) -> list[Any]:
+    async def list_income_methods(self) -> Sequence[Any]:
         """返回百居易账户可用的收入方式。"""
 
 

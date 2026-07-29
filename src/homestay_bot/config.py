@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     wecom_encoding_aes_key: str
     wecom_agent_id: int = Field(gt=0)
     wecom_agent_secret: str
+    wecom_duty_userids: str
     session_secret: str = Field(min_length=32)
 
 
