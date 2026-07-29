@@ -23,7 +23,7 @@
 - [x] 确认彻底弃用 Fenno 和 DeepSeek 双接口方案
 - [x] 分段确认 DeepSeek 迁移设计
 - [x] 编写并审核 DeepSeek 迁移 Spec
-- [ ] 编写 DeepSeek 迁移实施计划
+- [x] 编写 DeepSeek 迁移实施计划
 - [ ] 实现 DeepSeek Chat Completions 与 Anthropic Web Search 适配
 - [ ] 通过真实 DeepSeek 契约并切换本机配置
 - [ ] 完成 DeepSeek 企业微信端到端验收
