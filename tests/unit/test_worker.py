@@ -305,6 +305,45 @@ async def test_wecom_poller_isolates_account_failure() -> None:
     assert visited_accounts == ["wk-broken", "wk-healthy"]
 
 
+@pytest.mark.asyncio
+async def test_wecom_poller_prioritizes_rate_limit_across_accounts() -> None:
+    """多账号同时失败时应优先传播 45009，以触发至少 60 秒退避。"""
+
+    class ApiStub:
+        """依次制造普通超时和企业微信限流。"""
+
+        async def list_kf_account_ids(self) -> list[str]:
+            """返回两个会失败的客服账号。"""
+            return ["wk-timeout", "wk-limited"]
+
+        async def sync_messages(self, **kwargs):
+            """按客服账号返回对应异常。"""
+            if kwargs["open_kfid"] == "wk-timeout":
+                raise TimeoutError("temporary")
+            raise WeComApiError(45009, "rate limit")
+
+    async def handle_message(message):
+        """本测试没有消息需要处理。"""
+
+    async def enqueue(job_type, payload):
+        """轮询不使用回调续页任务。"""
+
+    api = ApiStub()
+    poller = WeComMessagePoller(
+        api=api,
+        handler=WeComSyncJobHandler(
+            api=api,
+            handle_message=handle_message,
+            enqueue=enqueue,
+        ),
+    )
+
+    with pytest.raises(WeComApiError) as error:
+        await poller.run_once()
+
+    assert error.value.error_code == 45009
+
+
 def test_wecom_poll_limit_uses_exponential_backoff() -> None:
     """无 Token 补拉被限流后应从 60 秒开始指数退避。"""
     first_delay = _next_wecom_poll_delay(

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from homestay_bot.domain.enums import MessageOrigin
+from homestay_bot.integrations.wecom.api_client import WeComApiError
 from homestay_bot.integrations.wecom.schemas import SyncMessagePage
 from homestay_bot.services.message_service import IncomingMessage
 
@@ -167,6 +168,7 @@ class WeComMessagePoller:
         """发现全部客服账号并从各自上次游标补拉到最新页。"""
         account_ids = await self._api.list_kf_account_ids()
         first_error: Exception | None = None
+        rate_limit_error: WeComApiError | None = None
         for open_kfid in account_ids:
             try:
                 cursor = self._cursors.get(open_kfid, "")
@@ -185,8 +187,16 @@ class WeComMessagePoller:
                         raise RuntimeError("企业微信补拉声明有更多页但缺少游标")
             except Exception as error:
                 # 单个账号故障不得阻断其他客服账号的消息补拉。
-                if first_error is None:
+                # 限流需要至少 60 秒退避，优先级高于同轮次的普通异常。
+                if (
+                    isinstance(error, WeComApiError)
+                    and error.error_code == 45009
+                ):
+                    rate_limit_error = error
+                elif first_error is None:
                     first_error = error
+        if rate_limit_error is not None:
+            raise rate_limit_error
         if first_error is not None:
             raise first_error
 
