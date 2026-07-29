@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.config import Settings
@@ -68,9 +69,7 @@ class DurableJobQueue:
         """保存数据库会话工厂。"""
         self._factory = factory
 
-    async def enqueue(
-        self, job_type: str, payload: dict[str, Any]
-    ) -> None:
+    async def enqueue(self, job_type: str, payload: dict[str, Any]) -> None:
         """持久化一项任务并立即提交。"""
         dedupe_key = None
         if job_type == "wecom_sync":
@@ -83,10 +82,7 @@ class DurableJobQueue:
                 sort_keys=True,
                 ensure_ascii=False,
             )
-            dedupe_key = (
-                "wecom-sync:"
-                + hashlib.sha256(canonical.encode()).hexdigest()
-            )
+            dedupe_key = "wecom-sync:" + hashlib.sha256(canonical.encode()).hexdigest()
         async with self._factory() as session:
             await SQLAlchemyJobRepository(session).enqueue(
                 job_type,
@@ -95,9 +91,7 @@ class DurableJobQueue:
             )
             await session.commit()
 
-    async def enqueue_wecom_sync(
-        self, token: str, open_kfid: str
-    ) -> None:
+    async def enqueue_wecom_sync(self, token: str, open_kfid: str) -> None:
         """把企业微信回调转换为从空游标开始的同步任务。"""
         await self.enqueue(
             "wecom_sync",
@@ -125,9 +119,7 @@ class TransactionalOutboxWeCom:
         raw_key = f"{self._source_message_id}:{kind}:{self._sequence}"
         return f"outbox:{hashlib.sha256(raw_key.encode()).hexdigest()}"
 
-    async def send_text(
-        self, open_kfid: str, external_userid: str, content: str
-    ) -> str:
+    async def send_text(self, open_kfid: str, external_userid: str, content: str) -> str:
         """事务内登记客人回复，真实发送由 worker 在提交后执行。"""
         outbox_id = self._outbox_id("guest")
         await self._repository.enqueue(
@@ -205,10 +197,7 @@ class SessionEmployeeAuthService:
                 "state": state,
             }
         )
-        return (
-            "https://open.weixin.qq.com/connect/oauth2/authorize?"
-            f"{query}#wechat_redirect"
-        )
+        return f"https://open.weixin.qq.com/connect/oauth2/authorize?{query}#wechat_redirect"
 
     async def authenticate(self, code: str) -> Employee:
         """换取 userid，并在独立会话中验证本地启用角色。"""
@@ -231,9 +220,7 @@ class SessionEmployeeAccessVerifier:
     async def get_active(self, employee_id: int) -> Employee | None:
         """在短会话中读取最新员工授权。"""
         async with self._factory() as session:
-            return await SQLAlchemyEmployeeRepository(session).get_active(
-                employee_id
-            )
+            return await SQLAlchemyEmployeeRepository(session).get_active(employee_id)
 
 
 class SessionApprovalPageService:
@@ -280,9 +267,7 @@ class SessionApprovalPageService:
     ) -> BookingApproval:
         """在独立会话中执行带行锁和幂等保护的确认。"""
         async with self._factory() as session:
-            result = await self._service(session).confirm(
-                approval_id, employee_id, command
-            )
+            result = await self._service(session).confirm(approval_id, employee_id, command)
             await session.commit()
             return result
 
@@ -302,27 +287,17 @@ class SessionKnowledgeAdminService:
     async def create(self, employee_id: int, **fields: Any) -> Any:
         """创建知识并由底层服务提交审计。"""
         async with self._factory() as session:
-            return await KnowledgeAdminService(session).create(
-                employee_id, **fields
-            )
+            return await KnowledgeAdminService(session).create(employee_id, **fields)
 
-    async def update(
-        self, entry_id: int, employee_id: int, **fields: Any
-    ) -> Any:
+    async def update(self, entry_id: int, employee_id: int, **fields: Any) -> Any:
         """更新知识并由底层服务提交审计。"""
         async with self._factory() as session:
-            return await KnowledgeAdminService(session).update(
-                entry_id, employee_id, **fields
-            )
+            return await KnowledgeAdminService(session).update(entry_id, employee_id, **fields)
 
-    async def set_enabled(
-        self, entry_id: int, employee_id: int, enabled: bool
-    ) -> None:
+    async def set_enabled(self, entry_id: int, employee_id: int, enabled: bool) -> None:
         """切换知识启用状态。"""
         async with self._factory() as session:
-            await KnowledgeAdminService(session).set_enabled(
-                entry_id, employee_id, enabled
-            )
+            await KnowledgeAdminService(session).set_enabled(entry_id, employee_id, enabled)
 
 
 async def _run_worker_loop(
@@ -334,67 +309,67 @@ async def _run_worker_loop(
 ) -> None:
     """持续处理持久化任务，并周期恢复五分钟前的遗留锁。"""
     while True:
-        async with factory() as session:
-            repository = SQLAlchemyJobRepository(session)
-            await SQLAlchemyApprovalRepository(
-                session
-            ).recover_stale_creating(
-                before=datetime.now(UTC) - timedelta(minutes=5)
-            )
-            await repository.recover_stale(
-                before=datetime.now(UTC) - timedelta(minutes=5)
-            )
-            await session.commit()
-
-            async def send_guest(payload: dict[str, Any]) -> None:
-                """发送客人回复并回写真实 msgid；只重试确定未发送的错误。"""
-                try:
-                    real_message_id = await wecom.send_text(
-                        str(payload["open_kfid"]),
-                        str(payload["external_userid"]),
-                        str(payload["content"]),
-                    )
-                except httpx.ConnectError as error:
-                    raise RetrySafeJobError("企业微信连接尚未建立") from error
-                except WeComApiError as error:
-                    if error.error_code == 45009:
-                        raise RetrySafeJobError("企业微信明确限流") from error
-                    raise
-                await SQLAlchemyMessageRepository(
-                    session
-                ).replace_external_message_id(
-                    str(payload["outbox_id"]),
-                    real_message_id,
+        try:
+            async with factory() as session:
+                repository = SQLAlchemyJobRepository(session)
+                await SQLAlchemyApprovalRepository(session).recover_stale_creating(
+                    before=datetime.now(UTC) - timedelta(minutes=5)
                 )
+                await repository.recover_stale(before=datetime.now(UTC) - timedelta(minutes=5))
+                await session.commit()
 
-            async def send_internal(payload: dict[str, Any]) -> None:
-                """发送员工通知；连接失败或明确限流时才允许有限重试。"""
-                try:
-                    await wecom.send_internal_text(
-                        agent_id=int(payload["agent_id"]),
-                        employee_userids=list(payload["employee_userids"]),
-                        content=str(payload["content"]),
+                async def send_guest(payload: dict[str, Any]) -> None:
+                    """发送客人回复并回写真实 msgid；只重试确定未发送的错误。"""
+                    try:
+                        real_message_id = await wecom.send_text(
+                            str(payload["open_kfid"]),
+                            str(payload["external_userid"]),
+                            str(payload["content"]),
+                        )
+                    except httpx.ConnectError as error:
+                        raise RetrySafeJobError("企业微信连接尚未建立") from error
+                    except WeComApiError as error:
+                        if error.error_code == 45009:
+                            raise RetrySafeJobError("企业微信明确限流") from error
+                        raise
+                    await SQLAlchemyMessageRepository(session).replace_external_message_id(
+                        str(payload["outbox_id"]),
+                        real_message_id,
                     )
-                except httpx.ConnectError as error:
-                    raise RetrySafeJobError("企业微信连接尚未建立") from error
-                except WeComApiError as error:
-                    if error.error_code == 45009:
-                        raise RetrySafeJobError("企业微信明确限流") from error
-                    raise
 
-            worker = Worker(
-                repository=repository,
-                handlers={
-                    "wecom_sync": handler,
-                    "wecom_send_text": send_guest,
-                    "wecom_send_internal_text": send_internal,
-                },
-                heartbeat=lambda value: setattr(
-                    app.state, "worker_last_heartbeat", value
-                ),
-                checkpoint=session.commit,
-            )
-            handled = await worker.run_once()
+                async def send_internal(payload: dict[str, Any]) -> None:
+                    """发送员工通知；连接失败或明确限流时才允许有限重试。"""
+                    try:
+                        await wecom.send_internal_text(
+                            agent_id=int(payload["agent_id"]),
+                            employee_userids=list(payload["employee_userids"]),
+                            content=str(payload["content"]),
+                        )
+                    except httpx.ConnectError as error:
+                        raise RetrySafeJobError("企业微信连接尚未建立") from error
+                    except WeComApiError as error:
+                        if error.error_code == 45009:
+                            raise RetrySafeJobError("企业微信明确限流") from error
+                        raise
+
+                worker = Worker(
+                    repository=repository,
+                    handlers={
+                        "wecom_sync": handler,
+                        "wecom_send_text": send_guest,
+                        "wecom_send_internal_text": send_internal,
+                    },
+                    heartbeat=lambda value: setattr(app.state, "worker_last_heartbeat", value),
+                    checkpoint=session.commit,
+                )
+                handled = await worker.run_once()
+        except OperationalError as error:
+            if "database is locked" not in str(error).lower():
+                raise
+            # SQLite 本地测试发生瞬时写锁时保活 worker，稍后继续处理队列。
+            logger.warning("后台任务遇到 SQLite 写锁，1 秒后重试")
+            await asyncio.sleep(1)
+            continue
         if not handled:
             await asyncio.sleep(1)
 
@@ -407,9 +382,7 @@ def _next_wecom_poll_delay(
 ) -> float:
     """按错误类型计算补拉退避时间，并把等待上限控制在五分钟。"""
     minimum_delay = (
-        60.0
-        if isinstance(error, WeComApiError) and error.error_code == 45009
-        else interval_seconds
+        60.0 if isinstance(error, WeComApiError) and error.error_code == 45009 else interval_seconds
     )
     return min(max(current_delay * 2, minimum_delay), 300.0)
 
@@ -476,11 +449,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         safety_hmac_key=settings.session_secret.encode(),
         tool_executor=HostexReadOnlyToolExecutor(hostex),
     )
-    duty_userids = [
-        item.strip()
-        for item in settings.wecom_duty_userids.split(",")
-        if item.strip()
-    ]
+    duty_userids = [item.strip() for item in settings.wecom_duty_userids.split(",") if item.strip()]
 
     async def handle_message(message: IncomingMessage) -> None:
         """在独立事务中处理一条已转换的企业微信消息。"""
@@ -496,9 +465,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ),
                 agent_id=settings.wecom_agent_id,
                 duty_employee_userids=duty_userids,
-                approvals=ApprovalService(
-                    SQLAlchemyApprovalRepository(session)
-                ),
+                approvals=ApprovalService(SQLAlchemyApprovalRepository(session)),
                 approval_base_url=settings.public_base_url,
             )
             await service.handle_message(message)
