@@ -21,6 +21,7 @@ async def test_health_endpoint_returns_ok() -> None:
         "worker_heartbeat": "not_configured",
         "wecom_polling": "not_configured",
         "configuration": "incomplete",
+        "web_search": "not_configured",
     }
 
 
@@ -51,9 +52,45 @@ async def test_operational_health_degrades_when_wecom_poll_is_stale() -> None:
         heartbeat_getter=lambda: now,
         poll_heartbeat_getter=lambda: now - timedelta(seconds=61),
         configuration_ok=True,
+        web_search_status_getter=lambda: "unknown",
     )
 
     result = await service.check()
 
     assert result["status"] == "degraded"
     assert result["wecom_polling"] == "stale"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("web_search_status", "overall_status"),
+    [
+        ("unknown", "ok"),
+        ("ok", "ok"),
+        ("unsupported", "degraded"),
+        ("degraded", "degraded"),
+    ],
+)
+async def test_web_search_status_controls_overall_health(
+    web_search_status: str,
+    overall_status: str,
+) -> None:
+    """未验证不影响启动，明确不支持或异常时总体健康降级。"""
+
+    async def database_probe() -> bool:
+        """模拟可用数据库。"""
+        return True
+
+    now = datetime.now(UTC)
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: now,
+        configuration_ok=True,
+        web_search_status_getter=lambda: web_search_status,
+    )
+
+    result = await service.check()
+
+    assert result["web_search"] == web_search_status
+    assert result["status"] == overall_status

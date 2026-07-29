@@ -26,6 +26,7 @@ from homestay_bot.integrations.openai_client import (
     GuestAssistant,
     HostexReadOnlyToolExecutor,
 )
+from homestay_bot.integrations.tourism import WebSearchState
 from homestay_bot.integrations.wecom.api_client import (
     WeComApiClient,
     WeComApiError,
@@ -442,12 +443,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     queue = DurableJobQueue(factory)
     knowledge = KnowledgeService(SessionKnowledgeRepository(factory))
+    web_search_state = WebSearchState()
     assistant = GuestAssistant(
         client=openai,
         knowledge=knowledge,
         model=settings.openai_model,
         safety_hmac_key=settings.session_secret.encode(),
         tool_executor=HostexReadOnlyToolExecutor(hostex),
+        web_search_status_setter=web_search_state.set,
     )
     duty_userids = [item.strip() for item in settings.wecom_duty_userids.split(",") if item.strip()]
 
@@ -513,6 +516,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         heartbeat_getter=lambda: app.state.worker_last_heartbeat,
         poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
         configuration_ok=bool(duty_userids),
+        web_search_status_getter=web_search_state.get,
         poll_max_age=timedelta(
             seconds=max(
                 60,

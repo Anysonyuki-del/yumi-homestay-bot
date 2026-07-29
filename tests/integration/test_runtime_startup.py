@@ -65,6 +65,7 @@ def test_configured_application_starts_worker_and_reports_healthy(
             "worker_heartbeat": "ok",
             "wecom_polling": "ok",
             "configuration": "ok",
+            "web_search": "unknown",
         }
         assert openai_configuration == {
             "api_key": "test-openai-key",
