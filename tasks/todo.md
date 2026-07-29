@@ -6,13 +6,16 @@
 - [x] 编写并确认设计 Spec
 - [x] 同步官方 `web_search` 请求边界和首次健康状态
 - [x] 编写详细实施计划
-- [ ] 用户确认执行方式后实施
-- [ ] 运行单元、集成、静态检查和真实 Fenno 能力测试
-- [ ] 部署到本地运行目录并恢复测试会话
+- [x] 用户确认执行方式后实施
+- [x] 运行单元、集成、静态检查和真实 Fenno 能力测试
+- [x] 部署到本地运行目录并恢复测试会话
 - [ ] 完成企业微信端到端验收
 
 ## Review
 
-- 当前已完成设计与详细实施计划，尚未修改业务代码。
+- 已按 TDD 完成旅游意图门控、Fenno 联网、来源提取、失败升级和健康状态。
 - 设计以一次应用层 Responses 请求为上限；模型托管搜索内部动作不由应用计数。
-- 联网搜索首次使用前显示 `unknown`，不影响现有订房能力。
+- 全量测试结果：115 passed、3 skipped；Ruff 通过；mypy 检查 39 个源文件通过。
+- 真实 Fenno 契约测试：1 passed；Fenno 来源位于 `web_search_call.action.sources`，已兼容读取。
+- 本地健康检查：HTTP 200；`database`、`worker_heartbeat`、`wecom_polling`、`configuration` 均为 `ok`，首次联网前 `web_search` 为 `unknown`。
+- 已将唯一测试会话 ID 1 恢复为 `BOT_ACTIVE`；待企业微信端到端消息验收。

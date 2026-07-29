@@ -1057,7 +1057,7 @@ Run:
 
 ```bash
 launchctl kickstart -k "gui/$(id -u)/com.rin.homestay-bot"
-curl -sS -i "http://127.0.0.1:8000/health"
+curl -sS -i "http://127.0.0.1:8010/health"
 ```
 
 Expected: HTTP 200；JSON 中数据库、worker、企业微信轮询为 `ok`，`web_search` 初始为 `unknown`。
