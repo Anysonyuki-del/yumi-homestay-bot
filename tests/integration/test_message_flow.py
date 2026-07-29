@@ -38,8 +38,31 @@ async def test_message_flow_creates_conversation_and_deduplicates_message() -> N
 
         second = await messages.record_incoming(conversation.id, incoming)
         await session.commit()
+        context = await messages.build_context(conversation.id)
 
         assert first is True
         assert second is False
+        assert context == [{"role": "user", "content": "你好"}]
+
+        await messages.record_bot(
+            conversation.id,
+            "outbox:temporary",
+            "您好",
+            sent_at=incoming.sent_at,
+        )
+        await SQLAlchemyMessageRepository(
+            session
+        ).replace_external_message_id(
+            "outbox:temporary",
+            "wecom-real-msgid",
+        )
+        await session.commit()
+
+        assert (
+            await SQLAlchemyMessageRepository(session).exists(
+                "wecom-real-msgid"
+            )
+            is True
+        )
 
     await engine.dispose()

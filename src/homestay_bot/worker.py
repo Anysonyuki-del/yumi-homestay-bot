@@ -37,6 +37,10 @@ class WorkerRepository[JobType: WorkerJob](Protocol):
 JobHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+class RetrySafeJobError(RuntimeError):
+    """表示请求确定尚未产生外部副作用，可以有限重试。"""
+
+
 class WeComSyncApi(Protocol):
     """定义同步 worker 所需的企业微信读取接口。"""
 
@@ -121,8 +125,6 @@ class Worker[JobType: WorkerJob]:
 
     _retryable_job_types = {
         "wecom_sync",
-        "wecom_send_text",
-        "wecom_send_internal_text",
         "hostex_read",
     }
 
@@ -170,7 +172,10 @@ class Worker[JobType: WorkerJob]:
             await self._repository.mark_failed(
                 job,
                 error_code=type(error).__name__,
-                retry_allowed=job.job_type in self._retryable_job_types,
+                retry_allowed=(
+                    job.job_type in self._retryable_job_types
+                    or isinstance(error, RetrySafeJobError)
+                ),
                 max_attempts=3,
             )
         else:

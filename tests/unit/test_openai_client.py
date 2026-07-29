@@ -4,12 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from homestay_bot.domain.enums import Language
-from homestay_bot.integrations.hostex_client import (
-    AvailabilityDay,
-    Property,
-    PropertyAvailability,
-    Reservation,
-)
+from homestay_bot.integrations.hostex_client import AvailabilityDay, Property, PropertyAvailability
 from homestay_bot.integrations.openai_client import (
     GuestAssistant,
     HostexReadOnlyToolExecutor,
@@ -136,10 +131,7 @@ class ToolCallingOpenAIStub:
 
 
 class HostexStub:
-    """模拟百居易只读接口，并记录订单查询参数。"""
-
-    def __init__(self) -> None:
-        self.reservation_query = None
+    """模拟百居易房态与参考价只读接口。"""
 
     async def list_properties(self) -> list[Property]:
         """返回一间物理房间。"""
@@ -165,24 +157,9 @@ class HostexStub:
         """本测试不需要参考价明细。"""
         return []
 
-    async def list_reservations(self, query) -> list[Reservation]:
-        """记录查询条件并返回订单摘要。"""
-        self.reservation_query = query
-        return [
-            Reservation(
-                reservation_code="R-1",
-                stay_code="S-1",
-                property_id=101,
-                check_in_date="2026-08-01",
-                check_out_date="2026-08-02",
-                status="accepted",
-                created_at="2026-07-29T00:00:00+08:00",
-            )
-        ]
 
-
-def test_openai_tools_do_not_include_create_reservation() -> None:
-    """模型可查房态，但永远不能直接获得创建订单工具。"""
+def test_openai_tools_expose_only_non_personal_read_queries() -> None:
+    """客人模型只能查房态和参考价，不能查询订单或创建订单。"""
     assistant = GuestAssistant(
         client=OpenAIStub(),
         knowledge=KnowledgeStub(),
@@ -194,7 +171,7 @@ def test_openai_tools_do_not_include_create_reservation() -> None:
 
     assert "search_availability" in tool_names
     assert "search_reference_price" in tool_names
-    assert "lookup_reservation" in tool_names
+    assert "lookup_reservation" not in tool_names
     assert "create_reservation" not in tool_names
 
 
@@ -253,8 +230,16 @@ async def test_response_executes_read_only_tool_and_returns_final_decision() -> 
         )
     ]
     second_request = client.responses.requests[1]
-    assert second_request["previous_response_id"] == "resp-1"
     assert second_request["input"] == [
+        {
+            "type": "function_call",
+            "name": "search_availability",
+            "arguments": (
+                '{"check_in_date": "2026-08-01", '
+                '"check_out_date": "2026-08-02"}'
+            ),
+            "call_id": "call-1",
+        },
         {
             "type": "function_call_output",
             "call_id": "call-1",
@@ -283,6 +268,33 @@ async def test_low_confidence_response_forces_human_handoff() -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_booking_context_redacts_explicit_name_and_mobile() -> None:
+    """普通问答不应把客人明确写出的姓名和手机号发送给模型。"""
+    client = OpenAIStub()
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.6-terra",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {
+                "role": "user",
+                "content": "我叫张三，手机号13800138000，请问几点退房？",
+            }
+        ],
+    )
+
+    request_text = json.dumps(client.responses.kwargs, ensure_ascii=False)
+    assert "13800138000" not in request_text
+    assert "张三" not in request_text
+
+
+@pytest.mark.asyncio
 async def test_hostex_tool_executor_exposes_only_serializable_read_results() -> None:
     """百居易工具执行器应把只读模型转换为可安全回传的普通数据。"""
     hostex = HostexStub()
@@ -295,15 +307,8 @@ async def test_hostex_tool_executor_exposes_only_serializable_read_results() -> 
             "check_out_date": "2026-08-02",
         },
     )
-    reservations = await executor.execute(
-        "lookup_reservation",
-        {"reservation_code": "R-1"},
-    )
-
     assert availability[0]["property_id"] == 101
     assert availability[0]["days"][0]["date"] == "2026-08-01"
-    assert reservations[0]["reservation_code"] == "R-1"
-    assert hostex.reservation_query.reservation_code == "R-1"
 
 
 @pytest.mark.asyncio

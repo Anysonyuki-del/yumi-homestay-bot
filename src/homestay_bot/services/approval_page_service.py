@@ -2,8 +2,10 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Any, Protocol
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from homestay_bot.domain.enums import ApprovalStatus
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.services.booking_service import BookingService
@@ -60,6 +62,24 @@ class ApprovalPageService:
                 item.model_dump(mode="json") for item in income_methods
             ],
         }
+
+    async def list_pending(self) -> list[BookingApproval]:
+        """返回需要员工关注的待处理审批单。"""
+        statement = (
+            select(BookingApproval)
+            .where(
+                BookingApproval.status.in_(
+                    {
+                        ApprovalStatus.PENDING,
+                        ApprovalStatus.CREATING,
+                        ApprovalStatus.NEEDS_REVIEW,
+                        ApprovalStatus.CONFLICT,
+                    }
+                )
+            )
+            .order_by(BookingApproval.created_at.desc())
+        )
+        return list((await self._session.scalars(statement)).all())
 
     async def confirm(
         self,

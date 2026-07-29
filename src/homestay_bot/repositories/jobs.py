@@ -22,10 +22,18 @@ class SQLAlchemyJobRepository:
         payload: dict[str, Any],
         *,
         available_at: datetime | None = None,
+        dedupe_key: str | None = None,
     ) -> Job:
         """创建待执行任务并立即刷新主键。"""
+        if dedupe_key is not None:
+            existing = await self._session.scalar(
+                select(Job).where(Job.dedupe_key == dedupe_key)
+            )
+            if existing is not None:
+                return existing
         job = Job(
             job_type=job_type,
+            dedupe_key=dedupe_key,
             payload=payload,
             status=JobStatus.PENDING,
             attempts=0,
@@ -58,12 +66,31 @@ class SQLAlchemyJobRepository:
         return job
 
     async def recover_stale(self, *, before: datetime) -> int:
-        """把锁超时的运行任务恢复为待领取，支持进程重启续跑。"""
-        statement = (
+        """恢复安全任务；外部发送和下单任务超时后转人工，不自动重放。"""
+        non_replayable_types = {
+            "wecom_send_text",
+            "wecom_send_internal_text",
+            "hostex_create_reservation",
+        }
+        failed_statement = (
             update(Job)
             .where(
                 Job.status == JobStatus.RUNNING,
                 Job.locked_at < before,
+                Job.job_type.in_(non_replayable_types),
+            )
+            .values(
+                status=JobStatus.FAILED,
+                locked_at=None,
+                last_error_code="stale_non_replayable",
+            )
+        )
+        retry_statement = (
+            update(Job)
+            .where(
+                Job.status == JobStatus.RUNNING,
+                Job.locked_at < before,
+                Job.job_type.not_in(non_replayable_types),
             )
             .values(
                 status=JobStatus.PENDING,
@@ -71,9 +98,14 @@ class SQLAlchemyJobRepository:
                 last_error_code="stale_lock_recovered",
             )
         )
-        result = cast(CursorResult[Any], await self._session.execute(statement))
+        failed = cast(
+            CursorResult[Any], await self._session.execute(failed_statement)
+        )
+        retried = cast(
+            CursorResult[Any], await self._session.execute(retry_statement)
+        )
         await self._session.flush()
-        return int(result.rowcount)
+        return int(failed.rowcount) + int(retried.rowcount)
 
     async def mark_completed(self, job: Job) -> None:
         """标记任务完成并清除锁时间。"""

@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.models import Conversation, Message
@@ -53,4 +53,29 @@ class SQLAlchemyMessageRepository:
     async def add(self, message: Message) -> None:
         """保存消息并刷新主键，提交由调用方负责。"""
         self._session.add(message)
+        await self._session.flush()
+
+    async def list_recent(
+        self, conversation_id: int, limit: int
+    ) -> list[Message]:
+        """读取最近消息后恢复正序，供模型构造有限上下文。"""
+        statement = (
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.sent_at.desc(), Message.id.desc())
+            .limit(limit)
+        )
+        recent = list((await self._session.scalars(statement)).all())
+        recent.reverse()
+        return recent
+
+    async def replace_external_message_id(
+        self, temporary_id: str, external_message_id: str
+    ) -> None:
+        """发送成功后用企业微信真实 msgid 替换 outbox 临时编号。"""
+        await self._session.execute(
+            update(Message)
+            .where(Message.external_message_id == temporary_id)
+            .values(external_message_id=external_message_id)
+        )
         await self._session.flush()

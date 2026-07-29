@@ -8,6 +8,7 @@ from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.integrations.hostex_client import (
     CreateReservationRequest,
     CreateReservationResult,
+    HostexBusinessError,
     HostexTransportError,
     PropertyAvailability,
     Reservation,
@@ -76,34 +77,51 @@ class BookingService:
         command: ConfirmBookingCommand,
     ) -> BookingApproval:
         """锁定审批单、复查房态并最多创建一次百居易订单。"""
-        await self._permissions.require_booking_approver(employee_id)
         if not command.payment_confirmed:
             raise ValueError("员工必须明确确认已经收款")
 
+        recovering_creating = False
         async with self._approvals.transaction():
+            # 权限读取必须和审批行锁共用同一显式事务，避免 SQLAlchemy 自动事务嵌套。
+            await self._permissions.require_booking_approver(employee_id)
             approval = await self._approvals.get_for_update(approval_id)
             if approval.status is ApprovalStatus.BOOKED:
                 return approval
-            if approval.status is not ApprovalStatus.PENDING:
+            if approval.status is ApprovalStatus.CREATING:
+                recovering_creating = True
+            elif approval.status is not ApprovalStatus.PENDING:
                 return approval
 
-            if not await self._is_property_available(approval, command.property_id):
+            if recovering_creating:
+                pass
+            elif not await self._is_property_available(
+                approval, command.property_id
+            ):
                 approval.status = ApprovalStatus.CONFLICT
                 await self._approvals.save(approval)
                 return approval
+            else:
+                approval.status = ApprovalStatus.CREATING
+                approval.property_id = command.property_id
+                approval.final_rate_amount = command.final_rate_amount
+                approval.received_amount = command.received_amount
+                approval.income_method_id = command.income_method_id
+                approval.approved_by = employee_id
+                approval.approved_at = datetime.now(UTC)
+                await self._approvals.save(approval)
 
-            approval.status = ApprovalStatus.CREATING
-            approval.property_id = command.property_id
-            approval.final_rate_amount = command.final_rate_amount
-            approval.received_amount = command.received_amount
-            approval.income_method_id = command.income_method_id
-            approval.approved_by = employee_id
-            approval.approved_at = datetime.now(UTC)
-            await self._approvals.save(approval)
+        if recovering_creating:
+            return await self._reconcile_or_mark_review(approval)
 
         try:
             result = await self._hostex.create_reservation(self._build_create_request(approval))
             approval.hostex_request_id = result.request_id
+        except HostexBusinessError as error:
+            return await self._mark_needs_review(
+                approval,
+                failure_code=error.error_code,
+                failure_message="百居易明确拒绝创建请求",
+            )
         except HostexTransportError:
             return await self._reconcile_or_mark_review(approval)
 
@@ -155,19 +173,26 @@ class BookingService:
     async def _reconcile_or_mark_review(self, approval: BookingApproval) -> BookingApproval:
         """写后查询唯一精确订单；无法唯一确定时转人工核实。"""
         if approval.property_id is None:
-            approval.status = ApprovalStatus.NEEDS_REVIEW
-            await self._approvals.save(approval)
-            return approval
-
-        candidates = await self._hostex.list_reservations(
-            ReservationQuery(
-                property_id=approval.property_id,
-                start_check_in_date=approval.check_in_date,
-                end_check_in_date=approval.check_in_date,
-                order_by="created_at",
-                limit=20,
+            return await self._mark_needs_review(
+                approval,
+                failure_message="审批单缺少核验所需房间",
             )
-        )
+
+        try:
+            candidates = await self._hostex.list_reservations(
+                ReservationQuery(
+                    property_id=approval.property_id,
+                    start_check_in_date=approval.check_in_date,
+                    end_check_in_date=approval.check_in_date,
+                    order_by="created_at",
+                    limit=20,
+                )
+            )
+        except (HostexBusinessError, HostexTransportError):
+            return await self._mark_needs_review(
+                approval,
+                failure_message="创建结果暂时无法自动核验",
+            )
         matches = [
             item
             for item in candidates
@@ -175,6 +200,8 @@ class BookingService:
             and item.check_out_date == approval.check_out_date
             and item.guest_name == approval.guest_name
             and item.guest_phone == approval.guest_mobile
+            and self._matches_creation_window(approval, item)
+            and self._matches_rate_when_reported(approval, item)
         ]
 
         async with self._approvals.transaction():
@@ -184,5 +211,60 @@ class BookingService:
                 locked.hostex_reservation_code = matches[0].reservation_code
             else:
                 locked.status = ApprovalStatus.NEEDS_REVIEW
+            await self._approvals.save(locked)
+            return locked
+
+    @staticmethod
+    def _matches_creation_window(
+        approval: BookingApproval, reservation: Reservation
+    ) -> bool:
+        """只接受审批写入窗口附近创建的订单，避免误关联历史同名订单。"""
+        if approval.approved_at is None:
+            return False
+        try:
+            created_at = datetime.fromisoformat(
+                reservation.created_at.replace("Z", "+00:00")
+            )
+        except ValueError:
+            return False
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        approved_at = approval.approved_at
+        if approved_at.tzinfo is None:
+            approved_at = approved_at.replace(tzinfo=UTC)
+        return (
+            approved_at - timedelta(minutes=2)
+            <= created_at
+            <= approved_at + timedelta(minutes=30)
+        )
+
+    @staticmethod
+    def _matches_rate_when_reported(
+        approval: BookingApproval, reservation: Reservation
+    ) -> bool:
+        """百居易返回金额字段时必须与员工确认金额一致。"""
+        reported_rate = reservation.rates.get(
+            "rate_amount", reservation.rates.get("total_amount")
+        )
+        if reported_rate is None:
+            return False
+        try:
+            return int(reported_rate) == approval.final_rate_amount
+        except (TypeError, ValueError):
+            return False
+
+    async def _mark_needs_review(
+        self,
+        approval: BookingApproval,
+        *,
+        failure_code: int | None = None,
+        failure_message: str | None = None,
+    ) -> BookingApproval:
+        """锁定审批并转人工核验，确保任何错误都不会遗留 CREATING。"""
+        async with self._approvals.transaction():
+            locked = await self._approvals.get_for_update(approval.id)
+            locked.status = ApprovalStatus.NEEDS_REVIEW
+            locked.failure_code = failure_code
+            locked.failure_message = failure_message
             await self._approvals.save(locked)
             return locked

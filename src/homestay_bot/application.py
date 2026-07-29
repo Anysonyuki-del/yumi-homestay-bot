@@ -1,11 +1,14 @@
 import asyncio
 import contextlib
+import hashlib
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
+import httpx
 from fastapi import FastAPI
 from openai import AsyncOpenAI
 from pydantic import ValidationError
@@ -21,7 +24,10 @@ from homestay_bot.integrations.openai_client import (
     GuestAssistant,
     HostexReadOnlyToolExecutor,
 )
-from homestay_bot.integrations.wecom.api_client import WeComApiClient
+from homestay_bot.integrations.wecom.api_client import (
+    WeComApiClient,
+    WeComApiError,
+)
 from homestay_bot.repositories.approvals import (
     SQLAlchemyApprovalRepository,
     SQLAlchemyPermissionChecker,
@@ -38,12 +44,13 @@ from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.knowledge import KnowledgeAdminService
 from homestay_bot.routes.wecom_callback import WeComCallbackService
 from homestay_bot.services.approval_page_service import ApprovalPageService
+from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.knowledge_service import KnowledgeService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
-from homestay_bot.worker import WeComSyncJobHandler, Worker
+from homestay_bot.worker import RetrySafeJobError, WeComSyncJobHandler, Worker
 
 
 class DurableJobQueue:
@@ -57,8 +64,27 @@ class DurableJobQueue:
         self, job_type: str, payload: dict[str, Any]
     ) -> None:
         """持久化一项任务并立即提交。"""
+        dedupe_key = None
+        if job_type == "wecom_sync":
+            canonical = json.dumps(
+                {
+                    "cursor": payload.get("cursor", ""),
+                    "token": payload.get("token", ""),
+                    "open_kfid": payload.get("open_kfid", ""),
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            dedupe_key = (
+                "wecom-sync:"
+                + hashlib.sha256(canonical.encode()).hexdigest()
+            )
         async with self._factory() as session:
-            await SQLAlchemyJobRepository(session).enqueue(job_type, payload)
+            await SQLAlchemyJobRepository(session).enqueue(
+                job_type,
+                payload,
+                dedupe_key=dedupe_key,
+            )
             await session.commit()
 
     async def enqueue_wecom_sync(
@@ -68,6 +94,64 @@ class DurableJobQueue:
         await self.enqueue(
             "wecom_sync",
             {"cursor": "", "token": token, "open_kfid": open_kfid},
+        )
+
+
+class TransactionalOutboxWeCom:
+    """把客人回复和员工通知写入同一数据库事务，避免业务回滚后重复发送。"""
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        source_message_id: str,
+    ) -> None:
+        """绑定当前消息事务和稳定的来源消息编号。"""
+        self._repository = SQLAlchemyJobRepository(session)
+        self._source_message_id = source_message_id
+        self._sequence = 0
+
+    def _outbox_id(self, kind: str) -> str:
+        """为同一入站消息的每项出站动作生成稳定内部编号。"""
+        self._sequence += 1
+        raw_key = f"{self._source_message_id}:{kind}:{self._sequence}"
+        return f"outbox:{hashlib.sha256(raw_key.encode()).hexdigest()}"
+
+    async def send_text(
+        self, open_kfid: str, external_userid: str, content: str
+    ) -> str:
+        """事务内登记客人回复，真实发送由 worker 在提交后执行。"""
+        outbox_id = self._outbox_id("guest")
+        await self._repository.enqueue(
+            "wecom_send_text",
+            {
+                "outbox_id": outbox_id,
+                "open_kfid": open_kfid,
+                "external_userid": external_userid,
+                "content": content,
+            },
+            dedupe_key=outbox_id,
+        )
+        return outbox_id
+
+    async def send_internal_text(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        content: str,
+    ) -> None:
+        """事务内登记员工通知，真实发送由 worker 在提交后执行。"""
+        outbox_id = self._outbox_id("internal")
+        await self._repository.enqueue(
+            "wecom_send_internal_text",
+            {
+                "outbox_id": outbox_id,
+                "agent_id": agent_id,
+                "employee_userids": employee_userids,
+                "content": content,
+            },
+            dedupe_key=outbox_id,
         )
 
 
@@ -91,16 +175,19 @@ class SessionEmployeeAuthService:
         self,
         *,
         corp_id: str,
+        public_base_url: str,
         wecom: WeComApiClient,
         factory: async_sessionmaker[AsyncSession],
     ) -> None:
         """保存企业微信客户端和数据库会话工厂。"""
         self._corp_id = corp_id
+        self._public_base_url = public_base_url.rstrip("/")
         self._wecom = wecom
         self._factory = factory
 
     def authorization_url(self, redirect_uri: str, state: str) -> str:
-        """构造企业微信成员网页授权地址。"""
+        """使用固定公网根地址构造授权链接，不信任请求 Host。"""
+        redirect_uri = f"{self._public_base_url}/employee/oauth/callback"
         query = urlencode(
             {
                 "appid": self._corp_id,
@@ -124,6 +211,21 @@ class SessionEmployeeAuthService:
                 employees=SQLAlchemyEmployeeRepository(session),
             )
             return await service.authenticate(code)
+
+
+class SessionEmployeeAccessVerifier:
+    """每个员工页面请求都从数据库重新确认启用状态和角色。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def get_active(self, employee_id: int) -> Employee | None:
+        """在短会话中读取最新员工授权。"""
+        async with self._factory() as session:
+            return await SQLAlchemyEmployeeRepository(session).get_active(
+                employee_id
+            )
 
 
 class SessionApprovalPageService:
@@ -156,6 +258,11 @@ class SessionApprovalPageService:
         """在短会话中读取审批页全部数据。"""
         async with self._factory() as session:
             return await self._service(session).get_detail(approval_id)
+
+    async def list_pending(self) -> list[BookingApproval]:
+        """在短会话中读取待处理审批列表。"""
+        async with self._factory() as session:
+            return await self._service(session).list_pending()
 
     async def confirm(
         self,
@@ -215,18 +322,65 @@ async def _run_worker_loop(
     *,
     factory: async_sessionmaker[AsyncSession],
     handler: WeComSyncJobHandler,
+    wecom: WeComApiClient,
 ) -> None:
     """持续处理持久化任务，并周期恢复五分钟前的遗留锁。"""
     while True:
         async with factory() as session:
             repository = SQLAlchemyJobRepository(session)
+            await SQLAlchemyApprovalRepository(
+                session
+            ).recover_stale_creating(
+                before=datetime.now(UTC) - timedelta(minutes=5)
+            )
             await repository.recover_stale(
                 before=datetime.now(UTC) - timedelta(minutes=5)
             )
             await session.commit()
+
+            async def send_guest(payload: dict[str, Any]) -> None:
+                """发送客人回复并回写真实 msgid；只重试确定未发送的错误。"""
+                try:
+                    real_message_id = await wecom.send_text(
+                        str(payload["open_kfid"]),
+                        str(payload["external_userid"]),
+                        str(payload["content"]),
+                    )
+                except httpx.ConnectError as error:
+                    raise RetrySafeJobError("企业微信连接尚未建立") from error
+                except WeComApiError as error:
+                    if error.error_code == 45009:
+                        raise RetrySafeJobError("企业微信明确限流") from error
+                    raise
+                await SQLAlchemyMessageRepository(
+                    session
+                ).replace_external_message_id(
+                    str(payload["outbox_id"]),
+                    real_message_id,
+                )
+
+            async def send_internal(payload: dict[str, Any]) -> None:
+                """发送员工通知；连接失败或明确限流时才允许有限重试。"""
+                try:
+                    await wecom.send_internal_text(
+                        agent_id=int(payload["agent_id"]),
+                        employee_userids=list(payload["employee_userids"]),
+                        content=str(payload["content"]),
+                    )
+                except httpx.ConnectError as error:
+                    raise RetrySafeJobError("企业微信连接尚未建立") from error
+                except WeComApiError as error:
+                    if error.error_code == 45009:
+                        raise RetrySafeJobError("企业微信明确限流") from error
+                    raise
+
             worker = Worker(
                 repository=repository,
-                handlers={"wecom_sync": handler},
+                handlers={
+                    "wecom_sync": handler,
+                    "wecom_send_text": send_guest,
+                    "wecom_send_internal_text": send_internal,
+                },
                 heartbeat=lambda value: setattr(
                     app.state, "worker_last_heartbeat", value
                 ),
@@ -279,9 +433,16 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 messages=MessageService(SQLAlchemyMessageRepository(session)),
                 assistant=assistant,
                 emergency_service=EmergencyService(),
-                wecom=wecom,
+                wecom=TransactionalOutboxWeCom(
+                    session,
+                    source_message_id=message.msgid,
+                ),
                 agent_id=settings.wecom_agent_id,
                 duty_employee_userids=duty_userids,
+                approvals=ApprovalService(
+                    SQLAlchemyApprovalRepository(session)
+                ),
+                approval_base_url=settings.public_base_url,
             )
             await service.handle_message(message)
             await session.commit()
@@ -303,9 +464,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.employee_auth_service = SessionEmployeeAuthService(
         corp_id=settings.wecom_corp_id,
+        public_base_url=settings.public_base_url,
         wecom=wecom,
         factory=factory,
     )
+    app.state.employee_access_verifier = SessionEmployeeAccessVerifier(factory)
     app.state.approval_page_service = SessionApprovalPageService(
         factory=factory,
         hostex=hostex,
@@ -324,7 +487,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         configuration_ok=bool(duty_userids),
     )
     worker_task = asyncio.create_task(
-        _run_worker_loop(app, factory=factory, handler=sync_handler)
+        _run_worker_loop(
+            app,
+            factory=factory,
+            handler=sync_handler,
+            wecom=wecom,
+        )
     )
 
     try:
@@ -336,6 +504,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 测试重启或同进程重新装配时不得沿用已关闭的客户端与会话服务。
         for state_name in (
             "employee_auth_service",
+            "employee_access_verifier",
             "approval_page_service",
             "knowledge_admin_service",
             "wecom_callback_service",

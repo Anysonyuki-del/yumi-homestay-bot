@@ -1,4 +1,6 @@
-from homestay_bot.logging import redact_log_fields
+import logging
+
+from homestay_bot.logging import SensitiveDataFilter, redact_log_fields
 
 
 def test_log_filter_redacts_tokens_and_mobile_numbers() -> None:
@@ -27,3 +29,28 @@ def test_log_filter_redacts_nested_secrets_and_tokens_in_text() -> None:
 
     assert filtered["headers"]["Authorization"] == "[REDACTED]"
     assert "token-value" not in filtered["message"]
+
+
+def test_access_log_filter_redacts_oauth_and_callback_query_values() -> None:
+    """Uvicorn 访问日志不得记录 OAuth code 或企业微信签名。"""
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        "",
+        0,
+        '%s - "%s %s HTTP/%s" %d',
+        (
+            "127.0.0.1",
+            "GET",
+            "/employee/oauth/callback?code=secret-code&state=secret-state",
+            "1.1",
+            200,
+        ),
+        None,
+    )
+
+    SensitiveDataFilter().filter(record)
+    rendered = record.getMessage()
+
+    assert "secret-code" not in rendered
+    assert "secret-state" not in rendered

@@ -145,6 +145,7 @@ def upgrade() -> None:
         "jobs",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("job_type", sa.String(length=64), nullable=False),
+        sa.Column("dedupe_key", sa.String(length=128), nullable=True, unique=True),
         sa.Column("payload", sa.JSON(), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False),

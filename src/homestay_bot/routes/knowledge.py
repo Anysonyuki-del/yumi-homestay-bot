@@ -1,3 +1,4 @@
+import secrets
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import AuditLog, KnowledgeEntry
+from homestay_bot.routes.employee_auth import require_employee_session
 
 router = APIRouter(prefix="/employee/knowledge")
 templates = Jinja2Templates(
@@ -119,24 +121,21 @@ def _get_service(request: Request) -> KnowledgeAdminServicePort:
     return cast(KnowledgeAdminServicePort, service)
 
 
-def _require_employee(request: Request) -> tuple[int, EmployeeRole]:
-    """读取签名员工会话，并拒绝未登录或无效角色。"""
-    employee_id = request.session.get("employee_id")
-    role = request.session.get("employee_role")
-    if not isinstance(employee_id, int) or not isinstance(role, str):
-        raise HTTPException(status_code=401, detail="员工尚未登录")
-    try:
-        return employee_id, EmployeeRole(role)
-    except ValueError as error:
-        raise HTTPException(status_code=401, detail="员工角色无效") from error
-
-
-def _require_admin(request: Request) -> int:
+async def _require_admin(request: Request) -> int:
     """只允许管理员修改知识。"""
-    employee_id, role = _require_employee(request)
+    employee_id, role = await require_employee_session(request)
     if role is not EmployeeRole.ADMIN:
         raise HTTPException(status_code=403, detail="只有管理员可以修改知识")
     return employee_id
+
+
+def _consume_csrf(request: Request, csrf_token: str) -> None:
+    """校验并立即消耗知识管理一次性 CSRF 令牌。"""
+    expected = request.session.pop("knowledge_csrf", None)
+    if not isinstance(expected, str) or not secrets.compare_digest(
+        expected, csrf_token
+    ):
+        raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
 
 
 def _fields(
@@ -165,12 +164,18 @@ def _fields(
 @router.get("", response_class=HTMLResponse)
 async def knowledge_index(request: Request) -> Response:
     """允许全部已登录员工查看知识及启停状态。"""
-    _, role = _require_employee(request)
+    _, role = await require_employee_session(request)
     entries = await _get_service(request).list_all()
+    csrf_token = secrets.token_urlsafe(24)
+    request.session["knowledge_csrf"] = csrf_token
     return templates.TemplateResponse(
         request=request,
         name="knowledge/index.html",
-        context={"entries": entries, "can_edit": role is EmployeeRole.ADMIN},
+        context={
+            "entries": entries,
+            "can_edit": role is EmployeeRole.ADMIN,
+            "csrf_token": csrf_token,
+        },
     )
 
 
@@ -183,9 +188,11 @@ async def create_knowledge(
     question_en: str = Form(min_length=1),
     answer_en: str = Form(min_length=1),
     keywords: str = Form(""),
+    csrf_token: str = Form(),
 ) -> RedirectResponse:
     """管理员新增一条同时包含中英文内容的审核知识。"""
-    employee_id = _require_admin(request)
+    employee_id = await _require_admin(request)
+    _consume_csrf(request, csrf_token)
     await _get_service(request).create(
         employee_id,
         **_fields(
@@ -212,9 +219,11 @@ async def update_knowledge(
     question_en: str = Form(min_length=1),
     answer_en: str = Form(min_length=1),
     keywords: str = Form(""),
+    csrf_token: str = Form(),
 ) -> RedirectResponse:
     """管理员编辑指定双语知识。"""
-    employee_id = _require_admin(request)
+    employee_id = await _require_admin(request)
+    _consume_csrf(request, csrf_token)
     await _get_service(request).update(
         entry_id,
         employee_id,
@@ -234,12 +243,16 @@ async def update_knowledge(
 
 @router.post("/{entry_id}/{action}")
 async def toggle_knowledge(
-    request: Request, entry_id: int, action: str
+    request: Request,
+    entry_id: int,
+    action: str,
+    csrf_token: str = Form(),
 ) -> Response:
     """管理员启用或停用知识，成功后不返回正文。"""
     if action not in {"enable", "disable"}:
         raise HTTPException(status_code=404, detail="未知知识操作")
-    employee_id = _require_admin(request)
+    employee_id = await _require_admin(request)
+    _consume_csrf(request, csrf_token)
     await _get_service(request).set_enabled(
         entry_id, employee_id, enabled=action == "enable"
     )

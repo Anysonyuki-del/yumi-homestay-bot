@@ -15,6 +15,7 @@
       <section>
         <h2>新增知识</h2>
         <form method="post" action="/employee/knowledge">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>分类<input name="category" required></label>
           <label>中文问题<textarea name="question_zh" required></textarea></label>
           <label>中文答案<textarea name="answer_zh" required></textarea></label>
@@ -37,6 +38,7 @@
           <p lang="en">{{ entry.answer_en }}</p>
           {% if can_edit %}
           <form method="post" action="/employee/knowledge/{{ entry.id }}/{{ 'disable' if entry.is_enabled else 'enable' }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit">{{ "停用" if entry.is_enabled else "启用" }}</button>
           </form>
           {% endif %}

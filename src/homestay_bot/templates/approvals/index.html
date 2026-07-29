@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>待处理预订</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="card">
+      <h1>待处理预订</h1>
+      <ul>
+        {% for approval in approvals %}
+        <li>
+          <a href="/employee/approvals/{{ approval.id }}">
+            {{ approval.approval_code }} · {{ approval.guest_name }} ·
+            {{ approval.check_in_date }} · {{ approval.status.value }}
+          </a>
+        </li>
+        {% else %}
+        <li>当前没有待处理审批。</li>
+        {% endfor %}
+      </ul>
+    </main>
+  </body>
+</html>

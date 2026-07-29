@@ -1,8 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from homestay_bot.application import TransactionalOutboxWeCom
 from homestay_bot.domain.enums import JobStatus
 from homestay_bot.domain.models import Base, Job
 from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
@@ -71,5 +73,100 @@ async def test_failed_read_job_retries_but_booking_write_does_not() -> None:
 
         assert read_job.status is JobStatus.PENDING
         assert write_job.status is JobStatus.FAILED
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_external_send_is_not_replayed() -> None:
+    """发送结果不明确的企业微信任务应转失败，禁止恢复后重复发送。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+
+    async with factory() as session:
+        job = Job(
+            job_type="wecom_send_text",
+            payload={"content": "您好"},
+            status=JobStatus.RUNNING,
+            attempts=1,
+            available_at=now - timedelta(minutes=10),
+            locked_at=now - timedelta(minutes=10),
+        )
+        session.add(job)
+        await session.commit()
+
+        await SQLAlchemyJobRepository(session).recover_stale(
+            before=now - timedelta(minutes=5)
+        )
+        await session.refresh(job)
+
+        assert job.status is JobStatus.FAILED
+        assert job.last_error_code == "stale_non_replayable"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_outbound_messages_are_committed_to_outbox_before_network_send() -> None:
+    """会话事务只写出站任务，不在提交前直接调用企业微信。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        outbox = TransactionalOutboxWeCom(
+            session, source_message_id="msg-1"
+        )
+        message_id = await outbox.send_text("wk-1", "wm-1", "您好")
+        await outbox.send_internal_text(
+            agent_id=100001,
+            employee_userids=["staff-1"],
+            content="需要人工处理",
+        )
+        await session.commit()
+        jobs = list(
+            (
+                await session.scalars(
+                    select(Job).order_by(Job.id)
+                )
+            ).all()
+        )
+
+        assert message_id.startswith("outbox:")
+        assert [job.job_type for job in jobs] == [
+            "wecom_send_text",
+            "wecom_send_internal_text",
+        ]
+        assert all(job.status is JobStatus.PENDING for job in jobs)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_job_dedupe_key_prevents_duplicate_callback_chain() -> None:
+    """相同回调游标重复入队时只能保留一项任务。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        repository = SQLAlchemyJobRepository(session)
+        first = await repository.enqueue(
+            "wecom_sync",
+            {"cursor": "cursor-1"},
+            dedupe_key="wecom-sync:key-1",
+        )
+        second = await repository.enqueue(
+            "wecom_sync",
+            {"cursor": "cursor-1"},
+            dedupe_key="wecom-sync:key-1",
+        )
+
+        assert first.id == second.id
 
     await engine.dispose()

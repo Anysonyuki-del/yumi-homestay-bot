@@ -191,6 +191,9 @@ class Job(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    dedupe_key: Mapped[str | None] = mapped_column(
+        String(128), unique=True, nullable=True
+    )
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, native_enum=False, length=16),

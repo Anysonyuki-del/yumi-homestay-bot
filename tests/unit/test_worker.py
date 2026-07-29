@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from homestay_bot.domain.enums import MessageOrigin
-from homestay_bot.worker import WeComSyncJobHandler, Worker
+from homestay_bot.worker import RetrySafeJobError, WeComSyncJobHandler, Worker
 
 
 @dataclass
@@ -81,6 +81,25 @@ async def test_worker_never_retries_hostex_create_job() -> None:
     await worker.run_once()
 
     assert repository.failure["retry_allowed"] is False
+
+
+@pytest.mark.asyncio
+async def test_worker_retries_only_explicitly_safe_send_failure() -> None:
+    """发送任务只有在确认尚未产生外部副作用时才允许有限重试。"""
+    repository = RepositoryStub(JobStub(job_type="wecom_send_text"))
+
+    async def safely_failed(payload):
+        """模拟连接尚未建立的确定失败。"""
+        raise RetrySafeJobError("not connected")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"wecom_send_text": safely_failed},
+    )
+
+    await worker.run_once()
+
+    assert repository.failure["retry_allowed"] is True
 
 
 @pytest.mark.asyncio

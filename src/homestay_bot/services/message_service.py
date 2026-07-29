@@ -28,6 +28,11 @@ class MessageRepository(Protocol):
     async def add(self, message: Message) -> None:
         """保存一条入站或机器人消息。"""
 
+    async def list_recent(
+        self, conversation_id: int, limit: int
+    ) -> list[Message]:
+        """按时间正序返回最近消息。"""
+
 
 class MessageService:
     """统一保存企业微信入站消息和机器人出站消息。"""
@@ -72,3 +77,18 @@ class MessageService:
                 sent_at=sent_at or datetime.now().astimezone(),
             )
         )
+
+    async def build_context(
+        self, conversation_id: int, limit: int = 20
+    ) -> list[dict[str, str]]:
+        """返回最近客人与机器人文本，人工消息绝不重新交给模型。"""
+        messages = await self._repository.list_recent(conversation_id, limit)
+        context: list[dict[str, str]] = []
+        for message in messages:
+            if message.message_type != "text" or not message.content:
+                continue
+            if message.origin is MessageOrigin.GUEST:
+                context.append({"role": "user", "content": message.content})
+            elif message.origin is MessageOrigin.BOT:
+                context.append({"role": "assistant", "content": message.content})
+        return context

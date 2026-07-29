@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
+from homestay_bot.routes.employee_auth import require_employee_session
 
 router = APIRouter(prefix="/employee/approvals")
 templates = Jinja2Templates(
@@ -22,6 +23,9 @@ class ApprovalPageServicePort(Protocol):
     async def get_detail(self, approval_id: int) -> dict[str, Any]:
         """返回审批详情及可选房间、参考价和收入方式。"""
 
+    async def list_pending(self) -> list[BookingApproval]:
+        """返回员工需要处理的审批单。"""
+
     async def confirm(
         self,
         approval_id: int,
@@ -29,18 +33,6 @@ class ApprovalPageServicePort(Protocol):
         command: ConfirmBookingCommand,
     ) -> BookingApproval:
         """由授权员工确认并执行安全下单流程。"""
-
-
-def _require_employee(request: Request) -> tuple[int, EmployeeRole]:
-    """从签名会话读取可信员工身份，未登录时由路由重定向。"""
-    employee_id = request.session.get("employee_id")
-    role = request.session.get("employee_role")
-    if not isinstance(employee_id, int) or not isinstance(role, str):
-        raise HTTPException(status_code=401, detail="员工尚未登录")
-    try:
-        return employee_id, EmployeeRole(role)
-    except ValueError as error:
-        raise HTTPException(status_code=401, detail="员工角色无效") from error
 
 
 def _get_page_service(request: Request) -> ApprovalPageServicePort:
@@ -54,11 +46,29 @@ def _get_page_service(request: Request) -> ApprovalPageServicePort:
     return cast(ApprovalPageServicePort, service)
 
 
+@router.get("", response_class=HTMLResponse)
+async def approval_index(request: Request) -> Response:
+    """展示当前员工可查看的待处理审批列表。"""
+    try:
+        await require_employee_session(request)
+    except HTTPException:
+        return RedirectResponse(
+            "/employee/login?next=/employee/approvals",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    approvals = await _get_page_service(request).list_pending()
+    return templates.TemplateResponse(
+        request=request,
+        name="approvals/index.html",
+        context={"approvals": approvals},
+    )
+
+
 @router.get("/{approval_id}", response_class=HTMLResponse)
 async def approval_detail(request: Request, approval_id: int) -> Response:
     """展示脱敏审批详情，并签发一次性确认令牌。"""
     try:
-        _, role = _require_employee(request)
+        _, role = await require_employee_session(request)
     except HTTPException:
         return RedirectResponse(
             f"/employee/login?next=/employee/approvals/{approval_id}",
@@ -89,7 +99,7 @@ async def confirm_approval(
     confirmation_nonce: str = Form(),
 ) -> RedirectResponse:
     """校验角色和一次性令牌后，调用安全下单状态机。"""
-    employee_id, role = _require_employee(request)
+    employee_id, role = await require_employee_session(request)
     if role not in {EmployeeRole.ADMIN, EmployeeRole.BOOKING_APPROVER}:
         raise HTTPException(status_code=403, detail="当前员工没有确认下单权限")
 

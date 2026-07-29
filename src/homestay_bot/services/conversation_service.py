@@ -1,8 +1,11 @@
 import re
 from typing import Protocol
 
+from pydantic import ValidationError
+
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
-from homestay_bot.domain.models import Conversation
+from homestay_bot.domain.models import BookingApproval, Conversation
+from homestay_bot.domain.schemas import BookingRequest
 from homestay_bot.integrations.openai_client import AssistantDecision
 from homestay_bot.services.emergency_service import (
     EmergencyClassification,
@@ -33,6 +36,11 @@ class ConversationMessageService(Protocol):
         self, conversation_id: int, message_id: str, content: str
     ) -> None:
         """保存机器人出站消息。"""
+
+    async def build_context(
+        self, conversation_id: int, limit: int = 20
+    ) -> list[dict[str, str]]:
+        """返回有限的客人与机器人历史上下文。"""
 
 
 class GuestAssistantPort(Protocol):
@@ -66,6 +74,15 @@ class WeComMessagingPort(Protocol):
         """通知值班员工处理人工会话。"""
 
 
+class PendingApprovalPort(Protocol):
+    """定义客人确认资料后创建待审批单的唯一入口。"""
+
+    async def create_pending(
+        self, conversation_id: int, request: BookingRequest
+    ) -> BookingApproval:
+        """只创建待审批单，不执行百居易写入。"""
+
+
 class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
@@ -85,6 +102,8 @@ class ConversationService:
         wecom: WeComMessagingPort,
         agent_id: int,
         duty_employee_userids: list[str],
+        approvals: PendingApprovalPort | None = None,
+        approval_base_url: str = "",
     ) -> None:
         """注入仓储、AI、安全分类器和企业微信发送端口。"""
         self._conversations = conversations
@@ -94,6 +113,8 @@ class ConversationService:
         self._wecom = wecom
         self._agent_id = agent_id
         self._duty_employee_userids = duty_employee_userids
+        self._approvals = approvals
+        self._approval_base_url = approval_base_url.rstrip("/")
 
     async def handle_message(self, message: IncomingMessage) -> None:
         """处理单条已去重消息，确保人工回复不会形成机器人回环。"""
@@ -101,6 +122,10 @@ class ConversationService:
         if not await self._messages.record_incoming(conversation.id, message):
             return
         if message.origin is MessageOrigin.SERVICER:
+            # 一旦人工客服发言，立即锁定人工模式，防止客人下一条消息又触发机器人。
+            if conversation.mode is not ConversationMode.HUMAN_ACTIVE:
+                conversation.mode = ConversationMode.HUMAN_ACTIVE
+                await self._conversations.save(conversation)
             return
         if message.origin is not MessageOrigin.GUEST:
             return
@@ -126,9 +151,12 @@ class ConversationService:
         decision = await self._assistant.respond(
             guest_identifier=message.external_userid,
             language=conversation.language,
-            messages=[{"role": "user", "content": message.content}],
+            messages=await self._messages.build_context(conversation.id),
         )
         await self._send_guest_reply(conversation, decision.reply_text)
+        if decision.intent == "booking_confirmed":
+            await self._create_pending_approval(conversation, message, decision)
+            return
         if decision.handoff_reason is not None:
             conversation.mode = ConversationMode.HUMAN_ACTIVE
             await self._conversations.save(conversation)
@@ -137,6 +165,50 @@ class ConversationService:
                 message,
                 f"机器人请求人工接管：{decision.handoff_reason}",
             )
+
+    async def _create_pending_approval(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        decision: AssistantDecision,
+    ) -> None:
+        """把模型提取的完整资料转换为待审批单，缺项时强制转人工。"""
+        fields = decision.booking_fields
+        if self._approvals is None or fields is None:
+            await self._activate_human(
+                conversation, message, "预订资料无法生成待审批单"
+            )
+            return
+        try:
+            request = BookingRequest.model_validate(fields.model_dump())
+        except ValidationError:
+            await self._activate_human(
+                conversation, message, "预订资料不完整或格式无效"
+            )
+            return
+
+        approval = await self._approvals.create_pending(conversation.id, request)
+        conversation.mode = ConversationMode.HUMAN_ACTIVE
+        await self._conversations.save(conversation)
+        await self._notify_employee(
+            conversation,
+            message,
+            (
+                f"新待审批单：{approval.approval_code}（ID {approval.id}）\n"
+                f"{self._approval_base_url}/employee/approvals/{approval.id}"
+            ),
+        )
+
+    async def _activate_human(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        reason: str,
+    ) -> None:
+        """切换人工模式并发送内部原因摘要。"""
+        conversation.mode = ConversationMode.HUMAN_ACTIVE
+        await self._conversations.save(conversation)
+        await self._notify_employee(conversation, message, reason)
 
     @staticmethod
     def _detect_language(text: str, fallback: Language) -> Language:

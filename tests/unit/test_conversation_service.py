@@ -1,10 +1,11 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import Conversation
-from homestay_bot.integrations.openai_client import AssistantDecision
+from homestay_bot.integrations.openai_client import AssistantDecision, BookingFields
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.message_service import IncomingMessage
@@ -52,17 +53,35 @@ class MessageServiceStub:
         """记录机器人出站消息。"""
         self.bot_messages.append((conversation_id, message_id, content))
 
+    async def build_context(
+        self, conversation_id: int, limit: int = 20
+    ) -> list[dict[str, str]]:
+        """把测试中已记录的客人文本转换为模型历史。"""
+        return [
+            {"role": "user", "content": item.content}
+            for item in self.recorded[-limit:]
+            if item.origin is MessageOrigin.GUEST and item.msgtype == "text"
+        ]
+
 
 class AssistantStub:
     """返回固定客服决定并统计调用次数。"""
 
-    def __init__(self, *, handoff_reason: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        handoff_reason: str | None = None,
+        decision: AssistantDecision | None = None,
+    ) -> None:
         self.calls = 0
         self.handoff_reason = handoff_reason
+        self.decision = decision
 
     async def respond(self, **kwargs) -> AssistantDecision:
         """生成固定中文回复。"""
         self.calls += 1
+        if self.decision is not None:
+            return self.decision
         return AssistantDecision(
             reply_text="下午三点后可以入住。",
             language=Language.ZH,
@@ -93,6 +112,18 @@ class WeComStub:
         self.internal_messages.append(content)
 
 
+class ApprovalServiceStub:
+    """记录完整预订资料只创建待审批单。"""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def create_pending(self, conversation_id, request):
+        """记录会话和预订资料，不调用任何百居易写接口。"""
+        self.calls.append((conversation_id, request))
+        return SimpleNamespace(id=9, approval_code="APP-9")
+
+
 def incoming(
     *,
     content: str = "几点入住？",
@@ -116,6 +147,7 @@ def build_service(
     *,
     assistant: AssistantStub | None = None,
     messages: MessageServiceStub | None = None,
+    approvals: ApprovalServiceStub | None = None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
     """创建注入固定依赖的会话服务。"""
     conversations = ConversationRepositoryStub()
@@ -129,6 +161,7 @@ def build_service(
         wecom=wecom,
         agent_id=100001,
         duty_employee_userids=["staff-1"],
+        approvals=approvals,
     )
     return service, conversations, selected_assistant, wecom
 
@@ -136,12 +169,13 @@ def build_service(
 @pytest.mark.asyncio
 async def test_human_reply_does_not_trigger_bot() -> None:
     """人工接待人员的回复只保存，不得形成机器人循环回复。"""
-    service, _, assistant, wecom = build_service()
+    service, conversations, assistant, wecom = build_service()
 
     await service.handle_message(incoming(origin=MessageOrigin.SERVICER))
 
     assert assistant.calls == 0
     assert wecom.guest_messages == []
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 
 @pytest.mark.asyncio
@@ -191,3 +225,35 @@ async def test_normal_guest_message_gets_bot_reply() -> None:
 
     assert assistant.calls == 1
     assert wecom.guest_messages == ["下午三点后可以入住。"]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_booking_details_create_pending_approval_only() -> None:
+    """客人明确确认完整资料后只能生成待审批单，不得直接下单。"""
+    approvals = ApprovalServiceStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="资料已提交工作人员确认。",
+            language=Language.ZH,
+            intent="booking_confirmed",
+            confidence=0.99,
+            booking_fields=BookingFields(
+                check_in_date="2026-08-01",
+                check_out_date="2026-08-02",
+                number_of_guests=2,
+                guest_name="张三",
+                guest_mobile="13800138000",
+                room_type_preference="江景房",
+            ),
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        approvals=approvals,
+    )
+
+    await service.handle_message(incoming(content="以上资料确认无误"))
+
+    assert len(approvals.calls) == 1
+    assert approvals.calls[0][1].guest_name == "张三"
+    assert "待审批单" in wecom.internal_messages[0]

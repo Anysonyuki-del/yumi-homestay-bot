@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -9,6 +9,7 @@ from homestay_bot.domain.schemas import BookingRequest, ConfirmBookingCommand
 from homestay_bot.integrations.hostex_client import (
     AvailabilityDay,
     CreateReservationResult,
+    HostexBusinessError,
     HostexTransportError,
     PropertyAvailability,
     Reservation,
@@ -49,9 +50,20 @@ class AllowApprover:
 class HostexStub:
     """提供可计数的百居易行为，用于验证写入次数。"""
 
-    def __init__(self, *, available: bool = True, ambiguous: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        ambiguous: bool = False,
+        business_error: bool = False,
+        reservation_created_at: str | None = None,
+    ) -> None:
         self.available = available
         self.ambiguous = ambiguous
+        self.business_error = business_error
+        self.reservation_created_at = (
+            reservation_created_at or datetime.now(UTC).isoformat()
+        )
         self.create_calls = 0
 
     async def list_availabilities(
@@ -72,6 +84,8 @@ class HostexStub:
     async def create_reservation(self, request) -> CreateReservationResult:
         """记录真实写调用次数，并可模拟结果不明确。"""
         self.create_calls += 1
+        if self.business_error:
+            raise HostexBusinessError(422, "RT-FAIL", "invalid request")
         if self.ambiguous:
             raise HostexTransportError("timeout")
         return CreateReservationResult(request_id="RT-CREATE")
@@ -90,7 +104,8 @@ class HostexStub:
                 status="accepted",
                 guest_name="张三",
                 guest_phone="13800138000",
-                created_at="2026-07-29T00:00:00+08:00",
+                created_at=self.reservation_created_at,
+                rates={"rate_amount": 399},
             )
         ]
 
@@ -199,3 +214,67 @@ async def test_ambiguous_create_result_requires_manual_review_without_retry() ->
 
     assert result.status == ApprovalStatus.NEEDS_REVIEW
     assert hostex.create_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_business_create_error_moves_to_review_instead_of_stuck_creating() -> None:
+    """明确业务失败也必须离开 CREATING 并保留可解释错误码。"""
+    repository = InMemoryApprovalRepository(pending_approval())
+    hostex = HostexStub(business_error=True)
+    service = BookingService(repository, AllowApprover(), hostex)
+
+    result = await service.confirm_and_create(
+        1, employee_id=1, command=valid_command()
+    )
+
+    assert result.status == ApprovalStatus.NEEDS_REVIEW
+    assert result.failure_code == 422
+    assert hostex.create_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_repeated_confirmation_reconciles_creating_without_new_write() -> None:
+    """遗留 CREATING 审批再次确认时只能核验，不能再次创建订单。"""
+    approval = pending_approval()
+    approval.status = ApprovalStatus.CREATING
+    approval.property_id = 101
+    approval.final_rate_amount = 399
+    approval.received_amount = 399
+    approval.income_method_id = 1
+    approval.approved_at = datetime.now(UTC)
+    repository = InMemoryApprovalRepository(approval)
+    hostex = HostexStub()
+    service = BookingService(repository, AllowApprover(), hostex)
+
+    result = await service.confirm_and_create(
+        1, employee_id=1, command=valid_command()
+    )
+
+    assert result.status == ApprovalStatus.BOOKED
+    assert hostex.create_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_does_not_link_an_old_matching_order() -> None:
+    """姓名日期相同但创建时间早于本次审批的旧订单不得被误关联。"""
+    approval = pending_approval()
+    approval.status = ApprovalStatus.CREATING
+    approval.property_id = 101
+    approval.final_rate_amount = 399
+    approval.received_amount = 399
+    approval.income_method_id = 1
+    approval.approved_at = datetime.now(UTC)
+    repository = InMemoryApprovalRepository(approval)
+    hostex = HostexStub(
+        reservation_created_at=(
+            approval.approved_at - timedelta(days=1)
+        ).isoformat()
+    )
+    service = BookingService(repository, AllowApprover(), hostex)
+
+    result = await service.confirm_and_create(
+        1, employee_id=1, command=valid_command()
+    )
+
+    assert result.status == ApprovalStatus.NEEDS_REVIEW
+    assert result.hostex_reservation_code is None

@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 
 import pytest
@@ -104,7 +105,10 @@ def test_regular_customer_service_can_read_but_cannot_modify() -> None:
     client, _ = build_client(EmployeeRole.CUSTOMER_SERVICE)
 
     detail = client.get("/employee/knowledge")
-    disable = client.post("/employee/knowledge/1/disable")
+    disable = client.post(
+        "/employee/knowledge/1/disable",
+        data={"csrf_token": "not-used-without-admin-role"},
+    )
 
     assert detail.status_code == 200
     assert "几点入住" in detail.text
@@ -117,7 +121,14 @@ async def test_disabling_knowledge_removes_it_from_bot_context() -> None:
     client, repository = build_client(EmployeeRole.ADMIN)
     knowledge_service = KnowledgeService(repository)
 
-    response = client.post("/employee/knowledge/1/disable")
+    page = client.get("/employee/knowledge")
+    csrf_token = re.search(
+        r'name="csrf_token" value="([^"]+)"', page.text
+    ).group(1)
+    response = client.post(
+        "/employee/knowledge/1/disable",
+        data={"csrf_token": csrf_token},
+    )
     context = await knowledge_service.build_context(Language.ZH)
 
     assert response.status_code == 204
@@ -128,6 +139,10 @@ def test_admin_can_create_bilingual_knowledge() -> None:
     """管理员新增时必须同时提交中英文问答。"""
     client, service = build_client(EmployeeRole.ADMIN)
 
+    page = client.get("/employee/knowledge")
+    csrf_token = re.search(
+        r'name="csrf_token" value="([^"]+)"', page.text
+    ).group(1)
     response = client.post(
         "/employee/knowledge",
         data={
@@ -137,6 +152,7 @@ def test_admin_can_create_bilingual_knowledge() -> None:
             "question_en": "How can I get there?",
             "answer_en": "Please follow the map.",
             "keywords": "交通,导航",
+            "csrf_token": csrf_token,
         },
         follow_redirects=False,
     )

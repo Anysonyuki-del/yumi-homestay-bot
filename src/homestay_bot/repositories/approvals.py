@@ -1,10 +1,13 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import ApprovalStatus, EmployeeRole
 from homestay_bot.domain.models import BookingApproval, Employee
 
 
@@ -41,6 +44,25 @@ class SQLAlchemyApprovalRepository:
         """刷新审批单变更，提交由外层事务负责。"""
         self._session.add(approval)
         await self._session.flush()
+
+    async def recover_stale_creating(self, *, before: datetime) -> int:
+        """把进程中断遗留的创建中审批转为人工核验，绝不自动重放。"""
+        statement = (
+            update(BookingApproval)
+            .where(
+                BookingApproval.status == ApprovalStatus.CREATING,
+                BookingApproval.approved_at < before,
+            )
+            .values(
+                status=ApprovalStatus.NEEDS_REVIEW,
+                failure_message="创建进程中断，需人工核验百居易后台",
+            )
+        )
+        result = cast(
+            CursorResult[Any], await self._session.execute(statement)
+        )
+        await self._session.flush()
+        return int(result.rowcount)
 
 
 class SQLAlchemyPermissionChecker:

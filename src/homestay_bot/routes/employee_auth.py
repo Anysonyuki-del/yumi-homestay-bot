@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 
+from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
 
 router = APIRouter(prefix="/employee")
@@ -69,6 +70,39 @@ class EmployeeAuthServicePort(Protocol):
 
     async def authenticate(self, code: str) -> Employee:
         """返回已授权本地员工。"""
+
+
+class EmployeeAccessVerifier(Protocol):
+    """定义请求期间重新验证员工状态的接口。"""
+
+    async def get_active(self, employee_id: int) -> Employee | None:
+        """返回仍处于启用状态的员工。"""
+
+
+async def require_employee_session(
+    request: Request,
+) -> tuple[int, EmployeeRole]:
+    """读取签名会话，并在生产环境重新验证员工状态与最新角色。"""
+    employee_id = request.session.get("employee_id")
+    role_value = request.session.get("employee_role")
+    if not isinstance(employee_id, int) or not isinstance(role_value, str):
+        raise HTTPException(status_code=401, detail="员工尚未登录")
+    try:
+        role = EmployeeRole(role_value)
+    except ValueError as error:
+        raise HTTPException(status_code=401, detail="员工角色无效") from error
+
+    verifier = getattr(request.app.state, "employee_access_verifier", None)
+    if verifier is not None:
+        employee = await cast(EmployeeAccessVerifier, verifier).get_active(
+            employee_id
+        )
+        if employee is None:
+            request.session.clear()
+            raise HTTPException(status_code=401, detail="员工已停用或不存在")
+        role = employee.role
+        request.session["employee_role"] = role.value
+    return employee_id, role
 
 
 def _get_auth_service(request: Request) -> EmployeeAuthServicePort:

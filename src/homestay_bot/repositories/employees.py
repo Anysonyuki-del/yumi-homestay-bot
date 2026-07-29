@@ -19,3 +19,12 @@ class SQLAlchemyEmployeeRepository:
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def get_active(self, employee_id: int) -> Employee | None:
+        """按本地主键返回仍启用的员工。"""
+        statement = select(Employee).where(
+            Employee.id == employee_id,
+            Employee.is_active.is_(True),
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()

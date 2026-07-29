@@ -1,12 +1,12 @@
 import hashlib
 import hmac
 import json
+import re
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
 from homestay_bot.domain.enums import Language
-from homestay_bot.integrations.hostex_client import ReservationQuery
 from homestay_bot.services.knowledge_service import KnowledgeService
 
 
@@ -40,10 +40,6 @@ class HostexReadOnlyClient(Protocol):
     ) -> list[Any]:
         """返回渠道日历参考价。"""
 
-    async def list_reservations(self, query: ReservationQuery) -> list[Any]:
-        """按安全过滤条件返回订单摘要。"""
-
-
 class HostexReadOnlyToolExecutor:
     """把模型白名单工具映射到百居易只读 API。"""
 
@@ -66,10 +62,6 @@ class HostexReadOnlyToolExecutor:
             result = await self._hostex.list_reference_prices(
                 arguments["check_in_date"],
                 arguments["check_out_date"],
-            )
-        elif name == "lookup_reservation":
-            result = await self._hostex.list_reservations(
-                ReservationQuery(reservation_code=arguments["reservation_code"])
             )
         else:
             raise ValueError(f"不允许执行工具: {name}")
@@ -152,18 +144,6 @@ class GuestAssistant:
                 },
                 "strict": True,
             },
-            {
-                "type": "function",
-                "name": "lookup_reservation",
-                "description": "按已知订单编号查询订单摘要。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"reservation_code": {"type": "string"}},
-                    "required": ["reservation_code"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            },
         ]
 
     def _validate_decision(self, output_text: str) -> AssistantDecision:
@@ -172,6 +152,56 @@ class GuestAssistant:
         if decision.confidence < 0.7 and decision.handoff_reason is None:
             return decision.model_copy(update={"handoff_reason": "low_confidence"})
         return decision
+
+    @staticmethod
+    def _minimize_personal_data(
+        messages: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """仅在明确预订资料阶段保留姓名手机号，其余对话先做本地脱敏。"""
+        combined = "\n".join(item.get("content", "") for item in messages)
+        booking_context = re.search(
+            r"预订|订房|下单|booking|reservation|reserve",
+            combined,
+            re.IGNORECASE,
+        )
+        if booking_context:
+            return [dict(item) for item in messages]
+
+        minimized: list[dict[str, str]] = []
+        for item in messages:
+            content = item.get("content", "")
+            content = re.sub(
+                r"(?<!\d)1[3-9]\d{9}(?!\d)",
+                "[手机号已隐藏]",
+                content,
+            )
+            content = re.sub(
+                r"(?:我叫|姓名(?:是|[:：])?)\s*[\u4e00-\u9fff]{2,4}",
+                "[姓名已隐藏]",
+                content,
+            )
+            content = re.sub(
+                r"(?i)\bmy name is\s+[a-z][a-z .'-]{0,50}",
+                "[name redacted]",
+                content,
+            )
+            minimized.append({**item, "content": content})
+        return minimized
+
+    @staticmethod
+    def _serialize_output_item(item: Any) -> dict[str, Any]:
+        """把 Responses 输出项转为下一轮可重放的无状态输入。"""
+        model_dump = getattr(item, "model_dump", None)
+        if callable(model_dump):
+            return dict(model_dump(mode="json", exclude_none=True))
+        if getattr(item, "type", None) == "function_call":
+            return {
+                "type": "function_call",
+                "name": item.name,
+                "arguments": item.arguments,
+                "call_id": item.call_id,
+            }
+        raise RuntimeError("无法序列化 OpenAI Responses 输出项")
 
     async def respond(
         self,
@@ -195,6 +225,8 @@ class GuestAssistant:
             "你是武汉一家7间房民宿的客服。只能依据审核知识和查询工具回答。"
             "不得确认最终价格、收款、具体房间、退款、取消或改期；"
             "资料不足或置信度低时必须设置 handoff_reason。"
+            "只有客人明确确认了入住日期、退房日期、人数、姓名、手机号和房型偏好后，"
+            "intent 才能设为 booking_confirmed，并填写全部 booking_fields；"
             f"\n审核知识：{json.dumps(knowledge_payload, ensure_ascii=False)}"
         )
         safety_identifier = hmac.new(
@@ -208,7 +240,7 @@ class GuestAssistant:
             "store": False,
             "safety_identifier": safety_identifier,
             "instructions": system_prompt,
-            "input": messages,
+            "input": self._minimize_personal_data(messages),
             "tools": self.tool_definitions(),
             "text": {
                 "format": {
@@ -233,6 +265,9 @@ class GuestAssistant:
             if self._tool_executor is None:
                 raise RuntimeError("模型请求了查询工具，但系统未配置工具执行器")
 
+            replayed_output = [
+                self._serialize_output_item(item) for item in response.output
+            ]
             outputs: list[dict[str, str]] = []
             for call in function_calls:
                 arguments = json.loads(call.arguments)
@@ -246,8 +281,8 @@ class GuestAssistant:
                 )
             continuation_request = {
                 **request,
-                "previous_response_id": response.id,
-                "input": outputs,
+                # store=False 时显式重放上一轮输出，避免依赖服务端状态。
+                "input": [*replayed_output, *outputs],
             }
             response = await self._client.responses.create(
                 **continuation_request,
