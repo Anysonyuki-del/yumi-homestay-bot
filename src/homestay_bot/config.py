@@ -11,9 +11,9 @@ class Settings(BaseSettings):
 
     database_url: str
     public_base_url: str
-    openai_api_key: str
-    openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-5.6-terra"
+    deepseek_api_key: str
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
     hostex_access_token: str
     wecom_corp_id: str
     wecom_kf_secret: str
@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     wecom_duty_userids: str
     wecom_poll_interval_seconds: float = Field(default=15, ge=5, le=300)
     session_secret: str = Field(min_length=32)
+
+    @property
+    def deepseek_anthropic_base_url(self) -> str:
+        """从唯一 DeepSeek 根地址派生 Anthropic 兼容地址。"""
+        return f"{self.deepseek_base_url.rstrip('/')}/anthropic"
 
 
 @lru_cache

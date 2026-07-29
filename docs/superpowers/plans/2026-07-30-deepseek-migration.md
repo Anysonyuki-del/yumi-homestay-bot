@@ -54,11 +54,11 @@
 
 - Modify: `pyproject.toml`
 - Modify: `src/homestay_bot/config.py`
-- Modify: `tests/integration/test_runtime_startup.py`
+- Create: `tests/unit/test_config.py`
 
-- [ ] **Step 1：写双客户端配置失败测试**
+- [ ] **Step 1：写 DeepSeek 配置失败测试**
 
-把 `tests/integration/test_runtime_startup.py` 中的模型环境变量改为：
+在 `tests/unit/test_config.py` 使用完整最小环境构造 `Settings`：
 
 ```python
 environment = {
@@ -79,17 +79,13 @@ environment = {
 }
 ```
 
-为 `FakeOpenAI` 增加对应的 `FakeAnthropic`，并断言：
-
 ```python
-assert chat_configuration == {
-    "api_key": "test-deepseek-key",
-    "base_url": "https://api.deepseek.test",
-}
-assert tourism_configuration == {
-    "api_key": "test-deepseek-key",
-    "base_url": "https://api.deepseek.test/anthropic",
-}
+settings = Settings()
+assert settings.deepseek_api_key == "test-deepseek-key"
+assert settings.deepseek_model == "deepseek-v4-flash"
+assert settings.deepseek_anthropic_base_url == (
+    "https://api.deepseek.test/anthropic"
+)
 ```
 
 - [ ] **Step 2：运行测试确认失败**
@@ -98,10 +94,10 @@ Run:
 
 ```bash
 "/Volumes/02/obsidian codex/homestay-bot/.venv/bin/pytest" \
-  tests/integration/test_runtime_startup.py -v
+  tests/unit/test_config.py -v
 ```
 
-Expected: FAIL，`Settings` 仍要求 `OPENAI_API_KEY`，应用也没有创建 Anthropic 客户端。
+Expected: FAIL，`Settings` 尚无 `deepseek_api_key`。
 
 - [ ] **Step 3：修改依赖和配置字段**
 
@@ -143,16 +139,15 @@ Run:
 
 ```bash
 "/Volumes/02/obsidian codex/homestay-bot/.venv/bin/pytest" \
-  tests/integration/test_runtime_startup.py -v
+  tests/unit/test_config.py -v
 ```
 
-Expected: 在应用装配尚未切换前仍 FAIL，但配置字段验证不再报告缺少
-`OPENAI_API_KEY`。
+Expected: PASS。
 
 - [ ] **Step 6：提交配置边界**
 
 ```bash
-git add pyproject.toml src/homestay_bot/config.py tests/integration/test_runtime_startup.py
+git add pyproject.toml src/homestay_bot/config.py tests/unit/test_config.py
 git commit -m "chore: configure DeepSeek model clients"
 ```
 

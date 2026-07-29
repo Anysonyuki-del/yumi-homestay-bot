@@ -9,6 +9,7 @@ description = "武汉小型民宿企业微信客服机器人"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.14,<2",
+    "anthropic>=0.52,<1",
     "asyncpg>=0.30,<1",
     "cryptography>=44,<46",
     "fastapi>=0.115,<1",
