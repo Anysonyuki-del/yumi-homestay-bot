@@ -462,7 +462,9 @@ async def test_tourism_query_uses_one_required_web_search_request() -> None:
     assert request["tool_choice"] == {"type": "web_search"}
     assert request["include"] == ["web_search_call.action.sources"]
     assert "武汉市文化和旅游局" in decision.reply_text
-    assert "https://wlj.wuhan.gov.cn/" in decision.reply_text
+    assert "参考来源：武汉市文化和旅游局" in decision.reply_text
+    assert "http://" not in decision.reply_text
+    assert "https://" not in decision.reply_text
     assert decision.handoff_reason is None
     assert statuses == ["ok"]
 

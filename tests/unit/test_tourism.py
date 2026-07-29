@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 from homestay_bot.integrations.tourism import (
     WebSearchState,
-    append_citations,
     extract_url_citations,
+    format_tourism_reply,
     is_tourism_query,
     latest_user_question,
     web_search_tool,
@@ -73,10 +73,17 @@ def test_citations_are_deduplicated_and_appended_with_query_date() -> None:
     citations = extract_url_citations(response)
 
     assert citations == [("官方活动页", "https://example.gov.cn/a")]
-    assert append_citations("推荐东湖。", citations, date(2026, 7, 29)) == (
-        "推荐东湖。\n\n查询日期：2026-07-29\n"
-        "来源：\n1. 官方活动页\nhttps://example.gov.cn/a"
+    formatted = format_tourism_reply(
+        "推荐[东湖](https://example.gov.cn/a)，详情见 https://example.gov.cn/b。",
+        citations,
+        date(2026, 7, 29),
     )
+    assert formatted == (
+        "推荐东湖，详情见\n\n查询日期：2026-07-29\n"
+        "参考来源：官方活动页"
+    )
+    assert "http://" not in formatted
+    assert "https://" not in formatted
 
 
 def test_sources_fall_back_to_web_search_call_action() -> None:
@@ -100,6 +107,31 @@ def test_sources_fall_back_to_web_search_call_action() -> None:
 
     assert extract_url_citations(response) == [
         ("www.wuhan.gov.cn", "https://www.wuhan.gov.cn/zjwh/whly/index.shtml")
+    ]
+
+
+def test_null_web_search_sources_do_not_hide_later_citations() -> None:
+    """Fenno 的 sources 为 null 时应跳过，并继续读取后续正文注解。"""
+    citation = SimpleNamespace(
+        type="url_citation",
+        url="https://wlj.wuhan.gov.cn/",
+        title="武汉市文化和旅游局",
+    )
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="web_search_call",
+                action=SimpleNamespace(sources=None),
+            ),
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(annotations=[citation])],
+            ),
+        ]
+    )
+
+    assert extract_url_citations(response) == [
+        ("武汉市文化和旅游局", "https://wlj.wuhan.gov.cn/")
     ]
 
 

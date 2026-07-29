@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让企业微信民宿客服只在武汉旅游咨询中调用 Fenno `gpt-5.4-mini` 的兼容 `web_search` 工具，返回带日期和来源的推荐，并在联网失败时明确回复和转人工。
+**Goal:** 让企业微信民宿客服只在武汉旅游咨询中调用 Fenno `gpt-5.4-mini` 的兼容 `web_search` 工具，返回带日期和精简来源名称、但不含链接的推荐，并在联网失败时明确回复和转人工。
 
 **Architecture:** 新建纯逻辑旅游模块，负责意图门控、最小输入、工具定义、来源提取和健康状态；`GuestAssistant` 仍是唯一模型入口，只对旅游意图切换到联网请求。`ConversationService` 捕获明确的旅游搜索异常并复用现有事务发件箱完成客人提示、会话切换和员工通知；健康检查通过进程内状态报告 `unknown/ok/unsupported/degraded`。
 
@@ -39,7 +39,7 @@ from types import SimpleNamespace
 
 from homestay_bot.integrations.tourism import (
     WebSearchState,
-    append_citations,
+    format_tourism_reply,
     extract_url_citations,
     is_tourism_query,
     latest_user_question,
@@ -106,9 +106,13 @@ def test_citations_are_deduplicated_and_appended_with_query_date() -> None:
     )
     citations = extract_url_citations(response)
     assert citations == [("官方活动页", "https://example.gov.cn/a")]
-    assert append_citations("推荐东湖。", citations, date(2026, 7, 29)) == (
+    assert format_tourism_reply(
+        "推荐[东湖](https://example.gov.cn/a)。",
+        citations,
+        date(2026, 7, 29),
+    ) == (
         "推荐东湖。\n\n查询日期：2026-07-29\n"
-        "来源：\n1. 官方活动页\nhttps://example.gov.cn/a"
+        "参考来源：官方活动页"
     )
 
 
@@ -132,6 +136,30 @@ def test_sources_fall_back_to_web_search_call_action() -> None:
     )
     assert extract_url_citations(response) == [
         ("www.wuhan.gov.cn", "https://www.wuhan.gov.cn/zjwh/whly/index.shtml")
+    ]
+
+
+def test_null_web_search_sources_do_not_hide_later_citations() -> None:
+    """Fenno 的 sources 为 null 时应跳过，并继续读取后续正文注解。"""
+    citation = SimpleNamespace(
+        type="url_citation",
+        url="https://wlj.wuhan.gov.cn/",
+        title="武汉市文化和旅游局",
+    )
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="web_search_call",
+                action=SimpleNamespace(sources=None),
+            ),
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(annotations=[citation])],
+            ),
+        ]
+    )
+    assert extract_url_citations(response) == [
+        ("武汉市文化和旅游局", "https://wlj.wuhan.gov.cn/")
     ]
 
 
@@ -243,7 +271,7 @@ def extract_url_citations(response: Any) -> list[tuple[str, str]]:
             ]
         elif item_type == "web_search_call":
             action = getattr(output_item, "action", None)
-            candidates = list(getattr(action, "sources", []))
+            candidates = list(getattr(action, "sources", None) or [])
         else:
             candidates = []
         for candidate in candidates:
@@ -256,19 +284,18 @@ def extract_url_citations(response: Any) -> list[tuple[str, str]]:
     return citations
 
 
-def append_citations(
+def format_tourism_reply(
     reply_text: str,
     citations: list[tuple[str, str]],
     queried_on: date,
 ) -> str:
-    """把查询日期和可点击来源追加到企业微信文本。"""
-    source_lines = [
-        f"{index}. {title}\n{url}"
-        for index, (title, url) in enumerate(citations, start=1)
-    ]
+    """移除模型链接，并追加查询日期和精简来源名称。"""
+    clean_reply = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", reply_text)
+    clean_reply = re.sub(r"https?://\S+", "", clean_reply)
+    source_names = list(dict.fromkeys(title for title, _ in citations))[:5]
     return (
-        f"{reply_text.rstrip()}\n\n查询日期：{queried_on.isoformat()}\n"
-        f"来源：\n" + "\n".join(source_lines)
+        f"{clean_reply.rstrip()}\n\n查询日期：{queried_on.isoformat()}\n"
+        f"参考来源：{'、'.join(source_names)}"
     )
 ```
 
@@ -367,7 +394,8 @@ async def test_tourism_query_uses_one_required_web_search_request() -> None:
     assert request["tool_choice"] == {"type": "web_search"}
     assert request["include"] == ["web_search_call.action.sources"]
     assert "武汉市文化和旅游局" in decision.reply_text
-    assert "https://wlj.wuhan.gov.cn/" in decision.reply_text
+    assert "参考来源：武汉市文化和旅游局" in decision.reply_text
+    assert "https://" not in decision.reply_text
     assert decision.handoff_reason is None
     assert statuses == ["ok"]
 
@@ -509,7 +537,7 @@ from datetime import date
 from homestay_bot.integrations.tourism import (
     TourismSearchError,
     WebSearchStatus,
-    append_citations,
+    format_tourism_reply,
     extract_url_citations,
     is_tourism_query,
     latest_user_question,
@@ -615,7 +643,7 @@ if tourism_query:
     self._set_web_search_status("ok")
     return decision.model_copy(
         update={
-            "reply_text": append_citations(
+            "reply_text": format_tourism_reply(
                 decision.reply_text,
                 citations,
                 date.today(),
@@ -936,7 +964,8 @@ async def test_fenno_model_returns_tourism_answer_with_citations() -> None:
 
     assert decision.handoff_reason is None
     assert "查询日期：" in decision.reply_text
-    assert "https://" in decision.reply_text
+    assert "参考来源：" in decision.reply_text
+    assert "https://" not in decision.reply_text
     assert statuses == ["ok"]
 ```
 
@@ -1072,7 +1101,7 @@ Expected: HTTP 200；JSON 中数据库、worker、企业微信轮询为 `ok`，`
 
 Expected:
 
-- 前两条收到带查询日期和可点击来源的旅游回复，会话保持 `BOT_ACTIVE`。
+- 前两条收到带查询日期和精简来源名称、但不含链接的旅游回复，会话保持 `BOT_ACTIVE`。
 - 第三条继续走百居易房态流程，不调用联网搜索。
 - 再次请求 `/health` 时 `web_search` 为 `ok`。
 

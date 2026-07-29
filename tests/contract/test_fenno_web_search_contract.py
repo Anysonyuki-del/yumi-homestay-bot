@@ -50,5 +50,7 @@ async def test_fenno_model_returns_tourism_answer_with_citations() -> None:
 
     assert decision.handoff_reason is None
     assert "查询日期：" in decision.reply_text
-    assert "https://" in decision.reply_text
+    assert "参考来源：" in decision.reply_text
+    assert "http://" not in decision.reply_text
+    assert "https://" not in decision.reply_text
     assert statuses == ["ok"]

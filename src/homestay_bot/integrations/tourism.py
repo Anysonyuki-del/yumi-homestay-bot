@@ -18,6 +18,18 @@ _BOOKING_PATTERN = re.compile(
     r"availability|book|booking|check[- ]?in|check[- ]?out|room rate",
     re.IGNORECASE,
 )
+_MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(https?://[^)]+\)")
+_BARE_URL_PATTERN = re.compile(r"https?://\S+")
+_OFFICIAL_SOURCE_NAMES = {
+    "www.wuhan.gov.cn": "武汉市人民政府",
+    "3g.wuhan.gov.cn": "武汉市人民政府",
+    "wlj.wuhan.gov.cn": "武汉市文化和旅游局",
+    "ylj.wuhan.gov.cn": "武汉市园林和林业局",
+    "fgw.wuhan.gov.cn": "武汉市发展和改革委员会",
+    "hbj.wuhan.gov.cn": "武汉市生态环境局",
+    "gaj.wuhan.gov.cn": "武汉市公安局",
+    "zrzyhgh.wuhan.gov.cn": "武汉市自然资源和城乡建设局",
+}
 
 
 class TourismSearchError(RuntimeError):
@@ -90,7 +102,7 @@ def extract_url_citations(response: Any) -> list[tuple[str, str]]:
             ]
         elif item_type == "web_search_call":
             action = getattr(output_item, "action", None)
-            candidates = list(getattr(action, "sources", []))
+            candidates = list(getattr(action, "sources", None) or [])
         else:
             candidates = []
 
@@ -104,17 +116,30 @@ def extract_url_citations(response: Any) -> list[tuple[str, str]]:
     return citations
 
 
-def append_citations(
+def _source_display_name(title: str, url: str) -> str:
+    """把网址型标题转换为不会自动链接的来源名称。"""
+    hostname = urlparse(url).netloc.lower()
+    normalized_title = title.strip()
+    if normalized_title and normalized_title not in {url, hostname}:
+        return _BARE_URL_PATTERN.sub("", normalized_title).strip()
+    return _OFFICIAL_SOURCE_NAMES.get(hostname, hostname.replace(".", "·"))
+
+
+def format_tourism_reply(
     reply_text: str,
     citations: list[tuple[str, str]],
     queried_on: date,
 ) -> str:
-    """把查询日期和可点击来源追加到企业微信文本。"""
-    source_lines = [
-        f"{index}. {title}\n{url}"
-        for index, (title, url) in enumerate(citations, start=1)
-    ]
+    """移除模型生成的链接，并追加日期和最多五个来源名称。"""
+    clean_reply = _MARKDOWN_LINK_PATTERN.sub(r"\1", reply_text)
+    clean_reply = _BARE_URL_PATTERN.sub("", clean_reply).rstrip()
+    source_names = list(
+        dict.fromkeys(
+            _source_display_name(title, url)
+            for title, url in citations
+        )
+    )[:5]
     return (
-        f"{reply_text.rstrip()}\n\n查询日期：{queried_on.isoformat()}\n"
-        f"来源：\n" + "\n".join(source_lines)
+        f"{clean_reply}\n\n查询日期：{queried_on.isoformat()}\n"
+        f"参考来源：{'、'.join(source_names)}"
     )

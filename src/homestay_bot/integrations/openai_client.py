@@ -13,8 +13,8 @@ from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.tourism import (
     TourismSearchError,
     WebSearchStatus,
-    append_citations,
     extract_url_citations,
+    format_tourism_reply,
     is_tourism_query,
     latest_user_question,
     web_search_tool,
@@ -386,7 +386,7 @@ class GuestAssistant:
             self._set_web_search_status("ok")
             return decision.model_copy(
                 update={
-                    "reply_text": append_citations(
+                    "reply_text": format_tourism_reply(
                         decision.reply_text,
                         citations,
                         date.today(),
