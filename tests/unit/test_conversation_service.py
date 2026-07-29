@@ -5,6 +5,7 @@ import pytest
 
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import Conversation
+from homestay_bot.integrations.deepseek_client import AssistantUnavailableError
 from homestay_bot.integrations.openai_client import AssistantDecision, BookingFields
 from homestay_bot.integrations.tourism import (
     TourismSearchError,
@@ -107,6 +108,15 @@ class FailingTourismAssistantStub(AssistantStub):
         """抛出可识别的旅游联网异常。"""
         self.calls += 1
         raise TourismSearchError(self.status)
+
+
+class FailingAssistantStub(AssistantStub):
+    """模拟 DeepSeek 普通客服无法生成安全回复。"""
+
+    async def respond(self, **kwargs) -> AssistantDecision:
+        """抛出统一模型不可用异常。"""
+        self.calls += 1
+        raise AssistantUnavailableError()
 
 
 class WeComStub:
@@ -301,6 +311,19 @@ async def test_tourism_search_failure_uses_english_for_english_guest() -> None:
     )
 
     assert "unable to check live travel information" in wecom.guest_messages[0]
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_model_failure_replies_notifies_and_switches_to_human() -> None:
+    """普通模型失败必须明确回复、通知员工并切换人工。"""
+    assistant = FailingAssistantStub()
+    service, conversations, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="几点入住？"))
+
+    assert "暂时无法处理" in wecom.guest_messages[0]
+    assert "模型服务暂时不可用" in wecom.internal_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 

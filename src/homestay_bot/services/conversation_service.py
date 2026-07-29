@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import BookingApproval, Conversation
 from homestay_bot.domain.schemas import BookingRequest
+from homestay_bot.integrations.deepseek_client import AssistantUnavailableError
 from homestay_bot.integrations.openai_client import AssistantDecision
 from homestay_bot.integrations.tourism import TourismSearchError
 from homestay_bot.services.emergency_service import (
@@ -158,6 +159,9 @@ class ConversationService:
         except TourismSearchError as error:
             await self._escalate_tourism_failure(conversation, message, error)
             return
+        except AssistantUnavailableError:
+            await self._escalate_assistant_failure(conversation, message)
+            return
         await self._send_guest_reply(conversation, decision.reply_text)
         if decision.intent == "booking_confirmed":
             await self._create_pending_approval(conversation, message, decision)
@@ -303,6 +307,27 @@ class ConversationService:
             conversation,
             message,
             f"旅游联网失败：{error.status}",
+        )
+
+    async def _escalate_assistant_failure(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+    ) -> None:
+        """告知普通模型暂不可用，再切人工并通知值班员工。"""
+        reply = (
+            "I’m temporarily unable to process this request. "
+            "A staff member has been notified to help you."
+            if conversation.language is Language.EN
+            else "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。"
+        )
+        await self._send_guest_reply(conversation, reply)
+        conversation.mode = ConversationMode.HUMAN_ACTIVE
+        await self._conversations.save(conversation)
+        await self._notify_employee(
+            conversation,
+            message,
+            "模型服务暂时不可用",
         )
 
     async def _notify_employee(
