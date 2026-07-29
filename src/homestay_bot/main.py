@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 
+from homestay_bot.routes.wecom_callback import router as wecom_callback_router
+
 app = FastAPI(title="武汉民宿客服机器人")
+app.include_router(wecom_callback_router)
 
 
 @app.get("/health")

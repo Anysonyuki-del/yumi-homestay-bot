@@ -1,0 +1,140 @@
+import httpx
+import pytest
+
+from homestay_bot.integrations.wecom.api_client import WeComApiClient
+
+
+@pytest.mark.asyncio
+async def test_sync_messages_uses_kf_token_and_cursor() -> None:
+    """读取客服消息必须先取凭证，再提交回调中的同步 Token。"""
+    requests: list[httpx.Request] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/gettoken"):
+            assert request.url.params["corpid"] == "corp-id"
+            assert request.url.params["corpsecret"] == "kf-secret"
+            return httpx.Response(
+                200,
+                json={"errcode": 0, "errmsg": "ok", "access_token": "access", "expires_in": 7200},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "errcode": 0,
+                "errmsg": "ok",
+                "next_cursor": "cursor-2",
+                "has_more": 0,
+                "msg_list": [],
+            },
+        )
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+    result = await client.sync_messages(
+        cursor="cursor-1", token="sync-token", open_kfid="wk-1"
+    )
+
+    assert result.next_cursor == "cursor-2"
+    assert requests[1].url.path.endswith("/cgi-bin/kf/sync_msg")
+    assert b"sync-token" in requests[1].content
+
+
+@pytest.mark.asyncio
+async def test_send_text_uses_customer_service_endpoint() -> None:
+    """机器人回复必须发往指定客服账号和外部联系人。"""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/gettoken"):
+            return httpx.Response(
+                200,
+                json={"errcode": 0, "errmsg": "ok", "access_token": "access", "expires_in": 7200},
+            )
+        assert request.url.path.endswith("/cgi-bin/kf/send_msg")
+        assert b"wk-1" in request.content
+        assert b"wm-1" in request.content
+        return httpx.Response(
+            200, json={"errcode": 0, "errmsg": "ok", "msgid": "MSG-1"}
+        )
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+
+    message_id = await client.send_text("wk-1", "wm-1", "您好")
+
+    assert message_id == "MSG-1"
+
+
+@pytest.mark.asyncio
+async def test_send_internal_message_uses_agent_secret() -> None:
+    """内部审批通知必须使用自建应用 Secret 和 AgentID。"""
+    token_secrets: list[str] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/gettoken"):
+            token_secrets.append(request.url.params["corpsecret"])
+            return httpx.Response(
+                200,
+                json={
+                    "errcode": 0,
+                    "errmsg": "ok",
+                    "access_token": "agent-access",
+                    "expires_in": 7200,
+                },
+            )
+        assert request.url.path.endswith("/cgi-bin/message/send")
+        assert b'"agentid":100001' in request.content
+        assert b"staff-1" in request.content
+        return httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+
+    await client.send_internal_text(
+        agent_id=100001,
+        employee_userids=["staff-1"],
+        content="有新的预订待审批",
+    )
+
+    assert token_secrets == ["agent-secret"]
+
+
+@pytest.mark.asyncio
+async def test_transfer_service_state_assigns_employee() -> None:
+    """转人工时应指定客服账号、客人和接待员工。"""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/gettoken"):
+            return httpx.Response(
+                200,
+                json={"errcode": 0, "errmsg": "ok", "access_token": "access", "expires_in": 7200},
+            )
+        assert request.url.path.endswith("/cgi-bin/kf/service_state/trans")
+        assert b'"service_state":3' in request.content
+        assert b"staff-1" in request.content
+        return httpx.Response(
+            200, json={"errcode": 0, "errmsg": "ok", "msg_code": "CODE"}
+        )
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+
+    code = await client.transfer_service_state("wk-1", "wm-1", "staff-1")
+
+    assert code == "CODE"
