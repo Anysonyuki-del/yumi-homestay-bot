@@ -175,3 +175,18 @@ class WeComApiClient:
         )
         response.raise_for_status()
         self._raise_for_error(response.json())
+
+    async def get_employee_userid(self, code: str) -> str:
+        """使用内部应用 access token 把 OAuth code 换成员 userid。"""
+        access_token = await self._get_access_token(self._agent_secret)
+        response = await self._client.get(
+            "/cgi-bin/auth/getuserinfo",
+            params={"access_token": access_token, "code": code},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._raise_for_error(payload)
+        userid = payload.get("userid")
+        if not isinstance(userid, str) or not userid:
+            raise WeComApiError(-1, "OAuth 响应缺少企业成员 userid")
+        return userid

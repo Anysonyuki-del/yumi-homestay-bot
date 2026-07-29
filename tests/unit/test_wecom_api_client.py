@@ -138,3 +138,34 @@ async def test_transfer_service_state_assigns_employee() -> None:
     code = await client.transfer_service_state("wk-1", "wm-1", "staff-1")
 
     assert code == "CODE"
+
+
+@pytest.mark.asyncio
+async def test_oauth_code_resolves_employee_userid_with_agent_token() -> None:
+    """员工 OAuth code 必须使用内部应用凭据换取企业成员身份。"""
+    requests: list[httpx.Request] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/gettoken"):
+            assert request.url.params["corpsecret"] == "agent-secret"
+            return httpx.Response(
+                200,
+                json={"errcode": 0, "access_token": "agent-token", "expires_in": 7200},
+            )
+        assert request.url.path.endswith("/cgi-bin/auth/getuserinfo")
+        assert request.url.params["access_token"] == "agent-token"
+        assert request.url.params["code"] == "oauth-code"
+        return httpx.Response(200, json={"errcode": 0, "userid": "staff-1"})
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+
+    userid = await client.get_employee_userid("oauth-code")
+
+    assert userid == "staff-1"
+    assert len(requests) == 2
