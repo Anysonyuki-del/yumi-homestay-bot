@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
@@ -17,6 +18,21 @@ from homestay_bot.services.answer_policy import (
     is_transaction_sensitive,
 )
 from homestay_bot.services.knowledge_service import KnowledgeService
+
+logger = logging.getLogger(__name__)
+
+_ASSISTANT_FAILURE_REPLIES = {
+    "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。",
+    "暂时无法查询实时旅游信息，已为您通知工作人员协助，请稍候。",
+    (
+        "I’m temporarily unable to process this request. "
+        "A staff member has been notified to help you."
+    ),
+    (
+        "I’m unable to check live travel information right now. "
+        "A staff member has been notified to help you."
+    ),
+}
 
 
 class AssistantUnavailableError(RuntimeError):
@@ -226,16 +242,29 @@ class DeepSeekGuestAssistant:
     def _minimize_personal_data(
         messages: list[dict[str, str]],
     ) -> list[dict[str, str]]:
-        """非预订阶段隐藏姓名和手机号。"""
-        combined = "\n".join(item.get("content", "") for item in messages)
+        """移除失败轮次，并在非预订阶段隐藏姓名和手机号。"""
+        cleaned: list[dict[str, str]] = []
+        for item in messages:
+            if (
+                item.get("role") == "assistant"
+                and item.get("content") in _ASSISTANT_FAILURE_REPLIES
+            ):
+                # 失败文案不是模型知识；连同其未成功回答的问题一起移除，
+                # 防止下一轮模仿失败文案或回答过期问题。
+                if cleaned and cleaned[-1].get("role") == "user":
+                    cleaned.pop()
+                continue
+            cleaned.append(item)
+
+        combined = "\n".join(item.get("content", "") for item in cleaned)
         if re.search(
             r"预订|订房|下单|booking|reservation|reserve",
             combined,
             re.IGNORECASE,
         ):
-            return [dict(item) for item in messages]
+            return [dict(item) for item in cleaned]
         minimized: list[dict[str, str]] = []
-        for item in messages:
+        for item in cleaned:
             content = re.sub(
                 r"(?<!\d)1[3-9]\d{9}(?!\d)",
                 "[手机号已隐藏]",
@@ -431,7 +460,7 @@ class DeepSeekGuestAssistant:
             question_text,
             knowledge,
         )
-        for _ in range(2):
+        for attempt in range(1, 3):
             try:
                 active_request = {**request}
                 for _tool_round in range(4):
@@ -478,8 +507,25 @@ class DeepSeekGuestAssistant:
                 raise AssistantUnavailableError()
             except AssistantUnavailableError:
                 raise
-            except (IndexError, TypeError, ValidationError, ValueError):
+            except (
+                IndexError,
+                TypeError,
+                ValidationError,
+                ValueError,
+            ) as error:
+                # 只记录异常类型，不写响应正文或请求参数，避免日志泄露客人信息。
+                logger.warning(
+                    "DeepSeek 对话调用失败，准备重试：attempt=%s error_type=%s",
+                    attempt,
+                    type(error).__name__,
+                )
                 continue
-            except Exception:
+            except Exception as error:
+                # 外部 SDK 异常同样只保留类型，供现场区分网络、限流和协议错误。
+                logger.warning(
+                    "DeepSeek 对话调用失败，准备重试：attempt=%s error_type=%s",
+                    attempt,
+                    type(error).__name__,
+                )
                 continue
         raise AssistantUnavailableError()

@@ -24,9 +24,10 @@
 - [x] 分段确认 DeepSeek 迁移设计
 - [x] 编写并审核 DeepSeek 迁移 Spec
 - [x] 编写 DeepSeek 迁移实施计划
-- [ ] 实现 DeepSeek Chat Completions 与 Anthropic Web Search 适配
-- [ ] 通过真实 DeepSeek 契约并切换本机配置
+- [x] 实现 DeepSeek Chat Completions 与 Anthropic Web Search 适配
+- [x] 通过真实 DeepSeek 契约并切换本机配置
 - [ ] 完成 DeepSeek 企业微信端到端验收
+- [x] 修复失败文案污染模型上下文并保留安全诊断日志
 
 ## Review
 
@@ -41,3 +42,6 @@
 - 大模型兜底全量测试：128 passed、7 skipped；Ruff 通过；mypy 检查 40 个源文件通过。
 - 关键安全回归：44 passed；知识缺口和交易待确认均只提醒员工，不切换机器人会话。
 - 真实 Fenno 兜底契约：3 passed；普通问题、停车信息缺口和退款金额三类行为均符合设计。
+- DeepSeek 迁移后全量测试：120 passed、8 skipped；Ruff 通过；mypy 检查 41 个源文件通过。
+- 真实 DeepSeek 双接口契约：6 passed；普通问答、专属知识缺口、退款待确认、相对日期房态和武汉旅游联网均通过。
+- 企业微信首次 DeepSeek 验收暴露固定失败文案污染上下文；已按 TDD 移除失败轮次并增加不记录客人正文的异常类型日志。

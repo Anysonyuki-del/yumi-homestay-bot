@@ -194,7 +194,7 @@ async def test_empty_json_response_retries_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_two_invalid_json_responses_raise_unavailable() -> None:
+async def test_two_invalid_json_responses_raise_unavailable(caplog) -> None:
     """连续两次无效结构化输出必须进入统一失败边界。"""
     client = ChatClientStub(["", "不是 JSON"])
     assistant = DeepSeekGuestAssistant(
@@ -213,6 +213,14 @@ async def test_two_invalid_json_responses_raise_unavailable() -> None:
         )
 
     assert len(client.chat.completions.requests) == 2
+    assert sum(
+        "DeepSeek 对话调用失败" in record.getMessage()
+        for record in caplog.records
+    ) == 2
+    assert all(
+        "不是 JSON" not in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -283,6 +291,43 @@ async def test_general_question_clears_model_knowledge_gap_mistake() -> None:
 
     assert decision.knowledge_gap is False
     assert decision.knowledge_gap_topic is None
+
+
+@pytest.mark.asyncio
+async def test_previous_assistant_failure_reply_is_excluded_from_model_context() -> None:
+    """固定失败文案不得污染后续 DeepSeek 对话上下文。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {"role": "user", "content": "上一个问题"},
+            {
+                "role": "assistant",
+                "content": "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。",
+            },
+            {"role": "user", "content": "怎样和朋友协调旅行安排？"},
+        ],
+    )
+
+    request_messages = client.chat.completions.requests[0]["messages"]
+    assert all(
+        message.get("content")
+        != "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。"
+        for message in request_messages
+    )
+    assert all(
+        message.get("content") != "上一个问题"
+        for message in request_messages
+    )
 
 
 @pytest.mark.asyncio
