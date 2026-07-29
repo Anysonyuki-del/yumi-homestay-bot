@@ -7,6 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.routes.approvals import router as approvals_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
+from homestay_bot.routes.knowledge import router as knowledge_router
 from homestay_bot.routes.wecom_callback import router as wecom_callback_router
 
 app = FastAPI(title="武汉民宿客服机器人")
@@ -19,6 +20,7 @@ app.add_middleware(
 app.include_router(wecom_callback_router)
 app.include_router(employee_auth_router)
 app.include_router(approvals_router)
+app.include_router(knowledge_router)
 app.mount(
     "/static",
     StaticFiles(directory=Path(__file__).resolve().parent / "static"),
