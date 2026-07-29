@@ -6,6 +6,10 @@ import pytest
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import Conversation
 from homestay_bot.integrations.openai_client import AssistantDecision, BookingFields
+from homestay_bot.integrations.tourism import (
+    TourismSearchError,
+    WebSearchStatus,
+)
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.message_service import IncomingMessage
@@ -89,6 +93,20 @@ class AssistantStub:
             confidence=0.98,
             handoff_reason=self.handoff_reason,
         )
+
+
+class FailingTourismAssistantStub(AssistantStub):
+    """模拟 Fenno 联网超时或不支持。"""
+
+    def __init__(self, status: WebSearchStatus) -> None:
+        """保存预期失败分类。"""
+        super().__init__()
+        self.status = status
+
+    async def respond(self, **kwargs) -> AssistantDecision:
+        """抛出可识别的旅游联网异常。"""
+        self.calls += 1
+        raise TourismSearchError(self.status)
 
 
 class WeComStub:
@@ -257,3 +275,30 @@ async def test_confirmed_booking_details_create_pending_approval_only() -> None:
     assert len(approvals.calls) == 1
     assert approvals.calls[0][1].guest_name == "张三"
     assert "待审批单" in wecom.internal_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_tourism_search_failure_replies_then_switches_to_human() -> None:
+    """联网失败不得静默，客人和员工都应收到消息。"""
+    assistant = FailingTourismAssistantStub("degraded")
+    service, conversations, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="武汉有哪些地方好玩？"))
+
+    assert "暂时无法查询实时旅游信息" in wecom.guest_messages[0]
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert "旅游联网失败：degraded" in wecom.internal_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_tourism_search_failure_uses_english_for_english_guest() -> None:
+    """英文客人应收到固定英文失败说明。"""
+    assistant = FailingTourismAssistantStub("unsupported")
+    service, conversations, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(
+        incoming(content="What attractions are fun in Wuhan?")
+    )
+
+    assert "unable to check live travel information" in wecom.guest_messages[0]
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE

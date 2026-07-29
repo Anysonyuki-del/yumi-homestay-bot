@@ -7,6 +7,7 @@ from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import BookingApproval, Conversation
 from homestay_bot.domain.schemas import BookingRequest
 from homestay_bot.integrations.openai_client import AssistantDecision
+from homestay_bot.integrations.tourism import TourismSearchError
 from homestay_bot.services.emergency_service import (
     EmergencyClassification,
     EmergencyService,
@@ -148,11 +149,15 @@ class ConversationService:
             await self._escalate_regular(conversation, message)
             return
 
-        decision = await self._assistant.respond(
-            guest_identifier=message.external_userid,
-            language=conversation.language,
-            messages=await self._messages.build_context(conversation.id),
-        )
+        try:
+            decision = await self._assistant.respond(
+                guest_identifier=message.external_userid,
+                language=conversation.language,
+                messages=await self._messages.build_context(conversation.id),
+            )
+        except TourismSearchError as error:
+            await self._escalate_tourism_failure(conversation, message, error)
+            return
         await self._send_guest_reply(conversation, decision.reply_text)
         if decision.intent == "booking_confirmed":
             await self._create_pending_approval(conversation, message, decision)
@@ -260,6 +265,28 @@ class ConversationService:
         conversation.mode = ConversationMode.HUMAN_ACTIVE
         await self._conversations.save(conversation)
         await self._notify_employee(conversation, message, "普通人工接管")
+
+    async def _escalate_tourism_failure(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        error: TourismSearchError,
+    ) -> None:
+        """明确告知联网失败，再切人工并通知值班员工。"""
+        reply = (
+            "I’m unable to check live travel information right now. "
+            "A staff member has been notified to help you."
+            if conversation.language is Language.EN
+            else "暂时无法查询实时旅游信息，已为您通知工作人员协助，请稍候。"
+        )
+        await self._send_guest_reply(conversation, reply)
+        conversation.mode = ConversationMode.HUMAN_ACTIVE
+        await self._conversations.save(conversation)
+        await self._notify_employee(
+            conversation,
+            message,
+            f"旅游联网失败：{error.status}",
+        )
 
     async def _notify_employee(
         self,
