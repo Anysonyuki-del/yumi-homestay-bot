@@ -201,6 +201,51 @@ async def test_response_disables_storage_and_hashes_guest_identifier() -> None:
 
 
 @pytest.mark.asyncio
+async def test_response_uses_flat_strict_schema_for_compatible_endpoints() -> None:
+    """结构化输出 Schema 不应包含兼容接口无法解析的引用或缺失必填字段。"""
+    client = OpenAIStub()
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "当前房间预订状况"}],
+    )
+
+    schema = client.responses.kwargs["text"]["format"]["schema"]
+    assert "$defs" not in schema
+    assert set(schema["required"]) == set(schema["properties"])
+    booking_schema = schema["properties"]["booking_fields"]["anyOf"][0]
+    assert set(booking_schema["required"]) == set(booking_schema["properties"])
+
+
+@pytest.mark.asyncio
+async def test_missing_dates_are_clarified_without_human_handoff() -> None:
+    """普通房态咨询缺少日期时应继续追问，不应仅因资料不全转人工。"""
+    client = OpenAIStub()
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "当前房间预订状况"}],
+    )
+
+    instructions = str(client.responses.kwargs["instructions"])
+    assert "缺少入住或退房日期时应直接追问，不得仅因此转人工" in instructions
+
+
+@pytest.mark.asyncio
 async def test_response_executes_read_only_tool_and_returns_final_decision() -> None:
     """模型的只读函数调用应执行并把结果回传后再生成回复。"""
     client = ToolCallingOpenAIStub()

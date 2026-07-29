@@ -92,6 +92,54 @@ class AssistantDecision(BaseModel):
     booking_fields: BookingFields | None = None
 
 
+def assistant_decision_schema() -> dict[str, Any]:
+    """返回无引用的严格 Schema，兼容支持 Responses 的第三方端点。"""
+    nullable_string = {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "null"},
+        ]
+    }
+    booking_properties: dict[str, Any] = {
+        "check_in_date": nullable_string,
+        "check_out_date": nullable_string,
+        "number_of_guests": {
+            "anyOf": [
+                {"type": "integer"},
+                {"type": "null"},
+            ]
+        },
+        "guest_name": nullable_string,
+        "guest_mobile": nullable_string,
+        "room_type_preference": nullable_string,
+        "special_requests": nullable_string,
+    }
+    properties: dict[str, Any] = {
+        "reply_text": {"type": "string"},
+        "language": {"type": "string", "enum": [item.value for item in Language]},
+        "intent": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "handoff_reason": nullable_string,
+        "booking_fields": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": booking_properties,
+                    "required": list(booking_properties),
+                    "additionalProperties": False,
+                },
+                {"type": "null"},
+            ]
+        },
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
 class GuestAssistant:
     """使用审核知识和只读工具生成双语客服决定。"""
 
@@ -224,7 +272,9 @@ class GuestAssistant:
         system_prompt = (
             "你是武汉一家7间房民宿的客服。只能依据审核知识和查询工具回答。"
             "不得确认最终价格、收款、具体房间、退款、取消或改期；"
-            "资料不足或置信度低时必须设置 handoff_reason。"
+            "缺少入住或退房日期时应直接追问，不得仅因此转人工；"
+            "只有问题超出审核知识和工具能力、政策不明确、置信度低，"
+            "或客人明确要求人工时，才设置 handoff_reason。"
             "只有客人明确确认了入住日期、退房日期、人数、姓名、手机号和房型偏好后，"
             "intent 才能设为 booking_confirmed，并填写全部 booking_fields；"
             f"\n审核知识：{json.dumps(knowledge_payload, ensure_ascii=False)}"
@@ -247,7 +297,7 @@ class GuestAssistant:
                     "type": "json_schema",
                     "name": "assistant_decision",
                     "strict": True,
-                    "schema": AssistantDecision.model_json_schema(),
+                    "schema": assistant_decision_schema(),
                 }
             },
         }
