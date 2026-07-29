@@ -1,6 +1,5 @@
 import re
 
-
 _TRANSACTION_PATTERN = re.compile(
     r"房态|有房|可订|价格|房价|多少钱|参考价|退款|退多少|"
     r"取消|改期|付款|支付|到账|订单|预订状态|发票金额|"
