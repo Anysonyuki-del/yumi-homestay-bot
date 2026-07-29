@@ -13,7 +13,8 @@ class WeComMessage(WeComModel):
     """表示微信客服读取接口返回的一条消息或事件。"""
 
     msgid: str | None = None
-    open_kfid: str
+    # 部分事件只在 event 对象内提供客服账号，顶层字段并不固定存在。
+    open_kfid: str | None = None
     external_userid: str | None = None
     send_time: int | None = None
     origin: int | None = None
@@ -28,4 +29,3 @@ class SyncMessagePage(WeComModel):
     next_cursor: str = ""
     has_more: int = 0
     msg_list: list[WeComMessage] = Field(default_factory=list)
-

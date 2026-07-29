@@ -88,6 +88,66 @@ async def test_sync_messages_uses_kf_token_and_cursor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sync_messages_accepts_event_without_top_level_account_id() -> None:
+    """企业微信事件仅在 event 内含客服账号时，整页消息仍应可解析。"""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """返回真实企业微信 enter_session 事件的字段结构。"""
+        if request.url.path.endswith("/gettoken"):
+            return httpx.Response(
+                200,
+                json={
+                    "errcode": 0,
+                    "errmsg": "ok",
+                    "access_token": "access",
+                    "expires_in": 7200,
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "errcode": 0,
+                "errmsg": "ok",
+                "next_cursor": "cursor-2",
+                "has_more": 0,
+                "msg_list": [
+                    {
+                        "msgid": "event-1",
+                        "send_time": 1785298008,
+                        "origin": 4,
+                        "msgtype": "event",
+                        "event": {
+                            "event_type": "enter_session",
+                            "open_kfid": "wk-1",
+                            "external_userid": "wm-1",
+                        },
+                    }
+                ],
+            },
+        )
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+    try:
+        page = await client.sync_messages(
+            cursor="", token="", open_kfid="wk-1"
+        )
+    finally:
+        await client.aclose()
+
+    assert page.msg_list[0].open_kfid is None
+    assert page.msg_list[0].event == {
+        "event_type": "enter_session",
+        "open_kfid": "wk-1",
+        "external_userid": "wm-1",
+    }
+
+
+@pytest.mark.asyncio
 async def test_send_text_uses_customer_service_endpoint() -> None:
     """机器人回复必须发往指定客服账号和外部联系人。"""
 

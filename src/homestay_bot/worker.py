@@ -106,6 +106,7 @@ class WeComSyncJobHandler:
             if (
                 origin is None
                 or not item.msgid
+                or not item.open_kfid
                 or not item.external_userid
                 or item.send_time is None
             ):
