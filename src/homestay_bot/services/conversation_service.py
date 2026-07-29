@@ -17,6 +17,8 @@ from homestay_bot.services.emergency_service import (
 )
 from homestay_bot.services.message_service import IncomingMessage
 
+_MAX_ASSISTANT_REPLY_CHARACTERS = 1000
+
 
 class ConversationRepository(Protocol):
     """定义会话编排所需的持久化接口。"""
@@ -164,7 +166,8 @@ class ConversationService:
         except AssistantUnavailableError:
             await self._escalate_assistant_failure(conversation, message)
             return
-        await self._send_guest_reply(conversation, decision.reply_text)
+        reply_text = self._limit_assistant_reply(decision.reply_text)
+        await self._send_guest_reply(conversation, reply_text)
         if decision.intent == "booking_confirmed":
             await self._create_pending_approval(conversation, message, decision)
             return
@@ -257,6 +260,13 @@ class ConversationService:
             content,
         )
         await self._messages.record_bot(conversation.id, message_id, content)
+
+    @staticmethod
+    def _limit_assistant_reply(content: str) -> str:
+        """把大模型客人可见回复严格限制为最多一千个字符。"""
+        if len(content) <= _MAX_ASSISTANT_REPLY_CHARACTERS:
+            return content
+        return content[: _MAX_ASSISTANT_REPLY_CHARACTERS - 1] + "…"
 
     async def _escalate_emergency(
         self,

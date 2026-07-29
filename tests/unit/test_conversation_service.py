@@ -259,6 +259,50 @@ async def test_normal_guest_message_gets_bot_reply() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deepseek_reply_at_1000_characters_is_not_changed() -> None:
+    """恰好一千个字符的 DeepSeek 回复必须完整发送。"""
+    content = "汉" * 1000
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text=content,
+            language=Language.ZH,
+            intent="faq",
+            confidence=0.98,
+        )
+    )
+    service, _, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming())
+
+    assert wecom.guest_messages == [content]
+
+
+@pytest.mark.asyncio
+async def test_deepseek_reply_over_1000_characters_is_truncated_before_recording() -> None:
+    """超长 DeepSeek 回复应以省略号结尾，并按实际发送内容入库。"""
+    messages = MessageServiceStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="汉" * 1001,
+            language=Language.ZH,
+            intent="faq",
+            confidence=0.98,
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        messages=messages,
+    )
+
+    await service.handle_message(incoming())
+
+    expected = "汉" * 999 + "…"
+    assert wecom.guest_messages == [expected]
+    assert len(wecom.guest_messages[0]) == 1000
+    assert messages.bot_messages == [(1, "bot-1", expected)]
+
+
+@pytest.mark.asyncio
 async def test_confirmed_booking_details_create_pending_approval_only() -> None:
     """客人明确确认完整资料后只能生成待审批单，不得直接下单。"""
     approvals = ApprovalServiceStub()
