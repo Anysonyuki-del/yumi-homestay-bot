@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Protocol
 
 from homestay_bot.domain.enums import MessageOrigin
@@ -74,7 +74,8 @@ class MessageService:
                 origin=MessageOrigin.BOT,
                 message_type="text",
                 content=content,
-                sent_at=sent_at or datetime.now().astimezone(),
+                # 企业微信入站时间统一为 UTC，机器人消息也必须使用同一时间基准。
+                sent_at=sent_at or datetime.now(UTC),
             )
         )
 

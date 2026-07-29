@@ -58,11 +58,11 @@ class SQLAlchemyMessageRepository:
     async def list_recent(
         self, conversation_id: int, limit: int
     ) -> list[Message]:
-        """读取最近消息后恢复正序，供模型构造有限上下文。"""
+        """按系统实际处理顺序读取最近消息，避免外部时区扰乱上下文。"""
         statement = (
             select(Message)
             .where(Message.conversation_id == conversation_id)
-            .order_by(Message.sent_at.desc(), Message.id.desc())
+            .order_by(Message.id.desc())
             .limit(limit)
         )
         recent = list((await self._session.scalars(statement)).all())
