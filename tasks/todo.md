@@ -49,7 +49,7 @@
 - [x] 在 `tests/unit/test_deepseek_client.py` 验证删除宣传后的连续编号和无关房型推销清理
 - [x] 在 `src/homestay_bot/integrations/deepseek_client.py` 实现安全行过滤后的编号重排
 - [x] 运行全量测试、Ruff、mypy 和真实 DeepSeek 旅游契约
-- [ ] 部署本机服务并完成消息回放与健康检查
+- [x] 部署本机服务并完成消息回放与健康检查
 
 ## Review
 
@@ -81,3 +81,4 @@
 - 演出与展览日期会补全省略年份；展览月度展期覆盖窗口时允许通过，证据不满足时拒绝发送。
 - 回复安全过滤后会重新连续编号并删除无关房型推销。
 - 修复后全量测试：135 passed、10 skipped；Ruff、mypy 通过；真实 DeepSeek 完整契约 8 passed。
+- 本机部署健康检查 HTTP 200，会话保持 `BOT_ACTIVE`；历史普通回复回放得到连续 `1、2、3、4`，房型推销、客厅和庭院臆测均已清除。
