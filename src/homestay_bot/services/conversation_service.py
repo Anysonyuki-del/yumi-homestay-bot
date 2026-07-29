@@ -88,8 +88,8 @@ class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
     _handoff_pattern = re.compile(
-        r"人工客服|转人工|投诉|差评|退款|取消|改期|付款争议|价格争议|"
-        r"human agent|live agent|complaint|refund|cancel|reschedule|payment dispute",
+        r"人工客服|转人工|找人工|工作人员接待|"
+        r"human agent|live agent|staff member",
         re.IGNORECASE,
     )
 
@@ -162,13 +162,30 @@ class ConversationService:
         if decision.intent == "booking_confirmed":
             await self._create_pending_approval(conversation, message, decision)
             return
-        if decision.handoff_reason is not None:
-            conversation.mode = ConversationMode.HUMAN_ACTIVE
-            await self._conversations.save(conversation)
+        # 未确认的交易事实只提醒员工核实，机器人继续承接后续对话。
+        if decision.staff_confirmation_required:
             await self._notify_employee(
                 conversation,
                 message,
-                f"机器人请求人工接管：{decision.handoff_reason}",
+                (
+                    "业务待确认"
+                    "\n原因："
+                    f"{decision.staff_confirmation_reason or 'transaction_unconfirmed'}"
+                ),
+            )
+            return
+
+        # 民宿专属资料缺失时提醒补知识，不中断当前机器人会话。
+        if decision.knowledge_gap:
+            await self._notify_employee(
+                conversation,
+                message,
+                (
+                    "知识库待补充"
+                    "\n缺失主题："
+                    f"{decision.knowledge_gap_topic or 'property_information'}"
+                    "\n请在知识管理页面新增并启用审核答案"
+                ),
             )
 
     async def _create_pending_approval(

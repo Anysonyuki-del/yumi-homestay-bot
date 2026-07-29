@@ -302,3 +302,118 @@ async def test_tourism_search_failure_uses_english_for_english_guest() -> None:
 
     assert "unable to check live travel information" in wecom.guest_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_knowledge_gap_notifies_staff_and_keeps_bot_active() -> None:
+    """专属信息缺失时应提供替代建议并提醒补知识。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text=(
+                "当前资料暂未确认是否有专属停车场，"
+                "建议先使用附近公共停车场并留意现场标识。"
+            ),
+            language=Language.ZH,
+            intent="property_facility",
+            confidence=0.62,
+            knowledge_gap=True,
+            knowledge_gap_topic="停车",
+        )
+    )
+    service, conversations, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="你们有停车场吗？"))
+
+    assert "公共停车场" in wecom.guest_messages[0]
+    assert len(wecom.internal_messages) == 1
+    assert "知识库待补充" in wecom.internal_messages[0]
+    assert "停车" in wecom.internal_messages[0]
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_transaction_confirmation_notifies_staff_and_keeps_bot_active() -> None:
+    """交易结论无法确认时应通知员工核实，但不停止机器人。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="退款金额需要工作人员结合订单核实，我已为您发起确认。",
+            language=Language.ZH,
+            intent="refund",
+            confidence=0.55,
+            staff_confirmation_required=True,
+            staff_confirmation_reason="refund_amount_unconfirmed",
+        )
+    )
+    service, conversations, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="这个订单能退款多少？"))
+
+    assert "已为您发起确认" in wecom.guest_messages[0]
+    assert len(wecom.internal_messages) == 1
+    assert "业务待确认" in wecom.internal_messages[0]
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_transaction_confirmation_has_priority_over_knowledge_gap() -> None:
+    """同轮两个标记并存时只发送一次业务提醒。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="需要工作人员核实。",
+            language=Language.ZH,
+            intent="refund",
+            confidence=0.5,
+            knowledge_gap=True,
+            knowledge_gap_topic="退款",
+            staff_confirmation_required=True,
+            staff_confirmation_reason="refund_policy_unconfirmed",
+        )
+    )
+    service, conversations, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="退款政策是什么？"))
+
+    assert len(wecom.internal_messages) == 1
+    assert "业务待确认" in wecom.internal_messages[0]
+    assert "知识库待补充" not in wecom.internal_messages[0]
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_grounded_property_answer_does_not_notify_staff() -> None:
+    """已有审核答案的专属问题不得误报知识库缺口。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="民宿提供早餐，供应时间以审核知识中的说明为准。",
+            language=Language.ZH,
+            intent="property_facility",
+            confidence=0.95,
+            knowledge_gap=False,
+        )
+    )
+    service, conversations, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="你们提供早餐吗？"))
+
+    assert wecom.internal_messages == []
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_missing_dates_clarification_does_not_create_gap_alert() -> None:
+    """房态查询缺少必要日期时允许追问，但不得提醒补知识。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="请告诉我入住日期和退房日期，我马上帮您查询。",
+            language=Language.ZH,
+            intent="availability",
+            confidence=0.96,
+        )
+    )
+    service, conversations, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="还有房吗？"))
+
+    assert "入住日期" in wecom.guest_messages[0]
+    assert wecom.internal_messages == []
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
