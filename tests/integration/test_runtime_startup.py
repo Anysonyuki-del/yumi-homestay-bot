@@ -63,6 +63,7 @@ def test_configured_application_starts_worker_and_reports_healthy(
             "status": "ok",
             "database": "ok",
             "worker_heartbeat": "ok",
+            "wecom_polling": "ok",
             "configuration": "ok",
         }
         assert openai_configuration == {

@@ -24,6 +24,7 @@ class UnconfiguredHealthService:
             "status": "degraded",
             "database": "not_configured",
             "worker_heartbeat": "not_configured",
+            "wecom_polling": "not_configured",
             "configuration": "incomplete",
         }
 
@@ -36,14 +37,18 @@ class OperationalHealthService:
         *,
         database_probe: Callable[[], Awaitable[bool]],
         heartbeat_getter: Callable[[], datetime | None],
+        poll_heartbeat_getter: Callable[[], datetime | None],
         configuration_ok: bool,
         heartbeat_max_age: timedelta = timedelta(minutes=2),
+        poll_max_age: timedelta = timedelta(minutes=1),
     ) -> None:
         """注入无副作用探针和心跳读取器。"""
         self._database_probe = database_probe
         self._heartbeat_getter = heartbeat_getter
+        self._poll_heartbeat_getter = poll_heartbeat_getter
         self._configuration_ok = configuration_ok
         self._heartbeat_max_age = heartbeat_max_age
+        self._poll_max_age = poll_max_age
 
     async def check(self) -> dict[str, str]:
         """执行只读检查，不在健康接口创建任何外部资源。"""
@@ -53,10 +58,23 @@ class OperationalHealthService:
             isinstance(heartbeat, datetime)
             and datetime.now(UTC) - heartbeat <= self._heartbeat_max_age
         )
+        poll_heartbeat = self._poll_heartbeat_getter()
+        poll_ok = (
+            isinstance(poll_heartbeat, datetime)
+            and datetime.now(UTC) - poll_heartbeat <= self._poll_max_age
+        )
         result = {
-            "status": "ok" if database_ok and worker_ok and self._configuration_ok else "degraded",
+            "status": (
+                "ok"
+                if database_ok
+                and worker_ok
+                and poll_ok
+                and self._configuration_ok
+                else "degraded"
+            ),
             "database": "ok" if database_ok else "error",
             "worker_heartbeat": "ok" if worker_ok else "stale",
+            "wecom_polling": "ok" if poll_ok else "stale",
             "configuration": "ok" if self._configuration_ok else "incomplete",
         }
         return result

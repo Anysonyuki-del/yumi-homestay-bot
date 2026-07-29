@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from homestay_bot.domain.enums import MessageOrigin
+from homestay_bot.integrations.wecom.schemas import SyncMessagePage
 from homestay_bot.services.message_service import IncomingMessage
 
 
@@ -51,8 +52,15 @@ class WeComSyncApi(Protocol):
         token: str,
         open_kfid: str,
         limit: int = 1000,
-    ) -> Any:
+    ) -> SyncMessagePage:
         """返回一页客服消息。"""
+
+
+class WeComPollingApi(WeComSyncApi, Protocol):
+    """定义定时补拉发现客服账号所需的只读接口。"""
+
+    async def list_kf_account_ids(self) -> list[str]:
+        """返回当前企业全部微信客服账号 ID。"""
 
 
 class WeComSyncJobHandler:
@@ -75,18 +83,25 @@ class WeComSyncJobHandler:
         self._handle_message = handle_message
         self._enqueue = enqueue
 
-    async def __call__(self, payload: dict[str, Any]) -> None:
-        """读取一页消息；系统事件跳过，客人和人工消息分别处理。"""
-        cursor = str(payload.get("cursor", ""))
-        token = str(payload["token"])
-        open_kfid = str(payload["open_kfid"])
+    async def sync_page(
+        self,
+        *,
+        cursor: str,
+        token: str,
+        open_kfid: str,
+    ) -> SyncMessagePage:
+        """读取并处理一页消息，同时把下一游标交给调用方。"""
         page = await self._api.sync_messages(
             cursor=cursor,
             token=token,
             open_kfid=open_kfid,
         )
         for item in page.msg_list:
-            origin = self._origins.get(item.origin)
+            origin = (
+                self._origins.get(item.origin)
+                if item.origin is not None
+                else None
+            )
             if (
                 origin is None
                 or not item.msgid
@@ -108,6 +123,18 @@ class WeComSyncJobHandler:
                     sent_at=datetime.fromtimestamp(item.send_time, UTC),
                 )
             )
+        return page
+
+    async def __call__(self, payload: dict[str, Any]) -> None:
+        """处理回调触发的一页消息，并把剩余分页持久化入队。"""
+        cursor = str(payload.get("cursor", ""))
+        token = str(payload["token"])
+        open_kfid = str(payload["open_kfid"])
+        page = await self.sync_page(
+            cursor=cursor,
+            token=token,
+            open_kfid=open_kfid,
+        )
 
         if page.has_more:
             await self._enqueue(
@@ -118,6 +145,42 @@ class WeComSyncJobHandler:
                     "open_kfid": open_kfid,
                 },
             )
+
+
+class WeComMessagePoller:
+    """在回调缺失时定时补拉客服消息，并按账号维护内存游标。"""
+
+    def __init__(
+        self,
+        *,
+        api: WeComPollingApi,
+        handler: WeComSyncJobHandler,
+        max_pages_per_poll: int = 100,
+    ) -> None:
+        """注入只读企业微信接口和现有消息处理器。"""
+        self._api = api
+        self._handler = handler
+        self._max_pages_per_poll = max_pages_per_poll
+        self._cursors: dict[str, str] = {}
+
+    async def run_once(self) -> None:
+        """发现全部客服账号并从各自上次游标补拉到最新页。"""
+        account_ids = await self._api.list_kf_account_ids()
+        for open_kfid in account_ids:
+            cursor = self._cursors.get(open_kfid, "")
+            for _ in range(self._max_pages_per_poll):
+                page = await self._handler.sync_page(
+                    cursor=cursor,
+                    token="",
+                    open_kfid=open_kfid,
+                )
+                if page.next_cursor:
+                    cursor = page.next_cursor
+                if not page.has_more:
+                    self._cursors[open_kfid] = cursor
+                    break
+            else:
+                raise RuntimeError("企业微信单次补拉分页超过安全上限")
 
 
 class Worker[JobType: WorkerJob]:

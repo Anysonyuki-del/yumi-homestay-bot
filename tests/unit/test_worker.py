@@ -3,8 +3,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from homestay_bot.application import _next_wecom_poll_delay
 from homestay_bot.domain.enums import MessageOrigin
-from homestay_bot.worker import RetrySafeJobError, WeComSyncJobHandler, Worker
+from homestay_bot.integrations.wecom.api_client import WeComApiError
+from homestay_bot.worker import (
+    RetrySafeJobError,
+    WeComMessagePoller,
+    WeComSyncJobHandler,
+    Worker,
+)
 
 
 @dataclass
@@ -161,3 +168,66 @@ async def test_wecom_sync_maps_guest_and_servicer_origins_without_loop() -> None
         MessageOrigin.GUEST,
         MessageOrigin.SERVICER,
     ]
+
+
+@pytest.mark.asyncio
+async def test_wecom_poller_discovers_accounts_and_reuses_cursor() -> None:
+    """定时补拉应自动发现客服账号，并在后续轮次沿用各自游标。"""
+    sync_calls: list[dict[str, str]] = []
+
+    class ApiStub:
+        """返回一个客服账号和连续推进的同步游标。"""
+
+        async def list_kf_account_ids(self) -> list[str]:
+            """模拟企业微信客服账号列表。"""
+            return ["wk-1"]
+
+        async def sync_messages(self, **kwargs):
+            """记录游标并返回下一游标。"""
+            sync_calls.append(kwargs)
+            next_cursor = (
+                "cursor-1" if kwargs["cursor"] == "" else "cursor-2"
+            )
+            return SimpleNamespace(
+                msg_list=[],
+                has_more=0,
+                next_cursor=next_cursor,
+            )
+
+    async def handle_message(message):
+        """本测试没有消息需要处理。"""
+
+    async def enqueue(job_type, payload):
+        """轮询自行维护游标，不应创建回调续页任务。"""
+        raise AssertionError("轮询不应创建续页任务")
+
+    api = ApiStub()
+    handler = WeComSyncJobHandler(
+        api=api,
+        handle_message=handle_message,
+        enqueue=enqueue,
+    )
+    poller = WeComMessagePoller(api=api, handler=handler)
+
+    await poller.run_once()
+    await poller.run_once()
+
+    assert [call["cursor"] for call in sync_calls] == ["", "cursor-1"]
+    assert all(call["token"] == "" for call in sync_calls)
+
+
+def test_wecom_poll_limit_uses_exponential_backoff() -> None:
+    """无 Token 补拉被限流后应从 60 秒开始指数退避。"""
+    first_delay = _next_wecom_poll_delay(
+        current_delay=15,
+        interval_seconds=15,
+        error=WeComApiError(45009, "rate limit"),
+    )
+    second_delay = _next_wecom_poll_delay(
+        current_delay=first_delay,
+        interval_seconds=15,
+        error=WeComApiError(45009, "rate limit"),
+    )
+
+    assert first_delay == 60
+    assert second_delay == 120

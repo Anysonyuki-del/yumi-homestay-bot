@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -50,7 +51,14 @@ from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.knowledge_service import KnowledgeService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
-from homestay_bot.worker import RetrySafeJobError, WeComSyncJobHandler, Worker
+from homestay_bot.worker import (
+    RetrySafeJobError,
+    WeComMessagePoller,
+    WeComSyncJobHandler,
+    Worker,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class DurableJobQueue:
@@ -391,6 +399,52 @@ async def _run_worker_loop(
             await asyncio.sleep(1)
 
 
+def _next_wecom_poll_delay(
+    *,
+    current_delay: float,
+    interval_seconds: float,
+    error: Exception,
+) -> float:
+    """按错误类型计算补拉退避时间，并把等待上限控制在五分钟。"""
+    minimum_delay = (
+        60.0
+        if isinstance(error, WeComApiError) and error.error_code == 45009
+        else interval_seconds
+    )
+    return min(max(current_delay * 2, minimum_delay), 300.0)
+
+
+async def _run_wecom_poll_loop(
+    app: FastAPI,
+    *,
+    poller: WeComMessagePoller,
+    interval_seconds: float,
+) -> None:
+    """周期补拉客服消息；失败时退避，成功时更新健康心跳。"""
+    delay = interval_seconds
+    while True:
+        await asyncio.sleep(delay)
+        try:
+            await poller.run_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            delay = _next_wecom_poll_delay(
+                current_delay=delay,
+                interval_seconds=interval_seconds,
+                error=error,
+            )
+            # 只记录异常类型，避免企业微信错误正文携带请求细节。
+            logger.warning(
+                "企业微信定时补拉失败，%s 秒后重试：%s",
+                delay,
+                type(error).__name__,
+            )
+        else:
+            app.state.wecom_poll_last_success = datetime.now(UTC)
+            delay = interval_seconds
+
+
 @asynccontextmanager
 async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     """在配置完整时装配外部客户端、数据库服务和后台 worker。"""
@@ -455,6 +509,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         handle_message=handle_message,
         enqueue=queue.enqueue,
     )
+    poller = WeComMessagePoller(api=wecom, handler=sync_handler)
 
     async def database_probe() -> bool:
         """执行无副作用 SELECT 1 检查数据库连接。"""
@@ -484,10 +539,19 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         queue,
     )
     app.state.worker_last_heartbeat = datetime.now(UTC)
+    # 启动宽限期避免首次补拉前被误报；一次成功后由真实心跳覆盖。
+    app.state.wecom_poll_last_success = datetime.now(UTC)
     app.state.health_service = OperationalHealthService(
         database_probe=database_probe,
         heartbeat_getter=lambda: app.state.worker_last_heartbeat,
+        poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
         configuration_ok=bool(duty_userids),
+        poll_max_age=timedelta(
+            seconds=max(
+                60,
+                settings.wecom_poll_interval_seconds * 3,
+            )
+        ),
     )
     worker_task = asyncio.create_task(
         _run_worker_loop(
@@ -497,13 +561,22 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             wecom=wecom,
         )
     )
+    poll_task = asyncio.create_task(
+        _run_wecom_poll_loop(
+            app,
+            poller=poller,
+            interval_seconds=settings.wecom_poll_interval_seconds,
+        )
+    )
 
     try:
         yield
     finally:
-        worker_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await worker_task
+        for task in (worker_task, poll_task):
+            task.cancel()
+        for task in (worker_task, poll_task):
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         # 测试重启或同进程重新装配时不得沿用已关闭的客户端与会话服务。
         for state_name in (
             "employee_auth_service",
@@ -513,6 +586,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "wecom_callback_service",
             "health_service",
             "worker_last_heartbeat",
+            "wecom_poll_last_success",
         ):
             if hasattr(app.state, state_name):
                 delattr(app.state, state_name)

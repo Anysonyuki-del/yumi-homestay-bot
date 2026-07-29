@@ -81,6 +81,22 @@ class WeComApiClient:
         if error_code != 0:
             raise WeComApiError(error_code, str(payload.get("errmsg", "")))
 
+    async def list_kf_account_ids(self) -> list[str]:
+        """读取全部微信客服账号，供回调丢失时自动补拉消息。"""
+        access_token = await self._get_access_token(self._kf_secret)
+        response = await self._client.get(
+            "/cgi-bin/kf/account/list",
+            params={"access_token": access_token},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._raise_for_error(payload)
+        return [
+            str(item["open_kfid"])
+            for item in payload.get("account_list", [])
+            if item.get("open_kfid")
+        ]
+
     async def sync_messages(
         self,
         *,

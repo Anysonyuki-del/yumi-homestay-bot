@@ -5,6 +5,49 @@ from homestay_bot.integrations.wecom.api_client import WeComApiClient
 
 
 @pytest.mark.asyncio
+async def test_list_kf_account_ids_uses_customer_service_secret() -> None:
+    """定时补拉应自动发现全部微信客服账号。"""
+    token_secrets: list[str] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/gettoken"):
+            token_secrets.append(request.url.params["corpsecret"])
+            return httpx.Response(
+                200,
+                json={
+                    "errcode": 0,
+                    "access_token": "kf-access",
+                    "expires_in": 7200,
+                },
+            )
+        assert request.url.path.endswith("/cgi-bin/kf/account/list")
+        return httpx.Response(
+            200,
+            json={
+                "errcode": 0,
+                "account_list": [
+                    {"open_kfid": "wk-1", "name": "客服一"},
+                    {"open_kfid": "wk-2", "name": "客服二"},
+                ],
+            },
+        )
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+    try:
+        account_ids = await client.list_kf_account_ids()
+    finally:
+        await client.aclose()
+
+    assert account_ids == ["wk-1", "wk-2"]
+    assert token_secrets == ["kf-secret"]
+
+
+@pytest.mark.asyncio
 async def test_sync_messages_uses_kf_token_and_cursor() -> None:
     """读取客服消息必须先取凭证，再提交回调中的同步 Token。"""
     requests: list[httpx.Request] = []
