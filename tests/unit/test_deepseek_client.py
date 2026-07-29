@@ -294,6 +294,38 @@ async def test_general_question_clears_model_knowledge_gap_mistake() -> None:
 
 
 @pytest.mark.asyncio
+async def test_general_reply_removes_ungrounded_property_promotion() -> None:
+    """普通回答不得夹带未经审核的民宿房型或设施宣传。"""
+    payload = decision_payload()
+    payload["reply_text"] = (
+        "1. 建立共享文档，统一记录预算和行程。\n"
+        "2. 比如我们民宿有7间不同风格的房型，可以一起选。\n"
+        "3. 如果住我们民宿，客厅和庭院适合晚上复盘行程。\n"
+        "4. 每天只安排一两个核心活动，并预留机动时间。"
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "怎样和朋友协调旅行安排？"}],
+    )
+
+    assert "共享文档" in decision.reply_text
+    assert "机动时间" in decision.reply_text
+    assert "不同风格" not in decision.reply_text
+    assert "客厅" not in decision.reply_text
+    assert "庭院" not in decision.reply_text
+
+
+@pytest.mark.asyncio
 async def test_previous_assistant_failure_reply_is_excluded_from_model_context() -> None:
     """固定失败文案不得污染后续 DeepSeek 对话上下文。"""
     client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])

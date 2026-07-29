@@ -293,6 +293,13 @@ class DeepSeekGuestAssistant:
         updates: dict[str, Any] = {"handoff_reason": None}
         property_specific = is_property_specific(question_text)
         transaction_sensitive = is_transaction_sensitive(question_text)
+        if not property_specific:
+            # 客人未询问民宿专属信息时，删除模型主动添加的未审核宣传，
+            # 避免把房型、设施或公共空间的臆测当作本店事实发送。
+            updates["reply_text"] = self._remove_property_promotion(
+                decision.reply_text,
+                decision.language,
+            )
         if not property_specific and not transaction_sensitive:
             updates.update(
                 {
@@ -347,6 +354,36 @@ class DeepSeekGuestAssistant:
                 }
             )
         return decision.model_copy(update=updates)
+
+    @staticmethod
+    def _remove_property_promotion(
+        reply_text: str,
+        language: Language,
+    ) -> str:
+        """从非专属问题的回答中移除模型主动添加的本店事实。"""
+        self_reference = re.compile(
+            r"我们民宿|本民宿|咱们民宿|我们客栈|本客栈|本店|"
+            r"\bour (?:homestay|property|guesthouse|hotel)\b",
+            re.IGNORECASE,
+        )
+        safe_lines = [
+            line
+            for line in reply_text.splitlines()
+            if not self_reference.search(line)
+        ]
+        cleaned = "\n".join(safe_lines).strip()
+        if cleaned:
+            return cleaned
+        if language is Language.EN:
+            return (
+                "Agree on the budget and priorities first, assign one person "
+                "to each task, keep the plan in a shared document, and leave "
+                "some flexible time each day."
+            )
+        return (
+            "建议先统一预算和重点安排，再分工查询交通、景点与餐饮，"
+            "用共享文档集中记录，并为每天预留机动时间。"
+        )
 
     @staticmethod
     def _property_topic(question_text: str) -> str:
