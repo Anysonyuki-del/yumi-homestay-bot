@@ -133,6 +133,25 @@ class FlakyClientStub:
         self.messages = FlakyMessagesStub()
 
 
+class SuccessThenFailureMessagesStub(MessagesStub):
+    """首次成功，第二次失败，用于验证健康状态不被缓存掩盖。"""
+
+    async def create(self, **kwargs):
+        """首轮返回搜索结果，后续联网请求抛出临时故障。"""
+        if not self.requests:
+            return await super().create(**kwargs)
+        self.requests.append(kwargs)
+        raise RuntimeError("temporary failure")
+
+
+class SuccessThenFailureClientStub:
+    """暴露先成功后失败的 Messages 资源。"""
+
+    def __init__(self) -> None:
+        """初始化可记录的搜索资源。"""
+        self.messages = SuccessThenFailureMessagesStub()
+
+
 @pytest.mark.asyncio
 async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
     """旅游回答必须使用武汉搜索证据，并移除客人可见链接。"""
@@ -417,3 +436,86 @@ async def test_tourism_cache_separates_date_and_language() -> None:
         )
 
     assert len(client.messages.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_does_not_hide_latest_search_failure() -> None:
+    """缓存命中不得把最近一次真实联网故障重新标记为正常。"""
+    statuses: list[str] = []
+    client = SuccessThenFailureClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+        status_setter=statuses.append,
+    )
+    await searcher.search(
+        question="武汉有什么好玩的？",
+        language=Language.ZH,
+        queried_on=date(2026, 7, 30),
+    )
+    with pytest.raises(TourismSearchError):
+        await searcher.search(
+            question="武汉有什么好吃的？",
+            language=Language.ZH,
+            queried_on=date(2026, 7, 30),
+        )
+
+    await searcher.search(
+        question="武汉有什么好玩的？",
+        language=Language.ZH,
+        queried_on=date(2026, 7, 30),
+    )
+
+    assert statuses == ["ok", "degraded"]
+    assert len(client.messages.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_tourism_cache_evicts_oldest_entry_at_capacity() -> None:
+    """超过容量时淘汰最早条目，确保进程内缓存有界。"""
+    client = AnthropicClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+        cache_max_entries=2,
+    )
+    for question in ("武汉景点一", "武汉景点二", "武汉景点三", "武汉景点一"):
+        await searcher.search(
+            question=question,
+            language=Language.ZH,
+            queried_on=date(2026, 7, 30),
+        )
+
+    assert len(client.messages.requests) == 4
+
+
+def test_tourism_cache_rejects_non_positive_capacity() -> None:
+    """非正缓存容量应在初始化时明确拒绝，而不是运行时崩溃。"""
+    with pytest.raises(ValueError, match="cache_max_entries"):
+        DeepSeekTourismSearcher(
+            client=AnthropicClientStub(),
+            model="deepseek-v4-flash",
+            cache_max_entries=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_english_tourism_prompt_stays_below_hard_reply_limit() -> None:
+    """英文旅游回答使用短词数目标，避免发送层截断证据尾注。"""
+    client = AnthropicClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+    )
+
+    result = await searcher.search(
+        question="What should I visit in Wuhan?",
+        language=Language.EN,
+        queried_on=date(2026, 7, 30),
+    )
+
+    system = client.messages.requests[0]["system"]
+    assert "120-180 words" in system
+    assert "700-900 words" not in system
+    assert "查询日期：" in result
+    assert "参考来源：" in result

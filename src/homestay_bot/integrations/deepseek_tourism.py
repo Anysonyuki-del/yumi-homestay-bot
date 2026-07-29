@@ -58,6 +58,8 @@ class DeepSeekTourismSearcher:
         cache_max_entries: int = 100,
     ) -> None:
         """注入搜索客户端、健康状态写入器和有界缓存参数。"""
+        if cache_max_entries <= 0:
+            raise ValueError("cache_max_entries 必须大于零")
         self._client = client
         self._model = model
         self._status_setter = status_setter
@@ -268,7 +270,6 @@ class DeepSeekTourismSearcher:
         cache_key = self._cache_key(question, language, queried_on)
         cached_reply = self._get_cached_reply(cache_key)
         if cached_reply is not None:
-            self._set_status("ok")
             logger.info("旅游搜索完成：cache_hit=true duration_ms=0")
             return cached_reply
 
@@ -295,7 +296,7 @@ class DeepSeekTourismSearcher:
                 "For recent requests, prioritize events that have not ended "
                 "within this window, include the full year for every event "
                 "date, and label later events clearly. Select the three best "
-                "recommendations and keep the answer concise at 700-900 words."
+                "recommendations and keep the answer concise at 120-180 words."
             )
         )
         try:
