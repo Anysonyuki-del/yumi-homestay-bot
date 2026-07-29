@@ -216,6 +216,95 @@ async def test_wecom_poller_discovers_accounts_and_reuses_cursor() -> None:
     assert all(call["token"] == "" for call in sync_calls)
 
 
+@pytest.mark.asyncio
+async def test_wecom_poller_checkpoints_cursor_at_page_batch_limit() -> None:
+    """积压超过单批页数时应保存进度，下轮从新游标继续。"""
+    cursors: list[str] = []
+
+    class ApiStub:
+        """持续返回更多页，用于验证批次游标检查点。"""
+
+        async def list_kf_account_ids(self) -> list[str]:
+            """返回一个有大量积压的客服账号。"""
+            return ["wk-1"]
+
+        async def sync_messages(self, **kwargs):
+            """按调用顺序推进游标并始终声明还有更多页。"""
+            cursors.append(kwargs["cursor"])
+            return SimpleNamespace(
+                msg_list=[],
+                has_more=1,
+                next_cursor=f"cursor-{len(cursors)}",
+            )
+
+    async def handle_message(message):
+        """本测试没有消息需要处理。"""
+
+    async def enqueue(job_type, payload):
+        """轮询不使用回调续页任务。"""
+
+    api = ApiStub()
+    poller = WeComMessagePoller(
+        api=api,
+        handler=WeComSyncJobHandler(
+            api=api,
+            handle_message=handle_message,
+            enqueue=enqueue,
+        ),
+        max_pages_per_poll=2,
+    )
+
+    await poller.run_once()
+    await poller.run_once()
+
+    assert cursors == ["", "cursor-1", "cursor-2", "cursor-3"]
+
+
+@pytest.mark.asyncio
+async def test_wecom_poller_isolates_account_failure() -> None:
+    """一个客服账号失败时仍应继续补拉其他正常账号。"""
+    visited_accounts: list[str] = []
+
+    class ApiStub:
+        """让首个账号失败、第二个账号成功。"""
+
+        async def list_kf_account_ids(self) -> list[str]:
+            """返回两个客服账号。"""
+            return ["wk-broken", "wk-healthy"]
+
+        async def sync_messages(self, **kwargs):
+            """记录访问并按账号制造结果。"""
+            visited_accounts.append(kwargs["open_kfid"])
+            if kwargs["open_kfid"] == "wk-broken":
+                raise TimeoutError("temporary")
+            return SimpleNamespace(
+                msg_list=[],
+                has_more=0,
+                next_cursor="healthy-cursor",
+            )
+
+    async def handle_message(message):
+        """本测试没有消息需要处理。"""
+
+    async def enqueue(job_type, payload):
+        """轮询不使用回调续页任务。"""
+
+    api = ApiStub()
+    poller = WeComMessagePoller(
+        api=api,
+        handler=WeComSyncJobHandler(
+            api=api,
+            handle_message=handle_message,
+            enqueue=enqueue,
+        ),
+    )
+
+    with pytest.raises(TimeoutError):
+        await poller.run_once()
+
+    assert visited_accounts == ["wk-broken", "wk-healthy"]
+
+
 def test_wecom_poll_limit_uses_exponential_backoff() -> None:
     """无 Token 补拉被限流后应从 60 秒开始指数退避。"""
     first_delay = _next_wecom_poll_delay(

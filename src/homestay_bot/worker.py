@@ -166,21 +166,29 @@ class WeComMessagePoller:
     async def run_once(self) -> None:
         """发现全部客服账号并从各自上次游标补拉到最新页。"""
         account_ids = await self._api.list_kf_account_ids()
+        first_error: Exception | None = None
         for open_kfid in account_ids:
-            cursor = self._cursors.get(open_kfid, "")
-            for _ in range(self._max_pages_per_poll):
-                page = await self._handler.sync_page(
-                    cursor=cursor,
-                    token="",
-                    open_kfid=open_kfid,
-                )
-                if page.next_cursor:
-                    cursor = page.next_cursor
-                if not page.has_more:
+            try:
+                cursor = self._cursors.get(open_kfid, "")
+                for _ in range(self._max_pages_per_poll):
+                    page = await self._handler.sync_page(
+                        cursor=cursor,
+                        token="",
+                        open_kfid=open_kfid,
+                    )
+                    if page.next_cursor:
+                        cursor = page.next_cursor
                     self._cursors[open_kfid] = cursor
-                    break
-            else:
-                raise RuntimeError("企业微信单次补拉分页超过安全上限")
+                    if not page.has_more:
+                        break
+                    if not page.next_cursor:
+                        raise RuntimeError("企业微信补拉声明有更多页但缺少游标")
+            except Exception as error:
+                # 单个账号故障不得阻断其他客服账号的消息补拉。
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
 
 class Worker[JobType: WorkerJob]:
