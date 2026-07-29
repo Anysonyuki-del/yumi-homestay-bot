@@ -10,13 +10,17 @@
 - [x] 运行单元、集成、静态检查和真实 Fenno 能力测试
 - [x] 部署到本地运行目录并恢复测试会话
 - [ ] 完成企业微信端到端验收
+- [x] 修复“今天入住明天退房”的相对日期理解
+- [x] 真实 Fenno 验证相对日期直接触发房态查询
+- [ ] 部署并完成相对日期企业微信验收
 
 ## Review
 
 - 已按 TDD 完成旅游意图门控、Fenno 联网、来源提取、失败升级和健康状态。
 - 设计以一次应用层 Responses 请求为上限；模型托管搜索内部动作不由应用计数。
-- 全量测试结果：116 passed、3 skipped；Ruff 通过；mypy 检查 39 个源文件通过。
+- 全量测试结果：117 passed、4 skipped；Ruff 通过；mypy 检查 39 个源文件通过。
 - 真实 Fenno 契约测试：1 passed；Fenno 来源位于 `web_search_call.action.sources`，已兼容读取。
 - 按用户反馈移除全部客人可见链接；真实 Fenno 无链接契约测试 1 passed。
+- 相对日期真实契约测试：Fenno 将“今天入住明天退房”转换为 2026-07-29 至 2026-07-30，并直接调用房态工具。
 - 本地健康检查：HTTP 200；`database`、`worker_heartbeat`、`wecom_polling`、`configuration` 均为 `ok`，首次联网前 `web_search` 为 `unknown`。
 - 已将唯一测试会话 ID 1 恢复为 `BOT_ACTIVE`；待企业微信端到端消息验收。

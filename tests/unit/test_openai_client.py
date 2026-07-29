@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -304,6 +305,32 @@ async def test_missing_dates_are_clarified_without_human_handoff() -> None:
 
     instructions = str(client.responses.kwargs["instructions"])
     assert "缺少入住或退房日期时应直接追问，不得仅因此转人工" in instructions
+
+
+@pytest.mark.asyncio
+async def test_relative_dates_receive_exact_wuhan_date_context() -> None:
+    """今天、明天等自然日期应获得可直接查询的武汉日期映射。"""
+    client = OpenAIStub()
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=KnowledgeStub(),
+        model="gpt-5.4-mini",
+        safety_hmac_key=b"test-key",
+        local_date_provider=lambda: date(2026, 7, 29),
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "今天入住明天退房"}],
+    )
+
+    instructions = str(client.responses.kwargs["instructions"])
+    assert "武汉当前日期：2026-07-29" in instructions
+    assert "今天/今晚/今日=2026-07-29" in instructions
+    assert "明天/明日=2026-07-30" in instructions
+    assert "后天=2026-07-31" in instructions
+    assert "不得再次要求客人提供绝对日期" in instructions
 
 
 @pytest.mark.asyncio

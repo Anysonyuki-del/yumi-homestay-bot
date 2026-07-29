@@ -4,8 +4,9 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +23,11 @@ from homestay_bot.integrations.tourism import (
 from homestay_bot.services.knowledge_service import KnowledgeService
 
 logger = logging.getLogger(__name__)
+
+
+def _wuhan_today() -> date:
+    """返回武汉时区的当前自然日，避免 VPN 或系统时区影响。"""
+    return datetime.now(ZoneInfo("Asia/Shanghai")).date()
 
 
 class ReadOnlyToolExecutor(Protocol):
@@ -166,14 +172,16 @@ class GuestAssistant:
         safety_hmac_key: bytes,
         tool_executor: ReadOnlyToolExecutor | None = None,
         web_search_status_setter: Callable[[WebSearchStatus], None] | None = None,
+        local_date_provider: Callable[[], date] | None = None,
     ) -> None:
-        """注入模型、知识、只读工具和联网健康状态写入器。"""
+        """注入模型、知识、只读工具、健康状态和本地日期来源。"""
         self._client = client
         self._knowledge = knowledge
         self._model = model
         self._safety_hmac_key = safety_hmac_key
         self._tool_executor = tool_executor
         self._web_search_status_setter = web_search_status_setter
+        self._local_date_provider = local_date_provider or _wuhan_today
 
     def tool_definitions(self) -> list[dict[str, Any]]:
         """只暴露房态、参考价和订单查询，不暴露任何写操作。"""
@@ -309,6 +317,9 @@ class GuestAssistant:
     ) -> AssistantDecision:
         """关闭 OpenAI 状态存储，并返回经过结构校验的客服决定。"""
         tourism_query = is_tourism_query(messages)
+        local_today = self._local_date_provider()
+        local_tomorrow = local_today + timedelta(days=1)
+        local_day_after_tomorrow = local_today + timedelta(days=2)
         knowledge = await self._knowledge.build_context(language)
         knowledge_payload = [
             {
@@ -323,6 +334,14 @@ class GuestAssistant:
             "你是武汉一家7间房民宿的客服。只能依据审核知识和查询工具回答。"
             "不得确认最终价格、收款、具体房间、退款、取消或改期；"
             "缺少入住或退房日期时应直接追问，不得仅因此转人工；"
+            f"\n武汉当前日期：{local_today.isoformat()}。"
+            f"相对日期换算：今天/今晚/今日={local_today.isoformat()}，"
+            f"明天/明日={local_tomorrow.isoformat()}，"
+            f"后天={local_day_after_tomorrow.isoformat()}。"
+            "客人使用上述相对日期时，必须自主换算为 ISO 日期并直接调用房态或价格工具，"
+            "不得再次要求客人提供绝对日期；"
+            "“某日住一晚”表示该日入住、次日退房；"
+            "只有无法唯一推断入住或退房日期时才追问。"
             "只有问题超出审核知识和工具能力、政策不明确、置信度低，"
             "或客人明确要求人工时，才设置 handoff_reason。"
             "只有客人明确确认了入住日期、退房日期、人数、姓名、手机号和房型偏好后，"
@@ -389,7 +408,7 @@ class GuestAssistant:
                     "reply_text": format_tourism_reply(
                         decision.reply_text,
                         citations,
-                        date.today(),
+                        local_today,
                     ),
                     "handoff_reason": None,
                 }

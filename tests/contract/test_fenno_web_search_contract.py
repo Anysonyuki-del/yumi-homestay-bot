@@ -1,4 +1,6 @@
 import os
+from datetime import date
+from typing import Any
 
 import pytest
 from openai import AsyncOpenAI
@@ -21,6 +23,31 @@ class EmptyKnowledge:
     async def build_context(self, language: Language) -> list[KnowledgeSnippet]:
         """返回空知识，强制答案来自联网搜索。"""
         return []
+
+
+class RecordingAvailabilityExecutor:
+    """记录真实模型根据相对日期提出的只读房态查询。"""
+
+    def __init__(self) -> None:
+        """初始化工具调用记录。"""
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """返回固定可用房态，不访问真实百居易。"""
+        self.calls.append((name, arguments))
+        return [
+            {
+                "property_id": 101,
+                "days": [
+                    {"date": "2026-07-29", "available": True},
+                    {"date": "2026-07-30", "available": True},
+                ],
+            }
+        ]
 
 
 @pytest.mark.asyncio
@@ -54,3 +81,47 @@ async def test_fenno_model_returns_tourism_answer_with_citations() -> None:
     assert "http://" not in decision.reply_text
     assert "https://" not in decision.reply_text
     assert statuses == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_fenno_resolves_relative_booking_dates_before_querying() -> None:
+    """今天入住明天退房应直接换算日期并调用房态工具。"""
+    settings = Settings()  # type: ignore[call-arg]
+    client = AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
+    executor = RecordingAvailabilityExecutor()
+    assistant = GuestAssistant(
+        client=client,
+        knowledge=EmptyKnowledge(),  # type: ignore[arg-type]
+        model=settings.openai_model,
+        safety_hmac_key=settings.session_secret.encode(),
+        tool_executor=executor,
+        local_date_provider=lambda: date(2026, 7, 29),
+    )
+    try:
+        decision = await assistant.respond(
+            guest_identifier="fenno-relative-date-contract",
+            language=Language.ZH,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "今天入住明天退房，请问还有房吗？",
+                }
+            ],
+        )
+    finally:
+        await client.close()
+
+    assert executor.calls == [
+        (
+            "search_availability",
+            {
+                "check_in_date": "2026-07-29",
+                "check_out_date": "2026-07-30",
+            },
+        )
+    ]
+    assert decision.handoff_reason is None
+    assert "提供具体" not in decision.reply_text
