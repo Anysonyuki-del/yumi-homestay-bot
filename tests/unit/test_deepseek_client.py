@@ -1,4 +1,5 @@
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -498,6 +499,50 @@ async def test_general_reply_removes_ungrounded_property_promotion() -> None:
     assert "共享文档" in decision.reply_text
     assert "机动时间" in decision.reply_text
     assert "不同风格" not in decision.reply_text
+    assert "客厅" not in decision.reply_text
+    assert "庭院" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_property_filter_renumbers_list_and_removes_room_sales_cta() -> None:
+    """删除专属宣传后应连续编号，并清理无关房型推销。"""
+    payload = decision_payload()
+    payload["reply_text"] = (
+        "建议这样协调：\n"
+        "1. 建立共享文档。\n"
+        "2. 我们民宿有不同风格房型。\n"
+        "3. 分工查询交通和景点。\n"
+        "4. 每天预留机动时间。\n"
+        "5. 如果住我们民宿，可以使用客厅和庭院。\n"
+        "6. 行程不一致时可以灵活分组。\n"
+        "如果您需要，我也可以推荐适合朋友一起住的房型。"
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "怎样和朋友协调旅行安排？"}],
+    )
+
+    numbered_lines = [
+        line for line in decision.reply_text.splitlines()
+        if re.match(r"^\d+\.", line)
+    ]
+    assert numbered_lines == [
+        "1. 建立共享文档。",
+        "2. 分工查询交通和景点。",
+        "3. 每天预留机动时间。",
+        "4. 行程不一致时可以灵活分组。",
+    ]
+    assert "房型" not in decision.reply_text
     assert "客厅" not in decision.reply_text
     assert "庭院" not in decision.reply_text
 

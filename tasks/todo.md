@@ -41,6 +41,16 @@
 - [x] 运行全量测试、Ruff、mypy 和真实 DeepSeek 精简契约
 - [x] 部署本机运行服务并验证健康状态
 
+## 当前修复：近期旅游信息与回复格式
+
+- [x] 在 `tests/unit/test_deepseek_tourism.py` 验证当前日期及未来 15 天窗口传给 DeepSeek
+- [x] 在 `tests/unit/test_deepseek_tourism.py` 验证过期来源过滤、演出年份和窗口证据校验
+- [x] 在 `src/homestay_bot/integrations/deepseek_tourism.py` 实现武汉当前日期、15 天优先窗口和过期证据拒绝
+- [x] 在 `tests/unit/test_deepseek_client.py` 验证删除宣传后的连续编号和无关房型推销清理
+- [x] 在 `src/homestay_bot/integrations/deepseek_client.py` 实现安全行过滤后的编号重排
+- [x] 运行全量测试、Ruff、mypy 和真实 DeepSeek 旅游契约
+- [ ] 部署本机服务并完成消息回放与健康检查
+
 ## Review
 
 - 已按 TDD 完成旅游意图门控、Fenno 联网、来源提取、失败升级和健康状态。
@@ -67,3 +77,7 @@
 - 精简会保留日期、来源和风险提示；新增链接、丢失旅游证据标签或重新引入民宿专属臆测时拒绝精简结果。
 - 语义精简后全量测试：129 passed、9 skipped；Ruff 和 mypy 通过；真实 DeepSeek 完整契约 7 passed。
 - 本机部署后健康检查 HTTP 200；数据库、worker、企业微信轮询和配置均为正常，会话保持 `BOT_ACTIVE`。
+- 近期旅游修复把武汉当前日期和未来 15 天窗口直接交给 DeepSeek；明确过期来源被过滤，窗口外活动必须标注“半个月后”。
+- 演出与展览日期会补全省略年份；展览月度展期覆盖窗口时允许通过，证据不满足时拒绝发送。
+- 回复安全过滤后会重新连续编号并删除无关房型推销。
+- 修复后全量测试：135 passed、10 skipped；Ruff、mypy 通过；真实 DeepSeek 完整契约 8 passed。

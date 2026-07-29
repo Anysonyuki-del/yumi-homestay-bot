@@ -208,6 +208,24 @@ async def test_tourism_reply_contains_no_links() -> None:
 
 
 @pytest.mark.asyncio
+async def test_recent_wuhan_events_are_anchored_to_current_window() -> None:
+    """真实近期演出回答必须使用当前年份并排除往年内容。"""
+    assistant, chat, anthropic = await build_assistant()
+    try:
+        decision = await assistant.respond(
+            guest_identifier="deepseek-current-events",
+            language=Language.ZH,
+            messages=[{"role": "user", "content": "武汉最近有什么演出？"}],
+        )
+    finally:
+        await close_clients(chat, anthropic)
+    assert "查询日期：2026-07-30" in decision.reply_text
+    assert "2026" in decision.reply_text
+    assert "2025" not in decision.reply_text
+    assert "参考来源：" in decision.reply_text
+
+
+@pytest.mark.asyncio
 async def test_long_tourism_reply_is_semantically_refined() -> None:
     """真实 DeepSeek 应精简长回复并保留旅游证据标签。"""
     settings = Settings()  # type: ignore[call-arg]

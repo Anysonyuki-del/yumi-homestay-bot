@@ -372,11 +372,36 @@ class DeepSeekGuestAssistant:
             r"\bour (?:homestay|property|guesthouse|hotel)\b",
             re.IGNORECASE,
         )
+        room_sales_cta = re.compile(
+            r"如果.{0,12}(?:我|我们).{0,16}(?:推荐|介绍).{0,24}房型|"
+            r"(?:我|我们).{0,12}(?:可以|能).{0,16}(?:推荐|介绍).{0,24}房型|"
+            r"帮您.{0,16}(?:推荐|介绍|挑选).{0,24}房型",
+            re.IGNORECASE,
+        )
         safe_lines = [
             line
             for line in reply_text.splitlines()
             if not self_reference.search(line)
+            and not room_sales_cta.search(line)
         ]
+        numbered_line = re.compile(
+            r"^(?P<indent>\s*)(?P<number>\d{1,2})[.、．）)]\s*"
+            r"(?P<body>.+)$"
+        )
+        if sum(bool(numbered_line.match(line)) for line in safe_lines) >= 2:
+            sequence = 0
+            renumbered: list[str] = []
+            for line in safe_lines:
+                match = numbered_line.match(line)
+                if match is None:
+                    renumbered.append(line)
+                    continue
+                sequence += 1
+                renumbered.append(
+                    f"{match.group('indent')}{sequence}. "
+                    f"{match.group('body')}"
+                )
+            safe_lines = renumbered
         cleaned = "\n".join(safe_lines).strip()
         if cleaned:
             return cleaned
