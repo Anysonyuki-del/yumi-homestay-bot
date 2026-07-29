@@ -259,9 +259,9 @@ async def test_normal_guest_message_gets_bot_reply() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deepseek_reply_at_1000_characters_is_not_changed() -> None:
-    """恰好一千个字符的 DeepSeek 回复必须完整发送。"""
-    content = "汉" * 1000
+async def test_deepseek_reply_at_1500_characters_is_not_changed() -> None:
+    """恰好一千五百个字符的精简回复必须完整发送。"""
+    content = "汉" * 1500
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text=content,
@@ -278,12 +278,12 @@ async def test_deepseek_reply_at_1000_characters_is_not_changed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deepseek_reply_over_1000_characters_is_truncated_before_recording() -> None:
+async def test_deepseek_reply_over_1500_characters_is_truncated_before_recording() -> None:
     """超长 DeepSeek 回复应以省略号结尾，并按实际发送内容入库。"""
     messages = MessageServiceStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="汉" * 1001,
+            reply_text="汉" * 1501,
             language=Language.ZH,
             intent="faq",
             confidence=0.98,
@@ -296,9 +296,9 @@ async def test_deepseek_reply_over_1000_characters_is_truncated_before_recording
 
     await service.handle_message(incoming())
 
-    expected = "汉" * 999 + "…"
+    expected = "汉" * 1499 + "…"
     assert wecom.guest_messages == [expected]
-    assert len(wecom.guest_messages[0]) == 1000
+    assert len(wecom.guest_messages[0]) == 1500
     assert messages.bot_messages == [(1, "bot-1", expected)]
 
 

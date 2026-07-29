@@ -66,6 +66,12 @@ class AssistantDecision(BaseModel):
     staff_confirmation_reason: str | None = None
 
 
+class RefinedReply(BaseModel):
+    """约束 DeepSeek 二次精简返回的最小结构。"""
+
+    reply_text: str = Field(min_length=1)
+
+
 class TourismSearcher(Protocol):
     """定义客服助手所需的实时旅游搜索边界。"""
 
@@ -440,6 +446,45 @@ class DeepSeekGuestAssistant:
         )
         return asks_availability is not None and has_stay_range
 
+    async def _refine_reply(self, reply_text: str) -> str:
+        """对超过一千字的回复做一次语义精简，失败时保留原文。"""
+        if len(reply_text) <= 1000:
+            return reply_text
+        try:
+            response = await self._chat_client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是民宿客服回复编辑。请精简选优原回复，"
+                            "目标不超过1000个字符；保留关键事实、日期、"
+                            "房态、价格说明、风险提示、查询日期和来源名称。"
+                            "不得新增事实，不得添加链接，不得改变原意。"
+                            "只输出 JSON：{\"reply_text\":\"精简后的完整回复\"}。"
+                        ),
+                    },
+                    {"role": "user", "content": reply_text},
+                ],
+                response_format={"type": "json_object"},
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+            content = response.choices[0].message.content or ""
+            refined = RefinedReply.model_validate_json(content).reply_text.strip()
+            if re.search(r"https?://|\[[^\]]+\]\([^)]+\)", refined):
+                return reply_text
+            for evidence_label in ("查询日期：", "参考来源："):
+                if evidence_label in reply_text and evidence_label not in refined:
+                    return reply_text
+            return refined or reply_text
+        except Exception as error:
+            # 精简是质量增强而非主回复边界；只记录类型并保留原文交给硬上限兜底。
+            logger.warning(
+                "DeepSeek 回复精简失败，使用原回复：error_type=%s",
+                type(error).__name__,
+            )
+            return reply_text
+
     async def respond(
         self,
         *,
@@ -456,6 +501,7 @@ class DeepSeekGuestAssistant:
                 language=language,
                 queried_on=local_today,
             )
+            reply = await self._refine_reply(reply)
             return AssistantDecision(
                 reply_text=reply,
                 language=language,
@@ -510,12 +556,23 @@ class DeepSeekGuestAssistant:
                     message = response.choices[0].message
                     tool_calls = list(message.tool_calls or [])
                     if not tool_calls:
-                        return self._validate_decision(
+                        decision = self._validate_decision(
                             message.content or "",
                             question_text,
                             property_knowledge_grounded=(
                                 property_knowledge_grounded
                             ),
+                        )
+                        refined_reply = await self._refine_reply(
+                            decision.reply_text
+                        )
+                        if not is_property_specific(question_text):
+                            refined_reply = self._remove_property_promotion(
+                                refined_reply,
+                                decision.language,
+                            )
+                        return decision.model_copy(
+                            update={"reply_text": refined_reply}
                         )
                     if self._tool_executor is None:
                         raise AssistantUnavailableError()

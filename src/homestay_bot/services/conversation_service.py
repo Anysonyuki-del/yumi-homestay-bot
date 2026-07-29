@@ -17,7 +17,7 @@ from homestay_bot.services.emergency_service import (
 )
 from homestay_bot.services.message_service import IncomingMessage
 
-_MAX_ASSISTANT_REPLY_CHARACTERS = 1000
+_MAX_ASSISTANT_REPLY_CHARACTERS = 1500
 
 
 class ConversationRepository(Protocol):
@@ -263,7 +263,7 @@ class ConversationService:
 
     @staticmethod
     def _limit_assistant_reply(content: str) -> str:
-        """把大模型客人可见回复严格限制为最多一千个字符。"""
+        """把精简后的客人可见回复限制为最多一千五百个字符。"""
         if len(content) <= _MAX_ASSISTANT_REPLY_CHARACTERS:
             return content
         return content[: _MAX_ASSISTANT_REPLY_CHARACTERS - 1] + "…"

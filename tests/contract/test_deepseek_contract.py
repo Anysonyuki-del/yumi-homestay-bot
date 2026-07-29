@@ -41,6 +41,20 @@ class RecordingAvailabilityExecutor:
         return [{"property_id": 101, "days": [{"available": True}]}]
 
 
+class LongTourismEvidence:
+    """提供需要真实 DeepSeek 精简的长旅游证据回复。"""
+
+    async def search(self, **kwargs) -> str:
+        """返回带日期和来源名称的超长无链接回复。"""
+        return (
+            "武汉近期可优先考虑东湖、湖北省博物馆和黄鹤楼，"
+            "出发前请再次核对开放时间与预约要求。"
+            * 45
+            + "\n查询日期：2026-07-30"
+            + "\n参考来源：武汉市文化和旅游局"
+        )
+
+
 async def build_assistant(
     *,
     executor: RecordingAvailabilityExecutor | None = None,
@@ -189,5 +203,36 @@ async def test_tourism_reply_contains_no_links() -> None:
         )
     finally:
         await close_clients(chat, anthropic)
+    assert "http://" not in decision.reply_text
+    assert "https://" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_long_tourism_reply_is_semantically_refined() -> None:
+    """真实 DeepSeek 应精简长回复并保留旅游证据标签。"""
+    settings = Settings()  # type: ignore[call-arg]
+    chat = AsyncOpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=chat,
+        tourism_searcher=LongTourismEvidence(),  # type: ignore[arg-type]
+        knowledge=EmptyKnowledge(),  # type: ignore[arg-type]
+        model=settings.deepseek_model,
+        safety_hmac_key=settings.session_secret.encode(),
+        local_date_provider=lambda: date(2026, 7, 30),
+    )
+    try:
+        decision = await assistant.respond(
+            guest_identifier="deepseek-refinement",
+            language=Language.ZH,
+            messages=[{"role": "user", "content": "武汉近期有什么好玩的？"}],
+        )
+    finally:
+        await chat.close()
+    assert len(decision.reply_text) <= 1500
+    assert "查询日期：2026-07-30" in decision.reply_text
+    assert "参考来源：武汉市文化和旅游局" in decision.reply_text
     assert "http://" not in decision.reply_text
     assert "https://" not in decision.reply_text

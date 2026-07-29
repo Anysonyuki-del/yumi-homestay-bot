@@ -30,7 +30,16 @@
 - [x] 修复失败文案污染模型上下文并保留安全诊断日志
 - [x] 限制 DeepSeek 有效上下文长度，规避多轮结构化输出空白响应
 - [x] 过滤普通回答中未经审核的民宿专属宣传
-- [x] 将 DeepSeek 客人可见回复统一限制为最多 1000 个字符
+- [x] 初版将 DeepSeek 回复限制为 1000 字（现由语义精简与 1500 字硬上限替代）
+
+## 当前变更：DeepSeek 语义精简与 1500 字硬上限
+
+- [x] 在 `tests/unit/test_deepseek_client.py` 添加普通问答和旅游回复超长时触发一次语义精简的失败测试
+- [x] 在 `src/homestay_bot/integrations/deepseek_client.py` 实现目标 1000 字的单次精简，保持事实、日期、来源和风险提示且禁止新增事实与链接
+- [x] 在 `tests/unit/test_deepseek_client.py` 验证精简失败时保留原回复给发送层兜底
+- [x] 在 `tests/unit/test_conversation_service.py` 将绝对上限改为 1500 字，并验证 1500 字不变、1501 字截断
+- [x] 运行全量测试、Ruff、mypy 和真实 DeepSeek 精简契约
+- [ ] 部署本机运行服务并验证健康状态
 
 ## Review
 
@@ -54,3 +63,6 @@
 - 专属宣传过滤后全量测试：122 passed、8 skipped；Ruff、mypy 通过；真实 DeepSeek 普通问答契约 1 passed。
 - DeepSeek 回复长度限制采用发送前统一截断：1000 字保持不变，超长回复取前 999 字并追加省略号。
 - 长度限制后全量测试：124 passed、8 skipped；Ruff 和 mypy 通过；数据库记录与企业微信实际发送文本一致。
+- 已按用户纠正将机械截断升级为 DeepSeek 单次语义精简：目标 1000 字，1500 字为绝对上限。
+- 精简会保留日期、来源和风险提示；新增链接、丢失旅游证据标签或重新引入民宿专属臆测时拒绝精简结果。
+- 语义精简后全量测试：129 passed、9 skipped；Ruff 和 mypy 通过；真实 DeepSeek 完整契约 7 passed。
