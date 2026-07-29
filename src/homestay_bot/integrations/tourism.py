@@ -1,6 +1,7 @@
 import re
 from datetime import date
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
 
@@ -75,22 +76,31 @@ def web_search_tool() -> dict[str, Any]:
 
 
 def extract_url_citations(response: Any) -> list[tuple[str, str]]:
-    """从 Responses 消息注解提取并按 URL 去重来源。"""
+    """从正文注解或 web_search_call 提取并按 URL 去重来源。"""
     citations: list[tuple[str, str]] = []
     seen_urls: set[str] = set()
     for output_item in getattr(response, "output", []):
-        if getattr(output_item, "type", None) != "message":
-            continue
-        for content_item in getattr(output_item, "content", []):
-            for annotation in getattr(content_item, "annotations", []):
-                if getattr(annotation, "type", None) != "url_citation":
-                    continue
-                nested = getattr(annotation, "url_citation", annotation)
-                url = str(getattr(nested, "url", "")).strip()
-                title = str(getattr(nested, "title", "")).strip() or url
-                if url and url not in seen_urls:
-                    citations.append((title, url))
-                    seen_urls.add(url)
+        item_type = getattr(output_item, "type", None)
+        if item_type == "message":
+            candidates = [
+                getattr(annotation, "url_citation", annotation)
+                for content_item in getattr(output_item, "content", [])
+                for annotation in getattr(content_item, "annotations", [])
+                if getattr(annotation, "type", None) == "url_citation"
+            ]
+        elif item_type == "web_search_call":
+            action = getattr(output_item, "action", None)
+            candidates = list(getattr(action, "sources", []))
+        else:
+            candidates = []
+
+        for candidate in candidates:
+            url = str(getattr(candidate, "url", "")).strip()
+            title = str(getattr(candidate, "title", "")).strip()
+            title = title or urlparse(url).netloc or url
+            if url and url not in seen_urls:
+                citations.append((title, url))
+                seen_urls.add(url)
     return citations
 
 

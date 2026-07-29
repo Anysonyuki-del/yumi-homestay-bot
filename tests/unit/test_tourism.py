@@ -79,6 +79,30 @@ def test_citations_are_deduplicated_and_appended_with_query_date() -> None:
     )
 
 
+def test_sources_fall_back_to_web_search_call_action() -> None:
+    """Fenno 未返回正文注解时应读取 web_search_call.action.sources。"""
+    source = SimpleNamespace(
+        type="url",
+        url="https://www.wuhan.gov.cn/zjwh/whly/index.shtml",
+    )
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="web_search_call",
+                action=SimpleNamespace(sources=[source]),
+            ),
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(annotations=[])],
+            ),
+        ]
+    )
+
+    assert extract_url_citations(response) == [
+        ("www.wuhan.gov.cn", "https://www.wuhan.gov.cn/zjwh/whly/index.shtml")
+    ]
+
+
 def test_web_search_state_starts_unknown_and_can_change() -> None:
     """首次真实调用前必须显示 unknown。"""
     state = WebSearchState()
