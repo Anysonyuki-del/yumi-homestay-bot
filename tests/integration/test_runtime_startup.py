@@ -11,6 +11,19 @@ def test_configured_application_starts_worker_and_reports_healthy(
     tmp_path, monkeypatch
 ) -> None:
     """完整本地配置应装配数据库与 worker，并通过分层健康检查。"""
+    openai_configuration: dict[str, str] = {}
+
+    class FakeOpenAI:
+        """记录生命周期传给 OpenAI 客户端的连接配置。"""
+
+        def __init__(self, *, api_key: str, base_url: str) -> None:
+            """保存密钥和兼容接口根地址，避免测试访问外网。"""
+            openai_configuration["api_key"] = api_key
+            openai_configuration["base_url"] = base_url
+
+        async def close(self) -> None:
+            """模拟关闭异步客户端。"""
+
     database_path = tmp_path / "runtime.db"
     database_url = f"sqlite+aiosqlite:///{database_path}"
 
@@ -26,6 +39,7 @@ def test_configured_application_starts_worker_and_reports_healthy(
         "DATABASE_URL": database_url,
         "PUBLIC_BASE_URL": "https://local.example",
         "OPENAI_API_KEY": "test-openai-key",
+        "OPENAI_BASE_URL": "https://openai-compatible.example/v1",
         "OPENAI_MODEL": "gpt-5.6-terra",
         "HOSTEX_ACCESS_TOKEN": "test-hostex-token",
         "WECOM_CORP_ID": "corp-id",
@@ -39,6 +53,7 @@ def test_configured_application_starts_worker_and_reports_healthy(
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.setattr("homestay_bot.application.AsyncOpenAI", FakeOpenAI)
 
     with TestClient(app) as client:
         response = client.get("/health")
@@ -49,4 +64,8 @@ def test_configured_application_starts_worker_and_reports_healthy(
             "database": "ok",
             "worker_heartbeat": "ok",
             "configuration": "ok",
+        }
+        assert openai_configuration == {
+            "api_key": "test-openai-key",
+            "base_url": "https://openai-compatible.example/v1",
         }

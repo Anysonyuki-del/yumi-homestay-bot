@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     database_url: str
     public_base_url: str
     openai_api_key: str
+    openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-5.6-terra"
     hostex_access_token: str
     wecom_corp_id: str

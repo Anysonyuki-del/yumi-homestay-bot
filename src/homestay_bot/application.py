@@ -409,7 +409,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.wecom_kf_secret,
         settings.wecom_agent_secret,
     )
-    openai = AsyncOpenAI(api_key=settings.openai_api_key)
+    openai = AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
     queue = DurableJobQueue(factory)
     knowledge = KnowledgeService(SessionKnowledgeRepository(factory))
     assistant = GuestAssistant(
