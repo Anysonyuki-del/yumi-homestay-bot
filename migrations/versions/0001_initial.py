@@ -47,9 +47,7 @@ def upgrade() -> None:
             "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
         sa.ForeignKeyConstraint(["assigned_employee_id"], ["employees.id"]),
-        sa.UniqueConstraint(
-            "open_kfid", "external_userid", name="uq_conversation_participants"
-        ),
+        sa.UniqueConstraint("open_kfid", "external_userid", name="uq_conversation_participants"),
     )
     op.create_table(
         "knowledge_entries",
@@ -74,9 +72,7 @@ def upgrade() -> None:
         "messages",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("conversation_id", sa.Integer(), nullable=False),
-        sa.Column(
-            "external_message_id", sa.String(length=128), nullable=False, unique=True
-        ),
+        sa.Column("external_message_id", sa.String(length=128), nullable=False, unique=True),
         sa.Column("origin", sa.String(length=16), nullable=False),
         sa.Column("message_type", sa.String(length=32), nullable=False),
         sa.Column("content", sa.Text(), nullable=True),
@@ -84,9 +80,7 @@ def upgrade() -> None:
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
-        sa.ForeignKeyConstraint(
-            ["conversation_id"], ["conversations.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["conversation_id"], ["conversations.id"], ondelete="CASCADE"),
     )
     op.create_index("ix_messages_conversation_id", "messages", ["conversation_id"])
     op.create_table(
@@ -121,9 +115,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["approved_by"], ["employees.id"]),
         sa.ForeignKeyConstraint(["conversation_id"], ["conversations.id"]),
         sa.UniqueConstraint("approval_code", name="uq_booking_approval_code"),
-        sa.UniqueConstraint(
-            "hostex_reservation_code", name="uq_booking_hostex_reservation_code"
-        ),
+        sa.UniqueConstraint("hostex_reservation_code", name="uq_booking_hostex_reservation_code"),
     )
     op.create_index(
         "ix_booking_approval_status_created",
@@ -148,9 +140,7 @@ def upgrade() -> None:
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
     )
-    op.create_index(
-        "ix_external_requests_request_id", "external_requests", ["request_id"]
-    )
+    op.create_index("ix_external_requests_request_id", "external_requests", ["request_id"])
     op.create_table(
         "jobs",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -191,9 +181,7 @@ def downgrade() -> None:
     op.drop_table("jobs")
     op.drop_index("ix_external_requests_request_id", table_name="external_requests")
     op.drop_table("external_requests")
-    op.drop_index(
-        "ix_booking_approvals_conversation_id", table_name="booking_approvals"
-    )
+    op.drop_index("ix_booking_approvals_conversation_id", table_name="booking_approvals")
     op.drop_index("ix_booking_approval_status_created", table_name="booking_approvals")
     op.drop_table("booking_approvals")
     op.drop_index("ix_messages_conversation_id", table_name="messages")

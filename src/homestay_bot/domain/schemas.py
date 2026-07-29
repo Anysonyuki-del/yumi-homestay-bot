@@ -23,4 +23,3 @@ class BookingRequest(BaseModel):
     guest_mobile: str = Field(min_length=6, max_length=32)
     room_type_preference: str = Field(min_length=1, max_length=128)
     special_requests: str | None = Field(default=None, max_length=1000)
-

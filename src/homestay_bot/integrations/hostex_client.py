@@ -132,6 +132,31 @@ class IncomeMethod(HostexModel):
     name: str
 
 
+class CreateReservationRequest(HostexModel):
+    """定义百居易创建直订订单所需的完整字段。"""
+
+    property_id: int
+    custom_channel_id: int
+    check_in_date: date
+    check_out_date: date
+    number_of_guests: int
+    guest_name: str
+    email: str | None = None
+    mobile: str
+    currency: str = "CNY"
+    rate_amount: int
+    commission_amount: int = 0
+    received_amount: int
+    income_method_id: int
+    remarks: str | None = None
+
+
+class CreateReservationResult(HostexModel):
+    """保留创建请求编号；订单编号需要写后查询核验。"""
+
+    request_id: str
+
+
 class HostexClient:
     """封装百居易 OpenAPI，并统一处理信封响应和只读重试。"""
 
@@ -181,9 +206,7 @@ class HostexClient:
 
         for attempt in range(max_attempts):
             try:
-                response = await self._client.request(
-                    method, path, params=params, json=json
-                )
+                response = await self._client.request(method, path, params=params, json=json)
                 response.raise_for_status()
                 envelope: dict[str, Any] = response.json()
             except (httpx.HTTPError, ValueError) as error:
@@ -197,20 +220,14 @@ class HostexClient:
                 return envelope
 
             retry_after_header = response.headers.get("Retry-After")
-            retry_after = (
-                float(retry_after_header) if retry_after_header is not None else None
-            )
+            retry_after = float(retry_after_header) if retry_after_header is not None else None
             business_error = HostexBusinessError(
                 error_code=error_code,
                 request_id=str(envelope.get("request_id", "")),
                 message=str(envelope.get("error_msg", "")),
                 retry_after=retry_after,
             )
-            if (
-                retry_safe
-                and error_code in TRANSIENT_ERROR_CODES
-                and attempt + 1 < max_attempts
-            ):
+            if retry_safe and error_code in TRANSIENT_ERROR_CODES and attempt + 1 < max_attempts:
                 await self._sleeper(retry_after or float(2**attempt))
                 continue
             raise business_error
@@ -219,9 +236,7 @@ class HostexClient:
 
     async def list_properties(self) -> list[Property]:
         """读取物理房间，供房型映射、房态查询和员工选房使用。"""
-        envelope = await self._request(
-            "GET", "/properties", params={"offset": 0, "limit": 100}
-        )
+        envelope = await self._request("GET", "/properties", params={"offset": 0, "limit": 100})
         raw_properties = envelope["data"]["properties"]
         return [Property.model_validate(item) for item in raw_properties]
 
@@ -248,19 +263,14 @@ class HostexClient:
             result.append(
                 PropertyAvailability(
                     property_id=item["id"],
-                    days=[
-                        AvailabilityDay.model_validate(day)
-                        for day in item["availabilities"]
-                    ],
+                    days=[AvailabilityDay.model_validate(day) for day in item["availabilities"]],
                 )
             )
         return result
 
     async def list_room_types(self) -> list[RoomType]:
         """读取房型及其关联物理房间。"""
-        envelope = await self._request(
-            "GET", "/room_types", params={"offset": 0, "limit": 100}
-        )
+        envelope = await self._request("GET", "/room_types", params={"offset": 0, "limit": 100})
         raw_room_types = envelope["data"]["room_types"]
         return [RoomType.model_validate(item) for item in raw_room_types]
 
@@ -306,21 +316,25 @@ class HostexClient:
                 )
         return result
 
-    async def list_reservations(
-        self, query: ReservationQuery
-    ) -> list[Reservation]:
+    async def list_reservations(self, query: ReservationQuery) -> list[Reservation]:
         """按房间和日期查询订单，用于展示与不确定写入后的核验。"""
         params = query.model_dump(mode="json", exclude_none=True)
         envelope = await self._request("GET", "/reservations", params=params)
-        return [
-            Reservation.model_validate(item)
-            for item in envelope["data"]["reservations"]
-        ]
+        return [Reservation.model_validate(item) for item in envelope["data"]["reservations"]]
 
     async def list_income_methods(self) -> list[IncomeMethod]:
         """读取员工审批订单时可选的百居易收款方式。"""
         envelope = await self._request("GET", "/income_methods")
-        return [
-            IncomeMethod.model_validate(item)
-            for item in envelope["data"]["income_methods"]
-        ]
+        return [IncomeMethod.model_validate(item) for item in envelope["data"]["income_methods"]]
+
+    async def create_reservation(
+        self, request: CreateReservationRequest
+    ) -> CreateReservationResult:
+        """创建直订订单；任何网络失败都不得在本层自动重放。"""
+        envelope = await self._request(
+            "POST",
+            "/reservations",
+            json=request.model_dump(mode="json", exclude_none=True),
+            retry_safe=False,
+        )
+        return CreateReservationResult(request_id=str(envelope["request_id"]))

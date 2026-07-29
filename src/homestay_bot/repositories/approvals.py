@@ -1,0 +1,58 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.models import BookingApproval, Employee
+
+
+class SQLAlchemyApprovalRepository:
+    """使用 SQLAlchemy 会话持久化并锁定审批单。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        """绑定当前请求或后台任务的数据库会话。"""
+        self._session = session
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        """打开原子事务，退出时自动提交或回滚。"""
+        async with self._session.begin():
+            yield
+
+    async def add(self, approval: BookingApproval) -> BookingApproval:
+        """加入新审批单并刷新主键。"""
+        self._session.add(approval)
+        await self._session.flush()
+        return approval
+
+    async def get_for_update(self, approval_id: int) -> BookingApproval:
+        """使用数据库行锁读取审批单，阻止并发重复确认。"""
+        statement = (
+            select(BookingApproval).where(BookingApproval.id == approval_id).with_for_update()
+        )
+        approval = await self._session.scalar(statement)
+        if approval is None:
+            raise LookupError(f"审批单不存在: {approval_id}")
+        return approval
+
+    async def save(self, approval: BookingApproval) -> None:
+        """刷新审批单变更，提交由外层事务负责。"""
+        self._session.add(approval)
+        await self._session.flush()
+
+
+class SQLAlchemyPermissionChecker:
+    """从员工表验证最终下单权限。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        """绑定当前请求的数据库会话。"""
+        self._session = session
+
+    async def require_booking_approver(self, employee_id: int) -> None:
+        """仅允许管理员和预订审批员创建订单。"""
+        employee = await self._session.get(Employee, employee_id)
+        allowed_roles = {EmployeeRole.ADMIN, EmployeeRole.BOOKING_APPROVER}
+        if employee is None or not employee.is_active or employee.role not in allowed_roles:
+            raise PermissionError("当前员工没有确认下单权限")

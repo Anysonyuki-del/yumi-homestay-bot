@@ -1,0 +1,54 @@
+import secrets
+from collections.abc import Callable
+from typing import Protocol
+
+from homestay_bot.domain.enums import ApprovalStatus
+from homestay_bot.domain.models import BookingApproval
+from homestay_bot.domain.schemas import BookingRequest
+
+
+class PendingApprovalRepository(Protocol):
+    """定义创建待审批单所需的最小仓储接口。"""
+
+    async def add(self, approval: BookingApproval) -> BookingApproval:
+        """持久化并返回已分配主键的审批单。"""
+
+
+def generate_approval_code() -> str:
+    """生成不可预测且适合放入百居易备注的审批编号。"""
+    return f"APP-{secrets.token_urlsafe(12)}"
+
+
+class ApprovalService:
+    """把客人确认的资料转换成不占房的待审批单。"""
+
+    def __init__(
+        self,
+        repository: PendingApprovalRepository,
+        *,
+        code_factory: Callable[[], str] = generate_approval_code,
+    ) -> None:
+        """注入仓储和编号生成器，保证测试可重复。"""
+        self._repository = repository
+        self._code_factory = code_factory
+
+    async def create_pending(
+        self, conversation_id: int, request: BookingRequest
+    ) -> BookingApproval:
+        """校验日期并创建尚未选择具体房间的审批单。"""
+        if request.check_out_date <= request.check_in_date:
+            raise ValueError("退房日期必须晚于入住日期")
+
+        approval = BookingApproval(
+            approval_code=self._code_factory(),
+            conversation_id=conversation_id,
+            status=ApprovalStatus.PENDING,
+            check_in_date=request.check_in_date,
+            check_out_date=request.check_out_date,
+            number_of_guests=request.number_of_guests,
+            guest_name=request.guest_name,
+            guest_mobile=request.guest_mobile,
+            room_type_preference=request.room_type_preference,
+            special_requests=request.special_requests,
+        )
+        return await self._repository.add(approval)

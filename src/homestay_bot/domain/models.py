@@ -98,9 +98,7 @@ class Message(Base):
     conversation_id: Mapped[int] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    external_message_id: Mapped[str] = mapped_column(
-        String(128), unique=True, nullable=False
-    )
+    external_message_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     origin: Mapped[MessageOrigin] = mapped_column(
         Enum(MessageOrigin, native_enum=False, length=16), nullable=False
     )
@@ -135,9 +133,7 @@ class BookingApproval(TimestampMixin, Base):
     __tablename__ = "booking_approvals"
     __table_args__ = (
         UniqueConstraint("approval_code", name="uq_booking_approval_code"),
-        UniqueConstraint(
-            "hostex_reservation_code", name="uq_booking_hostex_reservation_code"
-        ),
+        UniqueConstraint("hostex_reservation_code", name="uq_booking_hostex_reservation_code"),
         Index("ix_booking_approval_status_created", "status", "created_at"),
     )
 
@@ -164,9 +160,7 @@ class BookingApproval(TimestampMixin, Base):
     income_method_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    hostex_reservation_code: Mapped[str | None] = mapped_column(
-        String(128), nullable=True
-    )
+    hostex_reservation_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     hostex_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     failure_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -215,9 +209,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    actor_employee_id: Mapped[int | None] = mapped_column(
-        ForeignKey("employees.id"), nullable=True
-    )
+    actor_employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     target_type: Mapped[str] = mapped_column(String(64), nullable=False)
     target_id: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -225,4 +217,3 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-

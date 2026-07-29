@@ -17,12 +17,13 @@ dependencies = [
     "openai>=1.68,<3",
     "pydantic-settings>=2.8,<3",
     "python-multipart>=0.0.20,<1",
-    "sqlalchemy>=2.0,<3",
+    "sqlalchemy[asyncio]>=2.0,<3",
     "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "aiosqlite>=0.21,<1",
     "mypy>=1.15,<2",
     "pytest>=8.3,<10",
     "pytest-asyncio>=0.25,<2",
@@ -50,4 +51,3 @@ python_version = "3.12"
 strict = true
 packages = ["homestay_bot"]
 mypy_path = ["src"]
-

@@ -26,4 +26,3 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """缓存经过校验的运行配置，避免每次请求重复读取环境。"""
     return Settings()  # type: ignore[call-arg]
-

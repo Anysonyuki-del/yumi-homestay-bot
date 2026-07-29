@@ -4,8 +4,10 @@ import httpx
 import pytest
 
 from homestay_bot.integrations.hostex_client import (
+    CreateReservationRequest,
     HostexBusinessError,
     HostexClient,
+    HostexTransportError,
     ReservationQuery,
 )
 
@@ -69,9 +71,7 @@ async def test_list_availabilities_sends_token_and_parses_days() -> None:
         )
 
     client = HostexClient("secret", transport=json_transport(responder))
-    result = await client.list_availabilities(
-        [101, 102], "2026-08-01", "2026-08-02"
-    )
+    result = await client.list_availabilities([101, 102], "2026-08-01", "2026-08-02")
 
     assert result[0].property_id == 101
     assert result[0].days[0].available is True
@@ -303,11 +303,42 @@ async def test_read_request_retries_429_using_retry_after() -> None:
         """记录退避时间，避免单元测试真实等待。"""
         delays.append(delay)
 
-    client = HostexClient(
-        "secret", transport=json_transport(responder), sleeper=record_delay
-    )
+    client = HostexClient("secret", transport=json_transport(responder), sleeper=record_delay)
     properties = await client.list_properties()
 
     assert properties == []
     assert attempts == 2
     assert delays == [2.0]
+
+
+@pytest.mark.asyncio
+async def test_create_reservation_sends_required_fields_without_retry() -> None:
+    """直订写入必须发送完整字段，网络失败时不得自动重放。"""
+    attempts = 0
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("timeout", request=request)
+
+    client = HostexClient("secret", transport=json_transport(responder))
+    request = CreateReservationRequest(
+        property_id=101,
+        custom_channel_id=1,
+        check_in_date="2026-08-01",
+        check_out_date="2026-08-02",
+        number_of_guests=2,
+        guest_name="张三",
+        mobile="13800138000",
+        currency="CNY",
+        rate_amount=399,
+        commission_amount=0,
+        received_amount=399,
+        income_method_id=1,
+        remarks="approval_code=APP-001",
+    )
+
+    with pytest.raises(HostexTransportError):
+        await client.create_reservation(request)
+
+    assert attempts == 1
