@@ -253,11 +253,46 @@ class DeepSeekGuestAssistant:
         self,
         output_text: str,
         question_text: str,
+        *,
+        property_knowledge_grounded: bool,
     ) -> AssistantDecision:
         """校验模型 JSON，并执行确定性风险归一化。"""
         decision = AssistantDecision.model_validate_json(output_text)
         updates: dict[str, Any] = {"handoff_reason": None}
-        if decision.staff_confirmation_required:
+        property_specific = is_property_specific(question_text)
+        transaction_sensitive = is_transaction_sensitive(question_text)
+        if not property_specific and not transaction_sensitive:
+            updates.update(
+                {
+                    "knowledge_gap": False,
+                    "knowledge_gap_topic": None,
+                    "staff_confirmation_required": False,
+                    "staff_confirmation_reason": None,
+                }
+            )
+        elif property_specific and not property_knowledge_grounded:
+            topic = self._property_topic(question_text)
+            safe_reply = (
+                f"当前审核资料尚未确认{topic}信息。"
+                "建议到店前由工作人员进一步确认，"
+                "并先准备不依赖该信息的替代安排。"
+            )
+            if topic == "停车":
+                safe_reply = (
+                    "当前审核资料尚未确认民宿停车信息。"
+                    "建议先考虑附近公共停车场或合规停车位，"
+                    "到店前再请工作人员确认周边停车安排。"
+                )
+            updates.update(
+                {
+                    "reply_text": safe_reply,
+                    "knowledge_gap": True,
+                    "knowledge_gap_topic": "property_information",
+                    "staff_confirmation_required": False,
+                    "staff_confirmation_reason": None,
+                }
+            )
+        elif decision.staff_confirmation_required:
             updates.update({"knowledge_gap": False, "knowledge_gap_topic": None})
         elif decision.confidence < 0.7 and is_transaction_sensitive(question_text):
             updates.update(
@@ -280,6 +315,61 @@ class DeepSeekGuestAssistant:
                 }
             )
         return decision.model_copy(update=updates)
+
+    @staticmethod
+    def _property_topic(question_text: str) -> str:
+        """从专属问题中提取用于知识匹配和安全回复的主题。"""
+        for topic in (
+            "停车",
+            "早餐",
+            "宠物",
+            "加床",
+            "电梯",
+            "厨房",
+            "洗衣",
+            "发票",
+            "接送",
+            "无障碍",
+            "吸烟",
+            "行李寄存",
+            "距离",
+        ):
+            if topic in question_text:
+                return topic
+        return "民宿专属"
+
+    @classmethod
+    def _has_relevant_property_knowledge(
+        cls,
+        question_text: str,
+        knowledge: list[Any],
+    ) -> bool:
+        """判断审核知识是否明确覆盖当前民宿专属主题。"""
+        topic = cls._property_topic(question_text)
+        if topic == "民宿专属":
+            return False
+        corpus = "\n".join(
+            f"{item.question}\n{item.answer}" for item in knowledge
+        )
+        return topic in corpus
+
+    @staticmethod
+    def _should_force_availability(question_text: str) -> bool:
+        """有完整入住退房信息的房态问题必须调用百居易。"""
+        asks_availability = re.search(
+            r"有房|几间房|房态|可订|availability",
+            question_text,
+            re.IGNORECASE,
+        )
+        has_stay_range = (
+            ("入住" in question_text and "退房" in question_text)
+            or (
+                re.search(r"今天|今晚|今日", question_text) is not None
+                and re.search(r"明天|明日|后天", question_text) is not None
+            )
+            or len(re.findall(r"\d{4}-\d{2}-\d{2}", question_text)) >= 2
+        )
+        return asks_availability is not None and has_stay_range
 
     async def respond(
         self,
@@ -328,8 +418,19 @@ class DeepSeekGuestAssistant:
             "response_format": {"type": "json_object"},
             "extra_body": {"thinking": {"type": "disabled"}},
             "tools": self.tool_definitions(),
-            "tool_choice": "auto",
+            "tool_choice": (
+                {
+                    "type": "function",
+                    "function": {"name": "search_availability"},
+                }
+                if self._should_force_availability(question_text)
+                else "auto"
+            ),
         }
+        property_knowledge_grounded = self._has_relevant_property_knowledge(
+            question_text,
+            knowledge,
+        )
         for _ in range(2):
             try:
                 active_request = {**request}
@@ -343,6 +444,9 @@ class DeepSeekGuestAssistant:
                         return self._validate_decision(
                             message.content or "",
                             question_text,
+                            property_knowledge_grounded=(
+                                property_knowledge_grounded
+                            ),
                         )
                     if self._tool_executor is None:
                         raise AssistantUnavailableError()
@@ -369,6 +473,7 @@ class DeepSeekGuestAssistant:
                     active_request = {
                         **request,
                         "messages": active_messages,
+                        "tool_choice": "auto",
                     }
                 raise AssistantUnavailableError()
             except AssistantUnavailableError:

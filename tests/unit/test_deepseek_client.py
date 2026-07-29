@@ -249,3 +249,67 @@ async def test_deepseek_executes_read_only_tool_and_replays_result() -> None:
         "tool_call_id": "call-1",
         "content": '{"available": true, "rooms": 1}',
     }
+    assert client.chat.completions.requests[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "search_availability"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_general_question_clears_model_knowledge_gap_mistake() -> None:
+    """普通常识问题不得因模型误标而提醒补知识库。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "confidence": 0.6,
+            "knowledge_gap": True,
+            "knowledge_gap_topic": "旅行协调",
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "怎样和朋友协调旅行安排？"}],
+    )
+
+    assert decision.knowledge_gap is False
+    assert decision.knowledge_gap_topic is None
+
+
+@pytest.mark.asyncio
+async def test_ungrounded_property_claim_is_forced_to_knowledge_gap() -> None:
+    """审核知识未包含停车时，模型高置信度回答也必须标记缺口。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "reply_text": "我们提供免费停车位。",
+            "confidence": 0.9,
+            "knowledge_gap": False,
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "你们有停车场吗？"}],
+    )
+
+    assert decision.knowledge_gap is True
+    assert decision.knowledge_gap_topic == "property_information"
