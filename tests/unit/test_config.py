@@ -29,3 +29,28 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
     assert settings.deepseek_anthropic_base_url == (
         "https://api.deepseek.test/anthropic"
     )
+
+
+def test_settings_default_to_five_second_wecom_polling(monkeypatch) -> None:
+    """未显式配置时采用五秒补拉，缩短客人等待时间。"""
+    environment = {
+        "DATABASE_URL": "sqlite+aiosqlite:///test.db",
+        "PUBLIC_BASE_URL": "https://local.example",
+        "DEEPSEEK_API_KEY": "test-deepseek-key",
+        "HOSTEX_ACCESS_TOKEN": "test-hostex-token",
+        "WECOM_CORP_ID": "corp-id",
+        "WECOM_KF_SECRET": "kf-secret",
+        "WECOM_CALLBACK_TOKEN": "callback-token",
+        "WECOM_ENCODING_AES_KEY": "A" * 43,
+        "WECOM_AGENT_ID": "100001",
+        "WECOM_AGENT_SECRET": "agent-secret",
+        "WECOM_DUTY_USERIDS": "staff-1",
+        "SESSION_SECRET": "local-test-session-secret-at-least-32",
+    }
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("WECOM_POLL_INTERVAL_SECONDS", raising=False)
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.wecom_poll_interval_seconds == 5

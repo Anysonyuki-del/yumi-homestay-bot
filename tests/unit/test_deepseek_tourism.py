@@ -102,6 +102,37 @@ class EventClientStub:
         self.messages = EventMessagesStub(text=text, sources=sources)
 
 
+class MutableClock:
+    """提供可由测试推进的单调时钟。"""
+
+    def __init__(self) -> None:
+        """从零开始记录测试时间。"""
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        """返回当前测试时间。"""
+        return self.value
+
+
+class FlakyMessagesStub(MessagesStub):
+    """首次搜索失败，后续返回有效结果。"""
+
+    async def create(self, **kwargs):
+        """第一次抛错，第二次复用正常搜索响应。"""
+        if not self.requests:
+            self.requests.append(kwargs)
+            raise RuntimeError("temporary failure")
+        return await super().create(**kwargs)
+
+
+class FlakyClientStub:
+    """暴露首次失败的 Messages 资源。"""
+
+    def __init__(self) -> None:
+        """初始化可恢复的搜索资源。"""
+        self.messages = FlakyMessagesStub()
+
+
 @pytest.mark.asyncio
 async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
     """旅游回答必须使用武汉搜索证据，并移除客人可见链接。"""
@@ -129,6 +160,9 @@ async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
     assert "当前日期：2026-07-30" in request["system"]
     assert "优先时间窗口：2026-07-30 至 2026-08-14" in request["system"]
     assert "每项活动日期必须注明完整年份" in request["system"]
+    assert "优先选出最值得推荐的3项" in request["system"]
+    assert "700至900字" in request["system"]
+    assert request["max_tokens"] == 1100
     assert "参考来源：武汉市文化和旅游局" in result
     assert "https://" not in result
     assert statuses == ["ok"]
@@ -285,3 +319,101 @@ async def test_recent_exhibition_accepts_ongoing_month_range() -> None:
     )
 
     assert "2026年7月下旬至2026年9月底" in result
+
+
+@pytest.mark.asyncio
+async def test_successful_tourism_reply_is_cached_for_same_request() -> None:
+    """同一天同语言的相同问题应直接复用已校验答案。"""
+    client = AnthropicClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+    )
+
+    first = await searcher.search(
+        question="  武汉近期有什么好玩的？ ",
+        language=Language.ZH,
+        queried_on=date(2026, 7, 30),
+    )
+    second = await searcher.search(
+        question="武汉近期有什么好玩的？",
+        language=Language.ZH,
+        queried_on=date(2026, 7, 30),
+    )
+
+    assert second == first
+    assert len(client.messages.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_tourism_cache_expires_after_ten_minutes() -> None:
+    """缓存满十分钟后必须重新联网，避免长期复用旧活动。"""
+    clock = MutableClock()
+    client = AnthropicClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+        clock=clock,
+    )
+
+    await searcher.search(
+        question="武汉有什么好玩的？",
+        language=Language.ZH,
+        queried_on=date(2026, 7, 30),
+    )
+    clock.value = 601.0
+    await searcher.search(
+        question="武汉有什么好玩的？",
+        language=Language.ZH,
+        queried_on=date(2026, 7, 30),
+    )
+
+    assert len(client.messages.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_tourism_search_is_not_cached() -> None:
+    """联网失败不得进入缓存，下一次相同问题仍应重新搜索。"""
+    client = FlakyClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+    )
+
+    with pytest.raises(TourismSearchError):
+        await searcher.search(
+            question="武汉有什么好玩的？",
+            language=Language.ZH,
+            queried_on=date(2026, 7, 30),
+        )
+    result = await searcher.search(
+        question="武汉有什么好玩的？",
+        language=Language.ZH,
+        queried_on=date(2026, 7, 30),
+    )
+
+    assert "参考来源：" in result
+    assert len(client.messages.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_tourism_cache_separates_date_and_language() -> None:
+    """不同查询日期或语言不得共享旅游答案。"""
+    client = AnthropicClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+    )
+
+    for language, queried_on in (
+        (Language.ZH, date(2026, 7, 30)),
+        (Language.EN, date(2026, 7, 30)),
+        (Language.ZH, date(2026, 7, 31)),
+    ):
+        await searcher.search(
+            question="武汉有什么好玩的？",
+            language=language,
+            queried_on=queried_on,
+        )
+
+    assert len(client.messages.requests) == 3

@@ -1,6 +1,8 @@
+import logging
 import re
 from collections.abc import Callable
 from datetime import date, timedelta
+from time import monotonic
 from typing import Any
 
 from homestay_bot.domain.enums import Language
@@ -36,6 +38,10 @@ _MONTH_ONLY_PATTERN = re.compile(r"\d{1,2}月(?!\d{1,2}日)")
 _YEAR_MONTH_PATTERN = re.compile(
     r"(?P<year>20\d{2})年(?P<month>\d{1,2})月"
 )
+logger = logging.getLogger(__name__)
+
+TourismCacheKey = tuple[str, str, date]
+TourismCacheValue = tuple[float, str]
 
 
 class DeepSeekTourismSearcher:
@@ -47,16 +53,59 @@ class DeepSeekTourismSearcher:
         client: Any,
         model: str,
         status_setter: Callable[[WebSearchStatus], None] | None = None,
+        clock: Callable[[], float] = monotonic,
+        cache_ttl_seconds: float = 600.0,
+        cache_max_entries: int = 100,
     ) -> None:
-        """注入 Anthropic 兼容客户端、模型和健康状态写入器。"""
+        """注入搜索客户端、健康状态写入器和有界缓存参数。"""
         self._client = client
         self._model = model
         self._status_setter = status_setter
+        self._clock = clock
+        self._cache_ttl_seconds = cache_ttl_seconds
+        self._cache_max_entries = cache_max_entries
+        self._cache: dict[TourismCacheKey, TourismCacheValue] = {}
 
     def _set_status(self, status: WebSearchStatus) -> None:
         """更新非敏感搜索能力状态。"""
         if self._status_setter is not None:
             self._status_setter(status)
+
+    @staticmethod
+    def _cache_key(
+        question: str,
+        language: Language,
+        queried_on: date,
+    ) -> TourismCacheKey:
+        """生成不含客人身份的稳定缓存键，并统一空白与大小写。"""
+        normalized_question = " ".join(question.split()).casefold()
+        return normalized_question, language.value, queried_on
+
+    def _get_cached_reply(self, key: TourismCacheKey) -> str | None:
+        """返回未过期的已校验回复，并及时删除过期项。"""
+        cached = self._cache.get(key)
+        if cached is None:
+            return None
+        expires_at, reply = cached
+        if self._clock() >= expires_at:
+            self._cache.pop(key, None)
+            return None
+        return reply
+
+    def _store_cached_reply(
+        self,
+        key: TourismCacheKey,
+        reply: str,
+    ) -> None:
+        """缓存成功答案，并按插入顺序限制内存条目数量。"""
+        self._cache.pop(key, None)
+        while len(self._cache) >= self._cache_max_entries:
+            oldest_key = next(iter(self._cache))
+            self._cache.pop(oldest_key, None)
+        self._cache[key] = (
+            self._clock() + self._cache_ttl_seconds,
+            reply,
+        )
 
     @staticmethod
     def _extract_content(
@@ -216,6 +265,14 @@ class DeepSeekTourismSearcher:
         queried_on: date,
     ) -> str:
         """执行有限武汉搜索，要求正文和搜索证据同时存在。"""
+        cache_key = self._cache_key(question, language, queried_on)
+        cached_reply = self._get_cached_reply(cache_key)
+        if cached_reply is not None:
+            self._set_status("ok")
+            logger.info("旅游搜索完成：cache_hit=true duration_ms=0")
+            return cached_reply
+
+        started_at = self._clock()
         priority_end = queried_on + timedelta(days=15)
         system = (
             "你是武汉民宿的旅游客服。必须使用 Web Search 的真实结果回答，"
@@ -226,7 +283,8 @@ class DeepSeekTourismSearcher:
             "近期问题优先展示该窗口内尚未结束的项目；不足时才补充更晚项目，"
             "并明确标注“半个月后”。不得把已经结束的活动当作近期推荐。"
             "每项活动日期必须注明完整年份。"
-            "简单推荐给出3至5项，规划问题给出半日或一日路线。"
+            "简单推荐要精简选优，优先选出最值得推荐的3项，正文控制在"
+            "700至900字；规划问题给出半日或一日路线。"
             "不要在正文中输出网址或 Markdown 链接。"
             if language is Language.ZH
             else (
@@ -236,13 +294,14 @@ class DeepSeekTourismSearcher:
                 f"{queried_on.isoformat()} through {priority_end.isoformat()}. "
                 "For recent requests, prioritize events that have not ended "
                 "within this window, include the full year for every event "
-                "date, and label later events clearly."
+                "date, and label later events clearly. Select the three best "
+                "recommendations and keep the answer concise at 700-900 words."
             )
         )
         try:
             response = await self._client.messages.create(
                 model=self._model,
-                max_tokens=1800,
+                max_tokens=1100,
                 system=system,
                 messages=[{"role": "user", "content": question}],
                 tools=[
@@ -265,11 +324,19 @@ class DeepSeekTourismSearcher:
                 "unsupported" if status_code in {400, 404, 422} else "degraded"
             )
             self._set_status(status)
+            logger.info(
+                "旅游搜索完成：cache_hit=false success=false duration_ms=%d",
+                round((self._clock() - started_at) * 1000),
+            )
             raise TourismSearchError(status) from error
 
         text, citations = self._extract_content(response)
         if not text or not citations:
             self._set_status("degraded")
+            logger.info(
+                "旅游搜索完成：cache_hit=false success=false duration_ms=%d",
+                round((self._clock() - started_at) * 1000),
+            )
             raise TourismSearchError("degraded")
         if self._is_recent_event_question(question):
             citations = self._remove_stale_citations(
@@ -295,6 +362,16 @@ class DeepSeekTourismSearcher:
                 ),
             ):
                 self._set_status("degraded")
+                logger.info(
+                    "旅游搜索完成：cache_hit=false success=false duration_ms=%d",
+                    round((self._clock() - started_at) * 1000),
+                )
                 raise TourismSearchError("degraded")
+        reply = format_tourism_reply(text, citations, queried_on)
+        self._store_cached_reply(cache_key, reply)
         self._set_status("ok")
-        return format_tourism_reply(text, citations, queried_on)
+        logger.info(
+            "旅游搜索完成：cache_hit=false success=true duration_ms=%d",
+            round((self._clock() - started_at) * 1000),
+        )
+        return reply

@@ -526,7 +526,6 @@ class DeepSeekGuestAssistant:
                 language=language,
                 queried_on=local_today,
             )
-            reply = await self._refine_reply(reply)
             return AssistantDecision(
                 reply_text=reply,
                 language=language,

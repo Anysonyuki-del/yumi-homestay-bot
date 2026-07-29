@@ -221,16 +221,9 @@ async def test_long_general_reply_is_semantically_refined_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_long_tourism_reply_is_refined_and_keeps_evidence_labels() -> None:
-    """超长旅游回复也要精简，并保留查询日期和来源名称。"""
-    refined_reply = (
-        "推荐东湖和湖北省博物馆。\n"
-        "查询日期：2026-07-30\n"
-        "参考来源：武汉市文化和旅游局"
-    )
-    client = ChatClientStub(
-        [json.dumps({"reply_text": refined_reply}, ensure_ascii=False)]
-    )
+async def test_tourism_reply_skips_second_model_refinement() -> None:
+    """已由联网搜索选优并校验的旅游回复不得再次串行调用模型。"""
+    client = ChatClientStub([])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
         tourism_searcher=LongTourismStub(),
@@ -245,10 +238,10 @@ async def test_long_tourism_reply_is_refined_and_keeps_evidence_labels() -> None
         messages=[{"role": "user", "content": "武汉最近有什么好玩的？"}],
     )
 
-    assert decision.reply_text == refined_reply
+    assert decision.reply_text.startswith("武汉旅游建议。")
     assert "查询日期：2026-07-30" in decision.reply_text
     assert "参考来源：武汉市文化和旅游局" in decision.reply_text
-    assert len(client.chat.completions.requests) == 1
+    assert client.chat.completions.requests == []
 
 
 @pytest.mark.asyncio
@@ -288,12 +281,9 @@ async def test_refinement_failure_keeps_original_reply_for_hard_limit_fallback(
 
 
 @pytest.mark.asyncio
-async def test_unsafe_tourism_refinement_falls_back_to_original_evidence() -> None:
-    """新增链接或丢失来源标签的精简结果必须被拒绝。"""
-    unsafe_reply = "精简推荐：https://example.com"
-    client = ChatClientStub(
-        [json.dumps({"reply_text": unsafe_reply}, ensure_ascii=False)]
-    )
+async def test_tourism_reply_preserves_validated_evidence_without_chat_call() -> None:
+    """旅游入口应原样保留搜索层附加的日期和来源证据。"""
+    client = ChatClientStub([])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
         tourism_searcher=LongTourismStub(),
@@ -308,10 +298,9 @@ async def test_unsafe_tourism_refinement_falls_back_to_original_evidence() -> No
         messages=[{"role": "user", "content": "武汉最近有什么好玩的？"}],
     )
 
-    assert decision.reply_text != unsafe_reply
     assert "查询日期：2026-07-30" in decision.reply_text
     assert "参考来源：武汉市文化和旅游局" in decision.reply_text
-    assert "https://" not in decision.reply_text
+    assert client.chat.completions.requests == []
 
 
 @pytest.mark.asyncio
