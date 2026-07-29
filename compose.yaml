@@ -1,0 +1,35 @@
+services:
+  api:
+    build: .
+    command: uvicorn homestay_bot.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: python -m homestay_bot.worker
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: homestay
+      POSTGRES_USER: homestay
+      POSTGRES_PASSWORD: homestay-local-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homestay -d homestay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
