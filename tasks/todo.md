@@ -892,12 +892,21 @@ Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_business_task_service.p
 
 Expected: PASS。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/homestay_bot/services/business_task_service.py src/homestay_bot/services/answer_policy.py src/homestay_bot/integrations/deepseek_client.py src/homestay_bot/services/conversation_service.py src/homestay_bot/services/hostex_sync.py src/homestay_bot/repositories/operations.py src/homestay_bot/repositories/context.py tests/unit/test_business_task_service.py tests/unit/test_answer_policy.py tests/unit/test_context_retention.py tests/unit/test_deepseek_client.py tests/unit/test_conversation_service.py tests/unit/test_hostex_sync.py
 git commit -m "feat: manage operational tasks"
 ```
+
+**Review（Task 6）**
+
+- 已提交 `7d57553 feat: manage operational tasks`。
+- AI 任务建议只进入待确认状态；缺少房间或服务日期时不能进入执行流程。
+- 价格、退款、投诉、提前入住和激烈情绪由本地规则触发 YuMi 接管，并写安全审计。
+- 百居易有效订单按退房日幂等创建周转保洁任务；取消订单不新建任务。
+- 客户模型上下文只包含脱敏摘要、有效订单摘要和未完成任务摘要。
+- 验证：251 passed，10 skipped；Ruff、mypy、`git diff --check` 均通过；迁移升级、降级、再升级通过。
 
 ### Task 7：两级员工权限与移动任务页
 
