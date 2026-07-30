@@ -74,7 +74,7 @@
 - [x] DeepSeek 先生成 FAQ 参考草稿再提醒管理员已确认
 - [x] 用户审核本文件中的最终书面 Spec
 - [x] 编写并确认实施计划
-- [ ] 按 TDD 实施、验证并部署
+- [x] 按 TDD 实施、验证并部署
 
 ## 实施计划
 
@@ -126,9 +126,20 @@
 - [x] 运行迁移升级与降级测试、全部 `pytest`、Ruff 和 mypy。
 - [x] 扩展 `tests/contract/test_deepseek_contract.py`，显式启用真实 DeepSeek FAQ 草稿契约，确认未知专属事实使用待确认占位。
 - [x] 在临时数据库回放三条相似问法，验证只创建一个候选、一个草稿任务和一条管理员通知，且客人回复不受影响。
-- [ ] 独立代码审查 Critical/Important 问题并修复后重跑全部验证。
-- [ ] 备份本机运行代码和数据库，执行 Alembic 迁移，部署源码并重启 LaunchAgent。
-- [ ] 验证健康检查 HTTP 200、管理员提醒、候选页面、转换知识、会话保持 `BOT_ACTIVE`，在 Review 中记录证据。
+- [x] 独立代码审查 Critical/Important 问题并修复后重跑全部验证。
+- [x] 备份本机运行代码和数据库，执行 Alembic 迁移，部署源码并重启 LaunchAgent。
+- [x] 验证健康检查 HTTP 200、管理员收件人、候选表与受保护管理入口、会话保持 `BOT_ACTIVE`，在 Review 中记录证据。
+
+## Review
+
+- 全量自动化验证：196 passed、10 skipped；Ruff 全仓通过；mypy 检查 46 个源文件通过。
+- 真实 DeepSeek FAQ 草稿契约通过：未知民宿专属事实保留 `【待管理员确认】`、非空核实项且不含链接。
+- 数据库迁移完成升级、降级至 `0001_initial`、再升级至 `0002_frequent_faq_candidates` 的完整循环。
+- 临时数据库三条相似问法回放结果：1 个候选、1 个草稿任务、1 条管理员通知，通知显示最近 72 小时 3 次。
+- 四轮独立代码审查最终结果：Critical 0、Important 0；已覆盖并发计数、冷却游标、飞行中关闭、原子重开、隐私脱敏和通知完整性。
+- 本机部署前备份位于 `/Users/rin/Library/Application Support/HomestayBot/.backups/frequent-faq-20260730-092251`。
+- 本机数据库已迁移至 `0002_frequent_faq_candidates`，`XuKuang` 已设为启用管理员；两个原有会话均保持 `BOT_ACTIVE`。
+- LaunchAgent `com.rin.homestay-bot` 运行中，健康检查 HTTP 200；数据库、worker、企业微信轮询和配置均为 `ok`。
 
 # 当前任务：武汉旅游联网推荐
 
