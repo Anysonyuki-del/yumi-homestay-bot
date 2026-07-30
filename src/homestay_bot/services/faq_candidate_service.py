@@ -42,6 +42,13 @@ _ORDER_PATTERN = re.compile(
 )
 
 
+def _as_utc(value: datetime) -> datetime:
+    """统一 SQLite 无时区时间与业务 UTC 时间，避免冷却期比较失败。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 class CandidateRecord(Protocol):
     """定义高频判定所需的候选字段。"""
 
@@ -193,8 +200,8 @@ class FrequentFaqService:
         available_at = now
         if candidate.last_reminded_at is not None:
             available_at = max(
-                available_at,
-                candidate.last_reminded_at + _REMINDER_COOLDOWN,
+                _as_utc(available_at),
+                _as_utc(candidate.last_reminded_at) + _REMINDER_COOLDOWN,
             )
         generation = candidate.draft_generation
         await self._jobs.enqueue(

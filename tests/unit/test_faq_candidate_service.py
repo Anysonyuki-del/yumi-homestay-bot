@@ -255,7 +255,8 @@ async def test_sixth_occurrence_waits_for_24_hour_cooldown_and_reuses_draft() ->
         )
     candidate = candidates.candidate
     candidate.notification_pending = False
-    candidate.last_reminded_at = now
+    # SQLite 会把带时区字段重读为无时区时间，服务必须仍按 UTC 计算。
+    candidate.last_reminded_at = now.replace(tzinfo=None)
     candidate.last_reminded_total = 3
     candidate.draft_status = KnowledgeCandidateDraftStatus.READY
     candidate.draft_examples_version = candidate.examples_version

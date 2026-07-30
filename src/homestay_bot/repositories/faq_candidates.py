@@ -1,7 +1,7 @@
 import hashlib
 import re
 import unicodedata
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import delete, func, select
@@ -24,6 +24,13 @@ def _canonical_key(question: str) -> str:
     normalized = unicodedata.normalize("NFKC", question).strip().lower()
     normalized = re.sub(r"\s+", "", normalized).replace("?", "？")
     return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _as_utc(value: datetime) -> datetime:
+    """把 SQLite 返回的无时区时间按 UTC 解释并统一比较格式。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 class SQLAlchemyFaqCandidateRepository:
@@ -107,7 +114,10 @@ class SQLAlchemyFaqCandidateRepository:
             )
         )
         candidate.total_occurrences += 1
-        if candidate.last_seen_at is None or occurred_at > candidate.last_seen_at:
+        if (
+            candidate.last_seen_at is None
+            or _as_utc(occurred_at) > _as_utc(candidate.last_seen_at)
+        ):
             candidate.last_seen_at = occurred_at
         clean_example = example.strip() if example else ""
         if clean_example and clean_example not in candidate.examples:

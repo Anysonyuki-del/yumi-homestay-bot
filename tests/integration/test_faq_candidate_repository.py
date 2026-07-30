@@ -106,6 +106,48 @@ async def test_occurrences_are_idempotent_counted_in_window_and_keep_three_examp
 
 
 @pytest.mark.asyncio
+async def test_occurrences_compare_utc_times_across_sqlite_sessions() -> None:
+    """SQLite 重读无时区时间后，后续 UTC 消息仍应正常更新最近出现时间。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 30, 4, tzinfo=UTC)
+
+    async with factory() as session:
+        candidate = await SQLAlchemyFaqCandidateRepository(
+            session
+        ).get_or_create(
+            canonical_question="民宿是否提供停车位？",
+            category="交通",
+        )
+        candidate_id = candidate.id
+        await SQLAlchemyFaqCandidateRepository(session).add_occurrence(
+            candidate_id,
+            source_message_id="msg-first-session",
+            occurred_at=now,
+            example="有停车位吗？",
+        )
+        await session.commit()
+
+    async with factory() as session:
+        repository = SQLAlchemyFaqCandidateRepository(session)
+        added = await repository.add_occurrence(
+            candidate_id,
+            source_message_id="msg-second-session",
+            occurred_at=now + timedelta(minutes=1),
+            example="停车方便吗？",
+        )
+        await session.commit()
+        refreshed = await repository.get(candidate_id)
+
+    assert added is True
+    assert refreshed is not None
+    assert refreshed.total_occurrences == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_snooze_clears_private_content_and_reopens_after_thirty_days(
     repository,
 ) -> None:
