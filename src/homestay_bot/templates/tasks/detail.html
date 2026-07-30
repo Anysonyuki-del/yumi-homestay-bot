@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>任务 {{ task.id }}</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="card">
+      <a class="back-link" href="/employee/tasks">← 返回任务列表</a>
+      <header class="page-header">
+        <p class="eyebrow">任务 #{{ task.id }}</p>
+        <h1>{{ task.task_type.value }}</h1>
+        <span class="status-badge">{{ task.status.value }}</span>
+      </header>
+
+      <dl class="detail-grid">
+        <dt>房间</dt><dd>{{ task.property_id or "待管理员确认" }}</dd>
+        <dt>服务日期</dt><dd>{{ task.service_date or "待管理员确认" }}</dd>
+        <dt>任务说明</dt><dd>{{ safe_description }}</dd>
+      </dl>
+
+      {% if is_admin and task.status.value in ["pending_confirmation", "pending_assignment"] %}
+      <section class="action-panel">
+        <h2>确认并分派</h2>
+        <p>请核对房间、日期和执行员工后再提交。</p>
+        <form method="post" action="/employee/tasks/{{ task.id }}/assign">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>房间
+            <select name="property_id" required>
+              {% for property in properties %}
+              <option value="{{ property.id }}">{{ property.title }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>服务日期
+            <input type="date" name="service_date" value="{{ task.service_date or '' }}" required>
+          </label>
+          <label>执行员工
+            <select name="assigned_employee_id" required>
+              {% for employee in employees %}
+              <option value="{{ employee.id }}">{{ employee.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit">确认并分派任务</button>
+        </form>
+      </section>
+      {% endif %}
+
+      {% if task.status.value == "assigned" %}
+      <form method="post" action="/employee/tasks/{{ task.id }}/transition">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="target" value="in_progress">
+        <button type="submit">开始处理</button>
+      </form>
+      {% elif task.status.value == "in_progress" %}
+      <form method="post" action="/employee/tasks/{{ task.id }}/transition">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="target" value="pending_inspection">
+        <button type="submit">提交检查</button>
+      </form>
+      {% endif %}
+
+      {% if is_admin and task.status.value not in ["completed", "cancelled"] %}
+      <form method="post" action="/employee/tasks/{{ task.id }}/transition">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="target" value="cancelled">
+        <button class="button-danger" type="submit">取消任务</button>
+      </form>
+      {% endif %}
+    </main>
+  </body>
+</html>

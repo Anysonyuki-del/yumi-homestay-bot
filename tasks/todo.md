@@ -926,7 +926,7 @@ git commit -m "feat: manage operational tasks"
 - Test: `tests/integration/test_approval_routes.py`
 - Test: `tests/integration/test_knowledge_routes.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 def test_staff_only_sees_assigned_tasks(client, staff_session):
@@ -938,13 +938,13 @@ def test_staff_only_sees_assigned_tasks(client, staff_session):
 
 同时覆盖管理员查看全部、员工不能分派/取消/看CRM、管理员仍可审批和管理知识、CSRF、越权任务ID返回403。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_task_routes.py tests/unit/test_task_page_service.py tests/integration/test_approval_routes.py tests/integration/test_knowledge_routes.py`
 
 Expected: FAIL，提示任务路由不存在。
 
-- [ ] **Step 3：实现两级权限和页面服务**
+- [x] **Step 3：实现两级权限和页面服务**
 
 `EmployeeRole` 收敛为 `ADMIN` 与 `STAFF`；迁移把非管理员角色统一为 `STAFF`，预订审批、知识管理、客户合并和任务分派限定管理员。
 
@@ -971,7 +971,7 @@ class TaskPageService:
 
 Jinja 页面使用移动优先的大按钮、状态徽标和明确确认文案；普通员工详情不渲染客户电话、订单金额、完整地址或无关凭证。
 
-- [ ] **Step 4：运行权限回归**
+- [x] **Step 4：运行权限回归**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_task_routes.py tests/unit/test_task_page_service.py tests/integration/test_approval_routes.py tests/integration/test_knowledge_routes.py tests/unit/test_application.py`
 

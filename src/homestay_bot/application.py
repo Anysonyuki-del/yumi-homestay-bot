@@ -76,6 +76,7 @@ from homestay_bot.services.hostex_sync import HostexSyncService
 from homestay_bot.services.knowledge_service import KnowledgeService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
+from homestay_bot.services.task_page_service import TaskPageService
 from homestay_bot.worker import (
     JobHandler,
     RetrySafeJobError,
@@ -333,6 +334,82 @@ class SessionApprovalPageService:
             result = await self._service(session).confirm(approval_id, employee_id, command)
             await session.commit()
             return result
+
+
+class SessionTaskPageService:
+    """为每次任务页面请求创建独立数据库会话。"""
+
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    @staticmethod
+    def _service(session: AsyncSession) -> TaskPageService:
+        """在同一事务装配任务查询、分派和状态机。"""
+        repository = SQLAlchemyOperationsRepository(session)
+        return TaskPageService(
+            repository,
+            BusinessTaskService(repository),
+        )
+
+    async def list_for(self, employee: Employee) -> list[Any]:
+        """返回当前员工可见的未关闭任务。"""
+        async with self._factory() as session:
+            return await self._service(session).list_for(employee)
+
+    async def detail_for(
+        self,
+        task_id: int,
+        employee: Employee,
+    ) -> dict[str, object]:
+        """返回当前员工可见的安全详情。"""
+        async with self._factory() as session:
+            return await self._service(session).detail_for(task_id, employee)
+
+    async def transition(
+        self,
+        task_id: int,
+        employee: Employee,
+        target: str,
+    ) -> Any:
+        """在独立事务推进任务状态。"""
+        async with self._factory() as session:
+            result = await self._service(session).transition(
+                task_id,
+                employee,
+                target,
+            )
+            await session.commit()
+            return result
+
+    async def assign(
+        self,
+        task_id: int,
+        employee: Employee,
+        *,
+        assigned_employee_id: int,
+        property_id: int,
+        service_date: date,
+    ) -> Any:
+        """在独立事务补齐信息并分派任务。"""
+        async with self._factory() as session:
+            result = await self._service(session).assign(
+                task_id,
+                employee,
+                assigned_employee_id=assigned_employee_id,
+                property_id=property_id,
+                service_date=service_date,
+            )
+            await session.commit()
+            return result
+
+    async def assignment_options(self) -> dict[str, list[object]]:
+        """返回启用员工和房间选项。"""
+        async with self._factory() as session:
+            return await self._service(session).assignment_options()
 
 
 class SessionKnowledgeAdminService:
@@ -800,6 +877,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         factory=factory,
         hostex=hostex,
     )
+    app.state.task_page_service = SessionTaskPageService(factory)
     app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory)
     app.state.wecom_callback_service = WeComCallbackService.from_credentials(
         settings.wecom_callback_token,

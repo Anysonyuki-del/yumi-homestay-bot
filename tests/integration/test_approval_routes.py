@@ -120,20 +120,18 @@ def test_unauthenticated_employee_is_redirected_to_login() -> None:
     assert response.headers["location"].startswith("/employee/login")
 
 
-def test_regular_customer_service_cannot_confirm_booking() -> None:
-    """普通客服可查看，但没有最终创建订单权限。"""
-    client, approvals = build_client(EmployeeRole.CUSTOMER_SERVICE)
+def test_staff_cannot_view_or_confirm_booking() -> None:
+    """普通员工不能查看审批详情或创建订单。"""
+    client, approvals = build_client(EmployeeRole.STAFF)
     login(client)
     detail = client.get("/employee/approvals/1")
-    nonce = re.search(
-        r'name="confirmation_nonce" value="([^"]+)"', detail.text
-    ).group(1)
 
     response = client.post(
         "/employee/approvals/1/confirm",
-        data=valid_form(nonce),
+        data=valid_form("forged"),
     )
 
+    assert detail.status_code == 403
     assert response.status_code == 403
     assert approvals.confirm_calls == 0
 

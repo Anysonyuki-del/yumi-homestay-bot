@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ "全部待办任务" if is_admin else "自己的任务" }}</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="card">
+      <header class="page-header">
+        <p class="eyebrow">YuMi 任务中心</p>
+        <h1>{{ "全部待办任务" if is_admin else "自己的任务" }}</h1>
+      </header>
+      <ul class="task-list">
+        {% for task in tasks %}
+        <li>
+          <a class="task-row" href="/employee/tasks/{{ task.id }}">
+            <span>
+              <strong>{{ task.task_type.value }}</strong>
+              <small>
+                {{ task.service_date or "日期待确认" }} ·
+                房间 {{ task.property_id or "待确认" }}
+              </small>
+            </span>
+            <span class="status-badge">{{ task.status.value }}</span>
+          </a>
+        </li>
+        {% else %}
+        <li class="empty-state">当前没有需要处理的任务。</li>
+        {% endfor %}
+      </ul>
+    </main>
+  </body>
+</html>

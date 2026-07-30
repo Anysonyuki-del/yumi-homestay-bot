@@ -164,7 +164,7 @@ def build_client(
 
 def test_regular_customer_service_can_read_but_cannot_modify() -> None:
     """普通客服可查看知识，但看不到候选且所有修改接口均应拒绝。"""
-    client, _ = build_client(EmployeeRole.CUSTOMER_SERVICE)
+    client, _ = build_client(EmployeeRole.STAFF)
 
     detail = client.get("/employee/knowledge")
     disable = client.post(
@@ -258,7 +258,7 @@ def test_admin_can_view_and_edit_draft_before_conversion() -> None:
 
 def test_candidate_actions_require_admin_and_one_time_csrf() -> None:
     """候选转换和关闭必须同时通过管理员权限与一次性 CSRF。"""
-    regular_client, regular_service = build_client(EmployeeRole.CUSTOMER_SERVICE)
+    regular_client, regular_service = build_client(EmployeeRole.STAFF)
     forbidden = regular_client.post(
         "/employee/knowledge/candidates/8/snooze",
         data={"csrf_token": "ignored"},
@@ -467,7 +467,7 @@ async def test_employee_repository_lists_only_active_admin_userids() -> None:
                 Employee(
                     wecom_userid="staff-active",
                     name="普通客服",
-                    role=EmployeeRole.CUSTOMER_SERVICE,
+                    role=EmployeeRole.STAFF,
                 ),
             ]
         )

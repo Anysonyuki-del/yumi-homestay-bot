@@ -66,7 +66,7 @@ async def test_permission_checker_rejects_regular_customer_service() -> None:
         employee = Employee(
             wecom_userid="staff-1",
             name="客服甲",
-            role=EmployeeRole.CUSTOMER_SERVICE,
+            role=EmployeeRole.STAFF,
         )
         session.add(employee)
         await session.commit()

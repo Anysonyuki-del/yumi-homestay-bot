@@ -5,18 +5,25 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from homestay_bot.domain.enums import BusinessTaskStatus, BusinessTaskType
+from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    BusinessTaskType,
+    EmployeeRole,
+)
 from homestay_bot.domain.models import (
     AuditLog,
     Base,
     BusinessTask,
     Customer,
+    Employee,
     Job,
     PropertyProfile,
     StayOrder,
 )
 from homestay_bot.integrations.hostex_client import Reservation
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
+from homestay_bot.services.business_task_service import BusinessTaskService
+from homestay_bot.services.task_page_service import TaskPageService
 
 
 @pytest.mark.asyncio
@@ -130,6 +137,71 @@ async def test_handoff_audit_does_not_store_chat_body() -> None:
             "reason": "refund",
         }
         assert "聊天正文" not in str(audit.details)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_admin_assignment_uses_state_machine_and_safe_audits() -> None:
+    """真实分派必须经过待分派和已分派，并且审计不复制任务正文。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        admin = Employee(
+            wecom_userid="admin",
+            name="管理员",
+            role=EmployeeRole.ADMIN,
+        )
+        staff = Employee(
+            wecom_userid="staff",
+            name="执行员工",
+            role=EmployeeRole.STAFF,
+        )
+        property_profile = PropertyProfile(id=101, title="长江中心")
+        pending = BusinessTask(
+            source_message_id="msg-assignment",
+            task_type=BusinessTaskType.SUPPLIES,
+            status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            description="补矿泉水，敏感正文不得进入审计",
+        )
+        session.add_all([admin, staff, property_profile, pending])
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+        service = TaskPageService(
+            repository,
+            BusinessTaskService(repository),
+        )
+
+        assigned = await service.assign(
+            pending.id,
+            admin,
+            assigned_employee_id=staff.id,
+            property_id=101,
+            service_date=date(2026, 8, 2),
+        )
+        await session.commit()
+
+        audits = list(
+            (
+                await session.scalars(
+                    select(AuditLog)
+                    .where(AuditLog.target_id == str(pending.id))
+                    .order_by(AuditLog.id)
+                )
+            ).all()
+        )
+
+        assert assigned.status is BusinessTaskStatus.ASSIGNED
+        assert assigned.assigned_employee_id == staff.id
+        assert [item.action for item in audits] == [
+            "business_task_assignment_prepared",
+            "business_task_status_changed",
+            "business_task_status_changed",
+        ]
+        assert "敏感正文" not in str([item.details for item in audits])
 
     await engine.dispose()
 

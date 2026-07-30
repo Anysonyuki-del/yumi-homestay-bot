@@ -20,10 +20,9 @@ class ApprovalStatus(StrEnum):
 
 
 class EmployeeRole(StrEnum):
-    """定义内部员工在审批与知识管理中的权限。"""
+    """定义一期内部员工的两级权限。"""
 
-    CUSTOMER_SERVICE = "customer_service"
-    BOOKING_APPROVER = "booking_approver"
+    STAFF = "staff"
     ADMIN = "admin"
 
 

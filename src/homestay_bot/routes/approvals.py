@@ -48,14 +48,16 @@ def _get_page_service(request: Request) -> ApprovalPageServicePort:
 
 @router.get("", response_class=HTMLResponse)
 async def approval_index(request: Request) -> Response:
-    """展示当前员工可查看的待处理审批列表。"""
+    """只向管理员展示待处理审批列表。"""
     try:
-        await require_employee_session(request)
+        _, role = await require_employee_session(request)
     except HTTPException:
         return RedirectResponse(
             "/employee/login?next=/employee/approvals",
             status_code=status.HTTP_303_SEE_OTHER,
         )
+    if role is not EmployeeRole.ADMIN:
+        raise HTTPException(status_code=403, detail="只有管理员可以查看预订审批")
     approvals = await _get_page_service(request).list_pending()
     return templates.TemplateResponse(
         request=request,
@@ -74,6 +76,8 @@ async def approval_detail(request: Request, approval_id: int) -> Response:
             f"/employee/login?next=/employee/approvals/{approval_id}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
+    if role is not EmployeeRole.ADMIN:
+        raise HTTPException(status_code=403, detail="只有管理员可以查看预订审批")
 
     detail = await _get_page_service(request).get_detail(approval_id)
     nonce = secrets.token_urlsafe(24)
@@ -100,7 +104,7 @@ async def confirm_approval(
 ) -> RedirectResponse:
     """校验角色和一次性令牌后，调用安全下单状态机。"""
     employee_id, role = await require_employee_session(request)
-    if role not in {EmployeeRole.ADMIN, EmployeeRole.BOOKING_APPROVER}:
+    if role is not EmployeeRole.ADMIN:
         raise HTTPException(status_code=403, detail="当前员工没有确认下单权限")
 
     nonces = dict(request.session.get("approval_nonces", {}))

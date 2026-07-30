@@ -73,8 +73,11 @@ class SQLAlchemyPermissionChecker:
         self._session = session
 
     async def require_booking_approver(self, employee_id: int) -> None:
-        """仅允许管理员和预订审批员创建订单。"""
+        """仅允许管理员创建订单。"""
         employee = await self._session.get(Employee, employee_id)
-        allowed_roles = {EmployeeRole.ADMIN, EmployeeRole.BOOKING_APPROVER}
-        if employee is None or not employee.is_active or employee.role not in allowed_roles:
+        if (
+            employee is None
+            or not employee.is_active
+            or employee.role is not EmployeeRole.ADMIN
+        ):
             raise PermissionError("当前员工没有确认下单权限")

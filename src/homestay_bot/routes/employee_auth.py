@@ -85,12 +85,8 @@ async def require_employee_session(
     """读取签名会话，并在生产环境重新验证员工状态与最新角色。"""
     employee_id = request.session.get("employee_id")
     role_value = request.session.get("employee_role")
-    if not isinstance(employee_id, int) or not isinstance(role_value, str):
+    if not isinstance(employee_id, int):
         raise HTTPException(status_code=401, detail="员工尚未登录")
-    try:
-        role = EmployeeRole(role_value)
-    except ValueError as error:
-        raise HTTPException(status_code=401, detail="员工角色无效") from error
 
     verifier = getattr(request.app.state, "employee_access_verifier", None)
     if verifier is not None:
@@ -102,6 +98,13 @@ async def require_employee_session(
             raise HTTPException(status_code=401, detail="员工已停用或不存在")
         role = employee.role
         request.session["employee_role"] = role.value
+    else:
+        if not isinstance(role_value, str):
+            raise HTTPException(status_code=401, detail="员工角色无效")
+        try:
+            role = EmployeeRole(role_value)
+        except ValueError as error:
+            raise HTTPException(status_code=401, detail="员工角色无效") from error
     return employee_id, role
 
 
@@ -119,7 +122,7 @@ def _get_auth_service(request: Request) -> EmployeeAuthServicePort:
 @router.get("/login")
 async def employee_login(
     request: Request,
-    next_path: str = Query("/employee/approvals", alias="next"),
+    next_path: str = Query("/employee/tasks", alias="next"),
 ) -> RedirectResponse:
     """生成一次性 OAuth state，并跳转企业微信授权页。"""
     safe_next = next_path if next_path.startswith("/") and not next_path.startswith("//") else "/"
@@ -148,5 +151,5 @@ async def employee_oauth_callback(
 
     request.session["employee_id"] = employee.id
     request.session["employee_role"] = employee.role.value
-    next_path = request.session.pop("oauth_next", "/employee/approvals")
+    next_path = request.session.pop("oauth_next", "/employee/tasks")
     return RedirectResponse(next_path, status_code=status.HTTP_303_SEE_OTHER)

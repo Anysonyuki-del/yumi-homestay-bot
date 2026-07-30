@@ -14,6 +14,7 @@ from homestay_bot.domain.models import (
     BusinessTask,
     Customer,
     CustomerIdentity,
+    Employee,
     HostexWebhookEvent,
     Job,
     PropertyProfile,
@@ -55,6 +56,118 @@ class SQLAlchemyOperationsRepository:
         self._session.add(task)
         await self._session.flush()
         return task
+
+    async def list_all_open(self) -> list[BusinessTask]:
+        """按服务日和主键返回全部未关闭任务。"""
+        return list(
+            (
+                await self._session.scalars(
+                    select(BusinessTask)
+                    .where(
+                        BusinessTask.status.not_in(
+                            [
+                                BusinessTaskStatus.COMPLETED,
+                                BusinessTaskStatus.CANCELLED,
+                            ]
+                        )
+                    )
+                    .order_by(
+                        BusinessTask.service_date.asc().nullsfirst(),
+                        BusinessTask.id,
+                    )
+                )
+            ).all()
+        )
+
+    async def list_assigned_open(self, employee_id: int) -> list[BusinessTask]:
+        """只返回分派给指定员工的未关闭任务。"""
+        return list(
+            (
+                await self._session.scalars(
+                    select(BusinessTask)
+                    .where(
+                        BusinessTask.assigned_employee_id == employee_id,
+                        BusinessTask.status.not_in(
+                            [
+                                BusinessTaskStatus.COMPLETED,
+                                BusinessTaskStatus.CANCELLED,
+                            ]
+                        ),
+                    )
+                    .order_by(
+                        BusinessTask.service_date.asc().nullsfirst(),
+                        BusinessTask.id,
+                    )
+                )
+            ).all()
+        )
+
+    async def get_task(self, task_id: int) -> BusinessTask | None:
+        """按主键读取任务，不加载客户或凭证关系。"""
+        return await self._session.get(BusinessTask, task_id)
+
+    async def prepare_assignment(
+        self,
+        *,
+        task_id: int,
+        assigned_employee_id: int,
+        property_id: int,
+        service_date: date,
+        actor_employee_id: int,
+    ) -> BusinessTask:
+        """锁定任务，校验执行员工并补齐分派字段。"""
+        task = await self.require_for_update(task_id)
+        assignee = await self._session.get(Employee, assigned_employee_id)
+        if assignee is None or not assignee.is_active:
+            raise ValueError("执行员工不存在或已停用")
+        if task.status not in {
+            BusinessTaskStatus.PENDING_CONFIRMATION,
+            BusinessTaskStatus.PENDING_ASSIGNMENT,
+        }:
+            raise ValueError("当前任务状态不能分派")
+        task.property_id = property_id
+        task.service_date = service_date
+        task.assigned_employee_id = assigned_employee_id
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="business_task_assignment_prepared",
+                target_type="business_task",
+                target_id=str(task.id),
+                details={
+                    "assigned_employee_id": assigned_employee_id,
+                    "property_id": property_id,
+                    "service_date": service_date.isoformat(),
+                },
+            )
+        )
+        await self._session.flush()
+        return task
+
+    async def assignment_options(self) -> dict[str, list[object]]:
+        """返回启用员工和启用房间，不包含联系方式或凭证。"""
+        employees: list[object] = list(
+            (
+                await self._session.scalars(
+                    select(Employee)
+                    .where(Employee.is_active.is_(True))
+                    .order_by(Employee.name, Employee.id)
+                )
+            ).all()
+        )
+        properties: list[object] = list(
+            (
+                await self._session.scalars(
+                    select(PropertyProfile)
+                    .where(PropertyProfile.is_active.is_(True))
+                    .order_by(PropertyProfile.title, PropertyProfile.id)
+                )
+            ).all()
+        )
+        return {
+            "employees": employees,
+            "properties": properties,
+        }
 
     async def create_pending_confirmation(
         self,

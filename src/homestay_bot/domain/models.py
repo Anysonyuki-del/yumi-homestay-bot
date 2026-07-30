@@ -66,7 +66,7 @@ class Employee(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[EmployeeRole] = mapped_column(
         Enum(EmployeeRole, native_enum=False, length=32),
-        default=EmployeeRole.CUSTOMER_SERVICE,
+        default=EmployeeRole.STAFF,
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
