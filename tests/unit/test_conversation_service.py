@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
-from homestay_bot.domain.models import Conversation
+from homestay_bot.domain.models import Conversation, Customer
 from homestay_bot.integrations.deepseek_client import (
     AssistantDecision,
     AssistantUnavailableError,
@@ -70,6 +70,20 @@ class MessageServiceStub:
             for item in self.recorded[-limit:]
             if item.origin is MessageOrigin.GUEST and item.msgtype == "text"
         ]
+
+
+class CustomerProfileStub:
+    """记录会话服务是否在处理消息前确保正式客户存在。"""
+
+    def __init__(self) -> None:
+        """初始化固定客户和调用记录。"""
+        self.customer = Customer(id=42, display_name="微信客户")
+        self.messages: list[IncomingMessage] = []
+
+    async def ensure_for_message(self, message: IncomingMessage) -> Customer:
+        """返回固定客户并记录消息。"""
+        self.messages.append(message)
+        return self.customer
 
 
 class AssistantStub:
@@ -198,6 +212,7 @@ def build_service(
     messages: MessageServiceStub | None = None,
     approvals: ApprovalServiceStub | None = None,
     frequent_faq: FrequentFaqStub | None = None,
+    customer_profiles: CustomerProfileStub | None = None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
     """创建注入固定依赖的会话服务。"""
     conversations = ConversationRepositoryStub()
@@ -213,8 +228,22 @@ def build_service(
         duty_employee_userids=["staff-1"],
         approvals=approvals,
         frequent_faq=frequent_faq,
+        customer_profiles=customer_profiles,
     )
     return service, conversations, selected_assistant, wecom
+
+
+@pytest.mark.asyncio
+async def test_first_message_links_formal_customer_before_recording() -> None:
+    """首次消息进入上下文前必须建立客户并关联当前会话。"""
+    profiles = CustomerProfileStub()
+    service, conversations, _, _ = build_service(customer_profiles=profiles)
+    message = incoming()
+
+    await service.handle_message(message)
+
+    assert profiles.messages == [message]
+    assert conversations.conversation.customer_id == profiles.customer.id
 
 
 @pytest.mark.asyncio

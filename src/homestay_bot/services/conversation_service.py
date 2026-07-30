@@ -6,7 +6,7 @@ from typing import Protocol
 from pydantic import ValidationError
 
 from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
-from homestay_bot.domain.models import BookingApproval, Conversation
+from homestay_bot.domain.models import BookingApproval, Conversation, Customer
 from homestay_bot.domain.schemas import BookingRequest
 from homestay_bot.integrations.deepseek_client import (
     AssistantDecision,
@@ -106,6 +106,13 @@ class FrequentFaqPort(Protocol):
         """在客人回复后记录一次可能的知识候选。"""
 
 
+class CustomerProfilePort(Protocol):
+    """定义会话进入消息上下文前建立正式客户的接口。"""
+
+    async def ensure_for_message(self, message: IncomingMessage) -> Customer:
+        """幂等建立客户并返回正式主档。"""
+
+
 class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
@@ -128,6 +135,7 @@ class ConversationService:
         approvals: PendingApprovalPort | None = None,
         approval_base_url: str = "",
         frequent_faq: FrequentFaqPort | None = None,
+        customer_profiles: CustomerProfilePort | None = None,
     ) -> None:
         """注入仓储、AI、安全分类器和企业微信发送端口。"""
         self._conversations = conversations
@@ -140,10 +148,17 @@ class ConversationService:
         self._approvals = approvals
         self._approval_base_url = approval_base_url.rstrip("/")
         self._frequent_faq = frequent_faq
+        self._customer_profiles = customer_profiles
 
     async def handle_message(self, message: IncomingMessage) -> None:
         """处理单条已去重消息，确保人工回复不会形成机器人回环。"""
         conversation = await self._conversations.get_or_create(message)
+        if self._customer_profiles is not None:
+            customer = await self._customer_profiles.ensure_for_message(message)
+            if conversation.customer_id != customer.id:
+                # 客户关联必须先于消息落库，避免产生没有正式档案的孤立消息。
+                conversation.customer_id = customer.id
+                await self._conversations.save(conversation)
         if not await self._messages.record_incoming(conversation.id, message):
             return
         if message.origin is MessageOrigin.SERVICER:

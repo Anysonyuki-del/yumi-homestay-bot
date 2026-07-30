@@ -42,6 +42,7 @@ from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
     SQLAlchemyMessageRepository,
 )
+from homestay_bot.repositories.customers import SQLAlchemyCustomerRepository
 from homestay_bot.repositories.employees import SQLAlchemyEmployeeRepository
 from homestay_bot.repositories.faq_candidates import (
     SQLAlchemyFaqCandidateRepository,
@@ -56,6 +57,7 @@ from homestay_bot.services.approval_page_service import ApprovalPageService
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
 from homestay_bot.services.conversation_service import ConversationService
+from homestay_bot.services.customer_service import CustomerService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
@@ -64,6 +66,7 @@ from homestay_bot.services.faq_candidate_service import FrequentFaqService
 from homestay_bot.services.faq_draft_job import FaqDraftJobService
 from homestay_bot.services.knowledge_service import KnowledgeService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
+from homestay_bot.services.sensitive_data import SensitiveDataCipher
 from homestay_bot.worker import (
     JobHandler,
     RetrySafeJobError,
@@ -578,6 +581,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         model=settings.deepseek_model,
     )
     duty_userids = [item.strip() for item in settings.wecom_duty_userids.split(",") if item.strip()]
+    sensitive_data = SensitiveDataCipher(settings.data_encryption_key)
 
     async def handle_message(message: IncomingMessage) -> None:
         """在独立事务中处理一条已转换的企业微信消息。"""
@@ -600,6 +604,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                     candidates=faq_candidates,
                     jobs=SQLAlchemyJobRepository(session),
                     savepoint_factory=session.begin_nested,
+                ),
+                customer_profiles=CustomerService(
+                    SQLAlchemyCustomerRepository(session),
+                    sensitive_data,
                 ),
             )
             await service.handle_message(message)

@@ -508,7 +508,7 @@ git commit -m "feat: add customer crm schema"
 - Test: `tests/integration/test_customer_repository.py`
 - Test: `tests/unit/test_conversation_service.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 async def test_first_message_creates_customer_and_verified_wecom_identity():
@@ -530,13 +530,13 @@ async def test_phone_match_only_creates_merge_suggestion():
 
 同时覆盖重复消息不重复建档、姓名相同不触发合并、管理员接受后迁移现阶段已存在的身份/会话/标签并写审计。订单和业务任务表在 Task 4 创建，因此其关联迁移测试也在 Task 4 同步补齐，避免依赖尚不存在的数据模型。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_customer_service.py tests/integration/test_customer_repository.py tests/unit/test_conversation_service.py`
 
 Expected: FAIL，提示客户服务和仓储不存在。
 
-- [ ] **Step 3：实现客户服务边界**
+- [x] **Step 3：实现客户服务边界**
 
 ```python
 class CustomerService:
@@ -565,13 +565,13 @@ class CustomerService:
 
 `ConversationService.handle_message()` 在记录首次消息前确保客户存在；合并必须锁定两个客户行，在同一事务中迁移身份、会话和标签，标记来源客户已合并，并写 `AuditLog`。HMAC 指纹只用于精确匹配，姓名和 AI 相似度不得触发合并。Task 4 创建订单与业务任务模型后，必须扩展同一 `merge_locked()` 事务迁移它们的客户外键。
 
-- [ ] **Step 4：运行客户服务测试**
+- [x] **Step 4：运行客户服务测试**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_customer_service.py tests/integration/test_customer_repository.py tests/unit/test_conversation_service.py`
 
 Expected: PASS。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/homestay_bot/repositories/customers.py src/homestay_bot/services/customer_service.py src/homestay_bot/repositories/conversations.py src/homestay_bot/services/conversation_service.py tests/unit/test_customer_service.py tests/integration/test_customer_repository.py tests/unit/test_conversation_service.py
