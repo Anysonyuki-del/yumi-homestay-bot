@@ -273,3 +273,50 @@ async def test_ready_draft_with_unchanged_examples_is_reused() -> None:
 
     assert drafter.calls == []
     assert len(notifications.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_draft_notification_retry_never_calls_deepseek_again() -> None:
+    """最终失败候选后续补发通知时只能复用失败状态，不得再次调用模型。"""
+    record = candidate(
+        draft_status=KnowledgeCandidateDraftStatus.FAILED,
+        draft_attempts=3,
+        draft_payload=None,
+    )
+    service, _, drafter, knowledge, notifications, _ = build_service(record)
+
+    await service.handle({"candidate_id": 7, "generation": 1, "refresh_draft": True})
+
+    assert drafter.calls == []
+    assert knowledge.languages == []
+    assert len(notifications.messages) == 1
+    assert "草稿生成失败" in notifications.messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_long_notification_keeps_entry_all_checks_and_three_bounded_examples() -> None:
+    """长草稿通知必须保留管理入口、全部待核实项和三条有界示例。"""
+    verification_items = [f"核实项{index}-" + "甲" * 80 for index in range(1, 9)]
+    long_draft = reviewable_draft().model_copy(
+        update={
+            "answer_zh": "【待管理员确认】" + "答" * 1400,
+            "verification_items": verification_items,
+        }
+    )
+    examples = [f"示例{index}-" + "问" * 140 for index in range(1, 4)]
+    record = candidate(
+        examples=examples,
+        examples_version=3,
+        draft_status=KnowledgeCandidateDraftStatus.READY,
+        draft_examples_version=3,
+        draft_payload=long_draft.model_dump(),
+    )
+    service, _, _, _, notifications, _ = build_service(record)
+
+    await service.handle({"candidate_id": 7, "generation": 1, "refresh_draft": False})
+
+    content = notifications.messages[0]["content"]
+    assert "管理页面：https://example.test/employee/knowledge" in content
+    assert all(f"核实项{index}-" in content for index in range(1, 9))
+    assert all(example in content for example in examples)
+    assert len(content) <= 2200

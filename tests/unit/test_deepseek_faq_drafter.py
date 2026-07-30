@@ -140,3 +140,61 @@ async def test_drafter_wraps_invalid_json_as_stable_error() -> None:
             examples=["有停车位吗？"],
             approved_knowledge=[],
         )
+
+
+@pytest.mark.asyncio
+async def test_drafter_rejects_ungrounded_property_fact_when_model_omits_checks() -> None:
+    """专属停车无相关审核知识时，模型清空待核实项也不得绕过占位要求。"""
+    payload = valid_draft_payload()
+    payload["answer_zh"] = "民宿提供两个免费停车位。"
+    payload["verification_items"] = []
+    drafter = DeepSeekFaqDrafter(
+        client=ChatClientStub(json.dumps(payload, ensure_ascii=False)),
+        model="deepseek-v4-flash",
+    )
+
+    with pytest.raises(FaqDraftUnavailableError):
+        await drafter.generate(
+            canonical_question="民宿是否提供停车位？",
+            category="停车",
+            examples=["有停车位吗？"],
+            approved_knowledge=[
+                {
+                    "category": "交通",
+                    "question_zh": "怎么到民宿？",
+                    "answer_zh": "请按导航前往。",
+                    "question_en": "How can I get there?",
+                    "answer_en": "Please follow navigation.",
+                }
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_drafter_accepts_property_fact_confirmed_by_relevant_knowledge() -> None:
+    """相关审核知识明确确认停车事实时，草稿无需强制待确认占位。"""
+    payload = valid_draft_payload()
+    payload["answer_zh"] = "民宿提供两个免费停车位。"
+    payload["verification_items"] = []
+    drafter = DeepSeekFaqDrafter(
+        client=ChatClientStub(json.dumps(payload, ensure_ascii=False)),
+        model="deepseek-v4-flash",
+    )
+
+    draft = await drafter.generate(
+        canonical_question="民宿是否提供停车位？",
+        category="停车",
+        examples=["有停车位吗？"],
+        approved_knowledge=[
+            {
+                "category": "停车",
+                "question_zh": "民宿有几个停车位？",
+                "answer_zh": "民宿提供两个免费停车位。",
+                "question_en": "How many parking spaces are available?",
+                "answer_en": "Two free parking spaces are available.",
+            }
+        ],
+    )
+
+    assert draft.answer_zh == "民宿提供两个免费停车位。"
+    assert draft.verification_items == []

@@ -6,6 +6,39 @@ from pydantic import BaseModel, Field, field_validator
 
 _LINK_PATTERN = re.compile(r"https?://|\[[^\]]+\]\([^)]+\)", re.IGNORECASE)
 _ADMIN_CONFIRMATION_PLACEHOLDER = "【待管理员确认】"
+_PROPERTY_SPECIFIC_PATTERN = re.compile(
+    r"民宿|本店|你们|你家|停车|车位|收费|费用|数量|设施|政策|"
+    r"入住|退房|寄存|宠物|吸烟|电梯|厨房|洗衣|空调|地址|距离|"
+    r"homestay|property|parking|fee|facilit|policy|check.?in|"
+    r"check.?out|luggage|pet|smoking|elevator|kitchen|laundry|"
+    r"address|distance",
+    re.IGNORECASE,
+)
+_PROPERTY_TOPIC_PATTERNS = (
+    re.compile(r"停车|车位|parking", re.IGNORECASE),
+    re.compile(r"收费|费用|免费|价格|fee|cost|free", re.IGNORECASE),
+    re.compile(
+        r"数量|几个|几间|多少|[一二两三四五六七八九十\d]+(?:个|间|位)|"
+        r"how many|capacity",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"设施|电梯|厨房|洗衣|空调|无线|wifi|"
+        r"facilit|elevator|kitchen|laundry|air.?condition",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"政策|允许|可否|能否|宠物|吸烟|取消|"
+        r"policy|allow|pet|smoking|cancel",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"时间|几点|多久|入住|退房|寄存|"
+        r"time|check.?in|check.?out|luggage",
+        re.IGNORECASE,
+    ),
+    re.compile(r"地址|位置|距离|address|location|distance", re.IGNORECASE),
+)
 
 
 class FaqDraftUnavailableError(RuntimeError):
@@ -51,8 +84,15 @@ class DeepSeekFaqDrafter:
         self._client = client
         self._model = model
 
-    @staticmethod
-    def _validate_safety(draft: FaqDraft) -> None:
+    @classmethod
+    def _validate_safety(
+        cls,
+        draft: FaqDraft,
+        *,
+        canonical_question: str,
+        category: str,
+        approved_knowledge: list[dict[str, str]],
+    ) -> None:
         """拒绝链接和没有待确认占位的未核实专属事实。"""
         serialized = json.dumps(draft.model_dump(), ensure_ascii=False)
         if _LINK_PATTERN.search(serialized):
@@ -62,6 +102,68 @@ class DeepSeekFaqDrafter:
             and _ADMIN_CONFIRMATION_PLACEHOLDER not in draft.answer_zh
         ):
             raise FaqDraftUnavailableError()
+        if cls._property_fact_is_ungrounded(
+            draft,
+            canonical_question=canonical_question,
+            category=category,
+            approved_knowledge=approved_knowledge,
+        ) and (
+            not draft.verification_items
+            or _ADMIN_CONFIRMATION_PLACEHOLDER not in draft.answer_zh
+        ):
+            raise FaqDraftUnavailableError()
+
+    @staticmethod
+    def _knowledge_corpus(
+        approved_knowledge: list[dict[str, str]],
+    ) -> str:
+        """合并审核知识字段，供确定性主题覆盖检查使用。"""
+        return "\n".join(
+            str(value)
+            for item in approved_knowledge
+            for key, value in item.items()
+            if key
+            in {
+                "category",
+                "question_zh",
+                "answer_zh",
+                "question_en",
+                "answer_en",
+            }
+        )
+
+    @classmethod
+    def _property_fact_is_ungrounded(
+        cls,
+        draft: FaqDraft,
+        *,
+        canonical_question: str,
+        category: str,
+        approved_knowledge: list[dict[str, str]],
+    ) -> bool:
+        """专属事实涉及的每个主题都必须在审核知识中有明确文本依据。"""
+        subject = "\n".join(
+            (
+                canonical_question,
+                category,
+                draft.question_zh,
+                draft.answer_zh,
+                draft.question_en,
+                draft.answer_en,
+            )
+        )
+        if _PROPERTY_SPECIFIC_PATTERN.search(subject) is None:
+            return False
+        relevant_patterns = [
+            pattern
+            for pattern in _PROPERTY_TOPIC_PATTERNS
+            if pattern.search(subject) is not None
+        ]
+        corpus = cls._knowledge_corpus(approved_knowledge)
+        if not relevant_patterns:
+            # 无法确定具体主题时采取保守边界，只允许管理员确认后采用。
+            return True
+        return any(pattern.search(corpus) is None for pattern in relevant_patterns)
 
     async def generate(
         self,
@@ -104,7 +206,12 @@ class DeepSeekFaqDrafter:
             )
             content = response.choices[0].message.content or ""
             draft = FaqDraft.model_validate_json(content)
-            self._validate_safety(draft)
+            self._validate_safety(
+                draft,
+                canonical_question=canonical_question,
+                category=category,
+                approved_knowledge=approved_knowledge,
+            )
             return draft
         except FaqDraftUnavailableError:
             raise

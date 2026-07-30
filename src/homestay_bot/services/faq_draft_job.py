@@ -115,9 +115,20 @@ class FaqDraftJobService:
             return
 
         needs_draft = (
-            candidate.draft_status is not KnowledgeCandidateDraftStatus.READY
-            or candidate.draft_payload is None
-            or candidate.examples_version > candidate.draft_examples_version
+            candidate.draft_status
+            not in {
+                KnowledgeCandidateDraftStatus.READY,
+                KnowledgeCandidateDraftStatus.FAILED,
+            }
+            or (
+                candidate.draft_status
+                is KnowledgeCandidateDraftStatus.READY
+                and (
+                    candidate.draft_payload is None
+                    or candidate.examples_version
+                    > candidate.draft_examples_version
+                )
+            )
         )
         if needs_draft:
             candidate = await self._generate_draft(candidate)
@@ -203,30 +214,49 @@ class FaqDraftJobService:
         )
 
     def _notification_content(self, candidate: DraftCandidate) -> str:
-        """生成不含客人身份的精简管理员通知。"""
+        """按段限制长度，确保关键审核信息和管理入口始终保留。"""
         examples = "\n".join(
-            f"{index}. {text}"
+            f"{index}. {self._limit_segment(text, 180)}"
             for index, text in enumerate(candidate.examples[:3], start=1)
         )
         if candidate.draft_status is KnowledgeCandidateDraftStatus.FAILED:
             summary = "FAQ 草稿生成失败，请管理员人工归纳。"
-            verification = ""
+            verification = "待核实事项：请根据参考问法人工核实"
         else:
             draft = FaqDraft.model_validate(candidate.draft_payload)
             summary = (
-                f"参考答案：{draft.answer_zh[:700]}\n"
-                f"建议关键词：{'、'.join(draft.keywords)}"
+                "参考答案："
+                f"{self._limit_segment(draft.answer_zh, 360)}\n"
+                "建议关键词："
+                + (
+                    "、".join(
+                        self._limit_segment(keyword, 30)
+                        for keyword in draft.keywords
+                    )
+                    or "无"
+                )
             )
-            verification = (
-                "\n待核实事项："
-                + ("、".join(draft.verification_items) or "无")
+            verification = "待核实事项：" + (
+                "、".join(
+                    self._limit_segment(item, 48)
+                    for item in draft.verification_items
+                )
+                or "无"
             )
-        content = (
+        return (
             "高频待归纳问题\n"
             f"累计出现：{candidate.total_occurrences} 次\n"
-            f"标准问题：{candidate.canonical_question}\n"
-            f"{summary}{verification}\n"
+            "标准问题："
+            f"{self._limit_segment(candidate.canonical_question, 160)}\n"
+            f"{summary}\n{verification}\n"
             f"参考问法：\n{examples or '无'}\n"
             f"管理页面：{self._knowledge_admin_url}"
         )
-        return content[:1800]
+
+    @staticmethod
+    def _limit_segment(text: str, maximum: int) -> str:
+        """单独限制非关键正文，避免整体截断丢失后续审核字段。"""
+        clean = text.strip()
+        if len(clean) <= maximum:
+            return clean
+        return clean[: maximum - 1] + "…"
