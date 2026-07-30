@@ -155,6 +155,24 @@ class ApprovalServiceStub:
         return SimpleNamespace(id=9, approval_code="APP-9")
 
 
+class FrequentFaqStub:
+    """记录高频 FAQ 跟踪调用并验证客人回复已先生成。"""
+
+    def __init__(self, wecom: WeComStub | None = None, *, fail: bool = False) -> None:
+        """配置可选发送端观察器和失败行为。"""
+        self.wecom = wecom
+        self.fail = fail
+        self.calls: list[dict[str, object]] = []
+
+    async def track(self, **kwargs) -> None:
+        """保存调用参数，必要时模拟统计异常。"""
+        if self.wecom is not None:
+            assert self.wecom.guest_messages
+        self.calls.append(kwargs)
+        if self.fail:
+            raise RuntimeError("candidate tracking failed")
+
+
 def incoming(
     *,
     content: str = "几点入住？",
@@ -179,6 +197,7 @@ def build_service(
     assistant: AssistantStub | None = None,
     messages: MessageServiceStub | None = None,
     approvals: ApprovalServiceStub | None = None,
+    frequent_faq: FrequentFaqStub | None = None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
     """创建注入固定依赖的会话服务。"""
     conversations = ConversationRepositoryStub()
@@ -193,6 +212,7 @@ def build_service(
         agent_id=100001,
         duty_employee_userids=["staff-1"],
         approvals=approvals,
+        frequent_faq=frequent_faq,
     )
     return service, conversations, selected_assistant, wecom
 
@@ -375,8 +395,8 @@ async def test_model_failure_replies_notifies_and_switches_to_human() -> None:
 
 
 @pytest.mark.asyncio
-async def test_knowledge_gap_notifies_staff_and_keeps_bot_active() -> None:
-    """专属信息缺失时应提供替代建议并提醒补知识。"""
+async def test_knowledge_gap_is_tracked_without_immediate_staff_alert() -> None:
+    """专属信息缺失时先正常回复并累计，不在单次出现时提醒员工。"""
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text=(
@@ -390,15 +410,54 @@ async def test_knowledge_gap_notifies_staff_and_keeps_bot_active() -> None:
             knowledge_gap_topic="停车",
         )
     )
-    service, conversations, _, wecom = build_service(assistant=assistant)
+    tracker = FrequentFaqStub()
+    service, conversations, _, wecom = build_service(
+        assistant=assistant,
+        frequent_faq=tracker,
+    )
 
-    await service.handle_message(incoming(content="你们有停车场吗？"))
+    message = incoming(content="你们有停车场吗？")
+    await service.handle_message(message)
 
     assert "公共停车场" in wecom.guest_messages[0]
-    assert len(wecom.internal_messages) == 1
-    assert "知识库待补充" in wecom.internal_messages[0]
-    assert "停车" in wecom.internal_messages[0]
+    assert wecom.internal_messages == []
+    assert tracker.calls == [
+        {
+            "source_message_id": message.msgid,
+            "question": message.content,
+            "occurred_at": message.sent_at,
+            "decision": assistant.decision,
+        }
+    ]
     assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_frequent_faq_tracking_runs_after_guest_reply() -> None:
+    """候选统计必须排在客人回复之后，避免增加可见等待时间。"""
+    tracker = FrequentFaqStub()
+    service, _, _, wecom = build_service(frequent_faq=tracker)
+    tracker.wecom = wecom
+    message = incoming(content="你们能寄存行李吗？")
+
+    await service.handle_message(message)
+
+    assert wecom.guest_messages == ["下午三点后可以入住。"]
+    assert len(tracker.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_frequent_faq_tracking_failure_does_not_rollback_reply(caplog) -> None:
+    """高频统计失败只能记录异常类型，不得撤销回复或切换人工。"""
+    tracker = FrequentFaqStub(fail=True)
+    service, conversations, _, wecom = build_service(frequent_faq=tracker)
+
+    await service.handle_message(incoming(content="你们能寄存行李吗？"))
+
+    assert wecom.guest_messages == ["下午三点后可以入住。"]
+    assert wecom.internal_messages == []
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+    assert any("高频 FAQ 统计失败" in item.getMessage() for item in caplog.records)
 
 
 @pytest.mark.asyncio

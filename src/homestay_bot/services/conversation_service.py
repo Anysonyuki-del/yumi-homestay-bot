@@ -1,4 +1,6 @@
+import logging
 import re
+from datetime import datetime
 from typing import Protocol
 
 from pydantic import ValidationError
@@ -18,6 +20,7 @@ from homestay_bot.services.emergency_service import (
 from homestay_bot.services.message_service import IncomingMessage
 
 _MAX_ASSISTANT_REPLY_CHARACTERS = 1500
+logger = logging.getLogger(__name__)
 
 
 class ConversationRepository(Protocol):
@@ -89,6 +92,20 @@ class PendingApprovalPort(Protocol):
         """只创建待审批单，不执行百居易写入。"""
 
 
+class FrequentFaqPort(Protocol):
+    """定义会话层登记高频 FAQ 候选的最小接口。"""
+
+    async def track(
+        self,
+        *,
+        source_message_id: str,
+        question: str,
+        occurred_at: datetime,
+        decision: AssistantDecision,
+    ) -> None:
+        """在客人回复后记录一次可能的知识候选。"""
+
+
 class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
@@ -110,6 +127,7 @@ class ConversationService:
         duty_employee_userids: list[str],
         approvals: PendingApprovalPort | None = None,
         approval_base_url: str = "",
+        frequent_faq: FrequentFaqPort | None = None,
     ) -> None:
         """注入仓储、AI、安全分类器和企业微信发送端口。"""
         self._conversations = conversations
@@ -121,6 +139,7 @@ class ConversationService:
         self._duty_employee_userids = duty_employee_userids
         self._approvals = approvals
         self._approval_base_url = approval_base_url.rstrip("/")
+        self._frequent_faq = frequent_faq
 
     async def handle_message(self, message: IncomingMessage) -> None:
         """处理单条已去重消息，确保人工回复不会形成机器人回环。"""
@@ -168,6 +187,7 @@ class ConversationService:
             return
         reply_text = self._limit_assistant_reply(decision.reply_text)
         await self._send_guest_reply(conversation, reply_text)
+        await self._track_frequent_faq(message, decision)
         if decision.intent == "booking_confirmed":
             await self._create_pending_approval(conversation, message, decision)
             return
@@ -184,17 +204,26 @@ class ConversationService:
             )
             return
 
-        # 民宿专属资料缺失时提醒补知识，不中断当前机器人会话。
-        if decision.knowledge_gap:
-            await self._notify_employee(
-                conversation,
-                message,
-                (
-                    "知识库待补充"
-                    "\n缺失主题："
-                    f"{decision.knowledge_gap_topic or 'property_information'}"
-                    "\n请在知识管理页面新增并启用审核答案"
-                ),
+    async def _track_frequent_faq(
+        self,
+        message: IncomingMessage,
+        decision: AssistantDecision,
+    ) -> None:
+        """隔离候选统计异常，确保客人回复和会话状态不受影响。"""
+        if self._frequent_faq is None:
+            return
+        try:
+            await self._frequent_faq.track(
+                source_message_id=message.msgid,
+                question=message.content,
+                occurred_at=message.sent_at,
+                decision=decision,
+            )
+        except Exception as error:
+            # 不记录问题正文和外部联系人，只保留异常类型用于诊断。
+            logger.warning(
+                "高频 FAQ 统计失败，已保留客人回复：error_type=%s",
+                type(error).__name__,
             )
 
     async def _create_pending_approval(
