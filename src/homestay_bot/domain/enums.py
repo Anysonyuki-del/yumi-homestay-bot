@@ -88,6 +88,24 @@ class CredentialDeliveryStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ReminderType(StrEnum):
+    """定义一期入住生命周期的四类主动提醒。"""
+
+    PRE_ARRIVAL = "pre_arrival"
+    ARRIVAL_DAY = "arrival_day"
+    CHECKOUT = "checkout"
+    THANK_YOU = "thank_you"
+
+
+class ReminderStatus(StrEnum):
+    """区分计划、平台受理和需要人工跟进，绝不虚构已送达。"""
+
+    SCHEDULED = "scheduled"
+    PLATFORM_ACCEPTED = "platform_accepted"
+    MANUAL_FOLLOWUP = "manual_followup"
+    CANCELLED = "cancelled"
+
+
 class Language(StrEnum):
     """定义机器人第一期支持的语言。"""
 

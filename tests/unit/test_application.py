@@ -242,6 +242,29 @@ def test_worker_handlers_register_faq_draft_factory() -> None:
     assert handlers["faq_draft_generate"] is faq_handler
 
 
+def test_worker_handlers_register_lifecycle_factory() -> None:
+    """worker 装配应为当前事务注册生命周期发送处理器。"""
+    session = object()
+
+    async def lifecycle_handler(payload: dict[str, Any]) -> None:
+        """提供固定测试处理器。"""
+
+    def factory(selected_session):
+        """验证处理器绑定当前 worker 会话。"""
+        assert selected_session is session
+        return lifecycle_handler
+
+    handlers: dict[str, Any] = {"wecom_sync": object()}
+
+    application._register_lifecycle_handler(
+        handlers,
+        cast(Any, session),
+        cast(Any, factory),
+    )
+
+    assert handlers["lifecycle_send"] is lifecycle_handler
+
+
 @pytest.mark.asyncio
 async def test_faq_maintenance_runs_without_new_guest_question(monkeypatch) -> None:
     """应用后台应周期清理 FAQ 明细，不依赖客人再次触发统计服务。"""

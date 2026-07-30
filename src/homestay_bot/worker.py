@@ -83,11 +83,15 @@ class WeComSyncJobHandler:
         api: WeComSyncApi,
         handle_message: Callable[[IncomingMessage], Awaitable[None]],
         enqueue: Callable[[str, dict[str, Any]], Awaitable[Any]],
+        handle_send_failure: (
+            Callable[[str, int], Awaitable[None]] | None
+        ) = None,
     ) -> None:
-        """注入企业微信读取端口、会话处理器和续页入队函数。"""
+        """注入企业微信读取、消息、发送失败和续页处理边界。"""
         self._api = api
         self._handle_message = handle_message
         self._enqueue = enqueue
+        self._handle_send_failure = handle_send_failure
 
     async def sync_page(
         self,
@@ -103,6 +107,24 @@ class WeComSyncJobHandler:
             open_kfid=open_kfid,
         )
         for item in page.msg_list:
+            if item.msgtype == "event" and item.event is not None:
+                # 发送失败是平台异步事件，必须按原发送消息编号回写，
+                # 不能伪装成一条客人消息进入客服上下文。
+                event = item.event
+                if (
+                    event.get("event_type") == "msg_send_fail"
+                    and self._handle_send_failure is not None
+                ):
+                    failed_message_id = str(
+                        event.get("fail_msgid", "")
+                    ).strip()
+                    fail_type = event.get("fail_type")
+                    if failed_message_id and isinstance(fail_type, int):
+                        await self._handle_send_failure(
+                            failed_message_id,
+                            fail_type,
+                        )
+                continue
             origin = (
                 self._origins.get(item.origin)
                 if item.origin is not None

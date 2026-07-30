@@ -58,6 +58,13 @@ class OperationsSyncPort(Protocol):
         """批量 upsert 对账窗口订单。"""
 
 
+class LifecycleSchedulePort(Protocol):
+    """定义订单同步后登记生命周期提醒的边界。"""
+
+    async def schedule_for_order(self, order_id: int) -> list[object]:
+        """为一笔有效订单幂等登记提醒。"""
+
+
 class HostexSyncService:
     """把百居易事件和定时查询统一转换为本地订单。"""
 
@@ -65,10 +72,13 @@ class HostexSyncService:
         self,
         hostex: HostexReservationPort,
         operations: OperationsSyncPort,
+        *,
+        lifecycle: LifecycleSchedulePort | None = None,
     ) -> None:
-        """注入百居易只读客户端和运营仓储。"""
+        """注入百居易客户端、运营仓储和可选生命周期调度器。"""
         self._hostex = hostex
         self._operations = operations
+        self._lifecycle = lifecycle
 
     async def handle_event(self, event_key: str) -> None:
         """精确查询事件订单并完成幂等 upsert。"""
@@ -102,4 +112,7 @@ class HostexSyncService:
                 service_date=reservation.check_out_date,
                 order_id=order.id,
             )
+        if self._lifecycle is not None:
+            # 取消订单也必须进入同一入口，由生命周期服务撤销既有提醒。
+            await self._lifecycle.schedule_for_order(order.id)
         return order

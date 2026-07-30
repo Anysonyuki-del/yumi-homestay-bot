@@ -169,6 +169,36 @@ async def test_stale_credential_part_is_not_replayed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stale_lifecycle_send_is_not_blindly_replayed() -> None:
+    """主动提醒发送结果不明时必须冻结，等待人工确认。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+
+    async with factory() as session:
+        job = Job(
+            job_type="lifecycle_send",
+            payload={"reminder_id": 51},
+            status=JobStatus.RUNNING,
+            attempts=1,
+            available_at=now - timedelta(minutes=10),
+            locked_at=now - timedelta(minutes=10),
+        )
+        session.add(job)
+        await session.commit()
+
+        await SQLAlchemyJobRepository(session).recover_stale(
+            before=now - timedelta(minutes=5)
+        )
+        await session.refresh(job)
+
+        assert job.status is JobStatus.FAILED
+        assert job.last_error_code == "stale_non_replayable"
+
+    await engine.dispose()
+@pytest.mark.asyncio
 async def test_outbound_messages_are_committed_to_outbox_before_network_send() -> None:
     """会话事务只写出站任务，不在提交前直接调用企业微信。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

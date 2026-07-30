@@ -57,6 +57,9 @@ from homestay_bot.repositories.faq_candidates import (
 )
 from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
 from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
+from homestay_bot.repositories.lifecycle_reminders import (
+    SQLAlchemyLifecycleReminderRepository,
+)
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 from homestay_bot.routes.employee_auth import EmployeeAuthService
 from homestay_bot.routes.health import OperationalHealthService
@@ -84,6 +87,10 @@ from homestay_bot.services.faq_candidate_service import FrequentFaqService
 from homestay_bot.services.faq_draft_job import FaqDraftJobService
 from homestay_bot.services.hostex_sync import HostexSyncService
 from homestay_bot.services.knowledge_service import KnowledgeService
+from homestay_bot.services.lifecycle_reminders import (
+    LifecycleReminderService,
+    TourismReminderWeatherProvider,
+)
 from homestay_bot.services.message_service import IncomingMessage, MessageService
 from homestay_bot.services.private_file_storage import (
     PrivateFileStorage,
@@ -850,6 +857,16 @@ def _register_hostex_event_handler(
         handlers["hostex_event"] = factory(session)
 
 
+def _register_lifecycle_handler(
+    handlers: dict[str, JobHandler],
+    session: AsyncSession,
+    factory: Callable[[AsyncSession], JobHandler] | None,
+) -> None:
+    """为当前 worker 事务按需注册入住生命周期发送处理器。"""
+    if factory is not None:
+        handlers["lifecycle_send"] = factory(session)
+
+
 def _register_credential_part_handler(
     handlers: dict[str, JobHandler],
     session: AsyncSession,
@@ -886,6 +903,9 @@ async def _run_worker_loop(
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
     customer_tag_handler_factory: (
+        Callable[[AsyncSession], JobHandler] | None
+    ) = None,
+    lifecycle_handler_factory: (
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
 ) -> None:
@@ -958,6 +978,11 @@ async def _run_worker_loop(
                     handlers,
                     session,
                     customer_tag_handler_factory,
+                )
+                _register_lifecycle_handler(
+                    handlers,
+                    session,
+                    lifecycle_handler_factory,
                 )
                 worker = Worker(
                     repository=repository,
@@ -1037,6 +1062,9 @@ async def _run_hostex_reconcile_loop(
     hostex: HostexClient,
     interval_seconds: float,
     today_provider: Callable[[], date] | None = None,
+    lifecycle_factory: (
+        Callable[[AsyncSession], LifecycleReminderService] | None
+    ) = None,
 ) -> None:
     """定时对账近期订单，补回遗漏的 Webhook。"""
     current_date = today_provider or (lambda: datetime.now(UTC).date())
@@ -1046,6 +1074,11 @@ async def _run_hostex_reconcile_loop(
                 service = HostexSyncService(
                     hostex,
                     SQLAlchemyOperationsRepository(session),
+                    lifecycle=(
+                        lifecycle_factory(session)
+                        if lifecycle_factory is not None
+                        else None
+                    ),
                 )
                 today = current_date()
                 await service.reconcile(
@@ -1152,6 +1185,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         model=settings.deepseek_model,
         status_setter=web_search_state.set,
     )
+    reminder_weather = TourismReminderWeatherProvider(tourism_searcher)
     assistant = DeepSeekGuestAssistant(
         chat_client=deepseek_chat,
         tourism_searcher=tourism_searcher,
@@ -1207,9 +1241,36 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             await service.handle_message(message)
             await session.commit()
 
+    def build_lifecycle_service(
+        session: AsyncSession,
+    ) -> LifecycleReminderService:
+        """用同一事务装配提醒状态、任务队列、发送器和人工任务。"""
+        return LifecycleReminderService(
+            SQLAlchemyLifecycleReminderRepository(session),
+            SQLAlchemyJobRepository(session),
+            wecom,
+            BusinessTaskService(
+                SQLAlchemyOperationsRepository(session)
+            ),
+            weather=reminder_weather,
+        )
+
+    async def handle_send_failure(
+        external_message_id: str,
+        fail_type: int,
+    ) -> None:
+        """在独立事务消费企业微信异步发送失败事件。"""
+        async with factory() as session:
+            await build_lifecycle_service(session).handle_send_failure(
+                external_message_id,
+                fail_type,
+            )
+            await session.commit()
+
     sync_handler = WeComSyncJobHandler(
         api=wecom,
         handle_message=handle_message,
+        handle_send_failure=handle_send_failure,
         enqueue=queue.enqueue,
     )
     poller = WeComMessagePoller(api=wecom, handler=sync_handler)
@@ -1252,6 +1313,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         service = HostexSyncService(
             hostex,
             SQLAlchemyOperationsRepository(session),
+            lifecycle=build_lifecycle_service(session),
         )
 
         async def handle_hostex_event(payload: dict[str, Any]) -> None:
@@ -1259,6 +1321,16 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             await service.handle_event(str(payload["event_key"]))
 
         return handle_hostex_event
+
+    def build_lifecycle_handler(session: AsyncSession) -> JobHandler:
+        """为当前 worker 事务创建主动提醒发送处理器。"""
+        service = build_lifecycle_service(session)
+
+        async def handle_lifecycle(payload: dict[str, Any]) -> None:
+            """按提醒编号执行发送前复核与状态回写。"""
+            await service.deliver(int(payload["reminder_id"]))
+
+        return handle_lifecycle
 
     def build_credential_part_handler(session: AsyncSession) -> JobHandler:
         """为当前 worker 事务创建禁止盲目重放的凭证部件发送器。"""
@@ -1359,6 +1431,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 if contact_client is not None
                 else None
             ),
+            lifecycle_handler_factory=build_lifecycle_handler,
         )
     )
     poll_task = asyncio.create_task(
@@ -1382,6 +1455,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             factory=factory,
             hostex=hostex,
             interval_seconds=settings.hostex_reconcile_interval_seconds,
+            lifecycle_factory=build_lifecycle_service,
         )
     )
 

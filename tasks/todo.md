@@ -1371,31 +1371,59 @@ git commit -m "feat: add mobile customer crm"
 
 **Files:**
 - Create: `src/homestay_bot/services/lifecycle_reminders.py`
+- Create: `src/homestay_bot/repositories/lifecycle_reminders.py`
+- Create: `migrations/versions/0007_lifecycle_reminders.py`
+- Modify: `src/homestay_bot/domain/enums.py`
+- Modify: `src/homestay_bot/domain/models.py`
 - Modify: `src/homestay_bot/services/business_task_service.py`
+- Modify: `src/homestay_bot/repositories/operations.py`
+- Modify: `src/homestay_bot/repositories/jobs.py`
 - Modify: `src/homestay_bot/application.py`
 - Modify: `src/homestay_bot/worker.py`
+- Modify: `src/homestay_bot/services/hostex_sync.py`
 - Test: `tests/unit/test_lifecycle_reminders.py`
 - Test: `tests/unit/test_worker.py`
+- Test: `tests/unit/test_hostex_sync.py`
+- Test: `tests/unit/test_application.py`
+- Test: `tests/integration/test_lifecycle_reminder_repository.py`
+- Test: `tests/integration/test_jobs.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
-async def test_expired_wecom_window_creates_manual_contact_task():
-    wecom.raise_error_code = 95004
-    await service.send(reminder)
+async def test_async_send_fail_creates_manual_contact_without_delivery():
+    reminder = await service.accept_platform_message(
+        reminder_id=1,
+        external_message_id="msg-1",
+    )
+    assert reminder.status is ReminderStatus.PLATFORM_ACCEPTED
+    await service.handle_send_failure("msg-1", fail_type=4)
     assert tasks.created[0].task_type is BusinessTaskType.MANUAL_CONTACT
-    assert reminder.delivered_at is None
+    assert reminder.status is ReminderStatus.MANUAL_FOLLOWUP
 ```
 
-同时覆盖入住前一天、入住当天、退房前、退房后提醒，武汉时区日期边界，已发送幂等，客户拒收和超过5条不误记送达。
+同时覆盖：
 
-- [ ] **Step 2：运行测试并确认失败**
+- 入住前一天 18:00：天气、路线、停车和注意事项；
+- 入住当天 10:00：预计到达时间与入住流程提示，不绕过房间可入住校验发送密码或二维码；
+- 退房当天 09:00：退房时间与遗留物提醒；
+- 退房当天 14:00：感谢入住，不立即索要好评；
+- 所有时间按 `Asia/Shanghai` 换算 UTC 入队；
+- 相同 `order_id + reminder_type + 本地计划日期` 幂等；
+- 只选择订单客户最近有客人消息的微信客服会话，不跨客户发送；
+- 本地预检最近客人消息 48 小时窗口，以及该窗口内机器人和人工已发条数；
+- 平台受理后只标记 `PLATFORM_ACCEPTED`，不得标记客户已收到；
+- `msg_send_fail` 的 4（超过 48 小时）、5（会话关闭）、6（超过 5 条）、10（客户拒收）转人工联系；
+- 网络连接明确未建立时有限重试，超时或结果不明确时不盲目重放；
+- 天气查询失败时仍发送不含链接的路线、停车和注意事项。
 
-Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py`
+- [x] **Step 2：运行测试并确认失败**
 
-Expected: FAIL，提示生命周期提醒服务不存在。
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py tests/integration/test_lifecycle_reminder_repository.py`
 
-- [ ] **Step 3：实现确定性提醒调度**
+Expected: FAIL，提示生命周期提醒服务、持久化状态和发送失败事件处理不存在。
+
+- [x] **Step 3：实现持久化状态与确定性提醒调度**
 
 ```python
 class LifecycleReminderService:
@@ -1405,29 +1433,62 @@ class LifecycleReminderService:
 
     async def deliver(self, reminder_id: int) -> None:
         reminder = await self._reminders.require_pending(reminder_id)
-        try:
-            await self._sender.send(reminder)
-        except WeComApiError as error:
-            if error.error_code not in EXPIRED_SEND_ERROR_CODES:
-                raise
+        context = await self._reminders.require_safe_send_context(reminder)
+        if not context.within_48_hours or context.sent_count >= 5:
             await self._tasks.create_manual_contact(reminder)
             await self._reminders.mark_manual_followup(reminder)
+            return
+        try:
+            message_id = await self._sender.send(reminder)
+        except ConnectionError:
+            raise RetrySafeJobError
+        except TimeoutError:
+            await self._tasks.create_manual_contact(reminder)
+            await self._reminders.mark_manual_followup(reminder)
+            return
+        await self._reminders.mark_platform_accepted(reminder, message_id)
+
+    async def handle_send_failure(
+        self, external_message_id: str, fail_type: int
+    ) -> None:
+        reminder = await self._reminders.find_by_message_id(
+            external_message_id
+        )
+        if reminder is None:
+            return
+        await self._tasks.create_manual_contact(reminder)
+        await self._reminders.mark_manual_followup(reminder, fail_type)
 ```
 
-提醒幂等键使用 `order_id + reminder_type + scheduled_date`。入住前天气由现有实时搜索能力生成，但不得包含链接；天气失败时仍发送路线、停车和注意事项。`EXPIRED_SEND_ERROR_CODES` 只包含已由企业微信契约测试确认的窗口过期、拒收和条数超限错误码；这些错误创建 YuMi 人工联系任务并终止自动重试，其他网络或服务错误继续走有上限的退避重试。
+新增 `LifecycleReminder` 保存计划时间、平台消息 ID 和
+`SCHEDULED / PLATFORM_ACCEPTED / MANUAL_FOLLOWUP / CANCELLED` 状态。
+系统没有企业微信“客户已读/已收到”回执，因此一期不建立虚假的
+`DELIVERED` 状态。`WeComSyncJobHandler` 必须识别 `msg_send_fail`
+事件并按 `fail_msgid` 回写准确提醒；普通消息仍走原有客户隔离流程。
+其他配置类失败也生成管理员异常任务，但不向客人重放。
 
-- [ ] **Step 4：运行时区和失败回退测试**
+- [x] **Step 4：运行时区和失败回退测试**
 
-Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py tests/unit/test_deepseek_tourism.py`
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py tests/integration/test_lifecycle_reminder_repository.py tests/unit/test_deepseek_tourism.py`
 
 Expected: PASS。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
-git add src/homestay_bot/services/lifecycle_reminders.py src/homestay_bot/services/business_task_service.py src/homestay_bot/application.py src/homestay_bot/worker.py tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py
+git add migrations/versions/0007_lifecycle_reminders.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py src/homestay_bot/repositories/lifecycle_reminders.py src/homestay_bot/repositories/operations.py src/homestay_bot/services/lifecycle_reminders.py src/homestay_bot/services/business_task_service.py src/homestay_bot/application.py src/homestay_bot/worker.py tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py tests/integration/test_lifecycle_reminder_repository.py tasks/todo.md
 git commit -m "feat: schedule guest lifecycle reminders"
 ```
+
+**Review（Task 12）**
+
+- 四类提醒按武汉本地时间换算为 UTC 持久化入队；相同订单、类型和本地日期保持唯一，订单改期会撤销旧计划，取消后按相同日期恢复也能重新激活。
+- 发送前只选择订单客户本人已验证的微信客服会话，并复核最近客人消息 48 小时窗口及其后的机器人/人工发送条数。
+- 企业微信同步已识别 `msg_send_fail`，按平台消息编号把 4、5、6、10 四类异步失败转为幂等人工联系任务；平台同步受理只记录 `PLATFORM_ACCEPTED`，不虚构送达。
+- 入住前天气复用现有武汉联网查询，明确当前日期、入住日期和房源区域；联网失败仍发送不含链接的路线、停车和注意事项。
+- 订单取消、已关闭提醒遗留任务、超时和 worker 崩溃均禁止盲目重放；只有明确未建立连接的请求允许有限重试。
+- 数据库迁移已通过全新升级、回退至 `0006_employee_roles`、再升级至 `0007_lifecycle_reminders` 的循环验证。
+- 全量验证：`357 passed, 10 skipped`；Ruff 全仓通过；mypy 检查 71 个源文件通过；`git diff --check` 通过。
 
 ### Task 13：全链路装配、健康状态、真实契约与本机部署
 

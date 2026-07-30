@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol
 
 from homestay_bot.domain.enums import BusinessTaskStatus, BusinessTaskType
 from homestay_bot.domain.models import BusinessTask, Employee
@@ -47,6 +47,13 @@ class BusinessTaskRepository(Protocol):
         actor_employee_id: int | None,
     ) -> BusinessTask:
         """保存状态并记录安全审计。"""
+
+    async def create_manual_contact_for_reminder(
+        self,
+        reminder: Any,
+        reason: str,
+    ) -> BusinessTask:
+        """为主动提醒失败幂等创建人工联系任务。"""
 
 
 class BusinessTaskService:
@@ -111,6 +118,17 @@ class BusinessTaskService:
             property_id=property_id,
             service_date=service_date,
             order_id=order_id,
+        )
+
+    async def create_manual_contact(
+        self,
+        reminder: Any,
+        reason: str,
+    ) -> BusinessTask:
+        """把主动提醒限制或失败转换为幂等人工联系任务。"""
+        return await self._tasks.create_manual_contact_for_reminder(
+            reminder,
+            reason,
         )
 
     async def record_ai_suggestion(

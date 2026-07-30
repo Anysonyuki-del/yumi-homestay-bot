@@ -262,6 +262,66 @@ async def test_wecom_sync_maps_guest_and_servicer_origins_without_loop() -> None
 
 
 @pytest.mark.asyncio
+async def test_wecom_sync_routes_send_failure_event_without_guest_message() -> None:
+    """消息发送失败事件必须按 fail_msgid 交给投递状态处理器。"""
+    page = SimpleNamespace(
+        msg_list=[
+            SimpleNamespace(
+                msgid="event-fail-1",
+                open_kfid=None,
+                external_userid=None,
+                send_time=1785283200,
+                origin=None,
+                msgtype="event",
+                text=None,
+                event={
+                    "event_type": "msg_send_fail",
+                    "open_kfid": "wk-1",
+                    "external_userid": "wm-1",
+                    "fail_msgid": "msg-accepted",
+                    "fail_type": 10,
+                },
+            )
+        ],
+        has_more=0,
+        next_cursor="",
+    )
+
+    class ApiStub:
+        """返回固定发送失败事件页。"""
+
+        async def sync_messages(self, **kwargs):
+            """返回单个失败事件。"""
+            return page
+
+    messages = []
+    failures = []
+
+    async def handle_message(message):
+        """事件不得伪装成客户消息。"""
+        messages.append(message)
+
+    async def handle_send_failure(message_id, fail_type):
+        """记录准确平台消息编号和失败类型。"""
+        failures.append((message_id, fail_type))
+
+    async def enqueue(job_type, payload):
+        """单页事件不创建续页任务。"""
+
+    handler = WeComSyncJobHandler(
+        api=ApiStub(),
+        handle_message=handle_message,
+        handle_send_failure=handle_send_failure,
+        enqueue=enqueue,
+    )
+
+    await handler.sync_page(cursor="", token="", open_kfid="wk-1")
+
+    assert messages == []
+    assert failures == [("msg-accepted", 10)]
+
+
+@pytest.mark.asyncio
 async def test_wecom_poller_discovers_accounts_and_reuses_cursor() -> None:
     """定时补拉应自动发现客服账号，并在后续轮次沿用各自游标。"""
     sync_calls: list[dict[str, str]] = []

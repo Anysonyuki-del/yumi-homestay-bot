@@ -18,6 +18,7 @@ from homestay_bot.domain.models import (
     Employee,
     HostexWebhookEvent,
     Job,
+    LifecycleReminder,
     PropertyProfile,
     RoomOperationalState,
     StayOrder,
@@ -57,6 +58,66 @@ class SQLAlchemyOperationsRepository:
             description="退房后周转保洁",
         )
         self._session.add(task)
+        await self._session.flush()
+        return task
+
+    async def create_manual_contact_for_reminder(
+        self,
+        reminder: LifecycleReminder,
+        reason: str,
+    ) -> BusinessTask:
+        """按提醒编号幂等创建不含客户正文的人工联系任务。"""
+        dedupe_key = f"lifecycle-manual:{reminder.id}"
+        existing = await self._session.scalar(
+            select(BusinessTask).where(
+                BusinessTask.dedupe_key == dedupe_key
+            )
+        )
+        if existing is not None:
+            return existing
+        order = await self._session.get(StayOrder, reminder.order_id)
+        if order is None:
+            raise LookupError("提醒关联订单不存在")
+        reason_labels = {
+            "send_window_expired": "已超过 48 小时发送窗口",
+            "send_count_limit": "已达到主动发送条数限制",
+            "send_result_uncertain": "平台发送结果不明确",
+            "verified_wecom_conversation_missing": "缺少可靠微信会话",
+            "order_customer_missing": "订单尚未关联客户",
+            "property_missing": "订单关联房间缺失",
+            "wecom_fail_4": "已超过 48 小时发送窗口",
+            "wecom_fail_5": "客服会话已关闭",
+            "wecom_fail_6": "已超过 5 条主动消息限制",
+            "wecom_fail_10": "客户拒收",
+        }
+        reason_label = reason_labels.get(reason, "企业微信发送失败")
+        task = BusinessTask(
+            dedupe_key=dedupe_key,
+            task_type=BusinessTaskType.MANUAL_CONTACT,
+            status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            customer_id=order.customer_id,
+            order_id=order.id,
+            property_id=order.property_id,
+            service_date=reminder.scheduled_local_date,
+            description=(
+                f"主动入住提醒未能自动发送（{reason_label}），"
+                "请人工联系客户。"
+            ),
+        )
+        self._session.add(task)
+        await self._session.flush()
+        self._session.add(
+            AuditLog(
+                actor_employee_id=None,
+                action="lifecycle_manual_contact_created",
+                target_type="business_task",
+                target_id=str(task.id),
+                details={
+                    "reminder_id": reminder.id,
+                    "reason": reason[:64],
+                },
+            )
+        )
         await self._session.flush()
         return task
 

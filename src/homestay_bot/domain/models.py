@@ -34,6 +34,8 @@ from homestay_bot.domain.enums import (
     KnowledgeCandidateStatus,
     Language,
     MessageOrigin,
+    ReminderStatus,
+    ReminderType,
     RoomOperationalStatus,
 )
 
@@ -504,6 +506,66 @@ class StayOrder(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     last_hostex_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class LifecycleReminder(TimestampMixin, Base):
+    """保存一笔订单的一次入住生命周期主动提醒。"""
+
+    __tablename__ = "lifecycle_reminders"
+    __table_args__ = (
+        UniqueConstraint(
+            "order_id",
+            "reminder_type",
+            "scheduled_local_date",
+            name="uq_lifecycle_reminder_schedule",
+        ),
+        Index(
+            "ix_lifecycle_reminder_status_schedule",
+            "status",
+            "scheduled_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("stay_orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    reminder_type: Mapped[ReminderType] = mapped_column(
+        Enum(ReminderType, native_enum=False, length=32),
+        nullable=False,
+    )
+    scheduled_local_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+    )
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    status: Mapped[ReminderStatus] = mapped_column(
+        Enum(ReminderStatus, native_enum=False, length=32),
+        default=ReminderStatus.SCHEDULED,
+        nullable=False,
+    )
+    external_message_id: Mapped[str | None] = mapped_column(
+        String(128),
+        unique=True,
+        nullable=True,
+    )
+    failure_reason: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    platform_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    manual_followup_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
 

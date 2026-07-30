@@ -78,6 +78,19 @@ class OperationsStub:
         return len(items)
 
 
+class LifecycleStub:
+    """记录订单同步后创建的生命周期计划。"""
+
+    def __init__(self) -> None:
+        """初始化订单编号列表。"""
+        self.order_ids: list[int] = []
+
+    async def schedule_for_order(self, order_id: int):
+        """记录非取消订单的提醒计划。"""
+        self.order_ids.append(order_id)
+        return []
+
+
 @pytest.mark.asyncio
 async def test_hostex_event_upserts_exact_reservation() -> None:
     """事件必须精确命中一笔订单后才允许 upsert 和完成。"""
@@ -129,3 +142,33 @@ async def test_cancelled_reservation_does_not_create_turnover() -> None:
     await service.handle_event("event-1")
 
     assert operations.turnovers == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_reservation_updates_lifecycle_schedule() -> None:
+    """取消订单仍需进入生命周期服务撤销既有提醒。"""
+    lifecycle = LifecycleStub()
+    service = HostexSyncService(
+        HostexStub([reservation(status="cancelled")]),
+        OperationsStub(),
+        lifecycle=lifecycle,
+    )
+
+    await service.handle_event("event-1")
+
+    assert lifecycle.order_ids == [1]
+
+
+@pytest.mark.asyncio
+async def test_synced_order_schedules_lifecycle_through_shared_path() -> None:
+    """Webhook 和对账共用的同步路径应登记入住生命周期提醒。"""
+    lifecycle = LifecycleStub()
+    service = HostexSyncService(
+        HostexStub([reservation()]),
+        OperationsStub(),
+        lifecycle=lifecycle,
+    )
+
+    await service.handle_event("event-1")
+
+    assert lifecycle.order_ids == [1]

@@ -72,6 +72,7 @@ class SQLAlchemyJobRepository:
             "wecom_send_text",
             "wecom_send_internal_text",
             "hostex_create_reservation",
+            "lifecycle_send",
         }
         failed_statement = (
             update(Job)
