@@ -110,6 +110,28 @@ async def test_worker_retries_only_explicitly_safe_send_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_retries_faq_draft_generation_as_safe_read_work() -> None:
+    """FAQ 草稿生成没有外部业务写入，普通模型失败允许有限重试。"""
+    repository = RepositoryStub(
+        JobStub(job_type="faq_draft_generate", payload={"candidate_id": 7})
+    )
+
+    async def failing_handler(payload):
+        """模拟 DeepSeek 暂时失败。"""
+        raise TimeoutError("temporary")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"faq_draft_generate": failing_handler},
+    )
+
+    await worker.run_once()
+
+    assert repository.failure["retry_allowed"] is True
+    assert repository.failure["max_attempts"] == 3
+
+
+@pytest.mark.asyncio
 async def test_wecom_sync_maps_guest_and_servicer_origins_without_loop() -> None:
     """企业微信来源 3 和 5 应分别映射为客人和人工客服。"""
     page = SimpleNamespace(

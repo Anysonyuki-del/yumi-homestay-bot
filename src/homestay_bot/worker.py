@@ -208,6 +208,7 @@ class Worker[JobType: WorkerJob]:
     _retryable_job_types = {
         "wecom_sync",
         "hostex_read",
+        "faq_draft_generate",
     }
 
     def __init__(

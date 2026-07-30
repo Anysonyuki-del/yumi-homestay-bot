@@ -140,6 +140,7 @@ class KnowledgeCandidate(TimestampMixin, Base):
         CheckConstraint("last_reminded_total >= 0", name="ck_candidate_reminded_nonnegative"),
         CheckConstraint("examples_version >= 0", name="ck_candidate_examples_version_nonnegative"),
         CheckConstraint("draft_generation >= 0", name="ck_candidate_generation_nonnegative"),
+        CheckConstraint("draft_attempts >= 0", name="ck_candidate_attempts_nonnegative"),
         Index("ix_candidate_status_snoozed", "status", "snoozed_until"),
     )
 
@@ -168,6 +169,7 @@ class KnowledgeCandidate(TimestampMixin, Base):
         nullable=False,
     )
     draft_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    draft_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     draft_examples_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     draft_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     knowledge_entry_id: Mapped[int | None] = mapped_column(

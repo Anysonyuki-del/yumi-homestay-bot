@@ -35,6 +35,7 @@ def upgrade() -> None:
         sa.Column("examples_version", sa.Integer(), nullable=False),
         sa.Column("draft_status", sa.String(length=24), nullable=False),
         sa.Column("draft_generation", sa.Integer(), nullable=False),
+        sa.Column("draft_attempts", sa.Integer(), nullable=False),
         sa.Column("draft_examples_version", sa.Integer(), nullable=False),
         sa.Column("draft_payload", sa.JSON(), nullable=True),
         sa.Column("knowledge_entry_id", sa.Integer(), nullable=True, unique=True),
@@ -59,6 +60,9 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "draft_generation >= 0", name="ck_candidate_generation_nonnegative"
+        ),
+        sa.CheckConstraint(
+            "draft_attempts >= 0", name="ck_candidate_attempts_nonnegative"
         ),
         sa.ForeignKeyConstraint(["knowledge_entry_id"], ["knowledge_entries.id"]),
     )

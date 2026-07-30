@@ -140,6 +140,7 @@ class SQLAlchemyFaqCandidateRepository:
         """开启新一代草稿生成并清除旧草稿正文。"""
         candidate = await self._require(candidate_id)
         candidate.draft_generation += 1
+        candidate.draft_attempts = 0
         candidate.draft_status = KnowledgeCandidateDraftStatus.PENDING
         candidate.draft_payload = None
         candidate.notification_pending = True
@@ -156,6 +157,16 @@ class SQLAlchemyFaqCandidateRepository:
         candidate.draft_status = KnowledgeCandidateDraftStatus.READY
         candidate.draft_payload = payload
         candidate.draft_examples_version = candidate.examples_version
+        candidate.draft_attempts = 0
+        await self._session.flush()
+        return candidate
+
+    async def increment_draft_attempts(
+        self, candidate_id: int
+    ) -> KnowledgeCandidate:
+        """持久化一次草稿生成失败，供 worker 跨重试判断上限。"""
+        candidate = await self._require(candidate_id)
+        candidate.draft_attempts += 1
         await self._session.flush()
         return candidate
 
@@ -165,6 +176,20 @@ class SQLAlchemyFaqCandidateRepository:
         candidate.draft_status = KnowledgeCandidateDraftStatus.FAILED
         candidate.draft_payload = None
         candidate.notification_pending = True
+        await self._session.flush()
+        return candidate
+
+    async def mark_notified(
+        self,
+        candidate_id: int,
+        *,
+        reminded_at: datetime,
+    ) -> KnowledgeCandidate:
+        """在管理员通知入队后更新本轮提醒游标。"""
+        candidate = await self._require(candidate_id)
+        candidate.notification_pending = False
+        candidate.last_reminded_total = candidate.total_occurrences
+        candidate.last_reminded_at = reminded_at
         await self._session.flush()
         return candidate
 
@@ -252,5 +277,6 @@ class SQLAlchemyFaqCandidateRepository:
         candidate.examples_version = 0
         candidate.draft_status = KnowledgeCandidateDraftStatus.NONE
         candidate.draft_payload = None
+        candidate.draft_attempts = 0
         candidate.draft_examples_version = 0
         candidate.notification_pending = False

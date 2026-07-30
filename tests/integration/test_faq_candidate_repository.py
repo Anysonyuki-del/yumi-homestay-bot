@@ -175,6 +175,12 @@ async def test_draft_state_conversion_and_occurrence_pruning(repository) -> None
     assert pending is not None
     assert pending.draft_status is KnowledgeCandidateDraftStatus.PENDING
     assert pending.draft_generation == 1
+    assert pending.draft_attempts == 0
+
+    first_failure = await candidates.increment_draft_attempts(candidate.id)
+    second_failure = await candidates.increment_draft_attempts(candidate.id)
+    assert first_failure.draft_attempts == 2
+    assert second_failure.draft_attempts == 2
 
     await candidates.mark_draft_failed(candidate.id)
     failed = await candidates.get(candidate.id)
