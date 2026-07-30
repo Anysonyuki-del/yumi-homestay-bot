@@ -1002,6 +1002,9 @@ git commit -m "feat: add employee mobile task center"
 - Create: `src/homestay_bot/routes/private_files.py`
 - Modify: `src/homestay_bot/config.py`
 - Modify: `.env.example`
+- Modify: `src/homestay_bot/application.py`
+- Modify: `src/homestay_bot/repositories/operations.py`
+- Modify: `src/homestay_bot/services/task_page_service.py`
 - Modify: `src/homestay_bot/routes/tasks.py`
 - Modify: `src/homestay_bot/templates/tasks/detail.html`
 - Modify: `src/homestay_bot/main.py`
@@ -1059,7 +1062,7 @@ class RoomReadinessService:
         )
 ```
 
-文件使用随机 UUID 名称保存到 `PRIVATE_UPLOAD_DIR`，下载必须经过员工会话和任务归属检查。`mark_ready()` 在同一事务中锁定任务与房间状态，验证执行人、待检查状态、完整清单和至少一张有效照片并写审计。
+文件使用随机 UUID 名称保存到 `PRIVATE_UPLOAD_DIR`，下载必须经过员工会话和任务归属检查。`SQLAlchemyOperationsRepository` 负责附件归属查询、任务/房态行锁、清单和安全审计；`SessionTaskPageService` 在短事务中组合私有存储、任务页面服务与可入住服务，上传文件落盘失败或附件落库失败时不得留下可访问的孤儿记录。`mark_ready()` 在同一事务中锁定任务与房间状态，验证执行人、待检查状态、完整清单和至少一张有效照片并写审计。
 
 - [ ] **Step 4：运行安全与路由测试**
 
