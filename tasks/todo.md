@@ -1104,7 +1104,7 @@ git commit -m "feat: verify room readiness with evidence"
 - Modify: `tests/unit/test_sensitive_data.py`
 - Test: `tests/integration/test_property_routes.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 def test_room_password_is_encrypted_at_rest(cipher):
@@ -1115,59 +1115,78 @@ def test_room_password_is_encrypted_at_rest(cipher):
 
 同时覆盖非管理员不可配置、页面不回显完整密码、二维码私有保存、凭证版本与房间绑定、审计不复制明文。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_sensitive_data.py tests/integration/test_property_routes.py`
 
 Expected: FAIL，提示加密和房源管理服务不存在。
 
-- [ ] **Step 3：实现独立数据密钥和房源配置**
+- [x] **Step 3：实现独立数据密钥和房源配置**
 
 复用 Task 1 已配置的 `DATA_ENCRYPTION_KEY` 和 `SensitiveDataCipher`，凭证与手机号采用相同密钥管理边界但使用不同用途上下文。
 
 ```python
 class SensitiveDataCipher:
-    def encrypt(self, value: str) -> bytes:
-        return self._fernet.encrypt(value.encode("utf-8"))
+    def encrypt(self, value: str, *, purpose: str | None = None) -> bytes:
+        cipher = self._fernet if purpose is None else self._purpose_cipher(purpose)
+        return cipher.encrypt(value.encode("utf-8"))
 
-    def decrypt(self, value: bytes) -> str:
-        return self._fernet.decrypt(value).decode("utf-8")
+    def decrypt(self, value: bytes, *, purpose: str | None = None) -> str:
+        cipher = self._fernet if purpose is None else self._purpose_cipher(purpose)
+        return cipher.decrypt(value).decode("utf-8")
 
 
 class PropertyAdminService:
     async def update_profile(
-        self, property_id: int, administrator_id: int, fields: PropertyFields
+        self, property_id: int, administrator: Employee, fields: PropertyFields
     ) -> PropertyProfile:
-        self._permissions.require_administrator(administrator_id)
-        return await self._properties.update_profile(property_id, fields)
+        self.require_admin(administrator)
+        property_profile = await self._require_property_for_update(property_id)
+        # 校验并保存允许管理员维护的公开运营字段。
+        return property_profile
 
     async def replace_credentials(
-        self, property_id: int, administrator_id: int,
+        self, property_id: int, administrator: Employee,
         password: str, guide: str, qr_file_id: str
     ) -> RoomCredential:
-        self._permissions.require_administrator(administrator_id)
-        return await self._properties.replace_credentials(
+        self.require_admin(administrator)
+        await self._require_property_for_update(property_id)
+        return RoomCredential(
             property_id=property_id,
-            password_ciphertext=self._cipher.encrypt(password),
-            guide_ciphertext=self._cipher.encrypt(guide),
+            password_ciphertext=self._cipher.encrypt(
+                password, purpose="room_password"
+            ),
+            guide_ciphertext=self._cipher.encrypt(
+                guide, purpose="checkin_guide"
+            ),
             qr_file_id=qr_file_id,
         )
 ```
 
 管理员页配置百居易房间映射、区域、地址提示、停车说明、入住指南、密码和二维码；日志只记录版本号和房间号。
 
-- [ ] **Step 4：运行加密、权限和日志测试**
+- [x] **Step 4：运行加密、权限和日志测试**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_sensitive_data.py tests/integration/test_property_routes.py tests/unit/test_log_redaction.py`
 
 Expected: PASS，数据库和日志中均无凭证明文。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/homestay_bot/services/sensitive_data.py src/homestay_bot/services/property_admin_service.py src/homestay_bot/routes/properties.py src/homestay_bot/templates/properties/index.html src/homestay_bot/templates/properties/detail.html src/homestay_bot/config.py .env.example src/homestay_bot/main.py src/homestay_bot/application.py tests/unit/test_sensitive_data.py tests/integration/test_property_routes.py
 git commit -m "feat: manage encrypted room credentials"
 ```
+
+**Review（Task 9）**
+
+- 管理员可维护百居易房间编号对应的房源名称、房型、区域、地址提示、停车说明和启用状态；普通员工无法进入房源管理页或读取二维码。
+- 门锁密码与入住指南分别使用从 `DATA_ENCRYPTION_KEY` 派生的用途专属子密钥加密；既有未指定用途的手机号加密格式保持兼容，不同用途之间无法互相解密。
+- 每次替换凭证都会锁定房源、创建递增版本并停用旧版本；管理页只显示当前版本，不解密或回显密码与入住指南。
+- 二维码复用 Task 8 的私有目录、真实图片校验、随机文件名和大小限制；凭证事务失败时自动删除新文件，旧版本文件保留供后续幂等投递核对。
+- 房源与凭证审计只记录房源编号、版本和启用状态，不记录密码、指南、二维码文件编号或其他正文。
+- 现有配置已经包含独立数据密钥、私有目录和上传大小上限，因此无需新增环境变量或数据库迁移。
+- 验证：292 passed，10 skipped；Task 9 定向测试 20 passed；Ruff、mypy、`git diff --check` 均通过。
 
 ### Task 10：可入住后的幂等凭证发送
 

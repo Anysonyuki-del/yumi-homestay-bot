@@ -36,3 +36,17 @@ def test_wrong_key_cannot_decrypt_sensitive_data() -> None:
 
     with pytest.raises(InvalidToken):
         other.decrypt(ciphertext)
+
+
+def test_room_password_uses_purpose_separated_encryption() -> None:
+    """房间密码密文必须隔离用途，不能作为其他敏感字段解密。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+
+    ciphertext = cipher.encrypt("839201", purpose="room_password")
+
+    assert b"839201" not in ciphertext
+    assert cipher.decrypt(ciphertext, purpose="room_password") == "839201"
+    with pytest.raises(InvalidToken):
+        cipher.decrypt(ciphertext, purpose="checkin_guide")
+    with pytest.raises(InvalidToken):
+        cipher.decrypt(ciphertext)

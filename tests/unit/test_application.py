@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy.exc import OperationalError
 
 from homestay_bot import application
@@ -402,6 +403,80 @@ async def test_failed_attachment_transaction_removes_private_file(
         await service.upload_photo(
             task.id,
             cast(Any, employee),
+            BytesIO(png),
+            "image/png",
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_credential_transaction_removes_private_qr(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """凭证落库失败时必须删除刚保存的私有二维码。"""
+
+    class SessionContext:
+        """提供不实际访问数据库的凭证短会话。"""
+
+        async def __aenter__(self):
+            """返回测试会话标记。"""
+            return SimpleNamespace()
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出测试会话。"""
+
+    class PropertyServiceStub:
+        """通过权限校验后模拟凭证数据库写入失败。"""
+
+        def __init__(self, session, cipher) -> None:
+            """接受应用注入依赖。"""
+
+        @staticmethod
+        def require_admin(employee) -> None:
+            """确认测试员工是管理员。"""
+            assert employee.role is EmployeeRole.ADMIN
+
+        async def replace_credentials(self, *args, **kwargs):
+            """模拟凭证版本写入失败。"""
+            raise RuntimeError("credential write failed")
+
+    monkeypatch.setattr(
+        application,
+        "PropertyAdminService",
+        PropertyServiceStub,
+    )
+    storage = PrivateFileStorage(tmp_path)
+    cipher = application.SensitiveDataCipher(
+        Fernet.generate_key().decode("ascii")
+    )
+    service = application.SessionPropertyAdminService(
+        cast(Any, lambda: SessionContext()),
+        cipher,
+        storage,
+        1024,
+    )
+    employee = SimpleNamespace(
+        id=1,
+        role=EmployeeRole.ADMIN,
+        is_active=True,
+    )
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR"
+        b"\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00"
+        b"\x90wS\xde"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+    with pytest.raises(RuntimeError, match="credential write failed"):
+        await service.replace_credentials(
+            101,
+            cast(Any, employee),
+            "839201",
+            "入住指南",
             BytesIO(png),
             "image/png",
         )

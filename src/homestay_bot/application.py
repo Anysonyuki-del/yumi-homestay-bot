@@ -79,6 +79,10 @@ from homestay_bot.services.private_file_storage import (
     PrivateFileStorage,
     StoredPrivateFile,
 )
+from homestay_bot.services.property_admin_service import (
+    PropertyAdminService,
+    PropertyFields,
+)
 from homestay_bot.services.room_readiness_service import RoomReadinessService
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 from homestay_bot.services.task_page_service import TaskPageService
@@ -503,6 +507,108 @@ class SessionTaskPageService:
         async with self._factory() as session:
             await self._service(session).require_attachment_visible(
                 file_id,
+                employee,
+            )
+        return self._storage.open_for_read(file_id)
+
+
+class SessionPropertyAdminService:
+    """为每次房源管理请求创建独立事务并协调私有二维码。"""
+
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        cipher: SensitiveDataCipher,
+        storage: PrivateFileStorage,
+        upload_size_limit: int,
+    ) -> None:
+        """保存数据库、加密和私有文件依赖。"""
+        self._factory = factory
+        self._cipher = cipher
+        self._storage = storage
+        self._upload_size_limit = upload_size_limit
+
+    def _service(self, session: AsyncSession) -> PropertyAdminService:
+        """在当前事务装配房源管理服务。"""
+        return PropertyAdminService(session, self._cipher)
+
+    async def list_all(self, employee: Employee) -> list[Any]:
+        """返回管理员可见房源列表。"""
+        async with self._factory() as session:
+            return await self._service(session).list_all(employee)
+
+    async def detail_for(
+        self,
+        property_id: int,
+        employee: Employee,
+    ) -> dict[str, object]:
+        """返回不含凭证明文的房源详情。"""
+        async with self._factory() as session:
+            return await self._service(session).detail_for(
+                property_id,
+                employee,
+            )
+
+    async def update_profile(
+        self,
+        property_id: int,
+        employee: Employee,
+        fields: PropertyFields,
+    ) -> Any:
+        """在独立事务更新房源运营资料。"""
+        async with self._factory() as session:
+            result = await self._service(session).update_profile(
+                property_id,
+                employee,
+                fields,
+            )
+            await session.commit()
+            return result
+
+    async def replace_credentials(
+        self,
+        property_id: int,
+        employee: Employee,
+        password: str,
+        guide: str,
+        stream: BinaryIO,
+        content_type: str,
+    ) -> Any:
+        """先验证管理员并保存二维码，事务失败时删除新文件。"""
+        PropertyAdminService.require_admin(employee)
+        stored: StoredPrivateFile | None = None
+        try:
+            stored = await self._storage.save_image(
+                stream,
+                content_type,
+                self._upload_size_limit,
+            )
+            async with self._factory() as session:
+                credential = await self._service(
+                    session
+                ).replace_credentials(
+                    property_id,
+                    employee,
+                    password=password,
+                    guide=guide,
+                    qr_file_id=stored.file_id,
+                )
+                await session.commit()
+                return credential
+        except Exception:
+            if stored is not None:
+                self._storage.delete(stored.file_id)
+            raise
+
+    async def qr_for(
+        self,
+        property_id: int,
+        employee: Employee,
+    ) -> StoredPrivateFile:
+        """数据库授权并定位当前版本后读取私有二维码。"""
+        async with self._factory() as session:
+            file_id = await self._service(session).active_qr_file_id(
+                property_id,
                 employee,
             )
         return self._storage.open_for_read(file_id)
@@ -976,6 +1082,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     private_file_storage = PrivateFileStorage(settings.private_upload_dir)
     app.state.task_page_service = SessionTaskPageService(
         factory,
+        private_file_storage,
+        settings.private_upload_max_bytes,
+    )
+    app.state.property_admin_service = SessionPropertyAdminService(
+        factory,
+        sensitive_data,
         private_file_storage,
         settings.private_upload_max_bytes,
     )
