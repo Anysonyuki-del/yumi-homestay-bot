@@ -1,4 +1,6 @@
 import asyncio
+import threading
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -13,6 +15,13 @@ def test_configured_application_starts_worker_and_reports_healthy(
     """完整本地配置应装配数据库与 worker，并通过分层健康检查。"""
     chat_configuration: dict[str, str | bool] = {}
     tourism_configuration: dict[str, str | bool] = {}
+    started = {
+        "worker": threading.Event(),
+        "wecom_poll": threading.Event(),
+        "context": threading.Event(),
+        "hostex": threading.Event(),
+    }
+    worker_wiring: dict[str, bool] = {}
 
     class FakeOpenAI:
         """记录生命周期传给 OpenAI 客户端的连接配置。"""
@@ -72,7 +81,59 @@ def test_configured_application_starts_worker_and_reports_healthy(
     monkeypatch.setattr("homestay_bot.application.AsyncOpenAI", FakeOpenAI)
     monkeypatch.setattr("homestay_bot.application.AsyncAnthropic", FakeAnthropic)
 
+    async def worker_loop(app, **kwargs) -> None:
+        """验证生产 worker 注册了一期全部持久化任务处理器。"""
+        for name in (
+            "faq_draft_handler_factory",
+            "hostex_event_handler_factory",
+            "credential_part_handler_factory",
+            "lifecycle_handler_factory",
+        ):
+            worker_wiring[name] = callable(kwargs.get(name))
+        started["worker"].set()
+        await asyncio.Event().wait()
+
+    async def wecom_poll_loop(app, **kwargs) -> None:
+        """模拟一次真实补拉成功并刷新生产健康状态。"""
+        app.state.wecom_poll_last_success = datetime.now(UTC)
+        started["wecom_poll"].set()
+        await asyncio.Event().wait()
+
+    async def context_loop(*, heartbeat, **kwargs) -> None:
+        """通过应用注入的回调模拟一次上下文维护成功。"""
+        heartbeat(datetime.now(UTC))
+        started["context"].set()
+        await asyncio.Event().wait()
+
+    async def hostex_loop(
+        *,
+        sync_heartbeat,
+        lifecycle_heartbeat,
+        **kwargs,
+    ) -> None:
+        """通过应用注入的回调模拟一次对账和提醒调度成功。"""
+        now = datetime.now(UTC)
+        sync_heartbeat(now)
+        lifecycle_heartbeat(now)
+        started["hostex"].set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("homestay_bot.application._run_worker_loop", worker_loop)
+    monkeypatch.setattr(
+        "homestay_bot.application._run_wecom_poll_loop",
+        wecom_poll_loop,
+    )
+    monkeypatch.setattr(
+        "homestay_bot.application._run_context_maintenance_loop",
+        context_loop,
+    )
+    monkeypatch.setattr(
+        "homestay_bot.application._run_hostex_reconcile_loop",
+        hostex_loop,
+    )
+
     with TestClient(app) as client:
+        assert all(event.wait(timeout=1) for event in started.values())
         response = client.get("/health")
 
         assert response.status_code == 200
@@ -81,10 +142,21 @@ def test_configured_application_starts_worker_and_reports_healthy(
             "database": "ok",
             "worker_heartbeat": "ok",
             "wecom_polling": "ok",
-                "configuration": "ok",
-                "web_search": "unknown",
-                "wecom_contact_sync": "not_configured",
-            }
+            "hostex_webhook_sync": "ok",
+            "context_maintenance": "ok",
+            "lifecycle_scheduler": "ok",
+            "configuration": "ok",
+            "web_search": "unknown",
+            "wecom_contact_sync": "not_configured",
+        }
+        assert worker_wiring == {
+            "faq_draft_handler_factory": True,
+            "hostex_event_handler_factory": True,
+            "credential_part_handler_factory": True,
+            "lifecycle_handler_factory": True,
+        }
+        assert app.state.private_file_service is app.state.task_page_service
+        assert app.state.hostex_webhook_service is not None
         assert chat_configuration == {
             "api_key": "test-deepseek-key",
             "base_url": "https://api.deepseek.test",

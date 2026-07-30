@@ -20,6 +20,9 @@ async def test_health_endpoint_returns_ok() -> None:
         "database": "not_configured",
         "worker_heartbeat": "not_configured",
         "wecom_polling": "not_configured",
+        "hostex_webhook_sync": "not_configured",
+        "context_maintenance": "not_configured",
+        "lifecycle_scheduler": "not_configured",
         "configuration": "incomplete",
         "web_search": "not_configured",
         "wecom_contact_sync": "not_configured",
@@ -65,6 +68,9 @@ async def test_operational_health_degrades_when_wecom_poll_is_stale() -> None:
         database_probe=database_probe,
         heartbeat_getter=lambda: now,
         poll_heartbeat_getter=lambda: now - timedelta(seconds=61),
+        hostex_heartbeat_getter=lambda: now,
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
         configuration_ok=True,
         web_search_status_getter=lambda: "unknown",
     )
@@ -100,6 +106,9 @@ async def test_web_search_status_controls_overall_health(
         database_probe=database_probe,
         heartbeat_getter=lambda: now,
         poll_heartbeat_getter=lambda: now,
+        hostex_heartbeat_getter=lambda: now,
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
         configuration_ok=True,
         web_search_status_getter=lambda: web_search_status,
     )
@@ -123,6 +132,9 @@ async def test_optional_wecom_contact_sync_is_reported_without_degrading() -> No
         database_probe=database_probe,
         heartbeat_getter=lambda: now,
         poll_heartbeat_getter=lambda: now,
+        hostex_heartbeat_getter=lambda: now,
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
         configuration_ok=True,
         web_search_status_getter=lambda: "ok",
         contact_sync_configured=False,
@@ -132,3 +144,75 @@ async def test_optional_wecom_contact_sync_is_reported_without_degrading() -> No
 
     assert result["status"] == "ok"
     assert result["wecom_contact_sync"] == "not_configured"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stale_component", "field"),
+    [
+        ("hostex", "hostex_webhook_sync"),
+        ("context", "context_maintenance"),
+        ("lifecycle", "lifecycle_scheduler"),
+    ],
+)
+async def test_operational_component_staleness_degrades_health(
+    stale_component: str,
+    field: str,
+) -> None:
+    """订单同步、上下文维护或提醒调度停滞都必须被健康页识别。"""
+
+    async def database_probe() -> bool:
+        """模拟可用数据库。"""
+        return True
+
+    now = datetime.now(UTC)
+    stale = now - timedelta(minutes=31)
+    heartbeats = {
+        "hostex": now,
+        "context": now,
+        "lifecycle": now,
+    }
+    heartbeats[stale_component] = stale
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: now,
+        hostex_heartbeat_getter=lambda: heartbeats["hostex"],
+        context_heartbeat_getter=lambda: heartbeats["context"],
+        lifecycle_heartbeat_getter=lambda: heartbeats["lifecycle"],
+        configuration_ok=True,
+        web_search_status_getter=lambda: "ok",
+        operational_max_age=timedelta(minutes=30),
+    )
+
+    result = await service.check()
+
+    assert result["status"] == "degraded"
+    assert result[field] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_future_heartbeat_is_not_considered_healthy() -> None:
+    """系统时间异常产生的未来心跳不得永久掩盖后台任务停滞。"""
+
+    async def database_probe() -> bool:
+        """模拟可用数据库。"""
+        return True
+
+    now = datetime.now(UTC)
+    future = now + timedelta(minutes=5)
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: future,
+        hostex_heartbeat_getter=lambda: now,
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
+        configuration_ok=True,
+        web_search_status_getter=lambda: "ok",
+    )
+
+    result = await service.check()
+
+    assert result["status"] == "degraded"
+    assert result["wecom_polling"] == "stale"

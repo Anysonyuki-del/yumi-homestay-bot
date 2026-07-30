@@ -259,12 +259,14 @@ class Worker[JobType: WorkerJob]:
         handlers: dict[str, JobHandler],
         heartbeat: Callable[[datetime], None] | None = None,
         checkpoint: Callable[[], Awaitable[None]] | None = None,
+        on_job_committed: Callable[[JobType], None] | None = None,
     ) -> None:
-        """注入任务仓储、处理器和可选心跳接收器。"""
+        """注入任务仓储、处理器、提交边界和成功提交回调。"""
         self._repository = repository
         self._handlers = handlers
         self._heartbeat = heartbeat
         self._checkpoint = checkpoint
+        self._on_job_committed = on_job_committed
 
     async def run_once(self) -> bool:
         """领取并处理一项任务；没有到期任务时返回 False。"""
@@ -289,6 +291,7 @@ class Worker[JobType: WorkerJob]:
                 await self._checkpoint()
             return True
 
+        succeeded = False
         try:
             await handler(job.payload)
         except Exception as error:
@@ -307,8 +310,12 @@ class Worker[JobType: WorkerJob]:
             )
         else:
             await self._repository.mark_completed(job)
+            succeeded = True
         if self._checkpoint is not None:
             await self._checkpoint()
+        if succeeded and self._on_job_committed is not None:
+            # 只有业务结果和任务完成状态都提交成功后，才向应用报告成功。
+            self._on_job_committed(job)
         return True
 
 

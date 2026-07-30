@@ -25,6 +25,9 @@ class UnconfiguredHealthService:
             "database": "not_configured",
             "worker_heartbeat": "not_configured",
             "wecom_polling": "not_configured",
+            "hostex_webhook_sync": "not_configured",
+            "context_maintenance": "not_configured",
+            "lifecycle_scheduler": "not_configured",
             "configuration": "incomplete",
             "web_search": "not_configured",
             "wecom_contact_sync": "not_configured",
@@ -40,34 +43,72 @@ class OperationalHealthService:
         database_probe: Callable[[], Awaitable[bool]],
         heartbeat_getter: Callable[[], datetime | None],
         poll_heartbeat_getter: Callable[[], datetime | None],
+        hostex_heartbeat_getter: Callable[[], datetime | None],
+        context_heartbeat_getter: Callable[[], datetime | None],
+        lifecycle_heartbeat_getter: Callable[[], datetime | None],
         configuration_ok: bool,
         web_search_status_getter: Callable[[], str],
         contact_sync_configured: bool = False,
         heartbeat_max_age: timedelta = timedelta(minutes=2),
         poll_max_age: timedelta = timedelta(minutes=1),
+        operational_max_age: timedelta | None = None,
+        hostex_max_age: timedelta = timedelta(minutes=30),
+        context_max_age: timedelta = timedelta(hours=2),
+        lifecycle_max_age: timedelta = timedelta(minutes=30),
     ) -> None:
         """注入无副作用探针和心跳读取器。"""
         self._database_probe = database_probe
         self._heartbeat_getter = heartbeat_getter
         self._poll_heartbeat_getter = poll_heartbeat_getter
+        self._hostex_heartbeat_getter = hostex_heartbeat_getter
+        self._context_heartbeat_getter = context_heartbeat_getter
+        self._lifecycle_heartbeat_getter = lifecycle_heartbeat_getter
         self._configuration_ok = configuration_ok
         self._web_search_status_getter = web_search_status_getter
         self._contact_sync_configured = contact_sync_configured
         self._heartbeat_max_age = heartbeat_max_age
         self._poll_max_age = poll_max_age
+        self._hostex_max_age = operational_max_age or hostex_max_age
+        self._context_max_age = operational_max_age or context_max_age
+        self._lifecycle_max_age = (
+            operational_max_age or lifecycle_max_age
+        )
+
+    @staticmethod
+    def _is_recent(
+        value: datetime | None,
+        max_age: timedelta,
+    ) -> bool:
+        """按 UTC 判断心跳是否仍在允许时间内。"""
+        if not isinstance(value, datetime):
+            return False
+        age = datetime.now(UTC) - value
+        return timedelta(0) <= age <= max_age
 
     async def check(self) -> dict[str, str]:
         """执行只读检查，不在健康接口创建任何外部资源。"""
         database_ok = await self._database_probe()
         heartbeat = self._heartbeat_getter()
-        worker_ok = (
-            isinstance(heartbeat, datetime)
-            and datetime.now(UTC) - heartbeat <= self._heartbeat_max_age
+        worker_ok = self._is_recent(
+            heartbeat,
+            self._heartbeat_max_age,
         )
         poll_heartbeat = self._poll_heartbeat_getter()
-        poll_ok = (
-            isinstance(poll_heartbeat, datetime)
-            and datetime.now(UTC) - poll_heartbeat <= self._poll_max_age
+        poll_ok = self._is_recent(
+            poll_heartbeat,
+            self._poll_max_age,
+        )
+        hostex_ok = self._is_recent(
+            self._hostex_heartbeat_getter(),
+            self._hostex_max_age,
+        )
+        context_ok = self._is_recent(
+            self._context_heartbeat_getter(),
+            self._context_max_age,
+        )
+        lifecycle_ok = self._is_recent(
+            self._lifecycle_heartbeat_getter(),
+            self._lifecycle_max_age,
         )
         web_search_status = self._web_search_status_getter()
         web_search_ok = web_search_status in {"unknown", "ok"}
@@ -77,6 +118,9 @@ class OperationalHealthService:
                 if database_ok
                 and worker_ok
                 and poll_ok
+                and hostex_ok
+                and context_ok
+                and lifecycle_ok
                 and self._configuration_ok
                 and web_search_ok
                 else "degraded"
@@ -84,6 +128,11 @@ class OperationalHealthService:
             "database": "ok" if database_ok else "error",
             "worker_heartbeat": "ok" if worker_ok else "stale",
             "wecom_polling": "ok" if poll_ok else "stale",
+            "hostex_webhook_sync": "ok" if hostex_ok else "stale",
+            "context_maintenance": "ok" if context_ok else "stale",
+            "lifecycle_scheduler": (
+                "ok" if lifecycle_ok else "stale"
+            ),
             "configuration": "ok" if self._configuration_ok else "incomplete",
             "web_search": web_search_status,
             "wecom_contact_sync": (

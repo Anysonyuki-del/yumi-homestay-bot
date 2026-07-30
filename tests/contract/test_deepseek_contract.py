@@ -9,6 +9,9 @@ from openai import AsyncOpenAI
 from homestay_bot.config import Settings
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+from homestay_bot.integrations.deepseek_context_summarizer import (
+    DeepSeekContextSummarizer,
+)
 from homestay_bot.integrations.deepseek_faq_drafter import DeepSeekFaqDrafter
 from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
@@ -237,3 +240,56 @@ async def test_faq_draft_marks_unknown_property_fact_for_admin_review() -> None:
     assert draft.verification_items
     assert "http://" not in draft.model_dump_json()
     assert "https://" not in draft.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_live_context_summary_removes_sensitive_details() -> None:
+    """真实摘要契约不得返回手机号、密码或详细门牌。"""
+    settings = Settings()  # type: ignore[call-arg]
+    chat = AsyncOpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+    )
+    try:
+        result = await DeepSeekContextSummarizer(
+            chat,
+            settings.deepseek_model,
+        ).summarize(
+            tier="long",
+            existing_summary="",
+            messages=[
+                "客户偏好安静，手机号13800138000，"
+                "门锁密码839201，地址武汉市武昌区中北路12号。"
+            ],
+        )
+    finally:
+        await chat.close()
+
+    serialized = result.summary + str(result.unresolved_items)
+    assert "安静" in serialized
+    assert "13800138000" not in serialized
+    assert "839201" not in serialized
+    assert "中北路12号" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_live_guest_request_extracts_reviewable_task() -> None:
+    """真实客服契约应在同一次响应中提取待员工确认的补给任务。"""
+    assistant, chat, anthropic = await build_assistant()
+    try:
+        decision = await assistant.respond(
+            guest_identifier="deepseek-task-contract",
+            language=Language.ZH,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "可以帮我补两瓶矿泉水吗？",
+                }
+            ],
+        )
+    finally:
+        await close_clients(chat, anthropic)
+
+    assert decision.task_suggestion is not None
+    assert decision.task_suggestion.task_type.value == "supplies"
+    assert decision.task_suggestion.description

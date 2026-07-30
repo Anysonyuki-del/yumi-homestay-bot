@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, cast
@@ -23,6 +23,25 @@ class StopFaqMaintenance(RuntimeError):
 
 class StopContextMaintenance(RuntimeError):
     """表示测试已观察到一次客户上下文周期维护。"""
+
+
+class StopHostexReconcile(RuntimeError):
+    """表示测试已观察到一次百居易对账。"""
+
+
+def test_committed_hostex_job_updates_sync_heartbeats() -> None:
+    """只有已提交的百居易事件任务才刷新同步与提醒心跳。"""
+    app = SimpleNamespace(state=SimpleNamespace())
+    completed_at = datetime(2026, 7, 31, 8, tzinfo=UTC)
+
+    application._record_committed_job_heartbeat(
+        app,
+        SimpleNamespace(job_type="hostex_event"),
+        now_provider=lambda: completed_at,
+    )
+
+    assert app.state.hostex_sync_last_success == completed_at
+    assert app.state.lifecycle_scheduler_last_success == completed_at
 
 
 @pytest.mark.asyncio
@@ -76,6 +95,8 @@ async def test_context_maintenance_processes_customers_hourly(monkeypatch) -> No
         raise StopContextMaintenance
 
     now = datetime(2026, 7, 31, 8, tzinfo=UTC)
+    completed_at = datetime(2026, 7, 31, 8, 5, tzinfo=UTC)
+    heartbeats: list[datetime] = []
     monkeypatch.setattr(application, "SQLAlchemyContextRepository", RepositoryStub)
     monkeypatch.setattr(application, "ContextRetentionService", ServiceStub)
     monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
@@ -85,10 +106,80 @@ async def test_context_maintenance_processes_customers_hourly(monkeypatch) -> No
             factory=cast(Any, lambda: SessionContext()),
             summarizer="summarizer",
             now_provider=lambda: now,
+            heartbeat_now=lambda: completed_at,
+            heartbeat=heartbeats.append,
         )
 
     assert maintained == [(7, now)]
     assert session.committed is True
+    assert heartbeats == [completed_at]
+
+
+@pytest.mark.asyncio
+async def test_hostex_reconcile_updates_sync_and_lifecycle_heartbeats(
+    monkeypatch,
+) -> None:
+    """成功对账后应同时证明订单同步和提醒调度仍在运行。"""
+    now = datetime(2026, 7, 31, 8, tzinfo=UTC)
+    session = SimpleNamespace(committed=False)
+    sync_heartbeats: list[datetime] = []
+    lifecycle_heartbeats: list[datetime] = []
+
+    async def commit() -> None:
+        """记录对账事务提交。"""
+        session.committed = True
+
+    session.commit = commit
+
+    class SessionContext:
+        """返回固定对账会话。"""
+
+        async def __aenter__(self):
+            """进入对账会话。"""
+            return session
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出对账会话。"""
+
+    class SyncServiceStub:
+        """记录对账窗口并验证生命周期服务已注入。"""
+
+        def __init__(self, hostex, operations, *, lifecycle=None) -> None:
+            """验证运行时装配了生命周期调度器。"""
+            assert hostex == "hostex"
+            assert lifecycle == "lifecycle"
+
+        async def reconcile(self, start_date, end_date) -> int:
+            """验证一期十五天补漏窗口。"""
+            assert start_date == date(2026, 7, 30)
+            assert end_date == date(2026, 8, 15)
+            return 1
+
+    async def stop_after_cycle(delay: float) -> None:
+        """完成首轮对账后结束无限循环。"""
+        assert delay == 900
+        raise StopHostexReconcile
+
+    monkeypatch.setattr(application, "HostexSyncService", SyncServiceStub)
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
+
+    with pytest.raises(StopHostexReconcile):
+        await application._run_hostex_reconcile_loop(
+            factory=cast(Any, lambda: SessionContext()),
+            hostex=cast(Any, "hostex"),
+            interval_seconds=900,
+            today_provider=lambda: date(2026, 7, 31),
+            lifecycle_factory=lambda selected: (
+                "lifecycle" if selected is session else "wrong"
+            ),
+            heartbeat_now=lambda: now,
+            sync_heartbeat=sync_heartbeats.append,
+            lifecycle_heartbeat=lifecycle_heartbeats.append,
+        )
+
+    assert session.committed is True
+    assert sync_heartbeats == [now]
+    assert lifecycle_heartbeats == [now]
 
 
 @pytest.mark.asyncio

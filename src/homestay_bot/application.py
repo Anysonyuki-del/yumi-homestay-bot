@@ -887,6 +887,20 @@ def _register_customer_tag_handler(
         handlers["customer_tag_sync"] = factory(session)
 
 
+def _record_committed_job_heartbeat(
+    app: FastAPI,
+    job: Any,
+    *,
+    now_provider: Callable[[], datetime] | None = None,
+) -> None:
+    """在任务最终提交后刷新对应业务链路的成功心跳。"""
+    if job.job_type != "hostex_event":
+        return
+    completed_at = (now_provider or (lambda: datetime.now(UTC)))()
+    app.state.hostex_sync_last_success = completed_at
+    app.state.lifecycle_scheduler_last_success = completed_at
+
+
 async def _run_worker_loop(
     app: FastAPI,
     *,
@@ -989,6 +1003,9 @@ async def _run_worker_loop(
                     handlers=handlers,
                     heartbeat=lambda value: setattr(app.state, "worker_last_heartbeat", value),
                     checkpoint=session.commit,
+                    on_job_committed=lambda job: (
+                        _record_committed_job_heartbeat(app, job)
+                    ),
                 )
                 handled = await worker.run_once()
         except OperationalError as error:
@@ -1032,9 +1049,12 @@ async def _run_context_maintenance_loop(
     factory: async_sessionmaker[AsyncSession],
     summarizer: Any,
     now_provider: Callable[[], datetime] | None = None,
+    heartbeat_now: Callable[[], datetime] | None = None,
+    heartbeat: Callable[[datetime], None] | None = None,
 ) -> None:
     """每小时为有消息的正式客户更新分层摘要。"""
     current_time = now_provider or (lambda: datetime.now(UTC))
+    completed_time = heartbeat_now or (lambda: datetime.now(UTC))
     while True:
         try:
             async with factory() as session:
@@ -1045,6 +1065,8 @@ async def _run_context_maintenance_loop(
                 for customer_id in customer_ids:
                     await service.maintain_customer(customer_id, cycle_now)
                 await session.commit()
+                if heartbeat is not None:
+                    heartbeat(completed_time())
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -1065,9 +1087,13 @@ async def _run_hostex_reconcile_loop(
     lifecycle_factory: (
         Callable[[AsyncSession], LifecycleReminderService] | None
     ) = None,
+    heartbeat_now: Callable[[], datetime] | None = None,
+    sync_heartbeat: Callable[[datetime], None] | None = None,
+    lifecycle_heartbeat: Callable[[datetime], None] | None = None,
 ) -> None:
     """定时对账近期订单，补回遗漏的 Webhook。"""
     current_date = today_provider or (lambda: datetime.now(UTC).date())
+    current_time = heartbeat_now or (lambda: datetime.now(UTC))
     while True:
         try:
             async with factory() as session:
@@ -1086,6 +1112,11 @@ async def _run_hostex_reconcile_loop(
                     today + timedelta(days=15),
                 )
                 await session.commit()
+                completed_at = current_time()
+                if sync_heartbeat is not None:
+                    sync_heartbeat(completed_at)
+                if lifecycle_heartbeat is not None:
+                    lifecycle_heartbeat(completed_at)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -1378,6 +1409,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         private_file_storage,
         settings.private_upload_max_bytes,
     )
+    app.state.private_file_service = app.state.task_page_service
     app.state.property_admin_service = SessionPropertyAdminService(
         factory,
         sensitive_data,
@@ -1400,13 +1432,26 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.hostex_webhook_secret_token,
         SessionHostexEventRecorder(factory),
     )
-    app.state.worker_last_heartbeat = datetime.now(UTC)
+    startup_time = datetime.now(UTC)
+    app.state.worker_last_heartbeat = startup_time
     # 启动宽限期避免首次补拉前被误报；一次成功后由真实心跳覆盖。
-    app.state.wecom_poll_last_success = datetime.now(UTC)
+    app.state.wecom_poll_last_success = startup_time
+    app.state.hostex_sync_last_success = startup_time
+    app.state.context_maintenance_last_success = startup_time
+    app.state.lifecycle_scheduler_last_success = startup_time
     app.state.health_service = OperationalHealthService(
         database_probe=database_probe,
         heartbeat_getter=lambda: app.state.worker_last_heartbeat,
         poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
+        hostex_heartbeat_getter=(
+            lambda: app.state.hostex_sync_last_success
+        ),
+        context_heartbeat_getter=(
+            lambda: app.state.context_maintenance_last_success
+        ),
+        lifecycle_heartbeat_getter=(
+            lambda: app.state.lifecycle_scheduler_last_success
+        ),
         configuration_ok=bool(duty_userids),
         web_search_status_getter=web_search_state.get,
         contact_sync_configured=contact_client is not None,
@@ -1414,6 +1459,18 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             seconds=max(
                 60,
                 settings.wecom_poll_interval_seconds * 3,
+            )
+        ),
+        hostex_max_age=timedelta(
+            seconds=max(
+                180,
+                settings.hostex_reconcile_interval_seconds * 3,
+            )
+        ),
+        lifecycle_max_age=timedelta(
+            seconds=max(
+                180,
+                settings.hostex_reconcile_interval_seconds * 3,
             )
         ),
     )
@@ -1448,6 +1505,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         _run_context_maintenance_loop(
             factory=factory,
             summarizer=context_summarizer,
+            heartbeat=lambda value: setattr(
+                app.state,
+                "context_maintenance_last_success",
+                value,
+            ),
         )
     )
     hostex_reconcile_task = asyncio.create_task(
@@ -1456,6 +1518,16 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             hostex=hostex,
             interval_seconds=settings.hostex_reconcile_interval_seconds,
             lifecycle_factory=build_lifecycle_service,
+            sync_heartbeat=lambda value: setattr(
+                app.state,
+                "hostex_sync_last_success",
+                value,
+            ),
+            lifecycle_heartbeat=lambda value: setattr(
+                app.state,
+                "lifecycle_scheduler_last_success",
+                value,
+            ),
         )
     )
 
@@ -1480,6 +1552,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "employee_access_verifier",
             "approval_page_service",
             "task_page_service",
+            "private_file_service",
             "property_admin_service",
             "customer_admin_service",
             "knowledge_admin_service",
@@ -1488,6 +1561,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "health_service",
             "worker_last_heartbeat",
             "wecom_poll_last_success",
+            "hostex_sync_last_success",
+            "context_maintenance_last_success",
+            "lifecycle_scheduler_last_success",
         ):
             if hasattr(app.state, state_name):
                 delattr(app.state, state_name)

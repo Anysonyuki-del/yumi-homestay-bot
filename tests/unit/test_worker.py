@@ -71,6 +71,73 @@ async def test_worker_executes_registered_handler() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_reports_success_only_after_final_commit() -> None:
+    """成功回调必须发生在任务完成状态真正提交之后。"""
+    job = JobStub(job_type="hostex_event")
+    repository = RepositoryStub(job)
+    sequence: list[str] = []
+
+    async def handler(payload):
+        """记录业务处理完成。"""
+        sequence.append("handled")
+
+    async def checkpoint() -> None:
+        """记录领取提交和最终完成提交。"""
+        sequence.append("committed")
+
+    def on_job_committed(committed_job) -> None:
+        """记录最终提交后的成功通知。"""
+        assert committed_job is job
+        sequence.append("reported")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"hostex_event": handler},
+        checkpoint=checkpoint,
+        on_job_committed=on_job_committed,
+    )
+
+    await worker.run_once()
+
+    assert sequence == [
+        "committed",
+        "handled",
+        "committed",
+        "reported",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_report_success_when_final_commit_fails() -> None:
+    """最终提交失败时不得提前刷新外部同步成功心跳。"""
+    repository = RepositoryStub(JobStub(job_type="hostex_event"))
+    checkpoint_calls = 0
+    reported: list[str] = []
+
+    async def handler(payload):
+        """模拟业务处理本身成功。"""
+
+    async def checkpoint() -> None:
+        """领取提交成功、任务完成提交失败。"""
+        nonlocal checkpoint_calls
+        checkpoint_calls += 1
+        if checkpoint_calls == 2:
+            raise RuntimeError("commit failed")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"hostex_event": handler},
+        checkpoint=checkpoint,
+        on_job_committed=lambda job: reported.append(job.job_type),
+    )
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await worker.run_once()
+
+    assert reported == []
+
+
+@pytest.mark.asyncio
 async def test_worker_never_retries_hostex_create_job() -> None:
     """百居易创建订单任务失败后必须直接转失败，不能自动重放。"""
     repository = RepositoryStub(

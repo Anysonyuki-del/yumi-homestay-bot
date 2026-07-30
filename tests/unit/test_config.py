@@ -67,8 +67,8 @@ def test_settings_load_optional_wecom_contact_secret(monkeypatch) -> None:
     assert settings.wecom_contact_secret == "contact-secret"
 
 
-def test_settings_default_to_five_second_wecom_polling(monkeypatch) -> None:
-    """未显式配置时采用五秒补拉，缩短客人等待时间。"""
+def test_settings_default_to_sixty_second_wecom_polling(monkeypatch) -> None:
+    """Webhook 保持实时，补拉默认一分钟以免耗尽企业微信额度。"""
     environment = {
         "DATABASE_URL": "sqlite+aiosqlite:///test.db",
         "PUBLIC_BASE_URL": "https://local.example",
@@ -91,7 +91,7 @@ def test_settings_default_to_five_second_wecom_polling(monkeypatch) -> None:
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
-    assert settings.wecom_poll_interval_seconds == 5
+    assert settings.wecom_poll_interval_seconds == 60
 
 
 def test_settings_require_independent_data_encryption_key(monkeypatch) -> None:

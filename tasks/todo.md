@@ -1503,7 +1503,7 @@ git commit -m "feat: schedule guest lifecycle reminders"
 - Modify: `deploy/com.rin.homestay-bot.plist`
 - Modify: `.env.example`
 
-- [ ] **Step 1：编写一期端到端失败测试**
+- [x] **Step 1：编写一期端到端失败测试**
 
 ```python
 async def test_phase_one_order_to_ready_and_credentials_flow():
@@ -1521,13 +1521,13 @@ async def test_phase_one_order_to_ready_and_credentials_flow():
 
 另写两个客户上下文隔离、七天摘要、Webhook补漏、越权员工、发送窗口过期和重复事件测试。
 
-- [ ] **Step 2：运行端到端测试并确认暴露装配缺口**
+- [x] **Step 2：运行端到端测试并确认暴露装配缺口**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_phase_one_flow.py tests/integration/test_runtime_startup.py`
 
 Expected: FAIL，列出尚未注册的 handler、状态服务或健康项。
 
-- [ ] **Step 3：完成应用装配和健康检查**
+- [x] **Step 3：完成应用装配和健康检查**
 
 `application_lifespan()` 只创建依赖并注册：
 
@@ -1541,7 +1541,7 @@ app.state.hostex_webhook_service
 
 健康页增加 `hostex_webhook_sync`、`context_maintenance`、`lifecycle_scheduler`，每项以最近成功心跳判定，凭证和客户正文不得进入健康响应。
 
-- [ ] **Step 4：运行全部本地验证**
+- [x] **Step 4：运行全部本地验证**
 
 Run:
 
@@ -1554,7 +1554,7 @@ git diff --check
 
 Expected: 全部测试通过；只有未显式开启的真实契约测试被跳过；Ruff、mypy 和差异检查均通过。
 
-- [ ] **Step 5：运行真实契约与迁移演练**
+- [x] **Step 5：运行本机可执行的真实契约与迁移演练**
 
 显式开启并分别验证：
 
@@ -1567,11 +1567,17 @@ Expected: 全部测试通过；只有未显式开启的真实契约测试被跳�
 
 Expected: 真实契约通过，日志无密钥、密码、二维码、完整手机号和客户聊天正文。
 
-- [ ] **Step 6：独立审查一期安全边界**
+执行记录：百居易只读契约、企业微信客服账号发现、DeepSeek
+10 项真实契约、SQLite 完整迁移循环和备份恢复计数已通过。
+企业微信消息同步因缺少测试回调 Token 安全跳过；本机未安装
+PostgreSQL 服务，按“先本地 SQLite 测试、云部署前再迁移
+PostgreSQL”的已确认边界保留为云部署前验收项。
+
+- [x] **Step 6：独立审查一期安全边界**
 
 检查身份合并、跨客户查询、任务越权、路径穿越、CSRF、凭证明文、外部写入重放、Webhook伪造和摘要删除顺序。所有 Critical/Important 问题修复并重新执行 Step 4。
 
-- [ ] **Step 7：备份、迁移并部署本机测试环境**
+- [x] **Step 7：备份、迁移并部署本机测试环境**
 
 先备份运行目录、数据库和私有文件，执行 `alembic upgrade head`，同步源码与模板，填入新环境变量，重启 LaunchAgent。验证：
 
@@ -1583,9 +1589,20 @@ Expected: 真实契约通过，日志无密钥、密码、二维码、完整手�
 - 测试订单可生成唯一任务；
 - 凭证只在安全条件全部满足后发送。
 
-- [ ] **Step 8：提交验收结果**
+- [x] **Step 8：提交验收结果**
 
 ```bash
 git add tests src deploy .env.example tasks/todo.md tasks/lessons.md
 git commit -m "chore: verify yumi phase one delivery"
 ```
+
+**Review（Task 13）**
+
+- 新增一期订单到唯一保洁任务、员工执行、管理员验收、可入住和三段凭证发送的内存端到端测试；另验证两个客户的七天上下文相互隔离。
+- 健康页已覆盖 worker、企业微信补拉、百居易对账、客户上下文维护和生命周期提醒心跳；运行响应不包含客户正文或凭证。
+- 百居易只读查询、企业微信客服账号发现和消息补拉、DeepSeek 摘要与任务提取均已用当前真实配置验证；企业微信专用测试回调 Token 未配置，因此破坏性发送契约继续安全跳过。
+- SQLite 已完成升级、降级、再升级和备份恢复计数核验；本机没有 PostgreSQL 服务，相关验证保留为未来云服务器交付前置项。
+- 本机运行目录已备份到 `.backups/phase-one-20260731-074449`，数据库迁移至 `0007_lifecycle_reminders`，源码与迁移文件和当前分支一致；原有 2 个会话、94 条消息及管理员 `XuKuang` 均保留。
+- LaunchAgent 运行于 `127.0.0.1:8010`，持续运行超过三个轮询周期后健康检查仍返回 HTTP 200；四个待发送任务均为尚未到执行时间的生命周期提醒。
+- 企业微信兜底补拉实测返回 `45009` 频率限制后，已从每 5 秒调整为每 60 秒；实时 Webhook 不变，首个新周期成功且健康心跳已刷新。
+- 提交前独立审查发现的未来心跳误判、事务提交前刷新心跳和生产装配覆盖不足均已修复，最终复审无 Critical/Important；全量验证为 `367 passed, 15 skipped`，Ruff、mypy（71 个源文件）及 `git diff --check` 全部通过。

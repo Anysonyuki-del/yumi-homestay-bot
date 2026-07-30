@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     wecom_agent_secret: str
     wecom_contact_secret: str | None = None
     wecom_duty_userids: str
-    wecom_poll_interval_seconds: float = Field(default=5, ge=5, le=300)
+    wecom_poll_interval_seconds: float = Field(default=60, ge=5, le=300)
     session_secret: str = Field(min_length=32)
     data_encryption_key: str = Field(min_length=44, max_length=44)
     private_upload_dir: Path = Path("data/private_uploads")
