@@ -171,8 +171,8 @@ async def test_drafter_rejects_ungrounded_property_fact_when_model_omits_checks(
 
 
 @pytest.mark.asyncio
-async def test_drafter_accepts_property_fact_confirmed_by_relevant_knowledge() -> None:
-    """相关审核知识明确确认停车事实时，草稿无需强制待确认占位。"""
+async def test_drafter_keeps_admin_confirmation_even_with_relevant_knowledge() -> None:
+    """草稿只供审核，民宿专属事实即使有相关知识也必须保留确认占位。"""
     payload = valid_draft_payload()
     payload["answer_zh"] = "民宿提供两个免费停车位。"
     payload["verification_items"] = []
@@ -181,20 +181,60 @@ async def test_drafter_accepts_property_fact_confirmed_by_relevant_knowledge() -
         model="deepseek-v4-flash",
     )
 
-    draft = await drafter.generate(
-        canonical_question="民宿是否提供停车位？",
-        category="停车",
-        examples=["有停车位吗？"],
-        approved_knowledge=[
-            {
-                "category": "停车",
-                "question_zh": "民宿有几个停车位？",
-                "answer_zh": "民宿提供两个免费停车位。",
-                "question_en": "How many parking spaces are available?",
-                "answer_en": "Two free parking spaces are available.",
-            }
-        ],
+    with pytest.raises(FaqDraftUnavailableError):
+        await drafter.generate(
+            canonical_question="民宿是否提供停车位？",
+            category="停车",
+            examples=["有停车位吗？"],
+            approved_knowledge=[
+                {
+                    "category": "停车",
+                    "question_zh": "民宿有几个停车位？",
+                    "answer_zh": "民宿提供两个免费停车位。",
+                    "question_en": "How many parking spaces are available?",
+                    "answer_en": "Two free parking spaces are available.",
+                }
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_drafter_rejects_property_fact_supported_only_by_keyword_mix() -> None:
+    """不同知识条目的关键词拼盘不得被当作完整专属事实依据。"""
+    payload = valid_draft_payload()
+    payload["answer_zh"] = "民宿提供两个免费停车位。"
+    payload["verification_items"] = []
+    drafter = DeepSeekFaqDrafter(
+        client=ChatClientStub(json.dumps(payload, ensure_ascii=False)),
+        model="deepseek-v4-flash",
     )
 
-    assert draft.answer_zh == "民宿提供两个免费停车位。"
-    assert draft.verification_items == []
+    with pytest.raises(FaqDraftUnavailableError):
+        await drafter.generate(
+            canonical_question="民宿是否提供停车位？",
+            category="停车",
+            examples=["有停车位吗？"],
+            approved_knowledge=[
+                {
+                    "category": "停车",
+                    "question_zh": "附近可以停车吗？",
+                    "answer_zh": "附近有公共停车区域。",
+                    "question_en": "Is parking nearby?",
+                    "answer_en": "Public parking is nearby.",
+                },
+                {
+                    "category": "房间",
+                    "question_zh": "有几个枕头？",
+                    "answer_zh": "每间房有两个枕头。",
+                    "question_en": "How many pillows?",
+                    "answer_en": "Each room has two pillows.",
+                },
+                {
+                    "category": "服务",
+                    "question_zh": "寄存收费吗？",
+                    "answer_zh": "行李寄存免费。",
+                    "question_en": "Is luggage storage free?",
+                    "answer_en": "Luggage storage is free.",
+                },
+            ],
+        )

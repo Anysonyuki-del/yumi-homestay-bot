@@ -14,31 +14,6 @@ _PROPERTY_SPECIFIC_PATTERN = re.compile(
     r"address|distance",
     re.IGNORECASE,
 )
-_PROPERTY_TOPIC_PATTERNS = (
-    re.compile(r"停车|车位|parking", re.IGNORECASE),
-    re.compile(r"收费|费用|免费|价格|fee|cost|free", re.IGNORECASE),
-    re.compile(
-        r"数量|几个|几间|多少|[一二两三四五六七八九十\d]+(?:个|间|位)|"
-        r"how many|capacity",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"设施|电梯|厨房|洗衣|空调|无线|wifi|"
-        r"facilit|elevator|kitchen|laundry|air.?condition",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"政策|允许|可否|能否|宠物|吸烟|取消|"
-        r"policy|allow|pet|smoking|cancel",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"时间|几点|多久|入住|退房|寄存|"
-        r"time|check.?in|check.?out|luggage",
-        re.IGNORECASE,
-    ),
-    re.compile(r"地址|位置|距离|address|location|distance", re.IGNORECASE),
-)
 
 
 class FaqDraftUnavailableError(RuntimeError):
@@ -91,7 +66,6 @@ class DeepSeekFaqDrafter:
         *,
         canonical_question: str,
         category: str,
-        approved_knowledge: list[dict[str, str]],
     ) -> None:
         """拒绝链接和没有待确认占位的未核实专属事实。"""
         serialized = json.dumps(draft.model_dump(), ensure_ascii=False)
@@ -102,11 +76,10 @@ class DeepSeekFaqDrafter:
             and _ADMIN_CONFIRMATION_PLACEHOLDER not in draft.answer_zh
         ):
             raise FaqDraftUnavailableError()
-        if cls._property_fact_is_ungrounded(
+        if cls._is_property_specific_draft(
             draft,
             canonical_question=canonical_question,
             category=category,
-            approved_knowledge=approved_knowledge,
         ) and (
             not draft.verification_items
             or _ADMIN_CONFIRMATION_PLACEHOLDER not in draft.answer_zh
@@ -114,34 +87,13 @@ class DeepSeekFaqDrafter:
             raise FaqDraftUnavailableError()
 
     @staticmethod
-    def _knowledge_corpus(
-        approved_knowledge: list[dict[str, str]],
-    ) -> str:
-        """合并审核知识字段，供确定性主题覆盖检查使用。"""
-        return "\n".join(
-            str(value)
-            for item in approved_knowledge
-            for key, value in item.items()
-            if key
-            in {
-                "category",
-                "question_zh",
-                "answer_zh",
-                "question_en",
-                "answer_en",
-            }
-        )
-
-    @classmethod
-    def _property_fact_is_ungrounded(
-        cls,
+    def _is_property_specific_draft(
         draft: FaqDraft,
         *,
         canonical_question: str,
         category: str,
-        approved_knowledge: list[dict[str, str]],
     ) -> bool:
-        """专属事实涉及的每个主题都必须在审核知识中有明确文本依据。"""
+        """判断草稿是否涉及必须由管理员最终确认的民宿专属事实。"""
         subject = "\n".join(
             (
                 canonical_question,
@@ -152,18 +104,7 @@ class DeepSeekFaqDrafter:
                 draft.answer_en,
             )
         )
-        if _PROPERTY_SPECIFIC_PATTERN.search(subject) is None:
-            return False
-        relevant_patterns = [
-            pattern
-            for pattern in _PROPERTY_TOPIC_PATTERNS
-            if pattern.search(subject) is not None
-        ]
-        corpus = cls._knowledge_corpus(approved_knowledge)
-        if not relevant_patterns:
-            # 无法确定具体主题时采取保守边界，只允许管理员确认后采用。
-            return True
-        return any(pattern.search(corpus) is None for pattern in relevant_patterns)
+        return _PROPERTY_SPECIFIC_PATTERN.search(subject) is not None
 
     async def generate(
         self,
@@ -177,9 +118,10 @@ class DeepSeekFaqDrafter:
         system_prompt = (
             "你是武汉一家7间房民宿的FAQ编辑，只为管理员生成参考草稿。"
             "不得参考其他民宿、行业惯例或常识推测本店事实。"
-            "审核知识没有确认的停车数量、收费、时间、设施或政策等事实，"
-            "必须在中文答案对应位置写“【待管理员确认】”，并列入"
-            "verification_items。生成完整中英文问答，但不得输出网址、"
+            "凡涉及本店停车数量、收费、时间、设施或政策等专属事实，"
+            "即使审核知识中出现相似内容，也必须在中文答案对应位置写"
+            "“【待管理员确认】”，并列入verification_items，由管理员"
+            "最终确认。生成完整中英文问答，但不得输出网址、"
             "Markdown链接或客人身份。草稿不会直接回复客人。"
             "只输出JSON，字段为category、question_zh、answer_zh、"
             "question_en、answer_en、keywords、verification_items。"
@@ -210,7 +152,6 @@ class DeepSeekFaqDrafter:
                 draft,
                 canonical_question=canonical_question,
                 category=category,
-                approved_knowledge=approved_knowledge,
             )
             return draft
         except FaqDraftUnavailableError:
