@@ -3,10 +3,10 @@ import contextlib
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -26,6 +26,7 @@ from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
     HostexReadOnlyToolExecutor,
 )
+from homestay_bot.integrations.deepseek_faq_drafter import DeepSeekFaqDrafter
 from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
 from homestay_bot.integrations.hostex_client import HostexClient
 from homestay_bot.integrations.tourism import WebSearchState
@@ -42,6 +43,9 @@ from homestay_bot.repositories.conversations import (
     SQLAlchemyMessageRepository,
 )
 from homestay_bot.repositories.employees import SQLAlchemyEmployeeRepository
+from homestay_bot.repositories.faq_candidates import (
+    SQLAlchemyFaqCandidateRepository,
+)
 from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
 from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
 from homestay_bot.routes.employee_auth import EmployeeAuthService
@@ -53,9 +57,15 @@ from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
+from homestay_bot.services.faq_candidate_context import (
+    FaqCandidateContextService,
+)
+from homestay_bot.services.faq_candidate_service import FrequentFaqService
+from homestay_bot.services.faq_draft_job import FaqDraftJobService
 from homestay_bot.services.knowledge_service import KnowledgeService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
 from homestay_bot.worker import (
+    JobHandler,
     RetrySafeJobError,
     WeComMessagePoller,
     WeComSyncJobHandler,
@@ -169,6 +179,27 @@ class SessionKnowledgeRepository:
         """读取启用知识并在返回前关闭会话。"""
         async with self._factory() as session:
             return await SQLAlchemyKnowledgeRepository(session).list_active()
+
+
+class SessionFaqCandidateRepository:
+    """用独立短会话读取模型可匹配的 FAQ 候选目录。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def list_context(
+        self,
+        *,
+        now: datetime,
+    ) -> list[Any]:
+        """读取最多五十条开放候选，并提交关闭期满的重开状态。"""
+        async with self._factory() as session:
+            candidates = await SQLAlchemyFaqCandidateRepository(
+                session
+            ).list_context(now=now)
+            await session.commit()
+            return candidates
 
 
 class SessionEmployeeAuthService:
@@ -302,6 +333,47 @@ class SessionKnowledgeAdminService:
         async with self._factory() as session:
             await KnowledgeAdminService(session).set_enabled(entry_id, employee_id, enabled)
 
+    async def list_candidates(self) -> list[Any]:
+        """返回管理员可审核的高频 FAQ 候选。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).list_candidates()
+
+    async def convert_candidate(
+        self,
+        candidate_id: int,
+        employee_id: int,
+        **fields: Any,
+    ) -> Any:
+        """在独立会话中把管理员修改后的候选转为正式知识。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).convert_candidate(
+                candidate_id,
+                employee_id,
+                **fields,
+            )
+
+    async def snooze_candidate(
+        self,
+        candidate_id: int,
+        employee_id: int,
+    ) -> None:
+        """在独立会话中关闭候选三十天。"""
+        async with self._factory() as session:
+            await KnowledgeAdminService(session).snooze_candidate(
+                candidate_id,
+                employee_id,
+            )
+
+
+def _register_faq_draft_handler(
+    handlers: dict[str, JobHandler],
+    session: AsyncSession,
+    factory: Callable[[AsyncSession], JobHandler] | None,
+) -> None:
+    """为当前 worker 事务按需注册 FAQ 草稿处理器。"""
+    if factory is not None:
+        handlers["faq_draft_generate"] = factory(session)
+
 
 async def _run_worker_loop(
     app: FastAPI,
@@ -309,6 +381,9 @@ async def _run_worker_loop(
     factory: async_sessionmaker[AsyncSession],
     handler: WeComSyncJobHandler,
     wecom: WeComApiClient,
+    faq_draft_handler_factory: (
+        Callable[[AsyncSession], JobHandler] | None
+    ) = None,
 ) -> None:
     """持续处理持久化任务，并周期恢复五分钟前的遗留锁。"""
     while True:
@@ -355,13 +430,19 @@ async def _run_worker_loop(
                             raise RetrySafeJobError("企业微信明确限流") from error
                         raise
 
+                handlers: dict[str, JobHandler] = {
+                    "wecom_sync": handler,
+                    "wecom_send_text": send_guest,
+                    "wecom_send_internal_text": send_internal,
+                }
+                _register_faq_draft_handler(
+                    handlers,
+                    session,
+                    faq_draft_handler_factory,
+                )
                 worker = Worker(
                     repository=repository,
-                    handlers={
-                        "wecom_sync": handler,
-                        "wecom_send_text": send_guest,
-                        "wecom_send_internal_text": send_internal,
-                    },
+                    handlers=handlers,
                     heartbeat=lambda value: setattr(app.state, "worker_last_heartbeat", value),
                     checkpoint=session.commit,
                 )
@@ -449,6 +530,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     queue = DurableJobQueue(factory)
     knowledge = KnowledgeService(SessionKnowledgeRepository(factory))
+    faq_candidate_context = FaqCandidateContextService(
+        SessionFaqCandidateRepository(factory)
+    )
     web_search_state = WebSearchState()
     tourism_searcher = DeepSeekTourismSearcher(
         client=deepseek_anthropic,
@@ -462,12 +546,18 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         model=settings.deepseek_model,
         safety_hmac_key=settings.session_secret.encode(),
         tool_executor=HostexReadOnlyToolExecutor(hostex),
+        faq_candidate_context=faq_candidate_context,
+    )
+    faq_drafter = DeepSeekFaqDrafter(
+        client=deepseek_chat,
+        model=settings.deepseek_model,
     )
     duty_userids = [item.strip() for item in settings.wecom_duty_userids.split(",") if item.strip()]
 
     async def handle_message(message: IncomingMessage) -> None:
         """在独立事务中处理一条已转换的企业微信消息。"""
         async with factory() as session:
+            faq_candidates = SQLAlchemyFaqCandidateRepository(session)
             service = ConversationService(
                 conversations=SQLAlchemyConversationRepository(session),
                 messages=MessageService(SQLAlchemyMessageRepository(session)),
@@ -481,6 +571,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 duty_employee_userids=duty_userids,
                 approvals=ApprovalService(SQLAlchemyApprovalRepository(session)),
                 approval_base_url=settings.public_base_url,
+                frequent_faq=FrequentFaqService(
+                    candidates=faq_candidates,
+                    jobs=SQLAlchemyJobRepository(session),
+                    savepoint_factory=session.begin_nested,
+                ),
             )
             await service.handle_message(message)
             await session.commit()
@@ -491,6 +586,39 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         enqueue=queue.enqueue,
     )
     poller = WeComMessagePoller(api=wecom, handler=sync_handler)
+
+    def build_faq_draft_handler(session: AsyncSession) -> JobHandler:
+        """为当前 worker 会话创建可原子保存草稿和通知的处理器。"""
+
+        async def handle_faq_draft(payload: dict[str, Any]) -> None:
+            """按候选代次生成草稿，并把管理员通知写入同一事务。"""
+            candidate_id = int(payload["candidate_id"])
+            generation = int(payload["generation"])
+            service = FaqDraftJobService(
+                candidates=SQLAlchemyFaqCandidateRepository(session),
+                drafter=faq_drafter,
+                knowledge=KnowledgeService(
+                    cast(
+                        Any,
+                        SQLAlchemyKnowledgeRepository(session),
+                    )
+                ),
+                administrators=SQLAlchemyEmployeeRepository(session),
+                notifications=TransactionalOutboxWeCom(
+                    session,
+                    source_message_id=(
+                        f"faq-draft:{candidate_id}:{generation}"
+                    ),
+                ),
+                agent_id=settings.wecom_agent_id,
+                knowledge_admin_url=(
+                    f"{settings.public_base_url.rstrip('/')}"
+                    "/employee/knowledge"
+                ),
+            )
+            await service.handle(payload)
+
+        return handle_faq_draft
 
     async def database_probe() -> bool:
         """执行无副作用 SELECT 1 检查数据库连接。"""
@@ -541,6 +669,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             factory=factory,
             handler=sync_handler,
             wecom=wecom,
+            faq_draft_handler_factory=build_faq_draft_handler,
         )
     )
     poll_task = asyncio.create_task(

@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 from homestay_bot.config import Settings
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+from homestay_bot.integrations.deepseek_faq_drafter import DeepSeekFaqDrafter
 from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
 
@@ -209,3 +210,30 @@ async def test_recent_wuhan_events_are_anchored_to_current_window() -> None:
     assert "2026" in decision.reply_text
     assert "2025" not in decision.reply_text
     assert "参考来源：" in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_faq_draft_marks_unknown_property_fact_for_admin_review() -> None:
+    """真实 FAQ 草稿不得猜测本店停车事实，必须交给管理员核实。"""
+    settings = Settings()  # type: ignore[call-arg]
+    chat = AsyncOpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+    )
+    try:
+        draft = await DeepSeekFaqDrafter(
+            client=chat,
+            model=settings.deepseek_model,
+        ).generate(
+            canonical_question="民宿是否提供免费停车位？",
+            category="交通",
+            examples=["有停车位吗？", "停车收费吗？"],
+            approved_knowledge=[],
+        )
+    finally:
+        await chat.close()
+
+    assert "【待管理员确认】" in draft.answer_zh
+    assert draft.verification_items
+    assert "http://" not in draft.model_dump_json()
+    assert "https://" not in draft.model_dump_json()

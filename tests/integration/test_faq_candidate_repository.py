@@ -61,7 +61,7 @@ async def test_candidate_creation_is_idempotent_and_context_excludes_inactive(
 async def test_occurrences_are_idempotent_counted_in_window_and_keep_three_examples(
     repository,
 ) -> None:
-    """来源消息只能计数一次，窗口统计含边界且示例最多保存三条。"""
+    """来源消息只能计数一次，窗口统计含边界且保留最近三条示例。"""
     candidates, session = repository
     now = datetime(2026, 7, 30, 4, tzinfo=UTC)
     candidate = await candidates.get_or_create(
@@ -97,11 +97,11 @@ async def test_occurrences_are_idempotent_counted_in_window_and_keep_three_examp
     assert refreshed is not None
     assert refreshed.total_occurrences == 5
     assert refreshed.examples == [
-        "参考问法 1",
-        "参考问法 2",
         "参考问法 3",
+        "参考问法 4",
+        "参考问法 5",
     ]
-    assert refreshed.examples_version == 3
+    assert refreshed.examples_version == 5
 
 
 @pytest.mark.asyncio

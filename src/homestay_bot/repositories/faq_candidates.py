@@ -109,12 +109,9 @@ class SQLAlchemyFaqCandidateRepository:
         if candidate.last_seen_at is None or occurred_at > candidate.last_seen_at:
             candidate.last_seen_at = occurred_at
         clean_example = example.strip() if example else ""
-        if (
-            clean_example
-            and clean_example not in candidate.examples
-            and len(candidate.examples) < 3
-        ):
-            candidate.examples = [*candidate.examples, clean_example]
+        if clean_example and clean_example not in candidate.examples:
+            # 保留最近三条不同问法，让后续提醒能用新表达刷新参考草稿。
+            candidate.examples = [*candidate.examples, clean_example][-3:]
             candidate.examples_version += 1
         await self._session.flush()
         return True
