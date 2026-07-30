@@ -977,12 +977,22 @@ Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_task_routes.py t
 
 Expected: PASS；越权请求均为403且无敏感正文。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add migrations/versions/0006_employee_roles.py src/homestay_bot/routes/tasks.py src/homestay_bot/services/task_page_service.py src/homestay_bot/templates/tasks/index.html src/homestay_bot/templates/tasks/detail.html src/homestay_bot/domain/enums.py src/homestay_bot/routes/employee_auth.py src/homestay_bot/main.py src/homestay_bot/application.py src/homestay_bot/static/app.css tests/integration/test_task_routes.py tests/unit/test_task_page_service.py tests/integration/test_approval_routes.py tests/integration/test_knowledge_routes.py
 git commit -m "feat: add employee mobile task center"
 ```
+
+**Review（Task 7）**
+
+- 已提交 `81e0308 feat: add employee mobile task center`。
+- 员工角色已收敛为 `ADMIN` 与 `STAFF`；历史非管理员角色可迁移、降级和再次升级。
+- 管理员可查看全部任务、分派和取消；员工只可查看并推进自己的任务。
+- 分派严格经过待确认、待分派、已分派状态，全部写入不含任务正文的审计。
+- 任务页使用一次性 CSRF，越权任务编号返回 403，手机号和详细地址会脱敏。
+- 预订审批仅管理员可见和确认；知识管理与客户合并继续保持管理员写权限。
+- 验证：266 passed，10 skipped；Ruff、mypy、`git diff --check` 均通过。
 
 ### Task 8：私有附件、检查清单与执行员工标记可入住
 
