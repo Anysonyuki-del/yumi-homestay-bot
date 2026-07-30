@@ -44,6 +44,51 @@ class CustomerMergeStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class BusinessTaskType(StrEnum):
+    """定义一期允许进入任务中心的业务事项。"""
+
+    CLEANING = "cleaning"
+    MAINTENANCE = "maintenance"
+    SUPPLIES = "supplies"
+    SPECIAL_SERVICE = "special_service"
+    EARLY_CHECK_IN = "early_check_in"
+    LATE_CHECK_OUT = "late_check_out"
+    MANUAL_CONTACT = "manual_contact"
+
+
+class BusinessTaskStatus(StrEnum):
+    """定义业务任务从建议到完成的受控状态。"""
+
+    PENDING_CONFIRMATION = "pending_confirmation"
+    PENDING_ASSIGNMENT = "pending_assignment"
+    ASSIGNED = "assigned"
+    IN_PROGRESS = "in_progress"
+    PENDING_INSPECTION = "pending_inspection"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class RoomOperationalStatus(StrEnum):
+    """定义房间保洁、检查、入住和维修状态。"""
+
+    NOT_STARTED = "not_started"
+    CLEANING = "cleaning"
+    PENDING_INSPECTION = "pending_inspection"
+    READY = "ready"
+    OCCUPIED = "occupied"
+    MAINTENANCE = "maintenance"
+
+
+class CredentialDeliveryStatus(StrEnum):
+    """定义入住凭证整体或单个部件的投递状态。"""
+
+    PENDING = "pending"
+    SENT = "sent"
+    NEEDS_REVIEW = "needs_review"
+    MANUAL_FOLLOWUP = "manual_followup"
+    CANCELLED = "cancelled"
+
+
 class Language(StrEnum):
     """定义机器人第一期支持的语言。"""
 

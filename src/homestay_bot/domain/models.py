@@ -22,7 +22,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from homestay_bot.domain.enums import (
     ApprovalStatus,
+    BusinessTaskStatus,
+    BusinessTaskType,
     ConversationMode,
+    CredentialDeliveryStatus,
     CustomerIdentityProvider,
     CustomerMergeStatus,
     EmployeeRole,
@@ -31,6 +34,7 @@ from homestay_bot.domain.enums import (
     KnowledgeCandidateStatus,
     Language,
     MessageOrigin,
+    RoomOperationalStatus,
 )
 
 
@@ -448,3 +452,189 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class HostexWebhookEvent(TimestampMixin, Base):
+    """保存百居易 Webhook 的幂等事件和最小处理状态。"""
+
+    __tablename__ = "hostex_webhook_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    reservation_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class PropertyProfile(TimestampMixin, Base):
+    """保存百居易物理房间和 YuMi 运营配置。"""
+
+    __tablename__ = "property_profiles"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    room_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    district: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    address_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parking_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class StayOrder(TimestampMixin, Base):
+    """保存从百居易同步的入住订单关键事实。"""
+
+    __tablename__ = "stay_orders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    hostex_reservation_code: Mapped[str] = mapped_column(
+        String(128), unique=True, nullable=False
+    )
+    stay_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id"), nullable=True, index=True
+    )
+    property_id: Mapped[int] = mapped_column(
+        ForeignKey("property_profiles.id"), nullable=False, index=True
+    )
+    check_in_date: Mapped[date] = mapped_column(Date, nullable=False)
+    check_out_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    last_hostex_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class RoomOperationalState(TimestampMixin, Base):
+    """保存每个物理房间唯一的当前运营状态。"""
+
+    __tablename__ = "room_operational_states"
+
+    property_id: Mapped[int] = mapped_column(
+        ForeignKey("property_profiles.id"), primary_key=True
+    )
+    status: Mapped[RoomOperationalStatus] = mapped_column(
+        Enum(RoomOperationalStatus, native_enum=False, length=32),
+        default=RoomOperationalStatus.NOT_STARTED,
+        nullable=False,
+    )
+    changed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), nullable=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class BusinessTask(TimestampMixin, Base):
+    """保存保洁、维修、补给和特殊服务等运营任务。"""
+
+    __tablename__ = "business_tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dedupe_key: Mapped[str | None] = mapped_column(
+        String(160), unique=True, nullable=True
+    )
+    source_message_id: Mapped[str | None] = mapped_column(
+        String(128), unique=True, nullable=True
+    )
+    task_type: Mapped[BusinessTaskType] = mapped_column(
+        Enum(BusinessTaskType, native_enum=False, length=32), nullable=False
+    )
+    status: Mapped[BusinessTaskStatus] = mapped_column(
+        Enum(BusinessTaskStatus, native_enum=False, length=32), nullable=False
+    )
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id"), nullable=True, index=True
+    )
+    order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("stay_orders.id"), nullable=True, index=True
+    )
+    property_id: Mapped[int] = mapped_column(
+        ForeignKey("property_profiles.id"), nullable=False, index=True
+    )
+    service_date: Mapped[date] = mapped_column(Date, nullable=False)
+    assigned_employee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), nullable=True
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    checklist: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class TaskAttachment(TimestampMixin, Base):
+    """保存任务私有照片或文件的引用，不保存公网地址。"""
+
+    __tablename__ = "task_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("business_tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    private_file_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    uploaded_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), nullable=True
+    )
+
+
+class RoomCredential(TimestampMixin, Base):
+    """保存房间入住指南、密码密文和私有二维码引用。"""
+
+    __tablename__ = "room_credentials"
+    __table_args__ = (
+        UniqueConstraint("property_id", "version", name="uq_room_credential_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    property_id: Mapped[int] = mapped_column(
+        ForeignKey("property_profiles.id"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    password_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    guide_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    qr_file_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class CredentialDelivery(TimestampMixin, Base):
+    """保存一笔订单使用某版凭证的整体投递状态。"""
+
+    __tablename__ = "credential_deliveries"
+    __table_args__ = (
+        UniqueConstraint("order_id", "credential_id", name="uq_credential_delivery"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("stay_orders.id"), nullable=False)
+    credential_id: Mapped[int] = mapped_column(
+        ForeignKey("room_credentials.id"), nullable=False
+    )
+    status: Mapped[CredentialDeliveryStatus] = mapped_column(
+        Enum(CredentialDeliveryStatus, native_enum=False, length=32),
+        default=CredentialDeliveryStatus.PENDING,
+        nullable=False,
+    )
+
+
+class CredentialDeliveryPart(TimestampMixin, Base):
+    """保存指南、密码和二维码各自独立的幂等发送结果。"""
+
+    __tablename__ = "credential_delivery_parts"
+    __table_args__ = (
+        UniqueConstraint("delivery_id", "part_type", name="uq_delivery_part_type"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    delivery_id: Mapped[int] = mapped_column(
+        ForeignKey("credential_deliveries.id", ondelete="CASCADE"), nullable=False
+    )
+    part_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[CredentialDeliveryStatus] = mapped_column(
+        Enum(CredentialDeliveryStatus, native_enum=False, length=32),
+        default=CredentialDeliveryStatus.PENDING,
+        nullable=False,
+    )
+    external_message_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

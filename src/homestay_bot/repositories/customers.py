@@ -11,12 +11,14 @@ from homestay_bot.domain.enums import (
 )
 from homestay_bot.domain.models import (
     AuditLog,
+    BusinessTask,
     Conversation,
     Customer,
     CustomerIdentity,
     CustomerMergeSuggestion,
     CustomerTagLink,
     Employee,
+    StayOrder,
 )
 
 
@@ -150,6 +152,16 @@ class SQLAlchemyCustomerRepository:
         await self._session.execute(
             update(Conversation)
             .where(Conversation.customer_id == source.id)
+            .values(customer_id=target.id)
+        )
+        await self._session.execute(
+            update(StayOrder)
+            .where(StayOrder.customer_id == source.id)
+            .values(customer_id=target.id)
+        )
+        await self._session.execute(
+            update(BusinessTask)
+            .where(BusinessTask.customer_id == source.id)
             .values(customer_id=target.id)
         )
         await self._merge_tag_links(source.id, target.id)

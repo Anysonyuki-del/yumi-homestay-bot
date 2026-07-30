@@ -2,15 +2,24 @@ from sqlalchemy import CheckConstraint, UniqueConstraint
 
 from homestay_bot.domain.enums import (
     ApprovalStatus,
+    BusinessTaskStatus,
+    BusinessTaskType,
     ConversationMode,
+    CredentialDeliveryStatus,
     CustomerIdentityProvider,
     CustomerMergeStatus,
+    RoomOperationalStatus,
 )
 from homestay_bot.domain.models import (
     BookingApproval,
+    BusinessTask,
+    CredentialDeliveryPart,
     CustomerIdentity,
     CustomerMergeSuggestion,
+    HostexWebhookEvent,
     Message,
+    RoomOperationalState,
+    StayOrder,
 )
 
 
@@ -25,6 +34,10 @@ def test_domain_status_values_are_stable() -> None:
     assert CustomerIdentityProvider.WECOM_KF.value == "wecom_kf"
     assert CustomerIdentityProvider.HOSTEX.value == "hostex"
     assert CustomerMergeStatus.PENDING.value == "pending"
+    assert BusinessTaskType.CLEANING.value == "cleaning"
+    assert BusinessTaskStatus.PENDING_CONFIRMATION.value == "pending_confirmation"
+    assert RoomOperationalStatus.READY.value == "ready"
+    assert CredentialDeliveryStatus.NEEDS_REVIEW.value == "needs_review"
 
 
 def test_booking_approval_has_idempotency_constraints() -> None:
@@ -64,3 +77,19 @@ def test_customer_merge_rejects_self_merge_in_database() -> None:
     }
 
     assert "ck_customer_merge_distinct" in check_names
+
+
+def test_operations_models_define_required_unique_keys() -> None:
+    """外部事件、订单、任务、房态和投递部件必须具备数据库幂等键。"""
+    assert HostexWebhookEvent.__table__.c.event_key.unique is True
+    assert StayOrder.__table__.c.hostex_reservation_code.unique is True
+    assert BusinessTask.__table__.c.dedupe_key.unique is True
+    assert BusinessTask.__table__.c.source_message_id.unique is True
+    assert RoomOperationalState.__table__.c.property_id.primary_key is True
+
+    part_unique_columns = {
+        tuple(constraint.columns.keys())
+        for constraint in CredentialDeliveryPart.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert ("delivery_id", "part_type") in part_unique_columns

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from cryptography.fernet import Fernet
@@ -7,6 +7,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    BusinessTaskType,
     CustomerIdentityProvider,
     CustomerMergeStatus,
     EmployeeRole,
@@ -15,6 +17,7 @@ from homestay_bot.domain.enums import (
 from homestay_bot.domain.models import (
     AuditLog,
     Base,
+    BusinessTask,
     Conversation,
     Customer,
     CustomerIdentity,
@@ -22,6 +25,8 @@ from homestay_bot.domain.models import (
     CustomerTag,
     CustomerTagLink,
     Employee,
+    PropertyProfile,
+    StayOrder,
 )
 from homestay_bot.repositories.customers import SQLAlchemyCustomerRepository
 from homestay_bot.services.customer_service import CustomerService
@@ -203,6 +208,7 @@ async def test_confirm_merge_moves_existing_links_and_writes_safe_audit() -> Non
             open_kfid="wk-1",
             external_userid="wm-source",
         )
+        property_profile = PropertyProfile(id=101, title="测试房间")
         session.add_all(
             [
                 administrator,
@@ -213,8 +219,29 @@ async def test_confirm_merge_moves_existing_links_and_writes_safe_audit() -> Non
                 tag,
                 source_tag,
                 conversation,
+                property_profile,
             ]
         )
+        await session.flush()
+        order = StayOrder(
+            hostex_reservation_code="R-MERGE",
+            stay_code="S-MERGE",
+            customer_id=source.id,
+            property_id=property_profile.id,
+            check_in_date=date(2026, 8, 1),
+            check_out_date=date(2026, 8, 2),
+            status="confirmed",
+        )
+        task = BusinessTask(
+            dedupe_key="manual:merge-test",
+            task_type=BusinessTaskType.SUPPLIES,
+            status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+            customer_id=source.id,
+            property_id=property_profile.id,
+            service_date=date(2026, 8, 1),
+            description="补矿泉水",
+        )
+        session.add_all([order, task])
         await session.flush()
         suggestion = CustomerMergeSuggestion(
             source_customer_id=source.id,
@@ -234,6 +261,8 @@ async def test_confirm_merge_moves_existing_links_and_writes_safe_audit() -> Non
         await session.refresh(source)
         await session.refresh(conversation)
         await session.refresh(suggestion)
+        await session.refresh(order)
+        await session.refresh(task)
         identities = list(
             (
                 await session.scalars(
@@ -266,6 +295,8 @@ async def test_confirm_merge_moves_existing_links_and_writes_safe_audit() -> Non
         assert [link.tag_id for link in links] == [tag.id]
         assert suggestion.status is CustomerMergeStatus.ACCEPTED
         assert suggestion.reviewed_by == administrator.id
+        assert order.customer_id == target.id
+        assert task.customer_id == target.id
         assert audit is not None
         assert audit.details == {
             "source_customer_id": source.id,

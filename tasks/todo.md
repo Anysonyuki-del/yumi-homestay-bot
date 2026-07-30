@@ -671,7 +671,7 @@ git commit -m "feat: retain seven day customer context"
 - Test: `tests/integration/test_customer_repository.py`
 - Test: `tests/unit/test_models.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 async def test_turnover_task_dedupe_key_is_unique():
@@ -686,13 +686,13 @@ async def test_turnover_task_dedupe_key_is_unique():
 
 同时覆盖订单代码唯一、任务来源消息唯一、附件归属、房间状态唯一、凭证投递部件唯一和 Webhook 事件幂等；并验证管理员确认客户合并时，已有订单和业务任务的 `customer_id` 在同一事务迁移到目标客户。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_operations_repository.py tests/unit/test_models.py`
 
 Expected: FAIL，提示运营模型不存在。
 
-- [ ] **Step 3：创建模型和迁移**
+- [x] **Step 3：创建模型和迁移**
 
 新增枚举 `BusinessTaskType`、`BusinessTaskStatus`、`RoomOperationalStatus`、`CredentialDeliveryStatus`；`BusinessTaskType` 除六种客人服务任务外包含仅由系统创建的 `MANUAL_CONTACT`。新增模型：
 
@@ -714,13 +714,13 @@ CredentialDeliveryPart
 
 扩展 `SQLAlchemyCustomerRepository.merge_locked()`：锁定合并建议和两个客户后，除 Task 2 已处理的身份、会话和标签外，把 `StayOrder.customer_id` 与 `BusinessTask.customer_id` 一并迁移到目标客户；任何唯一冲突或写入失败都回滚整个合并事务。
 
-- [ ] **Step 4：验证迁移和约束**
+- [x] **Step 4：验证迁移和约束**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_operations_repository.py tests/unit/test_models.py tests/unit/test_db.py`
 
 Expected: PASS；迁移升级、降级、再升级成功。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add migrations/versions/0005_operations.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py src/homestay_bot/repositories/operations.py src/homestay_bot/repositories/customers.py src/homestay_bot/services/customer_service.py tests/integration/test_operations_repository.py tests/integration/test_customer_repository.py tests/unit/test_models.py
