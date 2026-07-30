@@ -587,10 +587,12 @@ git commit -m "feat: create customer profiles from conversations"
 - Create: `src/homestay_bot/repositories/context.py`
 - Modify: `src/homestay_bot/domain/models.py`
 - Modify: `src/homestay_bot/services/message_service.py`
+- Modify: `src/homestay_bot/services/conversation_service.py`
 - Modify: `src/homestay_bot/integrations/deepseek_client.py`
 - Modify: `src/homestay_bot/application.py`
 - Test: `tests/unit/test_context_retention.py`
 - Test: `tests/integration/test_message_flow.py`
+- Test: `tests/unit/test_conversation_service.py`
 - Test: `tests/unit/test_deepseek_client.py`
 
 - [ ] **Step 1：先写失败测试**
@@ -641,18 +643,18 @@ class ContextRetentionService:
         )
 ```
 
-`DeepSeekContextSummarizer` 只接收脱敏文本，结构化返回 `summary` 和 `unresolved_items`；本地再次检查手机号、身份证、地址、密码和二维码特征。`DeepSeekGuestAssistant.respond()` 增加 `customer_context` 参数，把摘要、订单和任务写入系统提示，最近原文仍保持最多三条。
+`DeepSeekContextSummarizer` 只接收脱敏文本，结构化返回 `summary` 和 `unresolved_items`；本地再次检查手机号、身份证、地址、密码和二维码特征。`ConversationService` 在调用助手前按当前 `customer_id` 读取 `CustomerModelContext`；`DeepSeekGuestAssistant.respond()` 增加可选 `customer_context` 参数，把客户摘要写入系统提示，最近原文仍保持最多三条。订单和任务尚未建表，由 Task 6 在模型与任务状态机接通时扩展同一上下文，避免本任务依赖未来模型。
 
 - [ ] **Step 4：注册每小时维护任务并验证**
 
-Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_deepseek_client.py tests/unit/test_application.py`
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_conversation_service.py tests/unit/test_deepseek_client.py tests/unit/test_application.py`
 
 Expected: PASS；两个客户并行维护不串数据。
 
 - [ ] **Step 5：提交**
 
 ```bash
-git add migrations/versions/0004_customer_context.py src/homestay_bot/domain/models.py src/homestay_bot/integrations/deepseek_context_summarizer.py src/homestay_bot/services/context_retention.py src/homestay_bot/repositories/context.py src/homestay_bot/services/message_service.py src/homestay_bot/integrations/deepseek_client.py src/homestay_bot/application.py tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_deepseek_client.py
+git add migrations/versions/0004_customer_context.py src/homestay_bot/domain/models.py src/homestay_bot/integrations/deepseek_context_summarizer.py src/homestay_bot/services/context_retention.py src/homestay_bot/repositories/context.py src/homestay_bot/services/message_service.py src/homestay_bot/services/conversation_service.py src/homestay_bot/integrations/deepseek_client.py src/homestay_bot/application.py tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_conversation_service.py tests/unit/test_deepseek_client.py
 git commit -m "feat: retain seven day customer context"
 ```
 
@@ -812,12 +814,14 @@ git commit -m "feat: sync hostex reservations and availability"
 - Modify: `src/homestay_bot/services/answer_policy.py`
 - Modify: `src/homestay_bot/integrations/deepseek_client.py`
 - Modify: `src/homestay_bot/services/conversation_service.py`
+- Modify: `src/homestay_bot/repositories/context.py`
 - Modify: `src/homestay_bot/services/hostex_sync.py`
 - Modify: `src/homestay_bot/repositories/operations.py`
 - Test: `tests/unit/test_business_task_service.py`
 - Test: `tests/unit/test_answer_policy.py`
 - Test: `tests/unit/test_deepseek_client.py`
 - Test: `tests/unit/test_conversation_service.py`
+- Test: `tests/unit/test_context_retention.py`
 - Test: `tests/unit/test_hostex_sync.py`
 
 - [ ] **Step 1：先写失败测试**
@@ -875,7 +879,7 @@ class BusinessTaskService:
         return await self._tasks.save_status(task, target)
 ```
 
-扩展 `AssistantDecision`，同一次 DeepSeek 响应返回可空 `task_suggestion`；本地只允许六种一期任务类型并清除敏感字段。`AnswerPolicy` 在本地执行确定性边界：民宿无关问题礼貌拒答，价格、退款、投诉、提前入住和激烈情绪只提供安抚与流程说明，不替 YuMi 作决定，并创建带会话摘要的接管通知。`ConversationService` 在客人回复成功后记录待确认任务，失败不得回滚回复；任务待确认时通知管理员，分派后只通知执行员工。把 `HostexSyncService` 的订单 upsert 成功事件接入 `create_turnover()`，以房源和服务日期幂等创建周转任务。每次状态变化和接管动作均写不含聊天正文的审计事件。
+扩展 `AssistantDecision`，同一次 DeepSeek 响应返回可空 `task_suggestion`；本地只允许六种一期任务类型并清除敏感字段。`AnswerPolicy` 在本地执行确定性边界：民宿无关问题礼貌拒答，价格、退款、投诉、提前入住和激烈情绪只提供安抚与流程说明，不替 YuMi 作决定，并创建带会话摘要的接管通知。`ConversationService` 在客人回复成功后记录待确认任务，失败不得回滚回复；任务待确认时通知管理员，分派后只通知执行员工。扩展 `ContextRepository.load_model_context()`，把当前客户的有效订单摘要和未完成任务摘要加入 Task 3 已建立的 `CustomerModelContext`，不得包含金额、完整手机号或入住凭证明文。把 `HostexSyncService` 的订单 upsert 成功事件接入 `create_turnover()`，以房源和服务日期幂等创建周转任务。每次状态变化和接管动作均写不含聊天正文的审计事件。
 
 - [ ] **Step 4：运行任务与会话测试**
 
@@ -886,7 +890,7 @@ Expected: PASS。
 - [ ] **Step 5：提交**
 
 ```bash
-git add src/homestay_bot/services/business_task_service.py src/homestay_bot/services/answer_policy.py src/homestay_bot/integrations/deepseek_client.py src/homestay_bot/services/conversation_service.py src/homestay_bot/services/hostex_sync.py src/homestay_bot/repositories/operations.py tests/unit/test_business_task_service.py tests/unit/test_answer_policy.py tests/unit/test_deepseek_client.py tests/unit/test_conversation_service.py tests/unit/test_hostex_sync.py
+git add src/homestay_bot/services/business_task_service.py src/homestay_bot/services/answer_policy.py src/homestay_bot/integrations/deepseek_client.py src/homestay_bot/services/conversation_service.py src/homestay_bot/services/hostex_sync.py src/homestay_bot/repositories/operations.py src/homestay_bot/repositories/context.py tests/unit/test_business_task_service.py tests/unit/test_answer_policy.py tests/unit/test_context_retention.py tests/unit/test_deepseek_client.py tests/unit/test_conversation_service.py tests/unit/test_hostex_sync.py
 git commit -m "feat: manage operational tasks"
 ```
 
