@@ -17,6 +17,76 @@ class StopFaqMaintenance(RuntimeError):
     """表示测试已观察到一次 FAQ 周期维护。"""
 
 
+class StopContextMaintenance(RuntimeError):
+    """表示测试已观察到一次客户上下文周期维护。"""
+
+
+@pytest.mark.asyncio
+async def test_context_maintenance_processes_customers_hourly(monkeypatch) -> None:
+    """应用应每小时维护有消息的客户摘要并提交成功结果。"""
+    session = SimpleNamespace(committed=False)
+    maintained: list[tuple[int, datetime]] = []
+
+    async def commit() -> None:
+        """记录维护事务已提交。"""
+        session.committed = True
+
+    session.commit = commit
+
+    class SessionContext:
+        """返回固定维护会话。"""
+
+        async def __aenter__(self):
+            """进入维护会话。"""
+            return session
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出维护会话。"""
+
+    class RepositoryStub:
+        """返回一个需要维护的正式客户。"""
+
+        def __init__(self, selected_session) -> None:
+            """验证仓储绑定维护会话。"""
+            assert selected_session is session
+
+        async def list_customer_ids_with_messages(self):
+            """返回固定客户主键。"""
+            return [7]
+
+    class ServiceStub:
+        """记录上下文维护调用。"""
+
+        def __init__(self, repository, summarizer) -> None:
+            """验证依赖已经装配。"""
+            assert isinstance(repository, RepositoryStub)
+            assert summarizer == "summarizer"
+
+        async def maintain_customer(self, customer_id: int, now: datetime) -> None:
+            """记录客户与统一维护时间。"""
+            maintained.append((customer_id, now))
+
+    async def stop_after_cycle(delay: float) -> None:
+        """验证一小时间隔并结束无限循环。"""
+        assert delay == 3600
+        raise StopContextMaintenance
+
+    now = datetime(2026, 7, 31, 8, tzinfo=UTC)
+    monkeypatch.setattr(application, "SQLAlchemyContextRepository", RepositoryStub)
+    monkeypatch.setattr(application, "ContextRetentionService", ServiceStub)
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
+
+    with pytest.raises(StopContextMaintenance):
+        await application._run_context_maintenance_loop(
+            factory=cast(Any, lambda: SessionContext()),
+            summarizer="summarizer",
+            now_provider=lambda: now,
+        )
+
+    assert maintained == [(7, now)]
+    assert session.committed is True
+
+
 @pytest.mark.asyncio
 async def test_faq_candidate_catalog_uses_short_session_and_commits_reopen(
     monkeypatch,

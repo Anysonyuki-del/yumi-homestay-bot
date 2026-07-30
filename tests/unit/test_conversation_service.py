@@ -14,6 +14,7 @@ from homestay_bot.integrations.tourism import (
     TourismSearchError,
     WebSearchStatus,
 )
+from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.message_service import IncomingMessage
@@ -86,6 +87,15 @@ class CustomerProfileStub:
         return self.customer
 
 
+class CustomerContextStub:
+    """返回固定脱敏客户摘要。"""
+
+    async def load_model_context(self, customer_id: int) -> CustomerModelContext:
+        """验证按正式客户主键读取摘要。"""
+        assert customer_id == 42
+        return CustomerModelContext("偏好安静", "曾入住", [])
+
+
 class AssistantStub:
     """返回固定客服决定并统计调用次数。"""
 
@@ -98,10 +108,12 @@ class AssistantStub:
         self.calls = 0
         self.handoff_reason = handoff_reason
         self.decision = decision
+        self.last_kwargs = None
 
     async def respond(self, **kwargs) -> AssistantDecision:
         """生成固定中文回复。"""
         self.calls += 1
+        self.last_kwargs = kwargs
         if self.decision is not None:
             return self.decision
         return AssistantDecision(
@@ -213,6 +225,7 @@ def build_service(
     approvals: ApprovalServiceStub | None = None,
     frequent_faq: FrequentFaqStub | None = None,
     customer_profiles: CustomerProfileStub | None = None,
+    customer_context: CustomerContextStub | None = None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
     """创建注入固定依赖的会话服务。"""
     conversations = ConversationRepositoryStub()
@@ -229,6 +242,7 @@ def build_service(
         approvals=approvals,
         frequent_faq=frequent_faq,
         customer_profiles=customer_profiles,
+        customer_context=customer_context,
     )
     return service, conversations, selected_assistant, wecom
 
@@ -244,6 +258,19 @@ async def test_first_message_links_formal_customer_before_recording() -> None:
 
     assert profiles.messages == [message]
     assert conversations.conversation.customer_id == profiles.customer.id
+
+
+@pytest.mark.asyncio
+async def test_customer_summary_is_passed_to_assistant() -> None:
+    """当前客户摘要必须随最近原文一起传给客服模型。"""
+    service, _, assistant, _ = build_service(
+        customer_profiles=CustomerProfileStub(),
+        customer_context=CustomerContextStub(),
+    )
+
+    await service.handle_message(incoming())
+
+    assert assistant.last_kwargs["customer_context"].short_summary == "偏好安静"
 
 
 @pytest.mark.asyncio

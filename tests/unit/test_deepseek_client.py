@@ -9,6 +9,7 @@ from homestay_bot.integrations.deepseek_client import (
     AssistantUnavailableError,
     DeepSeekGuestAssistant,
 )
+from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
 )
@@ -192,6 +193,39 @@ class ToolExecutorStub:
         """返回固定房态。"""
         self.calls.append((name, arguments))
         return {"available": True, "rooms": 1}
+
+
+@pytest.mark.asyncio
+async def test_customer_summary_is_added_without_raw_customer_identity() -> None:
+    """客服请求应携带脱敏客户摘要，不携带原始企业微信身份。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-sensitive-id",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "还是想要安静的房间"}],
+        customer_context=CustomerModelContext(
+            short_summary="偏好安静房间",
+            long_summary="曾经入住过",
+            unresolved_items=["停车方式待确认"],
+        ),
+    )
+
+    request_text = json.dumps(
+        client.chat.completions.requests[0],
+        ensure_ascii=False,
+    )
+    assert "偏好安静房间" in request_text
+    assert "曾经入住过" in request_text
+    assert "停车方式待确认" in request_text
+    assert "wm-sensitive-id" not in request_text
 
 
 @pytest.mark.asyncio

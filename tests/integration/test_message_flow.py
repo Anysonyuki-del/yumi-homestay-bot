@@ -4,7 +4,8 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import MessageOrigin
-from homestay_bot.domain.models import Base
+from homestay_bot.domain.models import Base, Conversation, Customer, Message
+from homestay_bot.repositories.context import SQLAlchemyContextRepository
 from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
     SQLAlchemyMessageRepository,
@@ -64,6 +65,66 @@ async def test_message_flow_creates_conversation_and_deduplicates_message() -> N
             )
             is True
         )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_context_candidates_are_isolated_and_keep_three_recent_raw_messages() -> None:
+    """摘要候选必须按客户隔离，并排除每位客户最近三条原文。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 31, 8, tzinfo=UTC)
+
+    async with factory() as session:
+        first_customer = Customer(display_name="客户一")
+        second_customer = Customer(display_name="客户二")
+        first_conversation = Conversation(
+            customer=first_customer,
+            open_kfid="wk-1",
+            external_userid="wm-1",
+        )
+        second_conversation = Conversation(
+            customer=second_customer,
+            open_kfid="wk-1",
+            external_userid="wm-2",
+        )
+        session.add_all([first_conversation, second_conversation])
+        await session.flush()
+        for index in range(5):
+            session.add(
+                Message(
+                    conversation_id=first_conversation.id,
+                    external_message_id=f"first-{index}",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content=f"客户一消息{index}",
+                    sent_at=now,
+                )
+            )
+        session.add(
+            Message(
+                conversation_id=second_conversation.id,
+                external_message_id="second-1",
+                origin=MessageOrigin.GUEST,
+                message_type="text",
+                content="客户二私有消息",
+                sent_at=now,
+            )
+        )
+        await session.commit()
+
+        candidates = await SQLAlchemyContextRepository(
+            session
+        ).list_short_candidates(first_customer.id, now, raw_limit=3)
+
+        assert [item.content for item in candidates] == [
+            "客户一消息0",
+            "客户一消息1",
+        ]
+        assert all("客户二" not in (item.content or "") for item in candidates)
 
     await engine.dispose()
 

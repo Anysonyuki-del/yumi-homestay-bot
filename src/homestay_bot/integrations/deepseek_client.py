@@ -17,6 +17,7 @@ from homestay_bot.services.answer_policy import (
     is_property_specific,
     is_transaction_sensitive,
 )
+from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
 )
@@ -610,6 +611,7 @@ class DeepSeekGuestAssistant:
         guest_identifier: str,
         language: Language,
         messages: list[dict[str, str]],
+        customer_context: CustomerModelContext | None = None,
     ) -> AssistantDecision:
         """调用 DeepSeek，并把连续失败收敛为统一领域异常。"""
         question_text = latest_user_question(messages)["content"]
@@ -636,6 +638,7 @@ class DeepSeekGuestAssistant:
         }
         tomorrow = local_today + timedelta(days=1)
         day_after = local_today + timedelta(days=2)
+        customer_context_payload = customer_context.__dict__ if customer_context else {}
         system_prompt = (
             "你是武汉一家7间房民宿的客服。请只输出 JSON，不要输出代码围栏。"
             "审核知识未覆盖普通常识时可以谨慎回答；民宿专属事实未确认时，"
@@ -654,6 +657,7 @@ class DeepSeekGuestAssistant:
             "“房源列表”“有哪些房型”等追问沿用该日期直接查询，不得重复追问。"
             f"审核知识：{json.dumps([item.__dict__ for item in knowledge], ensure_ascii=False)}"
             f"未关闭 FAQ 候选目录：{json.dumps(faq_candidates, ensure_ascii=False)}"
+            f"客户脱敏摘要：{json.dumps(customer_context_payload, ensure_ascii=False)}"
             f"输出结构：{json.dumps(assistant_decision_schema(), ensure_ascii=False)}"
         )
         minimized_messages = self._minimize_personal_data(messages)

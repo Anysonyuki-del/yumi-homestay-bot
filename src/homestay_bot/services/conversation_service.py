@@ -13,6 +13,7 @@ from homestay_bot.integrations.deepseek_client import (
     AssistantUnavailableError,
 )
 from homestay_bot.integrations.tourism import TourismSearchError
+from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.emergency_service import (
     EmergencyClassification,
     EmergencyService,
@@ -61,6 +62,7 @@ class GuestAssistantPort(Protocol):
         guest_identifier: str,
         language: Language,
         messages: list[dict[str, str]],
+        customer_context: CustomerModelContext | None = None,
     ) -> AssistantDecision:
         """返回经过结构校验的客服决定。"""
 
@@ -113,6 +115,13 @@ class CustomerProfilePort(Protocol):
         """幂等建立客户并返回正式主档。"""
 
 
+class CustomerContextPort(Protocol):
+    """定义按正式客户读取脱敏摘要的接口。"""
+
+    async def load_model_context(self, customer_id: int) -> CustomerModelContext:
+        """返回不含原文和敏感字段的客户摘要。"""
+
+
 class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
@@ -136,6 +145,7 @@ class ConversationService:
         approval_base_url: str = "",
         frequent_faq: FrequentFaqPort | None = None,
         customer_profiles: CustomerProfilePort | None = None,
+        customer_context: CustomerContextPort | None = None,
     ) -> None:
         """注入仓储、AI、安全分类器和企业微信发送端口。"""
         self._conversations = conversations
@@ -149,6 +159,7 @@ class ConversationService:
         self._approval_base_url = approval_base_url.rstrip("/")
         self._frequent_faq = frequent_faq
         self._customer_profiles = customer_profiles
+        self._customer_context = customer_context
 
     async def handle_message(self, message: IncomingMessage) -> None:
         """处理单条已去重消息，确保人工回复不会形成机器人回环。"""
@@ -189,10 +200,16 @@ class ConversationService:
             return
 
         try:
+            model_context = None
+            if self._customer_context is not None and conversation.customer_id is not None:
+                model_context = await self._customer_context.load_model_context(
+                    conversation.customer_id
+                )
             decision = await self._assistant.respond(
                 guest_identifier=message.external_userid,
                 language=conversation.language,
-                messages=await self._messages.build_context(conversation.id),
+                messages=await self._messages.build_context(conversation.id, limit=3),
+                customer_context=model_context,
             )
         except TourismSearchError as error:
             await self._escalate_tourism_failure(conversation, message, error)

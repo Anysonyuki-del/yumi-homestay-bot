@@ -187,6 +187,27 @@ class CustomerMergeSuggestion(TimestampMixin, Base):
     )
 
 
+class CustomerContextSummary(TimestampMixin, Base):
+    """保存客户七天内短摘要和七天外长期摘要。"""
+
+    __tablename__ = "customer_context_summaries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    short_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    long_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    unresolved_items: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    short_cutoff_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    long_cutoff_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class Conversation(TimestampMixin, Base):
     """保存一个微信客服账号与一个外部联系人的会话状态。"""
 
@@ -236,6 +257,12 @@ class Message(Base):
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    short_summarized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 

@@ -595,7 +595,7 @@ git commit -m "feat: create customer profiles from conversations"
 - Test: `tests/unit/test_conversation_service.py`
 - Test: `tests/unit/test_deepseek_client.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 async def test_messages_are_purged_only_after_long_summary_succeeds():
@@ -614,13 +614,13 @@ async def test_summary_failure_keeps_original_message():
 
 同时覆盖不同客户摘要隔离、最近一轮原文保留、七天内较早消息进入短期摘要、敏感字段拒绝、失败重试幂等。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_deepseek_client.py`
 
 Expected: FAIL，提示上下文摘要服务和字段不存在。
 
-- [ ] **Step 3：实现摘要模型与维护服务**
+- [x] **Step 3：实现摘要模型与维护服务**
 
 通过 `0004_customer_context.py` 新增 `CustomerContextSummary(short_summary, long_summary, short_cutoff_at, long_cutoff_at, version)`；给 `Message` 增加 `short_summarized_at` 和 `purged_at`，清理时保留消息 ID 但把正文置空以维持去重。
 
@@ -645,13 +645,13 @@ class ContextRetentionService:
 
 `DeepSeekContextSummarizer` 只接收脱敏文本，结构化返回 `summary` 和 `unresolved_items`；本地再次检查手机号、身份证、地址、密码和二维码特征。`ConversationService` 在调用助手前按当前 `customer_id` 读取 `CustomerModelContext`；`DeepSeekGuestAssistant.respond()` 增加可选 `customer_context` 参数，把客户摘要写入系统提示，最近原文仍保持最多三条。订单和任务尚未建表，由 Task 6 在模型与任务状态机接通时扩展同一上下文，避免本任务依赖未来模型。
 
-- [ ] **Step 4：注册每小时维护任务并验证**
+- [x] **Step 4：注册每小时维护任务并验证**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_conversation_service.py tests/unit/test_deepseek_client.py tests/unit/test_application.py`
 
 Expected: PASS；两个客户并行维护不串数据。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add migrations/versions/0004_customer_context.py src/homestay_bot/domain/models.py src/homestay_bot/integrations/deepseek_context_summarizer.py src/homestay_bot/services/context_retention.py src/homestay_bot/repositories/context.py src/homestay_bot/services/message_service.py src/homestay_bot/services/conversation_service.py src/homestay_bot/integrations/deepseek_client.py src/homestay_bot/application.py tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_conversation_service.py tests/unit/test_deepseek_client.py

@@ -26,6 +26,9 @@ from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
     HostexReadOnlyToolExecutor,
 )
+from homestay_bot.integrations.deepseek_context_summarizer import (
+    DeepSeekContextSummarizer,
+)
 from homestay_bot.integrations.deepseek_faq_drafter import DeepSeekFaqDrafter
 from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
 from homestay_bot.integrations.hostex_client import HostexClient
@@ -38,6 +41,7 @@ from homestay_bot.repositories.approvals import (
     SQLAlchemyApprovalRepository,
     SQLAlchemyPermissionChecker,
 )
+from homestay_bot.repositories.context import SQLAlchemyContextRepository
 from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
     SQLAlchemyMessageRepository,
@@ -56,6 +60,7 @@ from homestay_bot.routes.wecom_callback import WeComCallbackService
 from homestay_bot.services.approval_page_service import ApprovalPageService
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
+from homestay_bot.services.context_retention import ContextRetentionService
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.customer_service import CustomerService
 from homestay_bot.services.emergency_service import EmergencyService
@@ -486,6 +491,35 @@ async def _run_faq_maintenance_loop(
         await asyncio.sleep(3600)
 
 
+async def _run_context_maintenance_loop(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    summarizer: Any,
+    now_provider: Callable[[], datetime] | None = None,
+) -> None:
+    """每小时为有消息的正式客户更新分层摘要。"""
+    current_time = now_provider or (lambda: datetime.now(UTC))
+    while True:
+        try:
+            async with factory() as session:
+                repository = SQLAlchemyContextRepository(session)
+                customer_ids = await repository.list_customer_ids_with_messages()
+                service = ContextRetentionService(repository, summarizer)
+                cycle_now = current_time()
+                for customer_id in customer_ids:
+                    await service.maintain_customer(customer_id, cycle_now)
+                await session.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # 摘要失败时事务回滚并保留原文，下一周期自动重试。
+            logger.warning(
+                "客户上下文维护失败：error_type=%s",
+                type(error).__name__,
+            )
+        await asyncio.sleep(3600)
+
+
 def _next_wecom_poll_delay(
     *,
     current_delay: float,
@@ -580,6 +614,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         client=deepseek_chat,
         model=settings.deepseek_model,
     )
+    context_summarizer = DeepSeekContextSummarizer(
+        deepseek_chat,
+        settings.deepseek_model,
+    )
     duty_userids = [item.strip() for item in settings.wecom_duty_userids.split(",") if item.strip()]
     sensitive_data = SensitiveDataCipher(settings.data_encryption_key)
 
@@ -609,6 +647,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                     SQLAlchemyCustomerRepository(session),
                     sensitive_data,
                 ),
+                customer_context=SQLAlchemyContextRepository(session),
             )
             await service.handle_message(message)
             await session.commit()
@@ -715,13 +754,25 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     faq_maintenance_task = asyncio.create_task(
         _run_faq_maintenance_loop(factory=factory)
     )
+    context_maintenance_task = asyncio.create_task(
+        _run_context_maintenance_loop(
+            factory=factory,
+            summarizer=context_summarizer,
+        )
+    )
 
     try:
         yield
     finally:
-        for task in (worker_task, poll_task, faq_maintenance_task):
+        background_tasks = (
+            worker_task,
+            poll_task,
+            faq_maintenance_task,
+            context_maintenance_task,
+        )
+        for task in background_tasks:
             task.cancel()
-        for task in (worker_task, poll_task, faq_maintenance_task):
+        for task in background_tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         # 测试重启或同进程重新装配时不得沿用已关闭的客户端与会话服务。
