@@ -211,9 +211,36 @@ class SQLAlchemyFaqCandidateRepository:
         self,
         candidate_id: int,
         payload: dict[str, Any],
-    ) -> KnowledgeCandidate:
+        *,
+        expected_generation: int | None = None,
+    ) -> KnowledgeCandidate | None:
         """保存结构化草稿并记录本轮使用的示例版本。"""
         candidate = await self._require(candidate_id)
+        if expected_generation is not None:
+            result = await self._session.execute(
+                update(KnowledgeCandidate)
+                .where(
+                    KnowledgeCandidate.id == candidate_id,
+                    KnowledgeCandidate.status
+                    == KnowledgeCandidateStatus.OPEN,
+                    KnowledgeCandidate.draft_generation
+                    == expected_generation,
+                )
+                .values(
+                    draft_status=KnowledgeCandidateDraftStatus.READY,
+                    draft_payload=payload,
+                    draft_examples_version=(
+                        KnowledgeCandidate.examples_version
+                    ),
+                    draft_attempts=0,
+                )
+                .returning(KnowledgeCandidate.id)
+                .execution_options(synchronize_session=False)
+            )
+            if result.scalar_one_or_none() is None:
+                return None
+            await self._session.refresh(candidate)
+            return candidate
         candidate.draft_status = KnowledgeCandidateDraftStatus.READY
         candidate.draft_payload = payload
         candidate.draft_examples_version = candidate.examples_version
@@ -222,17 +249,67 @@ class SQLAlchemyFaqCandidateRepository:
         return candidate
 
     async def increment_draft_attempts(
-        self, candidate_id: int
-    ) -> KnowledgeCandidate:
+        self,
+        candidate_id: int,
+        *,
+        expected_generation: int | None = None,
+    ) -> KnowledgeCandidate | None:
         """持久化一次草稿生成失败，供 worker 跨重试判断上限。"""
         candidate = await self._require(candidate_id)
+        if expected_generation is not None:
+            result = await self._session.execute(
+                update(KnowledgeCandidate)
+                .where(
+                    KnowledgeCandidate.id == candidate_id,
+                    KnowledgeCandidate.status
+                    == KnowledgeCandidateStatus.OPEN,
+                    KnowledgeCandidate.draft_generation
+                    == expected_generation,
+                )
+                .values(
+                    draft_attempts=KnowledgeCandidate.draft_attempts + 1
+                )
+                .returning(KnowledgeCandidate.id)
+                .execution_options(synchronize_session=False)
+            )
+            if result.scalar_one_or_none() is None:
+                return None
+            await self._session.refresh(candidate)
+            return candidate
         candidate.draft_attempts += 1
         await self._session.flush()
         return candidate
 
-    async def mark_draft_failed(self, candidate_id: int) -> KnowledgeCandidate:
+    async def mark_draft_failed(
+        self,
+        candidate_id: int,
+        *,
+        expected_generation: int | None = None,
+    ) -> KnowledgeCandidate | None:
         """记录草稿最终失败，保留脱敏示例供管理员人工归纳。"""
         candidate = await self._require(candidate_id)
+        if expected_generation is not None:
+            result = await self._session.execute(
+                update(KnowledgeCandidate)
+                .where(
+                    KnowledgeCandidate.id == candidate_id,
+                    KnowledgeCandidate.status
+                    == KnowledgeCandidateStatus.OPEN,
+                    KnowledgeCandidate.draft_generation
+                    == expected_generation,
+                )
+                .values(
+                    draft_status=KnowledgeCandidateDraftStatus.FAILED,
+                    draft_payload=None,
+                    notification_pending=True,
+                )
+                .returning(KnowledgeCandidate.id)
+                .execution_options(synchronize_session=False)
+            )
+            if result.scalar_one_or_none() is None:
+                return None
+            await self._session.refresh(candidate)
+            return candidate
         candidate.draft_status = KnowledgeCandidateDraftStatus.FAILED
         candidate.draft_payload = None
         candidate.notification_pending = True

@@ -238,3 +238,26 @@ async def test_drafter_rejects_property_fact_supported_only_by_keyword_mix() -> 
                 },
             ],
         )
+
+
+@pytest.mark.asyncio
+async def test_drafter_requires_review_for_unlisted_property_breakfast_fact() -> None:
+    """早餐等权威策略覆盖的专属事实也必须保留管理员确认。"""
+    payload = valid_draft_payload()
+    payload["question_zh"] = "是否提供早餐？"
+    payload["answer_zh"] = "每天免费提供早餐。"
+    payload["question_en"] = "Is breakfast provided?"
+    payload["answer_en"] = "Free breakfast is provided daily."
+    payload["verification_items"] = []
+    drafter = DeepSeekFaqDrafter(
+        client=ChatClientStub(json.dumps(payload, ensure_ascii=False)),
+        model="deepseek-v4-flash",
+    )
+
+    with pytest.raises(FaqDraftUnavailableError):
+        await drafter.generate(
+            canonical_question="是否提供早餐？",
+            category="餐饮",
+            examples=["有早餐吗？"],
+            approved_knowledge=[],
+        )

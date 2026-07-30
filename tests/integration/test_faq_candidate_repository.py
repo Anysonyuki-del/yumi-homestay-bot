@@ -260,6 +260,11 @@ async def test_draft_state_conversion_and_occurrence_pruning(repository) -> None
     session.add(knowledge)
     await session.flush()
     await candidates.convert(candidate.id, knowledge_entry_id=knowledge.id)
+    stale_result = await candidates.mark_draft_ready(
+        candidate.id,
+        {"answer_zh": "不应恢复的旧草稿"},
+        expected_generation=1,
+    )
     removed = await candidates.prune_occurrences(before=now - timedelta(hours=72))
     await session.commit()
     converted = await candidates.get(candidate.id)
@@ -268,6 +273,7 @@ async def test_draft_state_conversion_and_occurrence_pruning(repository) -> None
     assert converted is not None
     assert converted.status is KnowledgeCandidateStatus.CONVERTED
     assert converted.draft_generation == 2
+    assert stale_result is None
     assert converted.knowledge_entry_id == knowledge.id
     assert converted.examples == []
     assert converted.draft_payload is None

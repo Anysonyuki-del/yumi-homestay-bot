@@ -73,21 +73,61 @@ class CandidateRepositoryStub:
         """返回测试候选在最近窗口内的次数。"""
         return 3
 
-    async def increment_draft_attempts(self, candidate_id: int):
+    async def increment_draft_attempts(
+        self,
+        candidate_id: int,
+        *,
+        expected_generation: int | None = None,
+    ):
         """增加一次草稿失败次数。"""
+        if (
+            expected_generation is not None
+            and (
+                self.record.status is not KnowledgeCandidateStatus.OPEN
+                or self.record.draft_generation != expected_generation
+            )
+        ):
+            return None
         self.record.draft_attempts += 1
         return self.record
 
-    async def mark_draft_ready(self, candidate_id: int, payload: dict):
+    async def mark_draft_ready(
+        self,
+        candidate_id: int,
+        payload: dict,
+        *,
+        expected_generation: int | None = None,
+    ):
         """保存成功草稿并重置失败次数。"""
+        if (
+            expected_generation is not None
+            and (
+                self.record.status is not KnowledgeCandidateStatus.OPEN
+                or self.record.draft_generation != expected_generation
+            )
+        ):
+            return None
         self.record.draft_status = KnowledgeCandidateDraftStatus.READY
         self.record.draft_payload = payload
         self.record.draft_examples_version = self.record.examples_version
         self.record.draft_attempts = 0
         return self.record
 
-    async def mark_draft_failed(self, candidate_id: int):
+    async def mark_draft_failed(
+        self,
+        candidate_id: int,
+        *,
+        expected_generation: int | None = None,
+    ):
         """标记最终失败。"""
+        if (
+            expected_generation is not None
+            and (
+                self.record.status is not KnowledgeCandidateStatus.OPEN
+                or self.record.draft_generation != expected_generation
+            )
+        ):
+            return None
         self.record.draft_status = KnowledgeCandidateDraftStatus.FAILED
         self.record.draft_payload = None
         return self.record
@@ -300,6 +340,35 @@ async def test_closed_candidate_ignores_queued_draft_job() -> None:
 
     assert drafter.calls == []
     assert knowledge.languages == []
+    assert notifications.messages == []
+
+
+@pytest.mark.asyncio
+async def test_candidate_closed_during_model_call_discards_old_result() -> None:
+    """管理员在模型调用期间关闭候选后，旧结果不得保存或通知。"""
+    record = candidate()
+
+    class ClosingDrafter(DrafterStub):
+        """模型返回前模拟管理员关闭并废止当前代次。"""
+
+        async def generate(self, **kwargs) -> FaqDraft:
+            """关闭候选后返回一个本应被丢弃的草稿。"""
+            self.calls.append(kwargs)
+            record.status = KnowledgeCandidateStatus.SNOOZED
+            record.draft_generation += 1
+            return reviewable_draft()
+
+    service, _, drafter, _, notifications, _ = build_service(
+        record,
+        drafter=ClosingDrafter(),
+    )
+
+    await service.handle(
+        {"candidate_id": 7, "generation": 1, "refresh_draft": True}
+    )
+
+    assert len(drafter.calls) == 1
+    assert record.draft_status is KnowledgeCandidateDraftStatus.PENDING
     assert notifications.messages == []
 
 

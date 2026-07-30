@@ -53,16 +53,28 @@ class DraftCandidateRepository(Protocol):
         """统计候选在指定 UTC 窗口内的真实出现次数。"""
 
     async def increment_draft_attempts(
-        self, candidate_id: int
-    ) -> DraftCandidate:
+        self,
+        candidate_id: int,
+        *,
+        expected_generation: int | None = None,
+    ) -> DraftCandidate | None:
         """增加一次草稿失败次数。"""
 
     async def mark_draft_ready(
-        self, candidate_id: int, payload: dict[str, Any]
-    ) -> DraftCandidate:
+        self,
+        candidate_id: int,
+        payload: dict[str, Any],
+        *,
+        expected_generation: int | None = None,
+    ) -> DraftCandidate | None:
         """保存安全草稿。"""
 
-    async def mark_draft_failed(self, candidate_id: int) -> DraftCandidate:
+    async def mark_draft_failed(
+        self,
+        candidate_id: int,
+        *,
+        expected_generation: int | None = None,
+    ) -> DraftCandidate | None:
         """标记草稿最终失败。"""
 
     async def mark_notified(
@@ -146,7 +158,13 @@ class FaqDraftJobService:
             )
         )
         if needs_draft:
-            candidate = await self._generate_draft(candidate)
+            candidate = await self._generate_draft(
+                candidate,
+                generation=generation,
+            )
+            if candidate is None:
+                # 管理员在模型调用期间关闭或转换候选，旧结果直接丢弃。
+                return
         now = self._now_provider()
         recent_count = await self._candidates.count_since(
             candidate.id,
@@ -162,7 +180,9 @@ class FaqDraftJobService:
     async def _generate_draft(
         self,
         candidate: DraftCandidate,
-    ) -> DraftCandidate:
+        *,
+        generation: int,
+    ) -> DraftCandidate | None:
         """生成并保存草稿；第三次失败改为人工兜底提醒。"""
         approved_knowledge = await self._build_approved_knowledge()
         try:
@@ -174,14 +194,21 @@ class FaqDraftJobService:
             )
         except FaqDraftUnavailableError as error:
             failed = await self._candidates.increment_draft_attempts(
-                candidate.id
+                candidate.id,
+                expected_generation=generation,
             )
+            if failed is None:
+                return None
             if failed.draft_attempts < 3:
                 raise RetrySafeJobError("FAQ 草稿暂不可用") from error
-            return await self._candidates.mark_draft_failed(candidate.id)
+            return await self._candidates.mark_draft_failed(
+                candidate.id,
+                expected_generation=generation,
+            )
         return await self._candidates.mark_draft_ready(
             candidate.id,
             draft.model_dump(),
+            expected_generation=generation,
         )
 
     async def _build_approved_knowledge(self) -> list[dict[str, str]]:

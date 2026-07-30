@@ -4,16 +4,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from homestay_bot.services.answer_policy import is_property_specific
+
 _LINK_PATTERN = re.compile(r"https?://|\[[^\]]+\]\([^)]+\)", re.IGNORECASE)
 _ADMIN_CONFIRMATION_PLACEHOLDER = "【待管理员确认】"
-_PROPERTY_SPECIFIC_PATTERN = re.compile(
-    r"民宿|本店|你们|你家|停车|车位|收费|费用|数量|设施|政策|"
-    r"入住|退房|寄存|宠物|吸烟|电梯|厨房|洗衣|空调|地址|距离|"
-    r"homestay|property|parking|fee|facilit|policy|check.?in|"
-    r"check.?out|luggage|pet|smoking|elevator|kitchen|laundry|"
-    r"address|distance",
-    re.IGNORECASE,
-)
 
 
 class FaqDraftUnavailableError(RuntimeError):
@@ -104,7 +98,7 @@ class DeepSeekFaqDrafter:
                 draft.answer_en,
             )
         )
-        return _PROPERTY_SPECIFIC_PATTERN.search(subject) is not None
+        return is_property_specific(subject)
 
     async def generate(
         self,
