@@ -9,6 +9,9 @@ from homestay_bot.integrations.deepseek_client import (
     AssistantUnavailableError,
     DeepSeekGuestAssistant,
 )
+from homestay_bot.services.faq_candidate_context import (
+    FaqCandidateContextService,
+)
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
 
 
@@ -25,6 +28,41 @@ class KnowledgeStub:
                 answer="下午三点后入住。",
             )
         ]
+
+
+class ParkingKnowledgeStub:
+    """返回已经覆盖停车主题的审核知识。"""
+
+    async def build_context(self, language: Language) -> list[KnowledgeSnippet]:
+        """提供停车知识用于验证已覆盖主题不会进入候选。"""
+        return [
+            KnowledgeSnippet(
+                source_id=2,
+                category="停车",
+                question="民宿有停车位吗？",
+                answer="停车安排请按审核说明执行。",
+            )
+        ]
+
+
+class CandidateRepositoryStub:
+    """返回含隐私附属字段的候选，验证模型上下文只取必要内容。"""
+
+    def __init__(self, count: int = 55) -> None:
+        """构造指定数量的未关闭候选。"""
+        self.items = [
+            SimpleNamespace(
+                id=index,
+                canonical_question=f"标准问题{index}",
+                examples=[f"客人原始问法{index}"],
+                external_userid=f"wm-sensitive-{index}",
+            )
+            for index in range(1, count + 1)
+        ]
+
+    async def list_context(self, *, now):
+        """返回候选列表，时间参数由服务负责提供。"""
+        return self.items
 
 
 class TourismStub:
@@ -180,6 +218,153 @@ async def test_deepseek_chat_returns_structured_decision_without_raw_guest_id() 
     assert request["response_format"] == {"type": "json_object"}
     assert request["extra_body"] == {"thinking": {"type": "disabled"}}
     assert "wm-sensitive-id" not in json.dumps(request, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_faq_candidate_is_returned_in_same_structured_guest_response() -> None:
+    """知识缺口候选应随主回复返回，且上下文最多含五十个必要字段。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "knowledge_gap": True,
+            "knowledge_gap_topic": "停车",
+            "faq_candidate": True,
+            "faq_candidate_id": 7,
+            "faq_canonical_question": "民宿是否提供停车位？",
+            "faq_category": "停车",
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    context = FaqCandidateContextService(CandidateRepositoryStub())
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        faq_candidate_context=context,
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-private-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "你们有停车位吗？"}],
+    )
+
+    assert decision.faq_candidate is True
+    assert decision.faq_candidate_id == 7
+    assert decision.faq_canonical_question == "民宿是否提供停车位？"
+    assert decision.faq_category == "停车"
+    system_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
+    assert system_prompt.count('"canonical_question"') == 50
+    assert '"id": 50' in system_prompt
+    assert '"id": 51' not in system_prompt
+    assert "客人原始问法" not in system_prompt
+    assert "wm-sensitive" not in system_prompt
+    assert "wm-private-guest" not in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_transaction_question_deterministically_clears_faq_candidate() -> None:
+    """价格、房态和订单等动态高风险问题不得进入 FAQ 候选。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "knowledge_gap": True,
+            "knowledge_gap_topic": "价格",
+            "faq_candidate": True,
+            "faq_candidate_id": 8,
+            "faq_canonical_question": "房间价格是多少？",
+            "faq_category": "价格",
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "今天房间价格是多少？"}],
+    )
+
+    assert decision.faq_candidate is False
+    assert decision.faq_candidate_id is None
+    assert decision.faq_canonical_question is None
+    assert decision.faq_category is None
+
+
+@pytest.mark.asyncio
+async def test_non_knowledge_gap_deterministically_clears_faq_candidate() -> None:
+    """模型未确认知识缺口时不得保留其候选归类字段。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "faq_candidate": True,
+            "faq_candidate_id": 9,
+            "faq_canonical_question": "如何协调旅行安排？",
+            "faq_category": "旅行",
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "怎样和朋友协调旅行安排？"}],
+    )
+
+    assert decision.faq_candidate is False
+    assert decision.faq_candidate_id is None
+    assert decision.faq_canonical_question is None
+    assert decision.faq_category is None
+
+
+@pytest.mark.asyncio
+async def test_approved_knowledge_deterministically_clears_faq_candidate() -> None:
+    """审核知识已覆盖当前主题时不得生成重复候选。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "knowledge_gap": True,
+            "knowledge_gap_topic": "停车",
+            "faq_candidate": True,
+            "faq_candidate_id": 10,
+            "faq_canonical_question": "民宿是否提供停车位？",
+            "faq_category": "停车",
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=ParkingKnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "你们有停车位吗？"}],
+    )
+
+    assert decision.faq_candidate is False
+    assert decision.faq_candidate_id is None
+    assert decision.faq_canonical_question is None
+    assert decision.faq_category is None
 
 
 @pytest.mark.asyncio

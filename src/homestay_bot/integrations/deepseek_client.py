@@ -17,6 +17,9 @@ from homestay_bot.services.answer_policy import (
     is_property_specific,
     is_transaction_sensitive,
 )
+from homestay_bot.services.faq_candidate_context import (
+    FaqCandidateContextService,
+)
 from homestay_bot.services.knowledge_service import KnowledgeService
 
 logger = logging.getLogger(__name__)
@@ -64,6 +67,10 @@ class AssistantDecision(BaseModel):
     knowledge_gap_topic: str | None = None
     staff_confirmation_required: bool = False
     staff_confirmation_reason: str | None = None
+    faq_candidate: bool = False
+    faq_candidate_id: int | None = None
+    faq_canonical_question: str | None = None
+    faq_category: str | None = None
 
 
 class RefinedReply(BaseModel):
@@ -147,6 +154,7 @@ class HostexReadOnlyToolExecutor:
 def assistant_decision_schema() -> dict[str, Any]:
     """返回供模型提示和本地校验共享的扁平 JSON 结构。"""
     nullable_string = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    nullable_integer = {"anyOf": [{"type": "integer"}, {"type": "null"}]}
     return {
         "type": "object",
         "properties": {
@@ -181,6 +189,10 @@ def assistant_decision_schema() -> dict[str, Any]:
             "knowledge_gap_topic": nullable_string,
             "staff_confirmation_required": {"type": "boolean"},
             "staff_confirmation_reason": nullable_string,
+            "faq_candidate": {"type": "boolean"},
+            "faq_candidate_id": nullable_integer,
+            "faq_canonical_question": nullable_string,
+            "faq_category": nullable_string,
         },
     }
 
@@ -203,8 +215,9 @@ class DeepSeekGuestAssistant:
         safety_hmac_key: bytes,
         tool_executor: ReadOnlyToolExecutor | None = None,
         local_date_provider: Callable[[], date] | None = None,
+        faq_candidate_context: FaqCandidateContextService | None = None,
     ) -> None:
-        """注入 DeepSeek、知识、旅游搜索和只读工具。"""
+        """注入 DeepSeek、知识、旅游搜索、候选上下文和只读工具。"""
         self._chat_client = chat_client
         self._tourism_searcher = tourism_searcher
         self._knowledge = knowledge
@@ -212,6 +225,7 @@ class DeepSeekGuestAssistant:
         self._safety_hmac_key = safety_hmac_key
         self._tool_executor = tool_executor
         self._local_date_provider = local_date_provider or _wuhan_today
+        self._faq_candidate_context = faq_candidate_context
 
     @staticmethod
     def tool_definitions() -> list[dict[str, Any]]:
@@ -293,6 +307,7 @@ class DeepSeekGuestAssistant:
         question_text: str,
         *,
         property_knowledge_grounded: bool,
+        faq_candidate_ids: set[int],
     ) -> AssistantDecision:
         """校验模型 JSON，并执行确定性风险归一化。"""
         decision = AssistantDecision.model_validate_json(output_text)
@@ -359,7 +374,54 @@ class DeepSeekGuestAssistant:
                     "staff_confirmation_reason": None,
                 }
             )
-        return decision.model_copy(update=updates)
+        normalized = decision.model_copy(update=updates)
+        candidate_allowed = (
+            normalized.knowledge_gap
+            and not transaction_sensitive
+            and not property_knowledge_grounded
+        )
+        canonical_question = (normalized.faq_canonical_question or "").strip()
+        category = (normalized.faq_category or "").strip()
+        if (
+            not candidate_allowed
+            or not normalized.faq_candidate
+            or not canonical_question
+            or not category
+        ):
+            return normalized.model_copy(
+                update={
+                    "faq_candidate": False,
+                    "faq_candidate_id": None,
+                    "faq_canonical_question": None,
+                    "faq_category": None,
+                }
+            )
+        candidate_id = normalized.faq_candidate_id
+        if candidate_id not in faq_candidate_ids:
+            candidate_id = None
+        return normalized.model_copy(
+            update={
+                "faq_candidate_id": candidate_id,
+                "faq_canonical_question": canonical_question,
+                "faq_category": category,
+            }
+        )
+
+    async def _build_faq_candidate_context(
+        self,
+    ) -> list[dict[str, int | str]]:
+        """读取最小候选目录；读取失败时不影响客人主回复。"""
+        if self._faq_candidate_context is None:
+            return []
+        try:
+            return await self._faq_candidate_context.build_context()
+        except Exception as error:
+            # 只记录异常类型，不输出候选标准问题或任何客人信息。
+            logger.warning(
+                "FAQ 候选上下文读取失败，使用空目录：error_type=%s",
+                type(error).__name__,
+            )
+            return []
 
     @staticmethod
     def _remove_property_promotion(
@@ -534,6 +596,12 @@ class DeepSeekGuestAssistant:
             )
 
         knowledge = await self._knowledge.build_context(language)
+        faq_candidates = await self._build_faq_candidate_context()
+        faq_candidate_ids = {
+            int(item["id"])
+            for item in faq_candidates
+            if isinstance(item.get("id"), int)
+        }
         tomorrow = local_today + timedelta(days=1)
         day_after = local_today + timedelta(days=2)
         system_prompt = (
@@ -542,10 +610,16 @@ class DeepSeekGuestAssistant:
             "明确说明未确认、提供替代建议并设置 knowledge_gap=true；"
             "价格、房态、退款、取消、改期、付款或订单状态无法确认时不得猜测，"
             "设置 staff_confirmation_required=true；缺少查询日期时允许追问。"
+            "仅当问题适合沉淀为固定 FAQ、审核知识确实缺失且 knowledge_gap=true 时，"
+            "设置 faq_candidate=true；房态、价格、订单、退款、预订、实时旅游和"
+            "紧急问题必须设置 faq_candidate=false。"
+            "如语义匹配已有候选，填写其编号；否则编号为 null，并给出简洁标准问题"
+            "和分类。候选目录只用于语义匹配，不可把目录内容当作已审核答案。"
             f"武汉当前日期：{local_today.isoformat()}；"
             f"今天={local_today.isoformat()}，明天={tomorrow.isoformat()}，"
             f"后天={day_after.isoformat()}。相对日期必须自主换算。"
             f"审核知识：{json.dumps([item.__dict__ for item in knowledge], ensure_ascii=False)}"
+            f"未关闭 FAQ 候选目录：{json.dumps(faq_candidates, ensure_ascii=False)}"
             f"输出结构：{json.dumps(assistant_decision_schema(), ensure_ascii=False)}"
         )
         request = {
@@ -586,6 +660,7 @@ class DeepSeekGuestAssistant:
                             property_knowledge_grounded=(
                                 property_knowledge_grounded
                             ),
+                            faq_candidate_ids=faq_candidate_ids,
                         )
                         refined_reply = await self._refine_reply(
                             decision.reply_text
