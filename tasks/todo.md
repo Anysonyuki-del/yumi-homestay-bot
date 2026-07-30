@@ -396,6 +396,1037 @@
 - [x] 入住资料安全自动发送条件已确认
 - [x] 管理员与普通员工最小权限已确认
 - [x] 可靠性、隐私与验收标准已确认
-- [ ] 用户审核本文件中的最终书面 Spec
+- [x] 用户审核本文件中的最终书面 Spec
 - [ ] 编写并确认实施计划
 - [ ] 按 TDD 实施、验证并部署
+
+## YuMi Phase One Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development`
+> (recommended) or `executing-plans` to implement this plan task-by-task.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 在现有民宿机器人上交付一期客户 CRM、七天上下文、百居易订单同步、业务任务中心、员工手机页、房间可入住流转、入住凭证安全发送和生命周期提醒。
+
+**Architecture:** 继续使用 FastAPI、SQLAlchemy 和持久化任务队列组成模块化单体。外部回调只验签入队，CRM、订单、任务、摘要和凭证规则由独立服务处理；所有外部写入使用发件箱、幂等键和人工复核边界。
+
+**Tech Stack:** Python 3.12、FastAPI、SQLAlchemy Async、Alembic、SQLite（本地）、PostgreSQL（正式环境）、Jinja2、DeepSeek、企业微信、百居易 OpenAPI、cryptography。
+
+**执行约束：** 每项严格按“失败测试 → 最小实现 → 验证 → 提交”执行；所有新增或修改的函数和关键业务分支必须写清楚中文注释。若实现发现与本计划不一致，先更新本计划并重新取得确认。
+
+---
+
+### Task 1：客户主档、身份、标签与合并建议数据模型
+
+**Files:**
+- Create: `migrations/versions/0003_customer_crm.py`
+- Create: `src/homestay_bot/services/sensitive_data.py`
+- Modify: `src/homestay_bot/domain/enums.py`
+- Modify: `src/homestay_bot/domain/models.py`
+- Modify: `src/homestay_bot/config.py`
+- Modify: `.env.example`
+- Test: `tests/integration/test_customer_repository.py`
+- Test: `tests/unit/test_sensitive_data.py`
+- Test: `tests/unit/test_models.py`
+- Test: `tests/unit/test_config.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_customer_identity_is_unique_and_conversation_links_customer():
+    customer = Customer(display_name="微信客户")
+    identity = CustomerIdentity(
+        customer=customer,
+        provider=CustomerIdentityProvider.WECOM_KF,
+        external_id="wm-1",
+        is_verified=True,
+    )
+    session.add_all([customer, identity])
+    await session.flush()
+    conversation = Conversation(
+        customer_id=customer.id,
+        open_kfid="wk-1",
+        external_userid="wm-1",
+    )
+    session.add(conversation)
+    await session.commit()
+    assert conversation.customer_id == customer.id
+```
+
+同时覆盖标签多选、相同 `provider + external_id` 唯一、合并建议状态和会话客户外键。
+增加凭证明文不出现在密文、相同手机号产生相同 HMAC 指纹、错误密钥不能解密的测试。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_customer_repository.py tests/unit/test_models.py`
+
+Expected: FAIL，提示 `Customer`、`CustomerIdentityProvider` 等类型不存在。
+
+- [ ] **Step 3：实现最小数据模型和迁移**
+
+在 `domain/enums.py` 增加：
+
+```python
+class CustomerIdentityProvider(StrEnum):
+    WECOM_KF = "wecom_kf"
+    WECOM_CONTACT = "wecom_contact"
+    WECHAT_UNIONID = "wechat_unionid"
+    HOSTEX = "hostex"
+
+
+class CustomerMergeStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+```
+
+在 `domain/models.py` 增加 `Customer`、`CustomerIdentity`、`CustomerTag`、`CustomerTagLink`、`CustomerMergeSuggestion`，并给 `Conversation` 增加可空 `customer_id`。`CustomerTag` 增加可空 `wecom_tag_id`，`CustomerTagLink` 增加 `sync_pending` 和脱敏后的 `last_sync_error_code`，用于后续可重试的企业微信标签同步。迁移为已有会话创建客户与微信客服身份。
+
+增加必填 `DATA_ENCRYPTION_KEY`，与 Session Secret 分离。`SensitiveDataCipher.encrypt()` 使用 Fernet，`fingerprint()` 使用带独立上下文前缀的 HMAC-SHA256；手机号只保存密文和指纹，不保存明文。
+
+- [ ] **Step 4：验证迁移升级、降级和测试**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_customer_repository.py tests/unit/test_sensitive_data.py tests/unit/test_models.py tests/unit/test_config.py tests/unit/test_db.py`
+
+Expected: PASS；`alembic upgrade head → downgrade 0002_frequent_faq_candidates → upgrade head` 成功。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add migrations/versions/0003_customer_crm.py src/homestay_bot/services/sensitive_data.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py src/homestay_bot/config.py .env.example tests/integration/test_customer_repository.py tests/unit/test_sensitive_data.py tests/unit/test_models.py tests/unit/test_config.py
+git commit -m "feat: add customer crm schema"
+```
+
+### Task 2：首次咨询建档、可靠身份匹配与管理员确认合并
+
+**Files:**
+- Create: `src/homestay_bot/repositories/customers.py`
+- Create: `src/homestay_bot/services/customer_service.py`
+- Modify: `src/homestay_bot/repositories/conversations.py`
+- Modify: `src/homestay_bot/services/conversation_service.py`
+- Test: `tests/unit/test_customer_service.py`
+- Test: `tests/integration/test_customer_repository.py`
+- Test: `tests/unit/test_conversation_service.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_first_message_creates_customer_and_verified_wecom_identity():
+    customer = await service.ensure_for_message(incoming_message)
+    assert customer.id is not None
+    assert repository.identities == [
+        ("wecom_kf", incoming_message.external_userid, customer.id)
+    ]
+
+
+async def test_phone_match_only_creates_merge_suggestion():
+    suggestion = await service.suggest_merge(
+        source_customer_id=2,
+        verified_phone="13800000000",
+    )
+    assert suggestion.status is CustomerMergeStatus.PENDING
+    assert repository.customers_were_merged is False
+```
+
+同时覆盖重复消息不重复建档、姓名相同不触发合并、管理员接受后迁移身份/会话/订单/任务并写审计。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_customer_service.py tests/integration/test_customer_repository.py tests/unit/test_conversation_service.py`
+
+Expected: FAIL，提示客户服务和仓储不存在。
+
+- [ ] **Step 3：实现客户服务边界**
+
+```python
+class CustomerService:
+    async def ensure_for_message(self, message: IncomingMessage) -> Customer:
+        return await self._customers.ensure_identity(
+            provider=CustomerIdentityProvider.WECOM_KF,
+            external_id=message.external_userid,
+            display_name="微信客户",
+        )
+
+    async def suggest_merge(
+        self, source_customer_id: int, verified_phone: str
+    ) -> CustomerMergeSuggestion | None:
+        fingerprint = self._cipher.fingerprint(verified_phone)
+        return await self._customers.suggest_unique_phone_match(
+            source_customer_id, fingerprint
+        )
+
+    async def confirm_merge(
+        self, suggestion_id: int, administrator_id: int
+    ) -> Customer:
+        return await self._customers.merge_locked(
+            suggestion_id, administrator_id
+        )
+```
+
+`ConversationService.handle_message()` 在记录首次消息前确保客户存在；合并必须锁定两个客户行，在同一事务中迁移关联记录并写 `AuditLog`。HMAC 指纹只用于精确匹配，姓名和 AI 相似度不得触发合并。
+
+- [ ] **Step 4：运行客户服务测试**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_customer_service.py tests/integration/test_customer_repository.py tests/unit/test_conversation_service.py`
+
+Expected: PASS。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add src/homestay_bot/repositories/customers.py src/homestay_bot/services/customer_service.py src/homestay_bot/repositories/conversations.py src/homestay_bot/services/conversation_service.py tests/unit/test_customer_service.py tests/integration/test_customer_repository.py tests/unit/test_conversation_service.py
+git commit -m "feat: create customer profiles from conversations"
+```
+
+### Task 3：七天上下文、短期摘要、长期摘要与安全清理
+
+**Files:**
+- Create: `migrations/versions/0004_customer_context.py`
+- Create: `src/homestay_bot/integrations/deepseek_context_summarizer.py`
+- Create: `src/homestay_bot/services/context_retention.py`
+- Create: `src/homestay_bot/repositories/context.py`
+- Modify: `src/homestay_bot/domain/models.py`
+- Modify: `src/homestay_bot/services/message_service.py`
+- Modify: `src/homestay_bot/integrations/deepseek_client.py`
+- Modify: `src/homestay_bot/application.py`
+- Test: `tests/unit/test_context_retention.py`
+- Test: `tests/integration/test_message_flow.py`
+- Test: `tests/unit/test_deepseek_client.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_messages_are_purged_only_after_long_summary_succeeds():
+    await service.maintain_customer(customer_id=1, now=NOW)
+    assert summarizer.long_calls == 1
+    assert old_message.content is None
+    assert old_message.purged_at == NOW
+
+
+async def test_summary_failure_keeps_original_message():
+    summarizer.raise_error = True
+    await service.maintain_customer(customer_id=1, now=NOW)
+    assert old_message.content == "七天前的原文"
+    assert old_message.purged_at is None
+```
+
+同时覆盖不同客户摘要隔离、最近一轮原文保留、七天内较早消息进入短期摘要、敏感字段拒绝、失败重试幂等。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_deepseek_client.py`
+
+Expected: FAIL，提示上下文摘要服务和字段不存在。
+
+- [ ] **Step 3：实现摘要模型与维护服务**
+
+通过 `0004_customer_context.py` 新增 `CustomerContextSummary(short_summary, long_summary, short_cutoff_at, long_cutoff_at, version)`；给 `Message` 增加 `short_summarized_at` 和 `purged_at`，清理时保留消息 ID 但把正文置空以维持去重。
+
+```python
+class ContextRetentionService:
+    async def maintain_customer(
+        self, customer_id: int, now: datetime
+    ) -> None:
+        await self._update_short_summary(customer_id, now)
+        await self._roll_expired_messages_into_long_summary(customer_id, now)
+
+    async def build_model_context(
+        self, customer_id: int, conversation_id: int, now: datetime
+    ) -> CustomerModelContext:
+        return await self._repository.load_model_context(
+            customer_id=customer_id,
+            conversation_id=conversation_id,
+            raw_since=now - timedelta(days=7),
+            raw_limit=3,
+        )
+```
+
+`DeepSeekContextSummarizer` 只接收脱敏文本，结构化返回 `summary` 和 `unresolved_items`；本地再次检查手机号、身份证、地址、密码和二维码特征。`DeepSeekGuestAssistant.respond()` 增加 `customer_context` 参数，把摘要、订单和任务写入系统提示，最近原文仍保持最多三条。
+
+- [ ] **Step 4：注册每小时维护任务并验证**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_deepseek_client.py tests/unit/test_application.py`
+
+Expected: PASS；两个客户并行维护不串数据。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add migrations/versions/0004_customer_context.py src/homestay_bot/domain/models.py src/homestay_bot/integrations/deepseek_context_summarizer.py src/homestay_bot/services/context_retention.py src/homestay_bot/repositories/context.py src/homestay_bot/services/message_service.py src/homestay_bot/integrations/deepseek_client.py src/homestay_bot/application.py tests/unit/test_context_retention.py tests/integration/test_message_flow.py tests/unit/test_deepseek_client.py
+git commit -m "feat: retain seven day customer context"
+```
+
+### Task 4：订单、房间、业务任务、附件和凭证数据模型
+
+**Files:**
+- Create: `migrations/versions/0005_operations.py`
+- Modify: `src/homestay_bot/domain/enums.py`
+- Modify: `src/homestay_bot/domain/models.py`
+- Test: `tests/integration/test_operations_repository.py`
+- Test: `tests/unit/test_models.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_turnover_task_dedupe_key_is_unique():
+    first = await repository.create_turnover(
+        property_id=101, service_date=date(2026, 8, 1)
+    )
+    second = await repository.create_turnover(
+        property_id=101, service_date=date(2026, 8, 1)
+    )
+    assert first.id == second.id
+```
+
+同时覆盖订单代码唯一、任务来源消息唯一、附件归属、房间状态唯一、凭证投递部件唯一和 Webhook 事件幂等。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_operations_repository.py tests/unit/test_models.py`
+
+Expected: FAIL，提示运营模型不存在。
+
+- [ ] **Step 3：创建模型和迁移**
+
+新增枚举 `BusinessTaskType`、`BusinessTaskStatus`、`RoomOperationalStatus`、`CredentialDeliveryStatus`；`BusinessTaskType` 除六种客人服务任务外包含仅由系统创建的 `MANUAL_CONTACT`。新增模型：
+
+```python
+HostexWebhookEvent
+StayOrder
+PropertyProfile
+RoomOperationalState
+BusinessTask
+TaskAttachment
+RoomCredential
+CredentialDelivery
+CredentialDeliveryPart
+```
+
+`BusinessTask.dedupe_key`、`StayOrder.hostex_reservation_code`、`HostexWebhookEvent.event_key` 和投递部件组合键必须唯一。凭证字段只保存密文和私有文件引用。
+
+- [ ] **Step 4：验证迁移和约束**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_operations_repository.py tests/unit/test_models.py tests/unit/test_db.py`
+
+Expected: PASS；迁移升级、降级、再升级成功。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add migrations/versions/0005_operations.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py tests/integration/test_operations_repository.py tests/unit/test_models.py
+git commit -m "feat: add operations data model"
+```
+
+### Task 5：百居易 Webhook、订单同步和定时对账
+
+**Files:**
+- Create: `src/homestay_bot/routes/hostex_webhook.py`
+- Create: `src/homestay_bot/services/hostex_sync.py`
+- Create: `src/homestay_bot/repositories/operations.py`
+- Modify: `src/homestay_bot/config.py`
+- Modify: `.env.example`
+- Modify: `src/homestay_bot/main.py`
+- Modify: `src/homestay_bot/application.py`
+- Modify: `src/homestay_bot/worker.py`
+- Test: `tests/unit/test_hostex_webhook.py`
+- Test: `tests/unit/test_hostex_sync.py`
+- Test: `tests/integration/test_operations_repository.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_hostex_webhook_verifies_secret_and_enqueues_once(client):
+    response = client.post(
+        "/webhooks/hostex",
+        headers={"Hostex-Webhook-Secret-Token": "valid"},
+        json={"event": "reservation_updated", "reservation_code": "R-1"},
+    )
+    assert response.status_code == 202
+    assert queue.calls == [("hostex_event", {"event_key": ANY})]
+```
+
+同时覆盖错误 Secret 返回401、未知字段忽略、重复事件幂等、订单更新、订单取消、Webhook 遗漏后对账补回。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_hostex_webhook.py tests/unit/test_hostex_sync.py tests/integration/test_operations_repository.py`
+
+Expected: FAIL，提示路由和同步服务不存在。
+
+- [ ] **Step 3：实现快速入队和订单 upsert**
+
+```python
+class HostexSyncService:
+    async def handle_event(self, event_key: str) -> None:
+        event = await self._events.require_pending(event_key)
+        matches = await self._hostex.list_reservations(
+            ReservationQuery(reservation_code=event.reservation_code)
+        )
+        if len(matches) != 1:
+            raise HostexSyncConflict(
+                event_key=event.event_key,
+                reservation_count=len(matches),
+            )
+        reservation = matches[0]
+        order = await self._orders.upsert_from_hostex(reservation)
+        await self._events.mark_completed(event)
+
+    async def reconcile(
+        self, start_date: date, end_date: date
+    ) -> ReconcileResult:
+        reservations = await self._hostex.list_reservations(
+            ReservationQuery(
+                start_check_in_date=start_date,
+                end_check_in_date=end_date,
+            )
+        )
+        return await self._orders.reconcile(reservations)
+```
+
+Webhook 使用 `secrets.compare_digest()` 验签，规范化 JSON 后计算缺省事件键，事务内保存事件并入队，不能调用 AI。同步服务按 `reservation_code` upsert `StayOrder` 并关联可靠客户身份；查到零条或多条订单时抛出 `HostexSyncConflict`，保留事件待人工复核，不猜测订单。周转任务在 Task 6 接入，避免本任务依赖尚未实现的任务服务。
+
+- [ ] **Step 4：注册 handler 与定时对账**
+
+增加 `HOSTEX_WEBHOOK_SECRET_TOKEN` 和 `HOSTEX_RECONCILE_INTERVAL_SECONDS=900`；worker 注册 `hostex_event`，应用启动独立对账循环。运行：
+
+`PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_hostex_webhook.py tests/unit/test_hostex_sync.py tests/unit/test_application.py`
+
+Expected: PASS，Webhook 请求路径不执行慢操作。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add src/homestay_bot/routes/hostex_webhook.py src/homestay_bot/services/hostex_sync.py src/homestay_bot/repositories/operations.py src/homestay_bot/config.py .env.example src/homestay_bot/main.py src/homestay_bot/application.py src/homestay_bot/worker.py tests/unit/test_hostex_webhook.py tests/unit/test_hostex_sync.py tests/integration/test_operations_repository.py
+git commit -m "feat: sync hostex reservations and availability"
+```
+
+### Task 6：业务任务状态机、自动周转任务和 AI 待确认任务
+
+**Files:**
+- Create: `src/homestay_bot/services/business_task_service.py`
+- Modify: `src/homestay_bot/services/answer_policy.py`
+- Modify: `src/homestay_bot/integrations/deepseek_client.py`
+- Modify: `src/homestay_bot/services/conversation_service.py`
+- Modify: `src/homestay_bot/services/hostex_sync.py`
+- Modify: `src/homestay_bot/repositories/operations.py`
+- Test: `tests/unit/test_business_task_service.py`
+- Test: `tests/unit/test_answer_policy.py`
+- Test: `tests/unit/test_deepseek_client.py`
+- Test: `tests/unit/test_conversation_service.py`
+- Test: `tests/unit/test_hostex_sync.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_ai_suggestion_creates_pending_confirmation_task():
+    task = await service.record_ai_suggestion(
+        customer_id=1,
+        source_message_id="msg-1",
+        task_type=BusinessTaskType.SUPPLIES,
+        description="补两瓶矿泉水",
+    )
+    assert task.status is BusinessTaskStatus.PENDING_CONFIRMATION
+    assert task.assigned_employee_id is None
+```
+
+同时覆盖不支持类型拒绝、重复消息幂等、订单同步后生成唯一周转保洁任务、非法状态跳转、提前入住不被 AI 自动批准、民宿无关问题礼貌拒答，以及价格、退款、投诉和明显激动情绪触发 YuMi 接管通知。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_business_task_service.py tests/unit/test_answer_policy.py tests/unit/test_deepseek_client.py tests/unit/test_conversation_service.py tests/unit/test_hostex_sync.py`
+
+Expected: FAIL，提示业务任务服务和结构化建议字段不存在。
+
+- [ ] **Step 3：实现任务状态机和同轮 AI 提取**
+
+```python
+class BusinessTaskService:
+    async def create_turnover(
+        self, property_id: int, service_date: date, order_id: int
+    ) -> BusinessTask:
+        return await self._tasks.get_or_create_turnover(
+            dedupe_key=f"turnover:{property_id}:{service_date.isoformat()}",
+            property_id=property_id,
+            service_date=service_date,
+            order_id=order_id,
+        )
+
+    async def record_ai_suggestion(
+        self, *, customer_id: int, source_message_id: str,
+        task_type: BusinessTaskType, description: str
+    ) -> BusinessTask:
+        return await self._tasks.create_pending_confirmation(
+            customer_id=customer_id,
+            source_message_id=source_message_id,
+            task_type=task_type,
+            description=description,
+        )
+
+    async def transition(
+        self, task_id: int, actor: Employee, target: BusinessTaskStatus
+    ) -> BusinessTask:
+        task = await self._tasks.require_for_update(task_id)
+        self._state_rules.require_allowed(task, actor, target)
+        return await self._tasks.save_status(task, target)
+```
+
+扩展 `AssistantDecision`，同一次 DeepSeek 响应返回可空 `task_suggestion`；本地只允许六种一期任务类型并清除敏感字段。`AnswerPolicy` 在本地执行确定性边界：民宿无关问题礼貌拒答，价格、退款、投诉、提前入住和激烈情绪只提供安抚与流程说明，不替 YuMi 作决定，并创建带会话摘要的接管通知。`ConversationService` 在客人回复成功后记录待确认任务，失败不得回滚回复；任务待确认时通知管理员，分派后只通知执行员工。把 `HostexSyncService` 的订单 upsert 成功事件接入 `create_turnover()`，以房源和服务日期幂等创建周转任务。每次状态变化和接管动作均写不含聊天正文的审计事件。
+
+- [ ] **Step 4：运行任务与会话测试**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_business_task_service.py tests/unit/test_answer_policy.py tests/unit/test_deepseek_client.py tests/unit/test_conversation_service.py tests/unit/test_hostex_sync.py`
+
+Expected: PASS。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add src/homestay_bot/services/business_task_service.py src/homestay_bot/services/answer_policy.py src/homestay_bot/integrations/deepseek_client.py src/homestay_bot/services/conversation_service.py src/homestay_bot/services/hostex_sync.py src/homestay_bot/repositories/operations.py tests/unit/test_business_task_service.py tests/unit/test_answer_policy.py tests/unit/test_deepseek_client.py tests/unit/test_conversation_service.py tests/unit/test_hostex_sync.py
+git commit -m "feat: manage operational tasks"
+```
+
+### Task 7：两级员工权限与移动任务页
+
+**Files:**
+- Create: `migrations/versions/0006_employee_roles.py`
+- Create: `src/homestay_bot/routes/tasks.py`
+- Create: `src/homestay_bot/services/task_page_service.py`
+- Create: `src/homestay_bot/templates/tasks/index.html`
+- Create: `src/homestay_bot/templates/tasks/detail.html`
+- Modify: `src/homestay_bot/domain/enums.py`
+- Modify: `src/homestay_bot/routes/employee_auth.py`
+- Modify: `src/homestay_bot/main.py`
+- Modify: `src/homestay_bot/application.py`
+- Modify: `src/homestay_bot/static/app.css`
+- Test: `tests/integration/test_task_routes.py`
+- Test: `tests/unit/test_task_page_service.py`
+- Test: `tests/integration/test_approval_routes.py`
+- Test: `tests/integration/test_knowledge_routes.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+def test_staff_only_sees_assigned_tasks(client, staff_session):
+    response = client.get("/employee/tasks")
+    assert response.status_code == 200
+    assert "自己的任务" in response.text
+    assert "其他员工任务" not in response.text
+```
+
+同时覆盖管理员查看全部、员工不能分派/取消/看CRM、管理员仍可审批和管理知识、CSRF、越权任务ID返回403。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_task_routes.py tests/unit/test_task_page_service.py tests/integration/test_approval_routes.py tests/integration/test_knowledge_routes.py`
+
+Expected: FAIL，提示任务路由不存在。
+
+- [ ] **Step 3：实现两级权限和页面服务**
+
+`EmployeeRole` 收敛为 `ADMIN` 与 `STAFF`；迁移把非管理员角色统一为 `STAFF`，预订审批、知识管理、客户合并和任务分派限定管理员。
+
+```python
+class TaskPageService:
+    async def list_for(self, employee: Employee) -> list[BusinessTask]:
+        if employee.role is EmployeeRole.ADMIN:
+            return await self._tasks.list_all_open()
+        return await self._tasks.list_assigned_open(employee.id)
+
+    async def detail_for(
+        self, task_id: int, employee: Employee
+    ) -> TaskDetail:
+        task = await self._tasks.require_visible_to(task_id, employee)
+        return TaskDetail.from_task(task, reveal_sensitive=False)
+
+    async def transition(
+        self, task_id: int, employee: Employee, target: str
+    ) -> BusinessTask:
+        return await self._task_service.transition(
+            task_id, employee, BusinessTaskStatus(target)
+        )
+```
+
+Jinja 页面使用移动优先的大按钮、状态徽标和明确确认文案；普通员工详情不渲染客户电话、订单金额、完整地址或无关凭证。
+
+- [ ] **Step 4：运行权限回归**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_task_routes.py tests/unit/test_task_page_service.py tests/integration/test_approval_routes.py tests/integration/test_knowledge_routes.py tests/unit/test_application.py`
+
+Expected: PASS；越权请求均为403且无敏感正文。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add migrations/versions/0006_employee_roles.py src/homestay_bot/routes/tasks.py src/homestay_bot/services/task_page_service.py src/homestay_bot/templates/tasks/index.html src/homestay_bot/templates/tasks/detail.html src/homestay_bot/domain/enums.py src/homestay_bot/routes/employee_auth.py src/homestay_bot/main.py src/homestay_bot/application.py src/homestay_bot/static/app.css tests/integration/test_task_routes.py tests/unit/test_task_page_service.py tests/integration/test_approval_routes.py tests/integration/test_knowledge_routes.py
+git commit -m "feat: add employee mobile task center"
+```
+
+### Task 8：私有附件、检查清单与执行员工标记可入住
+
+**Files:**
+- Create: `src/homestay_bot/services/private_file_storage.py`
+- Create: `src/homestay_bot/services/room_readiness_service.py`
+- Create: `src/homestay_bot/routes/private_files.py`
+- Modify: `src/homestay_bot/config.py`
+- Modify: `.env.example`
+- Modify: `src/homestay_bot/routes/tasks.py`
+- Modify: `src/homestay_bot/templates/tasks/detail.html`
+- Modify: `src/homestay_bot/main.py`
+- Test: `tests/unit/test_private_file_storage.py`
+- Test: `tests/unit/test_room_readiness_service.py`
+- Test: `tests/integration/test_task_routes.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_assigned_employee_can_mark_ready_after_checklist_and_photo():
+    task.assigned_employee_id = employee.id
+    task.status = BusinessTaskStatus.PENDING_INSPECTION
+    task.checklist = {"clean": True, "supplies": True, "damage": True}
+    task.attachments = [photo]
+    state = await service.mark_ready(task.id, employee)
+    assert state.status is RoomOperationalStatus.READY
+```
+
+同时覆盖非执行员工403、缺照片/清单拒绝、非待检查状态拒绝、管理员撤回、文件路径穿越和超大/伪图片拒绝。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_private_file_storage.py tests/unit/test_room_readiness_service.py tests/integration/test_task_routes.py`
+
+Expected: FAIL，提示文件存储和可入住服务不存在。
+
+- [ ] **Step 3：实现私有文件和状态守卫**
+
+```python
+class PrivateFileStorage:
+    async def save_image(
+        self, stream: BinaryIO, content_type: str, size_limit: int
+    ) -> StoredPrivateFile:
+        validated = await self._validator.read_image(stream, size_limit)
+        return await self._files.save_random_name(
+            validated, content_type=content_type
+        )
+
+
+class RoomReadinessService:
+    async def mark_ready(
+        self, task_id: int, actor: Employee
+    ) -> RoomOperationalState:
+        task = await self._tasks.require_for_update(task_id)
+        self._rules.require_ready_evidence(task, actor)
+        return await self._rooms.mark_ready(task.property_id, actor.id)
+
+    async def revoke_ready(
+        self, property_id: int, administrator: Employee
+    ) -> RoomOperationalState:
+        self._rules.require_administrator(administrator)
+        return await self._rooms.mark_pending_inspection(
+            property_id, administrator.id
+        )
+```
+
+文件使用随机 UUID 名称保存到 `PRIVATE_UPLOAD_DIR`，下载必须经过员工会话和任务归属检查。`mark_ready()` 在同一事务中锁定任务与房间状态，验证执行人、待检查状态、完整清单和至少一张有效照片并写审计。
+
+- [ ] **Step 4：运行安全与路由测试**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_private_file_storage.py tests/unit/test_room_readiness_service.py tests/integration/test_task_routes.py`
+
+Expected: PASS。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add src/homestay_bot/services/private_file_storage.py src/homestay_bot/services/room_readiness_service.py src/homestay_bot/routes/private_files.py src/homestay_bot/config.py .env.example src/homestay_bot/routes/tasks.py src/homestay_bot/templates/tasks/detail.html src/homestay_bot/main.py tests/unit/test_private_file_storage.py tests/unit/test_room_readiness_service.py tests/integration/test_task_routes.py
+git commit -m "feat: verify room readiness with evidence"
+```
+
+### Task 9：房源配置、加密凭证和管理员管理页
+
+**Files:**
+- Create: `src/homestay_bot/services/property_admin_service.py`
+- Create: `src/homestay_bot/routes/properties.py`
+- Create: `src/homestay_bot/templates/properties/index.html`
+- Create: `src/homestay_bot/templates/properties/detail.html`
+- Modify: `src/homestay_bot/config.py`
+- Modify: `.env.example`
+- Modify: `src/homestay_bot/main.py`
+- Modify: `src/homestay_bot/application.py`
+- Modify: `src/homestay_bot/services/sensitive_data.py`
+- Modify: `tests/unit/test_sensitive_data.py`
+- Test: `tests/integration/test_property_routes.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+def test_room_password_is_encrypted_at_rest(cipher):
+    encrypted = cipher.encrypt("839201")
+    assert b"839201" not in encrypted
+    assert cipher.decrypt(encrypted) == "839201"
+```
+
+同时覆盖非管理员不可配置、页面不回显完整密码、二维码私有保存、凭证版本与房间绑定、审计不复制明文。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_sensitive_data.py tests/integration/test_property_routes.py`
+
+Expected: FAIL，提示加密和房源管理服务不存在。
+
+- [ ] **Step 3：实现独立数据密钥和房源配置**
+
+复用 Task 1 已配置的 `DATA_ENCRYPTION_KEY` 和 `SensitiveDataCipher`，凭证与手机号采用相同密钥管理边界但使用不同用途上下文。
+
+```python
+class SensitiveDataCipher:
+    def encrypt(self, value: str) -> bytes:
+        return self._fernet.encrypt(value.encode("utf-8"))
+
+    def decrypt(self, value: bytes) -> str:
+        return self._fernet.decrypt(value).decode("utf-8")
+
+
+class PropertyAdminService:
+    async def update_profile(
+        self, property_id: int, administrator_id: int, fields: PropertyFields
+    ) -> PropertyProfile:
+        self._permissions.require_administrator(administrator_id)
+        return await self._properties.update_profile(property_id, fields)
+
+    async def replace_credentials(
+        self, property_id: int, administrator_id: int,
+        password: str, guide: str, qr_file_id: str
+    ) -> RoomCredential:
+        self._permissions.require_administrator(administrator_id)
+        return await self._properties.replace_credentials(
+            property_id=property_id,
+            password_ciphertext=self._cipher.encrypt(password),
+            guide_ciphertext=self._cipher.encrypt(guide),
+            qr_file_id=qr_file_id,
+        )
+```
+
+管理员页配置百居易房间映射、区域、地址提示、停车说明、入住指南、密码和二维码；日志只记录版本号和房间号。
+
+- [ ] **Step 4：运行加密、权限和日志测试**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_sensitive_data.py tests/integration/test_property_routes.py tests/unit/test_log_redaction.py`
+
+Expected: PASS，数据库和日志中均无凭证明文。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add src/homestay_bot/services/sensitive_data.py src/homestay_bot/services/property_admin_service.py src/homestay_bot/routes/properties.py src/homestay_bot/templates/properties/index.html src/homestay_bot/templates/properties/detail.html src/homestay_bot/config.py .env.example src/homestay_bot/main.py src/homestay_bot/application.py tests/unit/test_sensitive_data.py tests/integration/test_property_routes.py
+git commit -m "feat: manage encrypted room credentials"
+```
+
+### Task 10：可入住后的幂等凭证发送
+
+**Files:**
+- Create: `src/homestay_bot/services/credential_delivery.py`
+- Modify: `src/homestay_bot/integrations/wecom/api_client.py`
+- Modify: `src/homestay_bot/services/room_readiness_service.py`
+- Modify: `src/homestay_bot/application.py`
+- Modify: `src/homestay_bot/worker.py`
+- Test: `tests/unit/test_credential_delivery.py`
+- Test: `tests/unit/test_wecom_api_client.py`
+- Test: `tests/unit/test_worker.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_ready_room_enqueues_each_credential_part_once():
+    result = await service.evaluate(order_id=7)
+    assert result.status is CredentialDeliveryStatus.PENDING
+    assert jobs.dedupe_keys == [
+        "credential:7:guide:v3",
+        "credential:7:password:v3",
+        "credential:7:qr:v3",
+    ]
+```
+
+同时覆盖订单/客户/日期/房间不匹配不发送、非当天入住不发送、重复可入住事件不重复、文本成功图片不明确时不重放图片、48小时窗口失败转人工任务。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_credential_delivery.py tests/unit/test_wecom_api_client.py tests/unit/test_worker.py`
+
+Expected: FAIL，提示凭证投递服务和图片发送接口不存在。
+
+- [ ] **Step 3：实现逐部件投递和安全门**
+
+```python
+class CredentialDeliveryService:
+    async def evaluate(self, order_id: int) -> CredentialDelivery:
+        order = await self._orders.require_for_update(order_id)
+        self._rules.require_all_delivery_conditions(order)
+        return await self._deliveries.ensure_parts(order)
+
+    async def mark_sent(
+        self, part_id: int, external_message_id: str
+    ) -> None:
+        await self._deliveries.mark_sent(part_id, external_message_id)
+
+    async def mark_uncertain(self, part_id: int, error_code: str) -> None:
+        await self._deliveries.mark_needs_review(part_id, error_code)
+```
+
+扩展企业微信客户端的临时素材上传和图片发送。指南、密码和二维码各自拥有唯一投递部件与幂等键；外部结果不明确时状态为 `NEEDS_REVIEW`，不自动重放。房间标记可入住后只调用 `evaluate()`，不在请求事务中直接发送。
+
+- [ ] **Step 4：运行投递与 worker 回归**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_credential_delivery.py tests/unit/test_wecom_api_client.py tests/unit/test_worker.py tests/unit/test_room_readiness_service.py`
+
+Expected: PASS。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add src/homestay_bot/services/credential_delivery.py src/homestay_bot/integrations/wecom/api_client.py src/homestay_bot/services/room_readiness_service.py src/homestay_bot/application.py src/homestay_bot/worker.py tests/unit/test_credential_delivery.py tests/unit/test_wecom_api_client.py tests/unit/test_worker.py
+git commit -m "feat: deliver room credentials safely"
+```
+
+### Task 11：CRM管理员手机页、标签和合并审批
+
+**Files:**
+- Create: `src/homestay_bot/integrations/wecom/contact_client.py`
+- Create: `src/homestay_bot/services/customer_tag_sync.py`
+- Create: `src/homestay_bot/routes/customers.py`
+- Create: `src/homestay_bot/services/customer_admin_service.py`
+- Create: `src/homestay_bot/templates/customers/index.html`
+- Create: `src/homestay_bot/templates/customers/detail.html`
+- Create: `src/homestay_bot/templates/customers/merge.html`
+- Modify: `src/homestay_bot/main.py`
+- Modify: `src/homestay_bot/application.py`
+- Modify: `src/homestay_bot/config.py`
+- Modify: `.env.example`
+- Modify: `src/homestay_bot/static/app.css`
+- Test: `tests/integration/test_customer_routes.py`
+- Test: `tests/unit/test_customer_admin_service.py`
+- Test: `tests/unit/test_wecom_contact_client.py`
+- Test: `tests/unit/test_customer_tag_sync.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+def test_admin_can_confirm_merge_but_staff_cannot(client):
+    staff_response = client.post("/employee/customers/merge/1/confirm")
+    assert staff_response.status_code == 403
+    admin_response = admin_client.post(
+        "/employee/customers/merge/1/confirm",
+        data={"csrf_token": csrf_token},
+    )
+    assert admin_response.status_code == 303
+```
+
+同时覆盖客户列表、标签多选、备注、手机号脱敏、摘要更正/删除、拒绝合并、合并审计无正文。标签始终先在本地成功保存；仅当客户存在已验证的 `WECOM_CONTACT` 身份且配置了客户联系 Secret 时同步企业微信标签；缺少身份或配置时跳过，接口失败时标记待重试且不回滚本地标签。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_customer_routes.py tests/unit/test_customer_admin_service.py tests/unit/test_wecom_contact_client.py tests/unit/test_customer_tag_sync.py`
+
+Expected: FAIL，提示客户管理路由不存在。
+
+- [ ] **Step 3：实现管理员 CRM 页面**
+
+```python
+class CustomerAdminService:
+    async def list_customers(self, query: str | None) -> list[CustomerCard]:
+        return await self._customers.search_cards(query)
+
+    async def get_detail(self, customer_id: int) -> CustomerDetail:
+        return await self._customers.require_admin_detail(customer_id)
+
+    async def set_tags(
+        self, customer_id: int, tag_ids: list[int], administrator_id: int
+    ) -> None:
+        self._permissions.require_administrator(administrator_id)
+        await self._customers.replace_tags(customer_id, tag_ids)
+        await self._tag_sync.enqueue_if_linked(customer_id)
+
+    async def update_note(
+        self, customer_id: int, note: str, administrator_id: int
+    ) -> None:
+        self._permissions.require_administrator(administrator_id)
+        await self._customers.update_note(customer_id, note.strip())
+```
+
+全部路由要求管理员、CSRF 和活动员工复核。详情页只显示脱敏电话，完整敏感资料不通过普通 HTML 渲染。
+
+`CustomerTagSyncService` 仅对已验证的企业微信客户联系身份和配置了 `wecom_tag_id` 的标签调用官方 `/cgi-bin/externalcontact/mark_tag`。增加可选 `WECOM_CONTACT_SECRET`：未配置时健康项显示 `not_configured`，不影响本地 CRM；同步失败只记录错误码并保持 `sync_pending=True`，由 worker 幂等重试，日志不得写外部联系人 ID 或标签正文。
+
+- [ ] **Step 4：运行 CRM 权限测试**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_customer_routes.py tests/unit/test_customer_admin_service.py tests/unit/test_wecom_contact_client.py tests/unit/test_customer_tag_sync.py tests/integration/test_task_routes.py`
+
+Expected: PASS。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add src/homestay_bot/integrations/wecom/contact_client.py src/homestay_bot/services/customer_tag_sync.py src/homestay_bot/routes/customers.py src/homestay_bot/services/customer_admin_service.py src/homestay_bot/templates/customers/index.html src/homestay_bot/templates/customers/detail.html src/homestay_bot/templates/customers/merge.html src/homestay_bot/main.py src/homestay_bot/application.py src/homestay_bot/config.py .env.example src/homestay_bot/static/app.css tests/integration/test_customer_routes.py tests/unit/test_customer_admin_service.py tests/unit/test_wecom_contact_client.py tests/unit/test_customer_tag_sync.py
+git commit -m "feat: add mobile customer crm"
+```
+
+### Task 12：入住生命周期提醒、发送窗口失败和人工联系任务
+
+**Files:**
+- Create: `src/homestay_bot/services/lifecycle_reminders.py`
+- Modify: `src/homestay_bot/services/business_task_service.py`
+- Modify: `src/homestay_bot/application.py`
+- Modify: `src/homestay_bot/worker.py`
+- Test: `tests/unit/test_lifecycle_reminders.py`
+- Test: `tests/unit/test_worker.py`
+
+- [ ] **Step 1：先写失败测试**
+
+```python
+async def test_expired_wecom_window_creates_manual_contact_task():
+    wecom.raise_error_code = 95004
+    await service.send(reminder)
+    assert tasks.created[0].task_type is BusinessTaskType.MANUAL_CONTACT
+    assert reminder.delivered_at is None
+```
+
+同时覆盖入住前一天、入住当天、退房前、退房后提醒，武汉时区日期边界，已发送幂等，客户拒收和超过5条不误记送达。
+
+- [ ] **Step 2：运行测试并确认失败**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py`
+
+Expected: FAIL，提示生命周期提醒服务不存在。
+
+- [ ] **Step 3：实现确定性提醒调度**
+
+```python
+class LifecycleReminderService:
+    async def schedule_for_order(self, order_id: int) -> list[Job]:
+        order = await self._orders.require(order_id)
+        return await self._reminders.ensure_schedule(order)
+
+    async def deliver(self, reminder_id: int) -> None:
+        reminder = await self._reminders.require_pending(reminder_id)
+        try:
+            await self._sender.send(reminder)
+        except WeComApiError as error:
+            if error.error_code not in EXPIRED_SEND_ERROR_CODES:
+                raise
+            await self._tasks.create_manual_contact(reminder)
+            await self._reminders.mark_manual_followup(reminder)
+```
+
+提醒幂等键使用 `order_id + reminder_type + scheduled_date`。入住前天气由现有实时搜索能力生成，但不得包含链接；天气失败时仍发送路线、停车和注意事项。`EXPIRED_SEND_ERROR_CODES` 只包含已由企业微信契约测试确认的窗口过期、拒收和条数超限错误码；这些错误创建 YuMi 人工联系任务并终止自动重试，其他网络或服务错误继续走有上限的退避重试。
+
+- [ ] **Step 4：运行时区和失败回退测试**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py tests/unit/test_deepseek_tourism.py`
+
+Expected: PASS。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add src/homestay_bot/services/lifecycle_reminders.py src/homestay_bot/services/business_task_service.py src/homestay_bot/application.py src/homestay_bot/worker.py tests/unit/test_lifecycle_reminders.py tests/unit/test_worker.py
+git commit -m "feat: schedule guest lifecycle reminders"
+```
+
+### Task 13：全链路装配、健康状态、真实契约与本机部署
+
+**Files:**
+- Modify: `src/homestay_bot/application.py`
+- Modify: `src/homestay_bot/routes/health.py`
+- Modify: `tests/integration/test_runtime_startup.py`
+- Create: `tests/integration/test_phase_one_flow.py`
+- Modify: `tests/contract/test_hostex_contract.py`
+- Modify: `tests/contract/test_wecom_contract.py`
+- Modify: `tests/contract/test_deepseek_contract.py`
+- Modify: `deploy/com.rin.homestay-bot.plist`
+- Modify: `.env.example`
+
+- [ ] **Step 1：编写一期端到端失败测试**
+
+```python
+async def test_phase_one_order_to_ready_and_credentials_flow():
+    await receive_guest_message("今天入住明天退房")
+    await receive_hostex_reservation_webhook("R-1")
+    task = await require_single_turnover_task("R-1")
+    await assign_and_complete_with_photo(task)
+    await mark_room_ready(task)
+    assert await credential_parts("R-1") == {
+        "guide": "sent",
+        "password": "sent",
+        "qr": "sent",
+    }
+```
+
+另写两个客户上下文隔离、七天摘要、Webhook补漏、越权员工、发送窗口过期和重复事件测试。
+
+- [ ] **Step 2：运行端到端测试并确认暴露装配缺口**
+
+Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_phase_one_flow.py tests/integration/test_runtime_startup.py`
+
+Expected: FAIL，列出尚未注册的 handler、状态服务或健康项。
+
+- [ ] **Step 3：完成应用装配和健康检查**
+
+`application_lifespan()` 只创建依赖并注册：
+
+```python
+app.state.customer_admin_service
+app.state.task_page_service
+app.state.property_admin_service
+app.state.private_file_service
+app.state.hostex_webhook_service
+```
+
+健康页增加 `hostex_webhook_sync`、`context_maintenance`、`lifecycle_scheduler`，每项以最近成功心跳判定，凭证和客户正文不得进入健康响应。
+
+- [ ] **Step 4：运行全部本地验证**
+
+Run:
+
+```bash
+PYTHONPATH=src .venv/bin/pytest -q
+.venv/bin/ruff check .
+.venv/bin/mypy src
+git diff --check
+```
+
+Expected: 全部测试通过；只有未显式开启的真实契约测试被跳过；Ruff、mypy 和差异检查均通过。
+
+- [ ] **Step 5：运行真实契约与迁移演练**
+
+显式开启并分别验证：
+
+- 百居易订单查询、Webhook样例解析与对账；
+- 企业微信文本、图片素材和发送窗口错误；
+- DeepSeek客户摘要、任务提取和脱敏；
+- SQLite完整升级/降级/升级；
+- 临时PostgreSQL执行全部迁移和关键仓储测试；
+- 备份恢复后订单、任务、摘要和审计数量一致。
+
+Expected: 真实契约通过，日志无密钥、密码、二维码、完整手机号和客户聊天正文。
+
+- [ ] **Step 6：独立审查一期安全边界**
+
+检查身份合并、跨客户查询、任务越权、路径穿越、CSRF、凭证明文、外部写入重放、Webhook伪造和摘要删除顺序。所有 Critical/Important 问题修复并重新执行 Step 4。
+
+- [ ] **Step 7：备份、迁移并部署本机测试环境**
+
+先备份运行目录、数据库和私有文件，执行 `alembic upgrade head`，同步源码与模板，填入新环境变量，重启 LaunchAgent。验证：
+
+- 健康检查 HTTP 200；
+- 原有会话与知识不丢失；
+- XuKuang 保持管理员；
+- 普通员工权限最小化；
+- 两个测试客户上下文隔离；
+- 测试订单可生成唯一任务；
+- 凭证只在安全条件全部满足后发送。
+
+- [ ] **Step 8：提交验收结果**
+
+```bash
+git add tests src deploy .env.example tasks/todo.md tasks/lessons.md
+git commit -m "chore: verify yumi phase one delivery"
+```
