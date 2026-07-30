@@ -1,0 +1,105 @@
+from datetime import date
+from types import SimpleNamespace
+
+import pytest
+
+from homestay_bot.integrations.hostex_client import Reservation
+from homestay_bot.services.hostex_sync import HostexSyncConflict, HostexSyncService
+
+
+def reservation(code: str = "R-1", status: str = "confirmed") -> Reservation:
+    """构造百居易订单结果。"""
+    return Reservation(
+        reservation_code=code,
+        stay_code="S-1",
+        property_id=101,
+        check_in_date=date(2026, 8, 1),
+        check_out_date=date(2026, 8, 2),
+        status=status,
+        created_at="2026-07-31T00:00:00Z",
+    )
+
+
+class HostexStub:
+    """按测试配置返回订单列表。"""
+
+    def __init__(self, items: list[Reservation]) -> None:
+        """保存固定订单。"""
+        self.items = items
+        self.queries = []
+
+    async def list_reservations(self, query):
+        """记录查询并返回订单。"""
+        self.queries.append(query)
+        return self.items
+
+
+class OperationsStub:
+    """模拟事件读取、订单 upsert 和完成标记。"""
+
+    def __init__(self) -> None:
+        """初始化固定待处理事件。"""
+        self.event = SimpleNamespace(
+            event_key="event-1",
+            reservation_code="R-1",
+        )
+        self.upserts: list[Reservation] = []
+        self.completed = False
+
+    async def require_pending_event(self, event_key: str):
+        """返回固定事件。"""
+        assert event_key == "event-1"
+        return self.event
+
+    async def upsert_reservation(self, item: Reservation):
+        """记录同步订单。"""
+        self.upserts.append(item)
+        return SimpleNamespace(id=1)
+
+    async def mark_event_completed(self, event) -> None:
+        """记录事件已完成。"""
+        self.completed = True
+
+    async def reconcile_reservations(self, items: list[Reservation]):
+        """返回同步数量。"""
+        self.upserts.extend(items)
+        return len(items)
+
+
+@pytest.mark.asyncio
+async def test_hostex_event_upserts_exact_reservation() -> None:
+    """事件必须精确命中一笔订单后才允许 upsert 和完成。"""
+    hostex = HostexStub([reservation()])
+    operations = OperationsStub()
+    service = HostexSyncService(hostex, operations)
+
+    await service.handle_event("event-1")
+
+    assert operations.upserts[0].reservation_code == "R-1"
+    assert operations.completed is True
+
+
+@pytest.mark.asyncio
+async def test_hostex_event_conflict_does_not_guess_order() -> None:
+    """零条或多条结果必须保留事件待复核，不能猜测订单。"""
+    operations = OperationsStub()
+    service = HostexSyncService(HostexStub([]), operations)
+
+    with pytest.raises(HostexSyncConflict):
+        await service.handle_event("event-1")
+
+    assert operations.upserts == []
+    assert operations.completed is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_backfills_webhook_gap() -> None:
+    """定时对账应把日期窗口内订单交给仓储统一 upsert。"""
+    hostex = HostexStub([reservation("R-MISSED")])
+    operations = OperationsStub()
+    service = HostexSyncService(hostex, operations)
+
+    count = await service.reconcile(date(2026, 8, 1), date(2026, 8, 15))
+
+    assert count == 1
+    assert operations.upserts[0].reservation_code == "R-MISSED"

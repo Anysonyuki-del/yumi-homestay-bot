@@ -13,6 +13,7 @@ from homestay_bot.logging import configure_logging_redaction
 from homestay_bot.routes.approvals import router as approvals_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.routes.health import router as health_router
+from homestay_bot.routes.hostex_webhook import router as hostex_webhook_router
 from homestay_bot.routes.knowledge import router as knowledge_router
 from homestay_bot.routes.wecom_callback import router as wecom_callback_router
 
@@ -48,6 +49,7 @@ app.add_middleware(
     same_site="lax",
 )
 app.include_router(wecom_callback_router)
+app.include_router(hostex_webhook_router)
 app.include_router(employee_auth_router)
 app.include_router(approvals_router)
 app.include_router(knowledge_router)

@@ -225,6 +225,7 @@ class Worker[JobType: WorkerJob]:
     _retryable_job_types = {
         "wecom_sync",
         "hostex_read",
+        "hostex_event",
         "faq_draft_generate",
     }
 

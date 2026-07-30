@@ -5,7 +5,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlencode
 
@@ -53,8 +53,10 @@ from homestay_bot.repositories.faq_candidates import (
 )
 from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
 from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
+from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 from homestay_bot.routes.employee_auth import EmployeeAuthService
 from homestay_bot.routes.health import OperationalHealthService
+from homestay_bot.routes.hostex_webhook import HostexWebhookService
 from homestay_bot.routes.knowledge import KnowledgeAdminService
 from homestay_bot.routes.wecom_callback import WeComCallbackService
 from homestay_bot.services.approval_page_service import ApprovalPageService
@@ -69,6 +71,7 @@ from homestay_bot.services.faq_candidate_context import (
 )
 from homestay_bot.services.faq_candidate_service import FrequentFaqService
 from homestay_bot.services.faq_draft_job import FaqDraftJobService
+from homestay_bot.services.hostex_sync import HostexSyncService
 from homestay_bot.services.knowledge_service import KnowledgeService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
@@ -118,6 +121,23 @@ class DurableJobQueue:
             "wecom_sync",
             {"cursor": "", "token": token, "open_kfid": open_kfid},
         )
+
+
+class SessionHostexEventRecorder:
+    """用短会话原子保存百居易事件和后台任务。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def record_hostex_event(self, **fields: Any) -> bool:
+        """在同一事务写入事件与唯一任务并立即提交。"""
+        async with self._factory() as session:
+            created = await SQLAlchemyOperationsRepository(
+                session
+            ).record_hostex_event(**fields)
+            await session.commit()
+            return created
 
 
 class TransactionalOutboxWeCom:
@@ -383,6 +403,16 @@ def _register_faq_draft_handler(
         handlers["faq_draft_generate"] = factory(session)
 
 
+def _register_hostex_event_handler(
+    handlers: dict[str, JobHandler],
+    session: AsyncSession,
+    factory: Callable[[AsyncSession], JobHandler] | None,
+) -> None:
+    """为当前 worker 事务按需注册百居易事件处理器。"""
+    if factory is not None:
+        handlers["hostex_event"] = factory(session)
+
+
 async def _run_worker_loop(
     app: FastAPI,
     *,
@@ -390,6 +420,9 @@ async def _run_worker_loop(
     handler: WeComSyncJobHandler,
     wecom: WeComApiClient,
     faq_draft_handler_factory: (
+        Callable[[AsyncSession], JobHandler] | None
+    ) = None,
+    hostex_event_handler_factory: (
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
 ) -> None:
@@ -447,6 +480,11 @@ async def _run_worker_loop(
                     handlers,
                     session,
                     faq_draft_handler_factory,
+                )
+                _register_hostex_event_handler(
+                    handlers,
+                    session,
+                    hostex_event_handler_factory,
                 )
                 worker = Worker(
                     repository=repository,
@@ -518,6 +556,38 @@ async def _run_context_maintenance_loop(
                 type(error).__name__,
             )
         await asyncio.sleep(3600)
+
+
+async def _run_hostex_reconcile_loop(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    hostex: HostexClient,
+    interval_seconds: float,
+    today_provider: Callable[[], date] | None = None,
+) -> None:
+    """定时对账近期订单，补回遗漏的 Webhook。"""
+    current_date = today_provider or (lambda: datetime.now(UTC).date())
+    while True:
+        try:
+            async with factory() as session:
+                service = HostexSyncService(
+                    hostex,
+                    SQLAlchemyOperationsRepository(session),
+                )
+                today = current_date()
+                await service.reconcile(
+                    today - timedelta(days=1),
+                    today + timedelta(days=15),
+                )
+                await session.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "百居易订单对账失败：error_type=%s",
+                type(error).__name__,
+            )
+        await asyncio.sleep(interval_seconds)
 
 
 def _next_wecom_poll_delay(
@@ -692,6 +762,19 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return handle_faq_draft
 
+    def build_hostex_event_handler(session: AsyncSession) -> JobHandler:
+        """为当前 worker 事务创建百居易事件同步处理器。"""
+        service = HostexSyncService(
+            hostex,
+            SQLAlchemyOperationsRepository(session),
+        )
+
+        async def handle_hostex_event(payload: dict[str, Any]) -> None:
+            """按事件键同步一笔订单。"""
+            await service.handle_event(str(payload["event_key"]))
+
+        return handle_hostex_event
+
     async def database_probe() -> bool:
         """执行无副作用 SELECT 1 检查数据库连接。"""
         try:
@@ -719,6 +802,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.wecom_corp_id,
         queue,
     )
+    app.state.hostex_webhook_service = HostexWebhookService(
+        settings.hostex_webhook_secret_token,
+        SessionHostexEventRecorder(factory),
+    )
     app.state.worker_last_heartbeat = datetime.now(UTC)
     # 启动宽限期避免首次补拉前被误报；一次成功后由真实心跳覆盖。
     app.state.wecom_poll_last_success = datetime.now(UTC)
@@ -742,6 +829,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             handler=sync_handler,
             wecom=wecom,
             faq_draft_handler_factory=build_faq_draft_handler,
+            hostex_event_handler_factory=build_hostex_event_handler,
         )
     )
     poll_task = asyncio.create_task(
@@ -760,6 +848,13 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             summarizer=context_summarizer,
         )
     )
+    hostex_reconcile_task = asyncio.create_task(
+        _run_hostex_reconcile_loop(
+            factory=factory,
+            hostex=hostex,
+            interval_seconds=settings.hostex_reconcile_interval_seconds,
+        )
+    )
 
     try:
         yield
@@ -769,6 +864,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             poll_task,
             faq_maintenance_task,
             context_maintenance_task,
+            hostex_reconcile_task,
         )
         for task in background_tasks:
             task.cancel()
@@ -782,6 +878,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "approval_page_service",
             "knowledge_admin_service",
             "wecom_callback_service",
+            "hostex_webhook_service",
             "health_service",
             "worker_last_heartbeat",
             "wecom_poll_last_success",

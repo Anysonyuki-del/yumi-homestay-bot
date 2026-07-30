@@ -56,6 +56,7 @@ def test_configured_application_starts_worker_and_reports_healthy(
         "DEEPSEEK_BASE_URL": "https://api.deepseek.test",
         "DEEPSEEK_MODEL": "deepseek-v4-flash",
         "HOSTEX_ACCESS_TOKEN": "test-hostex-token",
+        "HOSTEX_WEBHOOK_SECRET_TOKEN": "test-webhook-secret",
         "WECOM_CORP_ID": "corp-id",
         "WECOM_KF_SECRET": "kf-secret",
         "WECOM_CALLBACK_TOKEN": "callback-token",

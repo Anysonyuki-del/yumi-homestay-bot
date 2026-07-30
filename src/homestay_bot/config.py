@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
     hostex_access_token: str
+    hostex_webhook_secret_token: str = Field(min_length=8)
+    hostex_reconcile_interval_seconds: float = Field(default=900, ge=60, le=86400)
     wecom_corp_id: str
     wecom_kf_secret: str
     wecom_callback_token: str

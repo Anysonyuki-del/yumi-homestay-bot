@@ -742,7 +742,7 @@ git commit -m "feat: add operations data model"
 - Test: `tests/unit/test_hostex_sync.py`
 - Test: `tests/integration/test_operations_repository.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 async def test_hostex_webhook_verifies_secret_and_enqueues_once(client):
@@ -757,13 +757,13 @@ async def test_hostex_webhook_verifies_secret_and_enqueues_once(client):
 
 同时覆盖错误 Secret 返回401、未知字段忽略、重复事件幂等、订单更新、订单取消、Webhook 遗漏后对账补回。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_hostex_webhook.py tests/unit/test_hostex_sync.py tests/integration/test_operations_repository.py`
 
 Expected: FAIL，提示路由和同步服务不存在。
 
-- [ ] **Step 3：实现快速入队和订单 upsert**
+- [x] **Step 3：实现快速入队和订单 upsert**
 
 ```python
 class HostexSyncService:
@@ -795,7 +795,7 @@ class HostexSyncService:
 
 Webhook 使用 `secrets.compare_digest()` 验签，规范化 JSON 后计算缺省事件键，事务内保存事件并入队，不能调用 AI。同步服务按 `reservation_code` upsert `StayOrder` 并关联可靠客户身份；查到零条或多条订单时抛出 `HostexSyncConflict`，保留事件待人工复核，不猜测订单。周转任务在 Task 6 接入，避免本任务依赖尚未实现的任务服务。
 
-- [ ] **Step 4：注册 handler 与定时对账**
+- [x] **Step 4：注册 handler 与定时对账**
 
 增加 `HOSTEX_WEBHOOK_SECRET_TOKEN` 和 `HOSTEX_RECONCILE_INTERVAL_SECONDS=900`；worker 注册 `hostex_event`，应用启动独立对账循环。运行：
 
@@ -803,7 +803,7 @@ Webhook 使用 `secrets.compare_digest()` 验签，规范化 JSON 后计算缺�
 
 Expected: PASS，Webhook 请求路径不执行慢操作。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/homestay_bot/routes/hostex_webhook.py src/homestay_bot/services/hostex_sync.py src/homestay_bot/repositories/operations.py src/homestay_bot/config.py .env.example src/homestay_bot/main.py src/homestay_bot/application.py src/homestay_bot/worker.py tests/unit/test_hostex_webhook.py tests/unit/test_hostex_sync.py tests/integration/test_operations_repository.py
