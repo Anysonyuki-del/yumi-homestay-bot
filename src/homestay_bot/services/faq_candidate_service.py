@@ -174,8 +174,12 @@ class FrequentFaqService:
             existing = await self._candidates.get(decision.faq_candidate_id)
             if existing is not None:
                 return existing
+        # 标准问题会进入候选目录、草稿和管理员页面，必须在持久化边界脱敏。
+        canonical_question = self.redact_example(
+            decision.faq_canonical_question or ""
+        )[:300]
         return await self._candidates.get_or_create(
-            canonical_question=decision.faq_canonical_question or "",
+            canonical_question=canonical_question,
             category=decision.faq_category or "",
         )
 

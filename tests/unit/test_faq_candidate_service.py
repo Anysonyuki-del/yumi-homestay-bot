@@ -236,6 +236,39 @@ def test_redact_example_masks_sensitive_identifiers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_canonical_question_is_redacted_and_limited_before_persistence() -> None:
+    """模型标准问题进入候选仓储前必须脱敏并限制长度。"""
+    now = datetime(2026, 7, 30, 4, tzinfo=UTC)
+    candidates = CandidateRepositoryStub()
+    service = FrequentFaqService(
+        candidates=candidates,
+        jobs=JobRepositoryStub(),
+        now_provider=lambda: now,
+    )
+    sensitive_canonical = (
+        "手机号13800138000，订单号 AB-123456，"
+        "身份证420106199001011234，邮箱guest@example.com，"
+        "请问民宿能停车吗？"
+        + "补充" * 200
+    )
+
+    await service.track(
+        source_message_id="canonical-sensitive",
+        question="请问民宿能停车吗？",
+        occurred_at=now,
+        decision=decision(faq_canonical_question=sensitive_canonical),
+    )
+
+    stored = candidates.candidate.canonical_question
+    assert "13800138000" not in stored
+    assert "AB-123456" not in stored
+    assert "420106199001011234" not in stored
+    assert "guest@example.com" not in stored
+    assert "请问民宿能停车吗" in stored
+    assert len(stored) <= 300
+
+
+@pytest.mark.asyncio
 async def test_sixth_occurrence_waits_for_24_hour_cooldown_and_reuses_draft() -> None:
     """无新示例的第二批三次应延迟到冷却结束并复用已有草稿。"""
     now = datetime(2026, 7, 30, 4, tzinfo=UTC)
