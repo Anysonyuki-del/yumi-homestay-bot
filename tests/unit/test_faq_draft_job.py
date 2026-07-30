@@ -5,6 +5,7 @@ import pytest
 
 from homestay_bot.domain.enums import (
     KnowledgeCandidateDraftStatus,
+    KnowledgeCandidateStatus,
     Language,
 )
 from homestay_bot.integrations.deepseek_faq_drafter import (
@@ -35,6 +36,7 @@ def candidate(**updates):
         "id": 7,
         "canonical_question": "民宿是否提供停车位？",
         "category": "停车",
+        "status": KnowledgeCandidateStatus.OPEN,
         "total_occurrences": 3,
         "examples": ["有停车位吗？", "开车过去方便停车吗？"],
         "examples_version": 2,
@@ -284,6 +286,21 @@ async def test_ready_draft_with_unchanged_examples_is_reused() -> None:
 
     assert drafter.calls == []
     assert len(notifications.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_closed_candidate_ignores_queued_draft_job() -> None:
+    """候选关闭后，旧代次任务不得重建草稿或发送管理员通知。"""
+    record = candidate(status=KnowledgeCandidateStatus.SNOOZED)
+    service, _, drafter, knowledge, notifications, _ = build_service(record)
+
+    await service.handle(
+        {"candidate_id": 7, "generation": 1, "refresh_draft": True}
+    )
+
+    assert drafter.calls == []
+    assert knowledge.languages == []
+    assert notifications.messages == []
 
 
 @pytest.mark.asyncio

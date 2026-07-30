@@ -4,6 +4,7 @@ from typing import Any, Protocol
 
 from homestay_bot.domain.enums import (
     KnowledgeCandidateDraftStatus,
+    KnowledgeCandidateStatus,
     Language,
 )
 from homestay_bot.integrations.deepseek_faq_drafter import (
@@ -22,6 +23,7 @@ class DraftCandidate(Protocol):
     """定义草稿任务读取的候选字段。"""
 
     id: int
+    status: KnowledgeCandidateStatus
     canonical_question: str
     category: str
     total_occurrences: int
@@ -119,7 +121,11 @@ class FaqDraftJobService:
         candidate_id = int(payload["candidate_id"])
         generation = int(payload["generation"])
         candidate = await self._candidates.get(candidate_id)
-        if candidate is None or candidate.draft_generation != generation:
+        if (
+            candidate is None
+            or candidate.status is not KnowledgeCandidateStatus.OPEN
+            or candidate.draft_generation != generation
+        ):
             # 候选已删除或进入更新代次时，旧任务直接幂等结束。
             return
 

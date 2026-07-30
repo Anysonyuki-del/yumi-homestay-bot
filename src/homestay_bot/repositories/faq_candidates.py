@@ -52,6 +52,7 @@ class SQLAlchemyFaqCandidateRepository:
             .where(KnowledgeCandidate.status == KnowledgeCandidateStatus.OPEN)
             .order_by(KnowledgeCandidate.updated_at.desc(), KnowledgeCandidate.id.desc())
             .limit(limit)
+            .execution_options(populate_existing=True)
         )
         return list(result.all())
 
@@ -246,12 +247,20 @@ class SQLAlchemyFaqCandidateRepository:
     ) -> KnowledgeCandidate:
         """在管理员通知入队后更新本轮提醒游标。"""
         candidate = await self._require(candidate_id)
-        candidate.notification_pending = False
-        candidate.last_reminded_total = candidate.total_occurrences
-        # 冷却期内积压的全部次数以实际通知时刻为新基线。
-        candidate.last_threshold_total = candidate.total_occurrences
-        candidate.last_reminded_at = reminded_at
-        await self._session.flush()
+        # 用数据库当前累计数原子推进两个游标，避免 DeepSeek 调用期间新增次数
+        # 被当前会话 identity map 中的陈旧对象覆盖。
+        await self._session.execute(
+            update(KnowledgeCandidate)
+            .where(KnowledgeCandidate.id == candidate_id)
+            .values(
+                notification_pending=False,
+                last_reminded_total=KnowledgeCandidate.total_occurrences,
+                last_threshold_total=KnowledgeCandidate.total_occurrences,
+                last_reminded_at=reminded_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await self._session.refresh(candidate)
         return candidate
 
     async def snooze(
@@ -315,36 +324,40 @@ class SQLAlchemyFaqCandidateRepository:
 
     async def reopen_expired(self, *, now: datetime) -> int:
         """关闭期满后清空旧周期的累计数、游标和出现明细。"""
-        expired = await self._session.scalars(
-            select(KnowledgeCandidate).where(
+        result = await self._session.execute(
+            update(KnowledgeCandidate)
+            .where(
                 KnowledgeCandidate.status == KnowledgeCandidateStatus.SNOOZED,
                 KnowledgeCandidate.snoozed_until <= now,
             )
+            .values(
+                status=KnowledgeCandidateStatus.OPEN,
+                snoozed_until=None,
+                total_occurrences=0,
+                last_seen_at=None,
+                last_threshold_total=0,
+                last_reminded_total=0,
+                last_reminded_at=None,
+                notification_pending=False,
+            )
+            .returning(KnowledgeCandidate.id)
+            .execution_options(synchronize_session=False)
         )
-        reopened = 0
-        for candidate in expired:
-            reopened += 1
-            candidate.status = KnowledgeCandidateStatus.OPEN
-            candidate.snoozed_until = None
-            candidate.total_occurrences = 0
-            candidate.last_seen_at = None
-            candidate.last_threshold_total = 0
-            candidate.last_reminded_total = 0
-            candidate.last_reminded_at = None
+        candidate_ids = list(result.scalars().all())
+        for candidate_id in candidate_ids:
             # 自动重开属于系统动作，审计不复制问题、示例或草稿正文。
             self._session.add(
                 AuditLog(
                     actor_employee_id=None,
                     action="faq_candidate.reopen",
                     target_type="knowledge_candidate",
-                    target_id=str(candidate.id),
-                    details={"candidate_id": candidate.id},
+                    target_id=str(candidate_id),
+                    details={"candidate_id": candidate_id},
                 )
             )
-            candidate.notification_pending = False
-            await self._delete_occurrences(candidate.id)
+            await self._delete_occurrences(candidate_id)
         await self._session.flush()
-        return reopened
+        return len(candidate_ids)
 
     async def _delete_occurrences(self, candidate_id: int) -> None:
         """显式删除出现明细，兼容未启用外键级联的 SQLite。"""
@@ -359,6 +372,8 @@ class SQLAlchemyFaqCandidateRepository:
         """删除脱敏示例和未采用草稿，避免处理完成后继续保留正文。"""
         candidate.examples = []
         candidate.examples_version = 0
+        # 关闭或转换时废止所有已经排队的旧代次草稿任务。
+        candidate.draft_generation += 1
         candidate.draft_status = KnowledgeCandidateDraftStatus.NONE
         candidate.draft_payload = None
         candidate.draft_attempts = 0

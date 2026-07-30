@@ -80,52 +80,52 @@
 
 ### Task 1：候选数据模型与迁移
 
-- [ ] 先在 `tests/integration/test_faq_candidate_repository.py` 编写失败测试，覆盖候选创建、来源消息幂等、72 小时计数、最多 3 条示例、30 天关闭和过期重开。
-- [ ] 在 `src/homestay_bot/domain/enums.py` 增加 `KnowledgeCandidateStatus`，在 `src/homestay_bot/domain/models.py` 增加 `KnowledgeCandidate` 与 `KnowledgeCandidateOccurrence`。
-- [ ] 新建 `migrations/versions/0002_frequent_faq_candidates.py`，包含外键、唯一约束和候选状态、出现时间索引。
-- [ ] 新建 `src/homestay_bot/repositories/faq_candidates.py`，实现 `list_context()`、`get_or_create()`、`add_occurrence()`、`count_since()`、`mark_draft_*()`、`snooze()`、`convert()` 和过期明细清理。
-- [ ] 运行仓储测试并提交 `feat: persist frequent faq candidates`。
+- [x] 先在 `tests/integration/test_faq_candidate_repository.py` 编写失败测试，覆盖候选创建、来源消息幂等、72 小时计数、最多 3 条示例、30 天关闭和过期重开。
+- [x] 在 `src/homestay_bot/domain/enums.py` 增加 `KnowledgeCandidateStatus`，在 `src/homestay_bot/domain/models.py` 增加 `KnowledgeCandidate` 与 `KnowledgeCandidateOccurrence`。
+- [x] 新建 `migrations/versions/0002_frequent_faq_candidates.py`，包含外键、唯一约束和候选状态、出现时间索引。
+- [x] 新建 `src/homestay_bot/repositories/faq_candidates.py`，实现 `list_context()`、`get_or_create()`、`add_occurrence()`、`count_since()`、`mark_draft_*()`、`snooze()`、`convert()` 和过期明细清理。
+- [x] 运行仓储测试并提交 `feat: persist frequent faq candidates`。
 
 ### Task 2：主回复内的语义候选归类
 
-- [ ] 先在 `tests/unit/test_deepseek_client.py` 编写失败测试，验证现有候选编号、标准问题、分类随同一次结构化客服响应返回，且动态、高风险或已有知识覆盖的问题被清空。
-- [ ] 在 `src/homestay_bot/integrations/deepseek_client.py` 扩展 `AssistantDecision` 与 JSON Schema，新增 `faq_candidate`、`faq_candidate_id`、`faq_canonical_question` 和 `faq_category`。
-- [ ] 新建 `src/homestay_bot/services/faq_candidate_context.py`，最多向模型提供 50 条未关闭候选编号与标准问题，不提供示例或客人身份。
-- [ ] 在 `src/homestay_bot/application.py` 注入短会话候选上下文，保持客人回复链路只有现有一次 DeepSeek 调用。
-- [ ] 运行 DeepSeek 客服单元测试并提交 `feat: classify faq candidates in guest response`。
+- [x] 先在 `tests/unit/test_deepseek_client.py` 编写失败测试，验证现有候选编号、标准问题、分类随同一次结构化客服响应返回，且动态、高风险或已有知识覆盖的问题被清空。
+- [x] 在 `src/homestay_bot/integrations/deepseek_client.py` 扩展 `AssistantDecision` 与 JSON Schema，新增 `faq_candidate`、`faq_candidate_id`、`faq_canonical_question` 和 `faq_category`。
+- [x] 新建 `src/homestay_bot/services/faq_candidate_context.py`，最多向模型提供 50 条未关闭候选编号与标准问题，不提供示例或客人身份。
+- [x] 在 `src/homestay_bot/application.py` 注入短会话候选上下文，保持客人回复链路只有现有一次 DeepSeek 调用。
+- [x] 运行 DeepSeek 客服单元测试并提交 `feat: classify faq candidates in guest response`。
 
 ### Task 3：72 小时高频统计与隐私处理
 
-- [ ] 先在 `tests/unit/test_faq_candidate_service.py` 编写失败测试，覆盖三次门槛、同客人累计、不同主题隔离、每新增三次且满 24 小时、关闭期不计数、消息幂等和统计异常隔离。
-- [ ] 新建 `src/homestay_bot/services/faq_candidate_service.py`，实现 `record()`、固定 FAQ 排除规则、UTC 窗口计算和草稿任务去重键。
-- [ ] 在同一服务实现手机号、订单号、身份证号和邮箱脱敏；只保留最近 3 条不同示例和示例版本。
-- [ ] 在 `tests/unit/test_conversation_service.py` 先验证客人回复完成后才记录候选，记录失败不回滚回复且不触发人工接管。
-- [ ] 在 `src/homestay_bot/services/conversation_service.py` 注入可选候选服务，并在有效 `AssistantDecision` 后执行隔离记录。
-- [ ] 运行服务与会话测试并提交 `feat: detect frequent faq gaps`。
+- [x] 先在 `tests/unit/test_faq_candidate_service.py` 编写失败测试，覆盖三次门槛、同客人累计、不同主题隔离、每新增三次且满 24 小时、关闭期不计数、消息幂等和统计异常隔离。
+- [x] 新建 `src/homestay_bot/services/faq_candidate_service.py`，实现 `record()`、固定 FAQ 排除规则、UTC 窗口计算和草稿任务去重键。
+- [x] 在同一服务实现手机号、订单号、身份证号和邮箱脱敏；只保留最近 3 条不同示例和示例版本。
+- [x] 在 `tests/unit/test_conversation_service.py` 先验证客人回复完成后才记录候选，记录失败不回滚回复且不触发人工接管。
+- [x] 在 `src/homestay_bot/services/conversation_service.py` 注入可选候选服务，并在有效 `AssistantDecision` 后执行隔离记录。
+- [x] 运行服务与会话测试并提交 `feat: detect frequent faq gaps`。
 
 ### Task 4：DeepSeek FAQ 草稿后台任务
 
-- [ ] 先在 `tests/unit/test_deepseek_faq_drafter.py` 编写失败测试，验证中英文问答、关键词、待核实事项、`【待管理员确认】`、无链接和不携带客人身份。
-- [ ] 新建 `src/homestay_bot/integrations/deepseek_faq_drafter.py`，实现 `FaqDraft` 与 `DeepSeekFaqDrafter.generate()` 的严格 JSON 校验和安全回退。
-- [ ] 先在 `tests/unit/test_faq_draft_job.py` 编写失败测试，验证成功草稿、三次失败后的人工兜底通知、无新示例时复用原草稿，以及草稿不进入机器人知识上下文。
-- [ ] 新建 `src/homestay_bot/services/faq_draft_job.py`，实现候选草稿状态更新、失败次数、管理员收件人查询和通知正文生成。
-- [ ] 在 `src/homestay_bot/worker.py` 将 `faq_draft_generate` 标记为可安全恢复任务，在 `src/homestay_bot/application.py` 注册 handler 和事务型管理员通知。
-- [ ] 运行草稿与 worker 测试并提交 `feat: generate reviewable faq drafts`。
+- [x] 先在 `tests/unit/test_deepseek_faq_drafter.py` 编写失败测试，验证中英文问答、关键词、待核实事项、`【待管理员确认】`、无链接和不携带客人身份。
+- [x] 新建 `src/homestay_bot/integrations/deepseek_faq_drafter.py`，实现 `FaqDraft` 与 `DeepSeekFaqDrafter.generate()` 的严格 JSON 校验和安全回退。
+- [x] 先在 `tests/unit/test_faq_draft_job.py` 编写失败测试，验证成功草稿、三次失败后的人工兜底通知、无新示例时复用原草稿，以及草稿不进入机器人知识上下文。
+- [x] 新建 `src/homestay_bot/services/faq_draft_job.py`，实现候选草稿状态更新、失败次数、管理员收件人查询和通知正文生成。
+- [x] 在 `src/homestay_bot/worker.py` 将 `faq_draft_generate` 标记为可安全恢复任务，在 `src/homestay_bot/application.py` 注册 handler 和事务型管理员通知。
+- [x] 运行草稿与 worker 测试并提交 `feat: generate reviewable faq drafts`。
 
 ### Task 5：管理员候选管理与正式知识转换
 
-- [ ] 先扩展 `tests/integration/test_knowledge_routes.py`，验证普通员工不可见、管理员可见完整草稿、预填编辑、转换为启用知识、关闭 30 天、CSRF 和审计不复制正文。
-- [ ] 在 `src/homestay_bot/repositories/employees.py` 增加 `list_active_admin_userids()`，只返回启用管理员。
-- [ ] 扩展 `src/homestay_bot/routes/knowledge.py` 的管理端口与服务，增加 `list_candidates()`、`convert_candidate()` 和 `snooze_candidate()`，转换操作与候选清理保持同一事务。
-- [ ] 扩展 `src/homestay_bot/templates/knowledge/index.html` 和 `src/homestay_bot/static/app.css`，只向管理员展示候选草稿、脱敏示例、待核实事项及转换/关闭表单。
-- [ ] 在 `src/homestay_bot/application.py` 扩展 `SessionKnowledgeAdminService` 装配新管理方法。
-- [ ] 运行知识管理集成测试并提交 `feat: review frequent faq drafts`。
+- [x] 先扩展 `tests/integration/test_knowledge_routes.py`，验证普通员工不可见、管理员可见完整草稿、预填编辑、转换为启用知识、关闭 30 天、CSRF 和审计不复制正文。
+- [x] 在 `src/homestay_bot/repositories/employees.py` 增加 `list_active_admin_userids()`，只返回启用管理员。
+- [x] 扩展 `src/homestay_bot/routes/knowledge.py` 的管理端口与服务，增加 `list_candidates()`、`convert_candidate()` 和 `snooze_candidate()`，转换操作与候选清理保持同一事务。
+- [x] 扩展 `src/homestay_bot/templates/knowledge/index.html`，复用现有 `src/homestay_bot/static/app.css`，只向管理员展示候选草稿、脱敏示例、待核实事项及转换/关闭表单。
+- [x] 在 `src/homestay_bot/application.py` 扩展 `SessionKnowledgeAdminService` 装配新管理方法。
+- [x] 运行知识管理集成测试并提交 `feat: review frequent faq drafts`。
 
 ### Task 6：全链路验证与本机部署
 
-- [ ] 运行迁移升级与降级测试、全部 `pytest`、Ruff 和 mypy。
-- [ ] 扩展 `tests/contract/test_deepseek_contract.py`，显式启用真实 DeepSeek FAQ 草稿契约，确认未知专属事实使用待确认占位。
-- [ ] 在临时数据库回放三条相似问法，验证只创建一个候选、一个草稿任务和一条管理员通知，且客人回复不受影响。
+- [x] 运行迁移升级与降级测试、全部 `pytest`、Ruff 和 mypy。
+- [x] 扩展 `tests/contract/test_deepseek_contract.py`，显式启用真实 DeepSeek FAQ 草稿契约，确认未知专属事实使用待确认占位。
+- [x] 在临时数据库回放三条相似问法，验证只创建一个候选、一个草稿任务和一条管理员通知，且客人回复不受影响。
 - [ ] 独立代码审查 Critical/Important 问题并修复后重跑全部验证。
 - [ ] 备份本机运行代码和数据库，执行 Alembic 迁移，部署源码并重启 LaunchAgent。
 - [ ] 验证健康检查 HTTP 200、管理员提醒、候选页面、转换知识、会话保持 `BOT_ACTIVE`，在 Review 中记录证据。

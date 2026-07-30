@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import (
@@ -267,6 +267,7 @@ async def test_draft_state_conversion_and_occurrence_pruning(repository) -> None
     assert removed == 0
     assert converted is not None
     assert converted.status is KnowledgeCandidateStatus.CONVERTED
+    assert converted.draft_generation == 2
     assert converted.knowledge_entry_id == knowledge.id
     assert converted.examples == []
     assert converted.draft_payload is None
@@ -290,6 +291,14 @@ async def test_notification_advances_threshold_to_delivery_time_total(repository
             example="是否提供儿童用品？",
         )
     candidate.last_threshold_total = 6
+    # 模拟 DeepSeek 调用期间其他事务已把数据库累计推进，但当前 identity map 仍为旧值。
+    await session.execute(
+        update(KnowledgeCandidate)
+        .where(KnowledgeCandidate.id == candidate.id)
+        .values(total_occurrences=11)
+        .execution_options(synchronize_session=False)
+    )
+    assert candidate.total_occurrences == 8
 
     notified = await candidates.mark_notified(
         candidate.id,
@@ -297,9 +306,9 @@ async def test_notification_advances_threshold_to_delivery_time_total(repository
     )
     await session.commit()
 
-    assert notified.total_occurrences == 8
-    assert notified.last_reminded_total == 8
-    assert notified.last_threshold_total == 8
+    assert notified.total_occurrences == 11
+    assert notified.last_reminded_total == 11
+    assert notified.last_threshold_total == 11
 
 
 @pytest.mark.asyncio
@@ -393,4 +402,59 @@ async def test_concurrent_candidate_and_occurrence_writes_remain_consistent(
     assert occurrence_count == 2
     assert candidate is not None
     assert candidate.total_occurrences == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reopen_is_claimed_once_without_duplicate_audit(
+    tmp_path,
+) -> None:
+    """维护与模型上下文并发重开时，只能有一个事务取得重开权。"""
+    database_url = (
+        f"sqlite+aiosqlite:///{tmp_path / 'faq-reopen-race.db'}?timeout=30"
+    )
+    engine = create_async_engine(database_url)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 30, tzinfo=UTC)
+
+    async with factory() as session:
+        repository = SQLAlchemyFaqCandidateRepository(session)
+        candidate = await repository.get_or_create(
+            canonical_question="能否寄存行李？",
+            category="服务",
+        )
+        candidate_id = candidate.id
+        await repository.snooze(
+            candidate_id,
+            until=now,
+        )
+        await session.commit()
+
+    async def reopen() -> int:
+        """在独立事务竞争同一个到期候选。"""
+        async with factory() as session:
+            count = await SQLAlchemyFaqCandidateRepository(
+                session
+            ).reopen_expired(now=now)
+            await session.commit()
+            return count
+
+    results = await asyncio.gather(reopen(), reopen())
+
+    async with factory() as session:
+        audit_count = await session.scalar(
+            select(func.count(AuditLog.id)).where(
+                AuditLog.action == "faq_candidate.reopen",
+                AuditLog.target_id == str(candidate_id),
+            )
+        )
+        reopened = await session.get(KnowledgeCandidate, candidate_id)
+
+    assert sorted(results) == [0, 1]
+    assert audit_count == 1
+    assert reopened is not None
+    assert reopened.status is KnowledgeCandidateStatus.OPEN
+    assert reopened.total_occurrences == 0
     await engine.dispose()
