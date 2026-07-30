@@ -78,6 +78,33 @@ async def test_failed_read_job_retries_but_booking_write_does_not() -> None:
 
 
 @pytest.mark.asyncio
+async def test_long_lived_retry_delay_is_capped_at_one_hour() -> None:
+    """长期等待管理员的任务不得因指数退避溢出或沉睡过久。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        repository = SQLAlchemyJobRepository(session)
+        job = await repository.enqueue("faq_draft_generate", {"candidate_id": 7})
+        job.attempts = 100
+        before = datetime.now(UTC)
+
+        await repository.mark_failed(
+            job,
+            error_code="DeferredRetryJobError",
+            retry_allowed=True,
+            max_attempts=10_000,
+        )
+
+        assert job.status is JobStatus.PENDING
+        assert job.available_at <= before + timedelta(hours=1, seconds=1)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_stale_external_send_is_not_replayed() -> None:
     """发送结果不明确的企业微信任务应转失败，禁止恢复后重复发送。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

@@ -15,7 +15,7 @@ from homestay_bot.services.knowledge_service import (
     KnowledgeService,
     KnowledgeSnippet,
 )
-from homestay_bot.worker import RetrySafeJobError
+from homestay_bot.worker import DeferredRetryJobError, RetrySafeJobError
 
 
 class DraftCandidate(Protocol):
@@ -191,7 +191,7 @@ class FaqDraftJobService:
             await self._administrators.list_active_admin_userids()
         )
         if not administrators:
-            raise RetrySafeJobError("没有启用管理员")
+            raise DeferredRetryJobError("没有启用管理员")
         await self._notifications.send_internal_text(
             agent_id=self._agent_id,
             employee_userids=administrators,

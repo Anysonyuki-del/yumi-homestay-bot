@@ -13,7 +13,7 @@ from homestay_bot.integrations.deepseek_faq_drafter import (
 )
 from homestay_bot.services.faq_draft_job import FaqDraftJobService
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
-from homestay_bot.worker import RetrySafeJobError
+from homestay_bot.worker import DeferredRetryJobError, RetrySafeJobError
 
 
 def reviewable_draft() -> FaqDraft:
@@ -248,7 +248,7 @@ async def test_no_admin_keeps_notification_pending_and_retries_safely() -> None:
         admin_userids=[],
     )
 
-    with pytest.raises(RetrySafeJobError):
+    with pytest.raises(DeferredRetryJobError):
         await service.handle(
             {"candidate_id": 7, "generation": 1, "refresh_draft": True}
         )

@@ -128,7 +128,8 @@ class SQLAlchemyJobRepository:
         if retry_allowed and job.attempts < max_attempts:
             job.status = JobStatus.PENDING
             job.available_at = datetime.now(UTC) + timedelta(
-                seconds=2 ** max(job.attempts, 1)
+                # 长期等待管理员配置的任务按小时低频重试，避免指数溢出。
+                seconds=min(2 ** min(max(job.attempts, 1), 12), 3600)
             )
         else:
             job.status = JobStatus.FAILED

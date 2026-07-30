@@ -43,6 +43,10 @@ class RetrySafeJobError(RuntimeError):
     """表示请求确定尚未产生外部副作用，可以有限重试。"""
 
 
+class DeferredRetryJobError(RetrySafeJobError):
+    """表示依赖配置暂不可用，需要长期低频重试。"""
+
+
 class WeComSyncApi(Protocol):
     """定义同步 worker 所需的企业微信读取接口。"""
 
@@ -251,6 +255,9 @@ class Worker[JobType: WorkerJob]:
         try:
             await handler(job.payload)
         except Exception as error:
+            max_attempts = (
+                10_000 if isinstance(error, DeferredRetryJobError) else 3
+            )
             # 错误码只记录异常类型，避免把可能含客人信息的正文写进任务表。
             await self._repository.mark_failed(
                 job,
@@ -259,7 +266,7 @@ class Worker[JobType: WorkerJob]:
                     job.job_type in self._retryable_job_types
                     or isinstance(error, RetrySafeJobError)
                 ),
-                max_attempts=3,
+                max_attempts=max_attempts,
             )
         else:
             await self._repository.mark_completed(job)

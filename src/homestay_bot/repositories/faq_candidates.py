@@ -13,6 +13,7 @@ from homestay_bot.domain.enums import (
     KnowledgeCandidateStatus,
 )
 from homestay_bot.domain.models import (
+    AuditLog,
     KnowledgeCandidate,
     KnowledgeCandidateOccurrence,
 )
@@ -255,6 +256,16 @@ class SQLAlchemyFaqCandidateRepository:
             candidate.last_threshold_total = candidate.total_occurrences
             candidate.last_reminded_total = candidate.total_occurrences
             candidate.last_reminded_at = None
+            # 自动重开属于系统动作，审计不复制问题、示例或草稿正文。
+            self._session.add(
+                AuditLog(
+                    actor_employee_id=None,
+                    action="faq_candidate.reopen",
+                    target_type="knowledge_candidate",
+                    target_id=str(candidate.id),
+                    details={"candidate_id": candidate.id},
+                )
+            )
             candidate.notification_pending = False
             await self._delete_occurrences(candidate.id)
         await self._session.flush()

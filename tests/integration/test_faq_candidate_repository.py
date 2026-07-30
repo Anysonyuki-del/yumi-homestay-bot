@@ -1,13 +1,14 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import (
     KnowledgeCandidateDraftStatus,
     KnowledgeCandidateStatus,
 )
-from homestay_bot.domain.models import Base, KnowledgeEntry
+from homestay_bot.domain.models import AuditLog, Base, KnowledgeEntry
 from homestay_bot.repositories.faq_candidates import (
     SQLAlchemyFaqCandidateRepository,
 )
@@ -153,6 +154,15 @@ async def test_snooze_clears_private_content_and_reopens_after_thirty_days(
         since=now - timedelta(days=1),
         until=now + timedelta(days=31),
     ) == 0
+    audit = await session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == "faq_candidate.reopen",
+            AuditLog.target_id == str(candidate.id),
+        )
+    )
+    assert audit is not None
+    assert audit.actor_employee_id is None
+    assert audit.details == {"candidate_id": candidate.id}
 
 
 @pytest.mark.asyncio

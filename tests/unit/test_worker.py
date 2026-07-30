@@ -7,6 +7,7 @@ from homestay_bot.application import _next_wecom_poll_delay
 from homestay_bot.domain.enums import MessageOrigin
 from homestay_bot.integrations.wecom.api_client import WeComApiError
 from homestay_bot.worker import (
+    DeferredRetryJobError,
     RetrySafeJobError,
     WeComMessagePoller,
     WeComSyncJobHandler,
@@ -129,6 +130,28 @@ async def test_worker_retries_faq_draft_generation_as_safe_read_work() -> None:
 
     assert repository.failure["retry_allowed"] is True
     assert repository.failure["max_attempts"] == 3
+
+
+@pytest.mark.asyncio
+async def test_worker_keeps_deferred_admin_notification_retriable() -> None:
+    """管理员暂不可用时应长期保留任务，等待管理员配置恢复。"""
+    repository = RepositoryStub(
+        JobStub(job_type="faq_draft_generate", payload={"candidate_id": 7})
+    )
+
+    async def deferred_handler(payload):
+        """模拟当前没有启用管理员。"""
+        raise DeferredRetryJobError("no active administrator")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"faq_draft_generate": deferred_handler},
+    )
+
+    await worker.run_once()
+
+    assert repository.failure["retry_allowed"] is True
+    assert repository.failure["max_attempts"] == 10_000
 
 
 @pytest.mark.asyncio
