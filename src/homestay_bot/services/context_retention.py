@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -20,6 +20,8 @@ class CustomerModelContext:
     short_summary: str
     long_summary: str
     unresolved_items: list[str]
+    active_orders: list[dict[str, str | int]] = field(default_factory=list)
+    open_tasks: list[dict[str, str | int | None]] = field(default_factory=list)
 
 
 class ContextRepository(Protocol):

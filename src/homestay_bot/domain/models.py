@@ -530,6 +530,15 @@ class BusinessTask(TimestampMixin, Base):
     """保存保洁、维修、补给和特殊服务等运营任务。"""
 
     __tablename__ = "business_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "status IN ('PENDING_CONFIRMATION', 'CANCELLED') "
+                "OR (property_id IS NOT NULL AND service_date IS NOT NULL)"
+            ),
+            name="ck_business_task_execution_fields",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     dedupe_key: Mapped[str | None] = mapped_column(
@@ -550,10 +559,10 @@ class BusinessTask(TimestampMixin, Base):
     order_id: Mapped[int | None] = mapped_column(
         ForeignKey("stay_orders.id"), nullable=True, index=True
     )
-    property_id: Mapped[int] = mapped_column(
-        ForeignKey("property_profiles.id"), nullable=False, index=True
+    property_id: Mapped[int | None] = mapped_column(
+        ForeignKey("property_profiles.id"), nullable=True, index=True
     )
-    service_date: Mapped[date] = mapped_column(Date, nullable=False)
+    service_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     assigned_employee_id: Mapped[int | None] = mapped_column(
         ForeignKey("employees.id"), nullable=True
     )

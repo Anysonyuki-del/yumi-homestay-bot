@@ -3,10 +3,14 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from homestay_bot.domain.enums import BusinessTaskStatus
 from homestay_bot.domain.models import (
+    BusinessTask,
     Conversation,
     CustomerContextSummary,
     Message,
+    PropertyProfile,
+    StayOrder,
 )
 from homestay_bot.services.context_retention import (
     ContextSummaryResult,
@@ -134,12 +138,68 @@ class SQLAlchemyContextRepository:
     async def load_model_context(self, customer_id: int) -> CustomerModelContext:
         """读取不含原文和敏感字段的客户摘要上下文。"""
         summary = await self.get_summary(customer_id)
-        if summary is None:
-            return CustomerModelContext("", "", [])
+        order_rows = (
+            await self._session.execute(
+                select(StayOrder, PropertyProfile.title)
+                .join(
+                    PropertyProfile,
+                    PropertyProfile.id == StayOrder.property_id,
+                )
+                .where(
+                    StayOrder.customer_id == customer_id,
+                    StayOrder.status.not_in(
+                        ["cancelled", "canceled", "checked_out", "completed"]
+                    ),
+                )
+                .order_by(StayOrder.check_in_date, StayOrder.id)
+                .limit(5)
+            )
+        ).all()
+        tasks = list(
+            (
+                await self._session.scalars(
+                    select(BusinessTask)
+                    .where(
+                        BusinessTask.customer_id == customer_id,
+                        BusinessTask.status.not_in(
+                            [
+                                BusinessTaskStatus.COMPLETED,
+                                BusinessTaskStatus.CANCELLED,
+                            ]
+                        ),
+                    )
+                    .order_by(BusinessTask.created_at, BusinessTask.id)
+                    .limit(10)
+                )
+            ).all()
+        )
         return CustomerModelContext(
-            short_summary=summary.short_summary,
-            long_summary=summary.long_summary,
-            unresolved_items=list(summary.unresolved_items),
+            short_summary=summary.short_summary if summary else "",
+            long_summary=summary.long_summary if summary else "",
+            unresolved_items=list(summary.unresolved_items) if summary else [],
+            active_orders=[
+                {
+                    "property_id": order.property_id,
+                    "property_title": property_title,
+                    "check_in_date": order.check_in_date.isoformat(),
+                    "check_out_date": order.check_out_date.isoformat(),
+                    "status": order.status,
+                }
+                for order, property_title in order_rows
+            ],
+            open_tasks=[
+                {
+                    "task_type": task.task_type.value,
+                    "status": task.status.value,
+                    "property_id": task.property_id,
+                    "service_date": (
+                        task.service_date.isoformat()
+                        if task.service_date is not None
+                        else None
+                    ),
+                }
+                for task in tasks
+            ],
         )
 
     async def _get_or_create_summary(

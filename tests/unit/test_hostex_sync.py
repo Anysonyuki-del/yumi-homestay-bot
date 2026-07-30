@@ -45,6 +45,7 @@ class OperationsStub:
         )
         self.upserts: list[Reservation] = []
         self.completed = False
+        self.turnovers: list[tuple[int, date, int]] = []
 
     async def require_pending_event(self, event_key: str):
         """返回固定事件。"""
@@ -55,6 +56,17 @@ class OperationsStub:
         """记录同步订单。"""
         self.upserts.append(item)
         return SimpleNamespace(id=1)
+
+    async def create_turnover(
+        self,
+        *,
+        property_id: int,
+        service_date: date,
+        order_id: int,
+    ):
+        """记录订单对应的周转保洁任务。"""
+        self.turnovers.append((property_id, service_date, order_id))
+        return SimpleNamespace(id=9)
 
     async def mark_event_completed(self, event) -> None:
         """记录事件已完成。"""
@@ -76,6 +88,7 @@ async def test_hostex_event_upserts_exact_reservation() -> None:
     await service.handle_event("event-1")
 
     assert operations.upserts[0].reservation_code == "R-1"
+    assert operations.turnovers == [(101, date(2026, 8, 2), 1)]
     assert operations.completed is True
 
 
@@ -103,3 +116,16 @@ async def test_reconcile_backfills_webhook_gap() -> None:
 
     assert count == 1
     assert operations.upserts[0].reservation_code == "R-MISSED"
+    assert operations.turnovers == [(101, date(2026, 8, 2), 1)]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_reservation_does_not_create_turnover() -> None:
+    """取消订单不得生成新的周转保洁任务。"""
+    hostex = HostexStub([reservation(status="cancelled")])
+    operations = OperationsStub()
+    service = HostexSyncService(hostex, operations)
+
+    await service.handle_event("event-1")
+
+    assert operations.turnovers == []

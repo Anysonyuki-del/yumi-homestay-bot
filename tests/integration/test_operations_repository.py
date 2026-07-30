@@ -2,10 +2,19 @@ from datetime import date
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import BusinessTaskStatus, BusinessTaskType
-from homestay_bot.domain.models import Base, Job, PropertyProfile, StayOrder
+from homestay_bot.domain.models import (
+    AuditLog,
+    Base,
+    BusinessTask,
+    Customer,
+    Job,
+    PropertyProfile,
+    StayOrder,
+)
 from homestay_bot.integrations.hostex_client import Reservation
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 
@@ -36,6 +45,91 @@ async def test_turnover_task_dedupe_key_is_unique() -> None:
         assert first.id == second.id
         assert first.task_type is BusinessTaskType.CLEANING
         assert first.status is BusinessTaskStatus.PENDING_ASSIGNMENT
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pending_ai_task_allows_unknown_property_and_date() -> None:
+    """待管理员确认的 AI 建议允许暂时缺少房间和服务日期。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        customer = Customer(display_name="测试客户")
+        session.add(customer)
+        await session.flush()
+        session.add(
+            BusinessTask(
+                source_message_id="msg-pending",
+                task_type=BusinessTaskType.SUPPLIES,
+                status=BusinessTaskStatus.PENDING_CONFIRMATION,
+                customer_id=customer.id,
+                property_id=None,
+                service_date=None,
+                description="补矿泉水",
+            )
+        )
+        await session.commit()
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_executable_task_rejects_unknown_property_or_date() -> None:
+    """数据库必须拒绝缺少执行地点或日期的可执行任务。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(
+            BusinessTask(
+                source_message_id="msg-invalid",
+                task_type=BusinessTaskType.SUPPLIES,
+                status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+                property_id=None,
+                service_date=None,
+                description="补矿泉水",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_handoff_audit_does_not_store_chat_body() -> None:
+    """人工接管审计只保存原因和内部主键，不复制客人消息。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        repository = SQLAlchemyOperationsRepository(session)
+        await repository.record_handoff(
+            conversation_id=7,
+            customer_id=9,
+            reason="refund",
+        )
+        await session.commit()
+
+        audit = await session.scalar(
+            select(AuditLog).where(AuditLog.action == "conversation_handoff")
+        )
+
+        assert audit is not None
+        assert audit.target_id == "7"
+        assert audit.details == {
+            "customer_id": 9,
+            "reason": "refund",
+        }
+        assert "聊天正文" not in str(audit.details)
 
     await engine.dispose()
 

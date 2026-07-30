@@ -95,8 +95,8 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("customer_id", sa.Integer(), nullable=True),
         sa.Column("order_id", sa.Integer(), nullable=True),
-        sa.Column("property_id", sa.BigInteger(), nullable=False),
-        sa.Column("service_date", sa.Date(), nullable=False),
+        sa.Column("property_id", sa.BigInteger(), nullable=True),
+        sa.Column("service_date", sa.Date(), nullable=True),
         sa.Column("assigned_employee_id", sa.Integer(), nullable=True),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("checklist", sa.JSON(), nullable=False),
@@ -105,6 +105,13 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["order_id"], ["stay_orders.id"]),
         sa.ForeignKeyConstraint(["property_id"], ["property_profiles.id"]),
         sa.ForeignKeyConstraint(["assigned_employee_id"], ["employees.id"]),
+        sa.CheckConstraint(
+            (
+                "status IN ('PENDING_CONFIRMATION', 'CANCELLED') "
+                "OR (property_id IS NOT NULL AND service_date IS NOT NULL)"
+            ),
+            name="ck_business_task_execution_fields",
+        ),
     )
     op.create_index("ix_business_tasks_customer_id", "business_tasks", ["customer_id"])
     op.create_index("ix_business_tasks_order_id", "business_tasks", ["order_id"])

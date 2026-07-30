@@ -62,6 +62,7 @@ from homestay_bot.routes.wecom_callback import WeComCallbackService
 from homestay_bot.services.approval_page_service import ApprovalPageService
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
+from homestay_bot.services.business_task_service import BusinessTaskService
 from homestay_bot.services.context_retention import ContextRetentionService
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.customer_service import CustomerService
@@ -718,6 +719,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                     sensitive_data,
                 ),
                 customer_context=SQLAlchemyContextRepository(session),
+                business_tasks=BusinessTaskService(
+                    SQLAlchemyOperationsRepository(session)
+                ),
+                audit_events=SQLAlchemyOperationsRepository(session),
             )
             await service.handle_message(message)
             await session.commit()

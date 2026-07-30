@@ -1,4 +1,6 @@
 from homestay_bot.services.answer_policy import (
+    handoff_reason,
+    is_homestay_related,
     is_property_specific,
     is_transaction_sensitive,
 )
@@ -27,3 +29,22 @@ def test_transaction_has_priority_over_property_specific() -> None:
     text = "你们能开多少钱的发票？"
     assert is_transaction_sensitive(text)
     assert is_property_specific(text)
+
+
+def test_high_risk_requests_have_deterministic_handoff_reason() -> None:
+    """价格、退款、投诉、提前入住和激烈情绪必须由本地规则要求接管。"""
+    assert handoff_reason("这个房间最低多少钱？") == "price"
+    assert handoff_reason("我要退款") == "refund"
+    assert handoff_reason("我要投诉你们") == "complaint"
+    assert handoff_reason("我想提前入住") == "early_check_in"
+    assert handoff_reason("太离谱了，你们必须马上解决！！！") == "agitated"
+    assert handoff_reason("武汉有哪些地方好玩？") is None
+    assert handoff_reason("武汉地铁票价多少钱？") is None
+
+
+def test_unrelated_questions_are_rejected_locally() -> None:
+    """客服只承接民宿住宿和武汉旅行相关问题。"""
+    assert is_homestay_related("房间几点可以入住？")
+    assert is_homestay_related("武汉有哪些地方好玩？")
+    assert is_homestay_related("好的，两个人")
+    assert not is_homestay_related("帮我写一段股票量化交易程序")

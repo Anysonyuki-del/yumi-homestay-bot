@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from homestay_bot.domain.enums import Language
+from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.deepseek_client import (
     AssistantUnavailableError,
     DeepSeekGuestAssistant,
@@ -252,6 +252,94 @@ async def test_deepseek_chat_returns_structured_decision_without_raw_guest_id() 
     assert request["response_format"] == {"type": "json_object"}
     assert request["extra_body"] == {"thinking": {"type": "disabled"}}
     assert "wm-sensitive-id" not in json.dumps(request, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_task_suggestion_is_returned_in_same_structured_response() -> None:
+    """模型应在同一轮回复中返回可选的待确认任务建议。"""
+    payload = decision_payload()
+    payload["task_suggestion"] = {
+        "task_type": "supplies",
+        "description": "请补两瓶矿泉水",
+        "property_id": 101,
+        "service_date": "2026-08-01",
+    }
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "请给101房补两瓶水"}],
+    )
+
+    assert decision.task_suggestion is not None
+    assert decision.task_suggestion.task_type is BusinessTaskType.SUPPLIES
+    assert decision.task_suggestion.property_id == 101
+
+
+@pytest.mark.asyncio
+async def test_system_only_task_suggestion_is_removed_locally() -> None:
+    """模型不得通过结构化输出创建系统专用人工联系任务。"""
+    payload = decision_payload()
+    payload["task_suggestion"] = {
+        "task_type": "manual_contact",
+        "description": "联系客人，手机号13800138000",
+        "property_id": None,
+        "service_date": None,
+    }
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "联系我"}],
+    )
+
+    assert decision.task_suggestion is None
+    schema_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
+    assert '"manual_contact"' not in schema_prompt
+
+
+@pytest.mark.asyncio
+async def test_early_check_in_is_forced_to_human_handoff() -> None:
+    """提前入住即使模型未标记，也必须由本地规则要求 YuMi 接管。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "reply_text": "我先帮您记录申请，是否可提前入住需工作人员确认。",
+            "intent": "early_check_in",
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "我想提前入住"}],
+    )
+
+    assert decision.handoff_reason == "early_check_in"
 
 
 @pytest.mark.asyncio

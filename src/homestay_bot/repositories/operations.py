@@ -10,6 +10,7 @@ from homestay_bot.domain.enums import (
     CustomerIdentityProvider,
 )
 from homestay_bot.domain.models import (
+    AuditLog,
     BusinessTask,
     Customer,
     CustomerIdentity,
@@ -54,6 +55,108 @@ class SQLAlchemyOperationsRepository:
         self._session.add(task)
         await self._session.flush()
         return task
+
+    async def create_pending_confirmation(
+        self,
+        *,
+        customer_id: int,
+        source_message_id: str,
+        task_type: BusinessTaskType,
+        description: str,
+        property_id: int | None = None,
+        service_date: date | None = None,
+    ) -> BusinessTask:
+        """按来源消息幂等保存一条 AI 待确认建议。"""
+        existing = await self._session.scalar(
+            select(BusinessTask).where(
+                BusinessTask.source_message_id == source_message_id
+            )
+        )
+        if existing is not None:
+            return existing
+        task = BusinessTask(
+            source_message_id=source_message_id,
+            task_type=task_type,
+            status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            customer_id=customer_id,
+            property_id=property_id,
+            service_date=service_date,
+            description=description,
+        )
+        self._session.add(task)
+        await self._session.flush()
+        self._session.add(
+            AuditLog(
+                actor_employee_id=None,
+                action="ai_task_suggested",
+                target_type="business_task",
+                target_id=str(task.id),
+                details={
+                    "customer_id": customer_id,
+                    "task_type": task_type.value,
+                },
+            )
+        )
+        await self._session.flush()
+        return task
+
+    async def require_for_update(self, task_id: int) -> BusinessTask:
+        """锁定并返回一条业务任务。"""
+        task = await self._session.scalar(
+            select(BusinessTask)
+            .where(BusinessTask.id == task_id)
+            .with_for_update()
+        )
+        if task is None:
+            raise LookupError("业务任务不存在")
+        return task
+
+    async def save_status(
+        self,
+        task: BusinessTask,
+        target: BusinessTaskStatus,
+        actor_employee_id: int | None,
+    ) -> BusinessTask:
+        """保存任务状态并写入不含描述正文的安全审计。"""
+        previous = task.status
+        task.status = target
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="business_task_status_changed",
+                target_type="business_task",
+                target_id=str(task.id),
+                details={
+                    "from_status": previous.value,
+                    "to_status": target.value,
+                    "task_type": task.task_type.value,
+                },
+            )
+        )
+        await self._session.flush()
+        return task
+
+    async def record_handoff(
+        self,
+        *,
+        conversation_id: int,
+        customer_id: int | None,
+        reason: str,
+    ) -> None:
+        """记录不含聊天正文和外部身份的人工接管审计。"""
+        self._session.add(
+            AuditLog(
+                actor_employee_id=None,
+                action="conversation_handoff",
+                target_type="conversation",
+                target_id=str(conversation_id),
+                details={
+                    "customer_id": customer_id,
+                    "reason": reason[:64],
+                },
+            )
+        )
+        await self._session.flush()
 
     async def record_hostex_event(
         self,

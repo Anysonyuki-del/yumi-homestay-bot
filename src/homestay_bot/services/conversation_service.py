@@ -1,18 +1,35 @@
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol
 
 from pydantic import ValidationError
 
-from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
-from homestay_bot.domain.models import BookingApproval, Conversation, Customer
+from homestay_bot.domain.enums import (
+    BusinessTaskType,
+    ConversationMode,
+    Language,
+    MessageOrigin,
+)
+from homestay_bot.domain.models import (
+    BookingApproval,
+    BusinessTask,
+    Conversation,
+    Customer,
+)
 from homestay_bot.domain.schemas import BookingRequest
 from homestay_bot.integrations.deepseek_client import (
     AssistantDecision,
     AssistantUnavailableError,
+    TaskSuggestion,
 )
 from homestay_bot.integrations.tourism import TourismSearchError
+from homestay_bot.services.answer_policy import (
+    handoff_reason as determine_handoff_reason,
+)
+from homestay_bot.services.answer_policy import (
+    is_homestay_related,
+)
 from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.emergency_service import (
     EmergencyClassification,
@@ -122,6 +139,35 @@ class CustomerContextPort(Protocol):
         """返回不含原文和敏感字段的客户摘要。"""
 
 
+class BusinessTaskPort(Protocol):
+    """定义会话层保存 AI 待确认任务的最小入口。"""
+
+    async def record_ai_suggestion(
+        self,
+        *,
+        customer_id: int,
+        source_message_id: str,
+        task_type: BusinessTaskType,
+        description: str,
+        property_id: int | None = None,
+        service_date: date | None = None,
+    ) -> BusinessTask:
+        """幂等保存一条结构化任务建议。"""
+
+
+class ConversationAuditPort(Protocol):
+    """定义人工接管动作的安全审计入口。"""
+
+    async def record_handoff(
+        self,
+        *,
+        conversation_id: int,
+        customer_id: int | None,
+        reason: str,
+    ) -> None:
+        """只记录内部主键和原因代码。"""
+
+
 class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
@@ -146,6 +192,8 @@ class ConversationService:
         frequent_faq: FrequentFaqPort | None = None,
         customer_profiles: CustomerProfilePort | None = None,
         customer_context: CustomerContextPort | None = None,
+        business_tasks: BusinessTaskPort | None = None,
+        audit_events: ConversationAuditPort | None = None,
     ) -> None:
         """注入仓储、AI、安全分类器和企业微信发送端口。"""
         self._conversations = conversations
@@ -160,6 +208,8 @@ class ConversationService:
         self._frequent_faq = frequent_faq
         self._customer_profiles = customer_profiles
         self._customer_context = customer_context
+        self._business_tasks = business_tasks
+        self._audit_events = audit_events
 
     async def handle_message(self, message: IncomingMessage) -> None:
         """处理单条已去重消息，确保人工回复不会形成机器人回环。"""
@@ -175,8 +225,10 @@ class ConversationService:
         if message.origin is MessageOrigin.SERVICER:
             # 一旦人工客服发言，立即锁定人工模式，防止客人下一条消息又触发机器人。
             if conversation.mode is not ConversationMode.HUMAN_ACTIVE:
-                conversation.mode = ConversationMode.HUMAN_ACTIVE
-                await self._conversations.save(conversation)
+                await self._switch_to_human(
+                    conversation,
+                    "servicer_reply",
+                )
             return
         if message.origin is not MessageOrigin.GUEST:
             return
@@ -197,6 +249,15 @@ class ConversationService:
 
         if message.msgtype != "text" or self._handoff_pattern.search(message.content):
             await self._escalate_regular(conversation, message)
+            return
+        if not is_homestay_related(message.content):
+            await self._send_guest_reply(
+                conversation,
+                (
+                    "我主要协助民宿入住或武汉旅行相关问题，"
+                    "这类问题暂时无法回答。"
+                ),
+            )
             return
 
         try:
@@ -220,10 +281,21 @@ class ConversationService:
         reply_text = self._limit_assistant_reply(decision.reply_text)
         await self._send_guest_reply(conversation, reply_text)
         await self._track_frequent_faq(message, decision)
+        await self._record_task_suggestion(conversation, message, decision)
+        local_handoff_reason = determine_handoff_reason(message.content)
+        if local_handoff_reason or decision.handoff_reason:
+            reason = local_handoff_reason or decision.handoff_reason
+            await self._activate_human(
+                conversation,
+                message,
+                f"YuMi 接管：{reason}",
+                audit_reason=reason,
+            )
+            return
         if decision.intent == "booking_confirmed":
             await self._create_pending_approval(conversation, message, decision)
             return
-        # 未确认的交易事实只提醒员工核实，机器人继续承接后续对话。
+        # 未确认的普通交易事实只提醒员工核实，机器人继续承接后续对话。
         if decision.staff_confirmation_required:
             await self._notify_employee(
                 conversation,
@@ -236,6 +308,40 @@ class ConversationService:
             )
             return
 
+    async def _record_task_suggestion(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        decision: AssistantDecision,
+    ) -> None:
+        """客人回复成功后幂等保存待确认任务，失败不回滚可见回复。"""
+        suggestion: TaskSuggestion | None = decision.task_suggestion
+        if (
+            self._business_tasks is None
+            or conversation.customer_id is None
+            or suggestion is None
+        ):
+            return
+        try:
+            task = await self._business_tasks.record_ai_suggestion(
+                customer_id=conversation.customer_id,
+                source_message_id=message.msgid,
+                task_type=suggestion.task_type,
+                description=suggestion.description,
+                property_id=suggestion.property_id,
+                service_date=suggestion.service_date,
+            )
+            await self._notify_employee(
+                conversation,
+                message,
+                f"新任务待确认：ID {task.id}，类型 {task.task_type.value}",
+            )
+        except Exception as error:
+            # 任务记录是回复后的副作用；日志只保留异常类型，不复制聊天正文。
+            logger.warning(
+                "AI 待确认任务记录失败，已保留客人回复：error_type=%s",
+                type(error).__name__,
+            )
     async def _track_frequent_faq(
         self,
         message: IncomingMessage,
@@ -280,8 +386,10 @@ class ConversationService:
             return
 
         approval = await self._approvals.create_pending(conversation.id, request)
-        conversation.mode = ConversationMode.HUMAN_ACTIVE
-        await self._conversations.save(conversation)
+        await self._switch_to_human(
+            conversation,
+            "booking_approval_created",
+        )
         await self._notify_employee(
             conversation,
             message,
@@ -296,11 +404,30 @@ class ConversationService:
         conversation: Conversation,
         message: IncomingMessage,
         reason: str,
+        *,
+        audit_reason: str | None = None,
     ) -> None:
         """切换人工模式并发送内部原因摘要。"""
+        await self._switch_to_human(
+            conversation,
+            audit_reason or reason,
+        )
+        await self._notify_employee(conversation, message, reason)
+
+    async def _switch_to_human(
+        self,
+        conversation: Conversation,
+        reason: str,
+    ) -> None:
+        """保存人工模式，并记录不含聊天正文的接管审计。"""
         conversation.mode = ConversationMode.HUMAN_ACTIVE
         await self._conversations.save(conversation)
-        await self._notify_employee(conversation, message, reason)
+        if self._audit_events is not None:
+            await self._audit_events.record_handoff(
+                conversation_id=conversation.id,
+                customer_id=conversation.customer_id,
+                reason=reason,
+            )
 
     @staticmethod
     def _detect_language(text: str, fallback: Language) -> Language:
@@ -338,12 +465,11 @@ class ConversationService:
         """发送固定安全提示、切人工并通知值班员工。"""
         reply = self._emergency.safety_reply(emergency, conversation.language)
         await self._send_guest_reply(conversation, reply)
-        conversation.mode = ConversationMode.HUMAN_ACTIVE
-        await self._conversations.save(conversation)
-        await self._notify_employee(
+        await self._activate_human(
             conversation,
             message,
             f"紧急事件：{emergency.category}",
+            audit_reason=f"emergency:{emergency.category}",
         )
 
     async def _escalate_regular(
@@ -356,9 +482,12 @@ class ConversationService:
             else "已为您通知工作人员，请稍候，我们会尽快人工处理。"
         )
         await self._send_guest_reply(conversation, reply)
-        conversation.mode = ConversationMode.HUMAN_ACTIVE
-        await self._conversations.save(conversation)
-        await self._notify_employee(conversation, message, "普通人工接管")
+        await self._activate_human(
+            conversation,
+            message,
+            "普通人工接管",
+            audit_reason="manual_request_or_media",
+        )
 
     async def _escalate_tourism_failure(
         self,
@@ -374,12 +503,11 @@ class ConversationService:
             else "暂时无法查询实时旅游信息，已为您通知工作人员协助，请稍候。"
         )
         await self._send_guest_reply(conversation, reply)
-        conversation.mode = ConversationMode.HUMAN_ACTIVE
-        await self._conversations.save(conversation)
-        await self._notify_employee(
+        await self._activate_human(
             conversation,
             message,
             f"旅游联网失败：{error.status}",
+            audit_reason=f"tourism_failure:{error.status}",
         )
 
     async def _escalate_assistant_failure(
@@ -395,12 +523,11 @@ class ConversationService:
             else "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。"
         )
         await self._send_guest_reply(conversation, reply)
-        conversation.mode = ConversationMode.HUMAN_ACTIVE
-        await self._conversations.save(conversation)
-        await self._notify_employee(
+        await self._activate_human(
             conversation,
             message,
             "模型服务暂时不可用",
+            audit_reason="assistant_unavailable",
         )
 
     async def _notify_employee(

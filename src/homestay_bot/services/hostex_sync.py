@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Protocol
 
-from homestay_bot.domain.models import HostexWebhookEvent, StayOrder
+from homestay_bot.domain.models import BusinessTask, HostexWebhookEvent, StayOrder
 from homestay_bot.integrations.hostex_client import (
     Reservation,
     ReservationQuery,
@@ -43,6 +43,15 @@ class OperationsSyncPort(Protocol):
     async def mark_event_completed(self, event: HostexWebhookEvent) -> None:
         """标记事件完成。"""
 
+    async def create_turnover(
+        self,
+        *,
+        property_id: int,
+        service_date: date,
+        order_id: int,
+    ) -> BusinessTask:
+        """幂等创建订单退房日的周转保洁任务。"""
+
     async def reconcile_reservations(
         self, reservations: list[Reservation]
     ) -> int:
@@ -69,7 +78,7 @@ class HostexSyncService:
         )
         if len(matches) != 1:
             raise HostexSyncConflict(event.event_key, len(matches))
-        await self._operations.upsert_reservation(matches[0])
+        await self._sync_reservation(matches[0])
         await self._operations.mark_event_completed(event)
 
     async def reconcile(self, start_date: date, end_date: date) -> int:
@@ -80,4 +89,17 @@ class HostexSyncService:
                 end_check_in_date=end_date,
             )
         )
-        return await self._operations.reconcile_reservations(reservations)
+        for reservation in reservations:
+            await self._sync_reservation(reservation)
+        return len(reservations)
+
+    async def _sync_reservation(self, reservation: Reservation) -> StayOrder:
+        """写入一笔订单，并为未取消订单创建唯一周转保洁任务。"""
+        order = await self._operations.upsert_reservation(reservation)
+        if reservation.status.lower() not in {"cancelled", "canceled"}:
+            await self._operations.create_turnover(
+                property_id=reservation.property_id,
+                service_date=reservation.check_out_date,
+                order_id=order.id,
+            )
+        return order

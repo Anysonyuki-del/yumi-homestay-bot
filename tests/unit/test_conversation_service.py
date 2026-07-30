@@ -3,12 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
+from homestay_bot.domain.enums import BusinessTaskType, ConversationMode, Language, MessageOrigin
 from homestay_bot.domain.models import Conversation, Customer
 from homestay_bot.integrations.deepseek_client import (
     AssistantDecision,
     AssistantUnavailableError,
     BookingFields,
+    TaskSuggestion,
 )
 from homestay_bot.integrations.tourism import (
     TourismSearchError,
@@ -199,6 +200,37 @@ class FrequentFaqStub:
             raise RuntimeError("candidate tracking failed")
 
 
+class BusinessTaskStub:
+    """记录会话服务写入的 AI 待确认任务。"""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        """配置可选失败行为。"""
+        self.fail = fail
+        self.calls: list[dict[str, object]] = []
+
+    async def record_ai_suggestion(self, **kwargs):
+        """记录结构化建议并返回固定任务。"""
+        self.calls.append(kwargs)
+        if self.fail:
+            raise RuntimeError("task unavailable")
+        return SimpleNamespace(
+            id=8,
+            task_type=kwargs["task_type"],
+        )
+
+
+class ConversationAuditStub:
+    """记录人工接管审计，不保存聊天正文。"""
+
+    def __init__(self) -> None:
+        """初始化审计调用。"""
+        self.calls: list[dict[str, object]] = []
+
+    async def record_handoff(self, **kwargs) -> None:
+        """记录最小接管元数据。"""
+        self.calls.append(kwargs)
+
+
 def incoming(
     *,
     content: str = "几点入住？",
@@ -226,6 +258,8 @@ def build_service(
     frequent_faq: FrequentFaqStub | None = None,
     customer_profiles: CustomerProfileStub | None = None,
     customer_context: CustomerContextStub | None = None,
+    business_tasks=None,
+    audit_events=None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
     """创建注入固定依赖的会话服务。"""
     conversations = ConversationRepositoryStub()
@@ -243,6 +277,8 @@ def build_service(
         frequent_faq=frequent_faq,
         customer_profiles=customer_profiles,
         customer_context=customer_context,
+        business_tasks=business_tasks,
+        audit_events=audit_events,
     )
     return service, conversations, selected_assistant, wecom
 
@@ -332,6 +368,110 @@ async def test_normal_guest_message_gets_bot_reply() -> None:
 
     assert assistant.calls == 1
     assert wecom.guest_messages == ["下午三点后可以入住。"]
+
+
+@pytest.mark.asyncio
+async def test_unrelated_question_is_rejected_without_calling_model() -> None:
+    """与民宿和武汉旅行无关的问题应礼貌拒答且不消耗模型调用。"""
+    service, conversations, assistant, wecom = build_service()
+
+    await service.handle_message(incoming(content="帮我分析这只股票"))
+
+    assert assistant.calls == 0
+    assert "民宿入住或武汉旅行" in wecom.guest_messages[0]
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
+    """高风险事项应先给流程说明，再通知 YuMi 并锁定人工模式。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="退款需结合订单由工作人员核实，我已通知工作人员。",
+            language=Language.ZH,
+            intent="refund",
+            confidence=0.95,
+            handoff_reason="refund",
+        )
+    )
+    audit = ConversationAuditStub()
+    service, conversations, _, wecom = build_service(
+        assistant=assistant,
+        audit_events=audit,
+    )
+
+    await service.handle_message(incoming(content="我要退款"))
+
+    assert "工作人员" in wecom.guest_messages[0]
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert "YuMi 接管：refund" in wecom.internal_messages[0]
+    assert audit.calls == [
+        {
+            "conversation_id": 1,
+            "customer_id": None,
+            "reason": "refund",
+        }
+    ]
+    assert "我要退款" not in str(audit.calls)
+
+
+@pytest.mark.asyncio
+async def test_ai_task_is_recorded_after_guest_reply_and_notifies_staff() -> None:
+    """结构化任务建议应在回复成功后落为待确认任务并提醒员工。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="好的，我先帮您记录补水需求。",
+            language=Language.ZH,
+            intent="room_service",
+            confidence=0.96,
+            task_suggestion=TaskSuggestion(
+                task_type=BusinessTaskType.SUPPLIES,
+                description="补两瓶矿泉水",
+            ),
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="请补两瓶矿泉水"))
+
+    assert wecom.guest_messages == ["好的，我先帮您记录补水需求。"]
+    assert tasks.calls[0]["customer_id"] == 42
+    assert tasks.calls[0]["source_message_id"] == "msg-1"
+    assert "新任务待确认" in wecom.internal_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_ai_task_failure_does_not_rollback_guest_reply(caplog) -> None:
+    """任务落库失败不得撤销已经成功发送的客人回复。"""
+    tasks = BusinessTaskStub(fail=True)
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="好的，我先帮您记录补水需求。",
+            language=Language.ZH,
+            intent="room_service",
+            confidence=0.96,
+            task_suggestion=TaskSuggestion(
+                task_type=BusinessTaskType.SUPPLIES,
+                description="补两瓶矿泉水",
+            ),
+        )
+    )
+    service, conversations, _, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="请补两瓶矿泉水"))
+
+    assert wecom.guest_messages == ["好的，我先帮您记录补水需求。"]
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+    assert any("AI 待确认任务记录失败" in item.getMessage() for item in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -517,8 +657,8 @@ async def test_frequent_faq_tracking_failure_does_not_rollback_reply(caplog) -> 
 
 
 @pytest.mark.asyncio
-async def test_transaction_confirmation_notifies_staff_and_keeps_bot_active() -> None:
-    """交易结论无法确认时应通知员工核实，但不停止机器人。"""
+async def test_refund_request_notifies_staff_and_switches_to_human() -> None:
+    """退款请求必须通知 YuMi 并切换人工，模型不能继续决策。"""
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text="退款金额需要工作人员结合订单核实，我已为您发起确认。",
@@ -535,13 +675,13 @@ async def test_transaction_confirmation_notifies_staff_and_keeps_bot_active() ->
 
     assert "已为您发起确认" in wecom.guest_messages[0]
     assert len(wecom.internal_messages) == 1
-    assert "业务待确认" in wecom.internal_messages[0]
-    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+    assert "YuMi 接管：refund" in wecom.internal_messages[0]
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 
 @pytest.mark.asyncio
-async def test_transaction_confirmation_has_priority_over_knowledge_gap() -> None:
-    """同轮两个标记并存时只发送一次业务提醒。"""
+async def test_refund_handoff_has_priority_over_knowledge_gap() -> None:
+    """退款接管和知识缺口并存时只发送一次接管提醒。"""
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text="需要工作人员核实。",
@@ -559,9 +699,9 @@ async def test_transaction_confirmation_has_priority_over_knowledge_gap() -> Non
     await service.handle_message(incoming(content="退款政策是什么？"))
 
     assert len(wecom.internal_messages) == 1
-    assert "业务待确认" in wecom.internal_messages[0]
+    assert "YuMi 接管：refund" in wecom.internal_messages[0]
     assert "知识库待补充" not in wecom.internal_messages[0]
-    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 
 @pytest.mark.asyncio

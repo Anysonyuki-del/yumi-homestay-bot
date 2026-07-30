@@ -827,7 +827,7 @@ git commit -m "feat: sync hostex reservations and availability"
 - Test: `tests/unit/test_context_retention.py`
 - Test: `tests/unit/test_hostex_sync.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 async def test_ai_suggestion_creates_pending_confirmation_task():
@@ -843,21 +843,20 @@ async def test_ai_suggestion_creates_pending_confirmation_task():
 
 同时覆盖不支持类型拒绝、重复消息幂等、订单同步后生成唯一周转保洁任务、非法状态跳转、提前入住不被 AI 自动批准、民宿无关问题礼貌拒答，以及价格、退款、投诉和明显激动情绪触发 YuMi 接管通知。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_business_task_service.py tests/unit/test_answer_policy.py tests/unit/test_deepseek_client.py tests/unit/test_conversation_service.py tests/unit/test_hostex_sync.py`
 
 Expected: FAIL，提示业务任务服务和结构化建议字段不存在。
 
-- [ ] **Step 3：实现任务状态机和同轮 AI 提取**
+- [x] **Step 3：实现任务状态机和同轮 AI 提取**
 
 ```python
 class BusinessTaskService:
     async def create_turnover(
-        self, property_id: int, service_date: date, order_id: int
+        self, *, property_id: int, service_date: date, order_id: int
     ) -> BusinessTask:
-        return await self._tasks.get_or_create_turnover(
-            dedupe_key=f"turnover:{property_id}:{service_date.isoformat()}",
+        return await self._tasks.create_turnover(
             property_id=property_id,
             service_date=service_date,
             order_id=order_id,
@@ -887,7 +886,7 @@ class BusinessTaskService:
 
 扩展 `AssistantDecision`，同一次 DeepSeek 响应返回可空 `task_suggestion`；本地只允许六种一期任务类型并清除敏感字段。AI 未能可靠确定房间或日期时仍可创建 `PENDING_CONFIRMATION`，但确认或分派前必须由管理员补齐；任何可执行状态不得缺少房间和服务日期。`AnswerPolicy` 在本地执行确定性边界：民宿无关问题礼貌拒答，价格、退款、投诉、提前入住和激烈情绪只提供安抚与流程说明，不替 YuMi 作决定，并创建带会话摘要的接管通知。`ConversationService` 在客人回复成功后记录待确认任务，失败不得回滚回复；任务待确认时通知管理员，分派后只通知执行员工。扩展 `ContextRepository.load_model_context()`，把当前客户的有效订单摘要和未完成任务摘要加入 Task 3 已建立的 `CustomerModelContext`，不得包含金额、完整手机号或入住凭证明文。把 `HostexSyncService` 的订单 upsert 成功事件接入 `create_turnover()`，以房源和服务日期幂等创建周转任务。每次状态变化和接管动作均写不含聊天正文的审计事件。
 
-- [ ] **Step 4：运行任务与会话测试**
+- [x] **Step 4：运行任务与会话测试**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_business_task_service.py tests/unit/test_answer_policy.py tests/unit/test_deepseek_client.py tests/unit/test_conversation_service.py tests/unit/test_hostex_sync.py`
 

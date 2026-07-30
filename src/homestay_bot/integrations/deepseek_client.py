@@ -2,16 +2,20 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from homestay_bot.domain.enums import Language
+from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.tourism import (
     is_tourism_query,
     latest_user_question,
+)
+from homestay_bot.services.answer_policy import (
+    handoff_reason as determine_handoff_reason,
 )
 from homestay_bot.services.answer_policy import (
     is_property_specific,
@@ -55,6 +59,26 @@ class BookingFields(BaseModel):
     special_requests: str | None = None
 
 
+class TaskSuggestion(BaseModel):
+    """保存模型从本轮客人请求中提取的运营任务建议。"""
+
+    task_type: BusinessTaskType
+    description: str = Field(min_length=1, max_length=500)
+    property_id: int | None = Field(default=None, gt=0)
+    service_date: date | None = None
+
+    @field_validator("description")
+    @classmethod
+    def redact_sensitive_description(cls, value: str) -> str:
+        """移除任务描述中的手机号并压缩多余空白。"""
+        redacted = re.sub(
+            r"(?<!\d)1[3-9]\d{9}(?!\d)",
+            "[手机号已隐藏]",
+            value,
+        )
+        return " ".join(redacted.split()).strip()
+
+
 class AssistantDecision(BaseModel):
     """约束模型每轮回复、风险标记和员工提醒决定。"""
 
@@ -72,6 +96,7 @@ class AssistantDecision(BaseModel):
     faq_candidate_id: int | None = None
     faq_canonical_question: str | None = None
     faq_category: str | None = None
+    task_suggestion: TaskSuggestion | None = None
 
 
 class RefinedReply(BaseModel):
@@ -194,6 +219,33 @@ def assistant_decision_schema() -> dict[str, Any]:
             "faq_candidate_id": nullable_integer,
             "faq_canonical_question": nullable_string,
             "faq_category": nullable_string,
+            "task_suggestion": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "task_type": {
+                                "type": "string",
+                                "enum": [
+                                    item.value
+                                    for item in BusinessTaskType
+                                    if item is not BusinessTaskType.MANUAL_CONTACT
+                                ],
+                            },
+                            "description": {"type": "string"},
+                            "property_id": nullable_integer,
+                            "service_date": nullable_string,
+                        },
+                        "required": [
+                            "task_type",
+                            "description",
+                            "property_id",
+                            "service_date",
+                        ],
+                    },
+                    {"type": "null"},
+                ]
+            },
         },
     }
 
@@ -312,7 +364,17 @@ class DeepSeekGuestAssistant:
     ) -> AssistantDecision:
         """校验模型 JSON，并执行确定性风险归一化。"""
         decision = AssistantDecision.model_validate_json(output_text)
-        updates: dict[str, Any] = {"handoff_reason": None}
+        local_handoff_reason = determine_handoff_reason(question_text)
+        updates: dict[str, Any] = {
+            "handoff_reason": local_handoff_reason,
+        }
+        if (
+            decision.task_suggestion is not None
+            and decision.task_suggestion.task_type
+            is BusinessTaskType.MANUAL_CONTACT
+        ):
+            # 人工接管任务只能由本地规则创建，不能信任模型自行提出。
+            updates["task_suggestion"] = None
         property_specific = is_property_specific(question_text)
         transaction_sensitive = is_transaction_sensitive(question_text)
         if not property_specific:
@@ -638,7 +700,7 @@ class DeepSeekGuestAssistant:
         }
         tomorrow = local_today + timedelta(days=1)
         day_after = local_today + timedelta(days=2)
-        customer_context_payload = customer_context.__dict__ if customer_context else {}
+        customer_context_payload = asdict(customer_context) if customer_context else {}
         system_prompt = (
             "你是武汉一家7间房民宿的客服。请只输出 JSON，不要输出代码围栏。"
             "审核知识未覆盖普通常识时可以谨慎回答；民宿专属事实未确认时，"
@@ -648,6 +710,10 @@ class DeepSeekGuestAssistant:
             "仅当问题适合沉淀为固定 FAQ、审核知识确实缺失且 knowledge_gap=true 时，"
             "设置 faq_candidate=true；房态、价格、订单、退款、预订、实时旅游和"
             "紧急问题必须设置 faq_candidate=false。"
+            "只回答民宿住宿和武汉旅行相关问题；其他问题应简短礼貌拒答。"
+            "客人提出保洁、维修、补耗材、特殊服务、提前入住或延迟退房时，"
+            "在同一 JSON 的 task_suggestion 中提取任务；不能确定房间或日期时填 null，"
+            "不得编造。task_suggestion 只是待员工确认，绝不代表已经答应客人。"
             "如语义匹配已有候选，填写其编号；否则编号为 null，并给出简洁标准问题"
             "和分类。候选目录只用于语义匹配，不可把目录内容当作已审核答案。"
             f"武汉当前日期：{local_today.isoformat()}；"
