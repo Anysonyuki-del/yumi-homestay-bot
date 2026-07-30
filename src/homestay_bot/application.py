@@ -46,6 +46,9 @@ from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
     SQLAlchemyMessageRepository,
 )
+from homestay_bot.repositories.credentials import (
+    SQLAlchemyCredentialDeliveryRepository,
+)
 from homestay_bot.repositories.customers import SQLAlchemyCustomerRepository
 from homestay_bot.repositories.employees import SQLAlchemyEmployeeRepository
 from homestay_bot.repositories.faq_candidates import (
@@ -65,6 +68,10 @@ from homestay_bot.services.booking_service import BookingService
 from homestay_bot.services.business_task_service import BusinessTaskService
 from homestay_bot.services.context_retention import ContextRetentionService
 from homestay_bot.services.conversation_service import ConversationService
+from homestay_bot.services.credential_delivery import (
+    CredentialDeliveryService,
+    CredentialPartSender,
+)
 from homestay_bot.services.customer_service import CustomerService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.faq_candidate_context import (
@@ -475,9 +482,16 @@ class SessionTaskPageService:
         """在同一事务锁定任务和房态并标记可入住。"""
         async with self._factory() as session:
             repository = SQLAlchemyOperationsRepository(session)
+            credential_repository = SQLAlchemyCredentialDeliveryRepository(
+                session
+            )
             state = await RoomReadinessService(
                 repository,
                 repository,
+                CredentialDeliveryService(
+                    credential_repository,
+                    SQLAlchemyJobRepository(session),
+                ),
             ).mark_ready(task_id, employee)
             await session.commit()
             return state
@@ -693,6 +707,16 @@ def _register_hostex_event_handler(
         handlers["hostex_event"] = factory(session)
 
 
+def _register_credential_part_handler(
+    handlers: dict[str, JobHandler],
+    session: AsyncSession,
+    factory: Callable[[AsyncSession], JobHandler] | None,
+) -> None:
+    """为当前 worker 事务按需注册凭证单部件发送处理器。"""
+    if factory is not None:
+        handlers["credential_send_part"] = factory(session)
+
+
 async def _run_worker_loop(
     app: FastAPI,
     *,
@@ -703,6 +727,9 @@ async def _run_worker_loop(
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
     hostex_event_handler_factory: (
+        Callable[[AsyncSession], JobHandler] | None
+    ) = None,
+    credential_part_handler_factory: (
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
 ) -> None:
@@ -765,6 +792,11 @@ async def _run_worker_loop(
                     handlers,
                     session,
                     hostex_event_handler_factory,
+                )
+                _register_credential_part_handler(
+                    handlers,
+                    session,
+                    credential_part_handler_factory,
                 )
                 worker = Worker(
                     repository=repository,
@@ -1059,6 +1091,16 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return handle_hostex_event
 
+    def build_credential_part_handler(session: AsyncSession) -> JobHandler:
+        """为当前 worker 事务创建禁止盲目重放的凭证部件发送器。"""
+        sender = CredentialPartSender(
+            SQLAlchemyCredentialDeliveryRepository(session),
+            wecom,
+            sensitive_data,
+            private_file_storage,
+        )
+        return sender.handle
+
     async def database_probe() -> bool:
         """执行无副作用 SELECT 1 检查数据库连接。"""
         try:
@@ -1126,6 +1168,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             wecom=wecom,
             faq_draft_handler_factory=build_faq_draft_handler,
             hostex_event_handler_factory=build_hostex_event_handler,
+            credential_part_handler_factory=build_credential_part_handler,
         )
     )
     poll_task = asyncio.create_task(
@@ -1172,6 +1215,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "employee_auth_service",
             "employee_access_verifier",
             "approval_page_service",
+            "task_page_service",
+            "property_admin_service",
             "knowledge_admin_service",
             "wecom_callback_service",
             "hostex_webhook_service",

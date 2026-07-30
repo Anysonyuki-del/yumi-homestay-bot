@@ -44,6 +44,19 @@ class RoomStateRepository(Protocol):
         """锁定并更新房态，同时记录安全审计。"""
 
 
+class CredentialDeliveryEvaluator(Protocol):
+    """定义房间可入住后触发凭证安全评估的接口。"""
+
+    async def evaluate(
+        self,
+        *,
+        order_id: int | None,
+        expected_property_id: int,
+        source_task_id: int,
+    ) -> object:
+        """评估安全条件并按需创建后台发送或人工异常。"""
+
+
 class RoomReadinessService:
     """校验证据后允许执行员工标记可入住、管理员撤回。"""
 
@@ -53,10 +66,12 @@ class RoomReadinessService:
         self,
         tasks: TaskEvidenceRepository,
         rooms: RoomStateRepository,
+        credential_delivery: CredentialDeliveryEvaluator | None = None,
     ) -> None:
-        """注入任务证据和房态仓储。"""
+        """注入任务证据、房态仓储和可选凭证评估器。"""
         self._tasks = tasks
         self._rooms = rooms
+        self._credential_delivery = credential_delivery
 
     async def mark_ready(
         self,
@@ -80,11 +95,18 @@ class RoomReadinessService:
             raise ReadinessRuleError("保洁检查清单尚未全部完成")
         if not await self._tasks.has_photo_attachment(task.id):
             raise ReadinessRuleError("至少需要一张有效现场照片")
-        return await self._rooms.set_room_status(
+        state = await self._rooms.set_room_status(
             task.property_id,
             RoomOperationalStatus.READY,
             actor.id,
         )
+        if self._credential_delivery is not None:
+            await self._credential_delivery.evaluate(
+                order_id=task.order_id,
+                expected_property_id=task.property_id,
+                source_task_id=task.id,
+            )
+        return state
 
     async def revoke_ready(
         self,

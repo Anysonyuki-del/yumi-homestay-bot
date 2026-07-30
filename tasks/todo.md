@@ -1192,15 +1192,19 @@ git commit -m "feat: manage encrypted room credentials"
 
 **Files:**
 - Create: `src/homestay_bot/services/credential_delivery.py`
+- Create: `src/homestay_bot/repositories/credentials.py`
 - Modify: `src/homestay_bot/integrations/wecom/api_client.py`
 - Modify: `src/homestay_bot/services/room_readiness_service.py`
 - Modify: `src/homestay_bot/application.py`
 - Modify: `src/homestay_bot/worker.py`
+- Modify: `src/homestay_bot/repositories/jobs.py`
 - Test: `tests/unit/test_credential_delivery.py`
 - Test: `tests/unit/test_wecom_api_client.py`
 - Test: `tests/unit/test_worker.py`
+- Test: `tests/integration/test_credential_delivery_repository.py`
+- Test: `tests/integration/test_jobs.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 async def test_ready_room_enqueues_each_credential_part_once():
@@ -1215,13 +1219,13 @@ async def test_ready_room_enqueues_each_credential_part_once():
 
 同时覆盖订单/客户/日期/房间不匹配不发送、非当天入住不发送、重复可入住事件不重复、文本成功图片不明确时不重放图片、48小时窗口失败转人工任务。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_credential_delivery.py tests/unit/test_wecom_api_client.py tests/unit/test_worker.py`
 
 Expected: FAIL，提示凭证投递服务和图片发送接口不存在。
 
-- [ ] **Step 3：实现逐部件投递和安全门**
+- [x] **Step 3：实现逐部件投递和安全门**
 
 ```python
 class CredentialDeliveryService:
@@ -1241,18 +1245,28 @@ class CredentialDeliveryService:
 
 扩展企业微信客户端的临时素材上传和图片发送。指南、密码和二维码各自拥有唯一投递部件与幂等键；外部结果不明确时状态为 `NEEDS_REVIEW`，不自动重放。房间标记可入住后只调用 `evaluate()`，不在请求事务中直接发送。
 
-- [ ] **Step 4：运行投递与 worker 回归**
+- [x] **Step 4：运行投递与 worker 回归**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_credential_delivery.py tests/unit/test_wecom_api_client.py tests/unit/test_worker.py tests/unit/test_room_readiness_service.py`
 
 Expected: PASS。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/homestay_bot/services/credential_delivery.py src/homestay_bot/integrations/wecom/api_client.py src/homestay_bot/services/room_readiness_service.py src/homestay_bot/application.py src/homestay_bot/worker.py tests/unit/test_credential_delivery.py tests/unit/test_wecom_api_client.py tests/unit/test_worker.py
 git commit -m "feat: deliver room credentials safely"
 ```
+
+**Review（Task 10）**
+
+- 房间标记可入住后只在同一事务执行凭证安全评估，不在员工请求中直接发送；缺订单、客户、日期、房间、凭证、会话或 48 小时窗口时幂等创建管理员人工处理任务。
+- 首次评估和 worker 实际发送前均复核：有效订单、当天入住且尚未退房、任务与订单房间一致、房态可入住、当前凭证有效且属于该房间、订单客户与会话客户一致、微信客服身份已验证、最近客人消息未超过 48 小时。
+- 指南、密码和二维码分别建立唯一投递部件与后台任务；任务载荷只有内部 `part_id`，不保存客户身份、密码、指南、二维码编号或其他凭证明文。
+- 文本只有获得企业微信 `msgid` 后才标记成功；二维码先上传临时素材再发送图片。发送结果不明确时部件和整体进入 `NEEDS_REVIEW` 并创建人工任务，不会自动重放。
+- `credential_send_part` 已加入进程中断后的禁止恢复清单；即使外部发送后数据库提交中断，重启也不会盲目再次发送。
+- 每次成功、阻止和待复核均写最小审计，只记录内部编号、部件类型、状态和错误类型。
+- 验证：311 passed，10 skipped；Task 10 定向测试 58 passed；Ruff、mypy、`git diff --check` 均通过。
 
 ### Task 11：CRM管理员手机页、标签和合并审批
 

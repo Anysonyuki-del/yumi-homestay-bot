@@ -68,6 +68,7 @@ class SQLAlchemyJobRepository:
     async def recover_stale(self, *, before: datetime) -> int:
         """恢复安全任务；外部发送和下单任务超时后转人工，不自动重放。"""
         non_replayable_types = {
+            "credential_send_part",
             "wecom_send_text",
             "wecom_send_internal_text",
             "hostex_create_reservation",

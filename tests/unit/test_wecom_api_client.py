@@ -177,6 +177,94 @@ async def test_send_text_uses_customer_service_endpoint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_temporary_image_uses_kf_token_and_multipart() -> None:
+    """入住二维码应使用客服凭据上传为企业微信临时图片素材。"""
+    requests: list[httpx.Request] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """记录令牌和 multipart 上传请求。"""
+        requests.append(request)
+        if request.url.path.endswith("/gettoken"):
+            assert request.url.params["corpsecret"] == "kf-secret"
+            return httpx.Response(
+                200,
+                json={
+                    "errcode": 0,
+                    "access_token": "kf-access",
+                    "expires_in": 7200,
+                },
+            )
+        assert request.url.path.endswith("/cgi-bin/media/upload")
+        assert request.url.params["type"] == "image"
+        assert b"image/png" in request.content
+        assert b"PNG-CONTENT" in request.content
+        return httpx.Response(
+            200,
+            json={"errcode": 0, "type": "image", "media_id": "MEDIA-1"},
+        )
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+    try:
+        media_id = await client.upload_temporary_image(
+            b"PNG-CONTENT",
+            content_type="image/png",
+        )
+    finally:
+        await client.aclose()
+
+    assert media_id == "MEDIA-1"
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_send_image_uses_customer_service_endpoint() -> None:
+    """二维码图片消息必须发送给准确客服账号和客户身份。"""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """返回图片消息的企业微信编号。"""
+        if request.url.path.endswith("/gettoken"):
+            return httpx.Response(
+                200,
+                json={
+                    "errcode": 0,
+                    "access_token": "kf-access",
+                    "expires_in": 7200,
+                },
+            )
+        assert request.url.path.endswith("/cgi-bin/kf/send_msg")
+        assert b'"msgtype":"image"' in request.content
+        assert b'"media_id":"MEDIA-1"' in request.content
+        assert b"wk-1" in request.content
+        assert b"wm-1" in request.content
+        return httpx.Response(
+            200,
+            json={"errcode": 0, "msgid": "IMAGE-MSG-1"},
+        )
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+    try:
+        message_id = await client.send_image(
+            "wk-1",
+            "wm-1",
+            "MEDIA-1",
+        )
+    finally:
+        await client.aclose()
+
+    assert message_id == "IMAGE-MSG-1"
+
+
+@pytest.mark.asyncio
 async def test_send_internal_message_uses_agent_secret() -> None:
     """内部审批通知必须使用自建应用 Secret 和 AgentID。"""
     token_secrets: list[str] = []

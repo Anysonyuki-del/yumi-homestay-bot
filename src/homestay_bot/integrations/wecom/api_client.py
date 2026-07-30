@@ -146,6 +146,64 @@ class WeComApiClient:
         self._raise_for_error(payload)
         return str(payload["msgid"])
 
+    async def upload_temporary_image(
+        self,
+        content: bytes,
+        *,
+        content_type: str,
+    ) -> str:
+        """使用客服凭据上传临时图片素材并返回 media_id。"""
+        access_token = await self._get_access_token(self._kf_secret)
+        extension = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/webp": "webp",
+        }.get(content_type, "img")
+        response = await self._client.post(
+            "/cgi-bin/media/upload",
+            params={
+                "access_token": access_token,
+                "type": "image",
+            },
+            files={
+                "media": (
+                    f"checkin-qr.{extension}",
+                    content,
+                    content_type,
+                )
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._raise_for_error(payload)
+        media_id = payload.get("media_id")
+        if not isinstance(media_id, str) or not media_id:
+            raise WeComApiError(-1, "临时图片响应缺少 media_id")
+        return media_id
+
+    async def send_image(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        media_id: str,
+    ) -> str:
+        """向准确微信客服会话发送一条图片消息。"""
+        access_token = await self._get_access_token(self._kf_secret)
+        response = await self._client.post(
+            "/cgi-bin/kf/send_msg",
+            params={"access_token": access_token},
+            json={
+                "touser": external_userid,
+                "open_kfid": open_kfid,
+                "msgtype": "image",
+                "image": {"media_id": media_id},
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._raise_for_error(payload)
+        return str(payload["msgid"])
+
     async def transfer_service_state(
         self,
         open_kfid: str,

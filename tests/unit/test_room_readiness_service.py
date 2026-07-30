@@ -37,6 +37,7 @@ def ready_task() -> SimpleNamespace:
             "supplies": True,
             "damage": True,
         },
+        order_id=77,
     )
 
 
@@ -168,3 +169,33 @@ async def test_admin_cannot_revoke_room_that_is_not_ready() -> None:
             101,
             employee(1, EmployeeRole.ADMIN),
         )
+
+
+@pytest.mark.asyncio
+async def test_mark_ready_only_triggers_credential_safety_evaluation() -> None:
+    """房态请求只登记凭证评估，不直接向客人发送任何内容。"""
+    calls: list[dict[str, object]] = []
+
+    class EvaluatorStub:
+        """记录凭证安全评估参数。"""
+
+        async def evaluate(self, **fields):
+            """记录任务订单与房间关联。"""
+            calls.append(fields)
+            return None
+
+    service = RoomReadinessService(
+        TaskEvidenceStub(),
+        RoomStateStub(),
+        EvaluatorStub(),
+    )
+
+    await service.mark_ready(7, employee(2))
+
+    assert calls == [
+        {
+            "order_id": 77,
+            "expected_property_id": 101,
+            "source_task_id": 7,
+        }
+    ]

@@ -92,6 +92,30 @@ async def test_worker_never_retries_hostex_create_job() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_never_retries_uncertain_credential_send() -> None:
+    """凭证发送出现未捕获异常也不得由通用 worker 自动重放。"""
+    repository = RepositoryStub(
+        JobStub(
+            job_type="credential_send_part",
+            payload={"part_id": 51},
+        )
+    )
+
+    async def uncertain_handler(payload):
+        """模拟外部发送后进程异常。"""
+        raise TimeoutError("unknown external result")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"credential_send_part": uncertain_handler},
+    )
+
+    await worker.run_once()
+
+    assert repository.failure["retry_allowed"] is False
+
+
+@pytest.mark.asyncio
 async def test_worker_retries_only_explicitly_safe_send_failure() -> None:
     """发送任务只有在确认尚未产生外部副作用时才允许有限重试。"""
     repository = RepositoryStub(JobStub(job_type="wecom_send_text"))
