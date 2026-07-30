@@ -276,9 +276,9 @@ class DeepSeekGuestAssistant:
                 continue
             cleaned.append(item)
 
-        # DeepSeek V4 Flash 在结构化输出和工具同时启用时，
-        # 超过五条有效历史消息可能只返回空白；始终保留最新五条。
-        cleaned = cleaned[-5:]
+        # DeepSeek V4 Flash 在结构化输出和工具同时启用时，多轮历史仍可能
+        # 返回纯空白；只保留上一轮问答和当前问题，兼顾连续性与稳定性。
+        cleaned = cleaned[-3:]
         combined = "\n".join(item.get("content", "") for item in cleaned)
         if re.search(
             r"预订|订房|下单|booking|reservation|reserve",
@@ -622,11 +622,12 @@ class DeepSeekGuestAssistant:
             f"未关闭 FAQ 候选目录：{json.dumps(faq_candidates, ensure_ascii=False)}"
             f"输出结构：{json.dumps(assistant_decision_schema(), ensure_ascii=False)}"
         )
-        request = {
+        minimized_messages = self._minimize_personal_data(messages)
+        request: dict[str, Any] = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                *self._minimize_personal_data(messages),
+                *minimized_messages,
             ],
             "response_format": {"type": "json_object"},
             "extra_body": {"thinking": {"type": "disabled"}},
@@ -647,6 +648,22 @@ class DeepSeekGuestAssistant:
         for attempt in range(1, 3):
             try:
                 active_request = {**request}
+                if attempt > 1:
+                    # 首轮协议异常时丢弃历史对话，只保留已脱敏的当前问题，
+                    # 避免 DeepSeek 对同一组复杂上下文连续返回空白内容。
+                    latest_user_message = next(
+                        (
+                            item
+                            for item in reversed(minimized_messages)
+                            if item["role"] == "user"
+                        ),
+                        None,
+                    )
+                    if latest_user_message is not None:
+                        active_request["messages"] = [
+                            request["messages"][0],
+                            latest_user_message,
+                        ]
                 for _tool_round in range(4):
                     response = await self._chat_client.chat.completions.create(
                         **active_request

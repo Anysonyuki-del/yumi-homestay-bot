@@ -523,7 +523,7 @@ async def test_refinement_cannot_reintroduce_property_hallucination() -> None:
 
 @pytest.mark.asyncio
 async def test_empty_json_response_retries_once() -> None:
-    """DeepSeek 首次返回空 JSON 时只重试一次。"""
+    """首轮空白时第二次请求应丢弃历史，只保留当前问题。"""
     client = ChatClientStub(
         ["", json.dumps(decision_payload(), ensure_ascii=False)]
     )
@@ -538,11 +538,23 @@ async def test_empty_json_response_retries_once() -> None:
     decision = await assistant.respond(
         guest_identifier="wm-guest",
         language=Language.ZH,
-        messages=[{"role": "user", "content": "几点入住？"}],
+        messages=[
+            {"role": "user", "content": "上一轮问题"},
+            {"role": "assistant", "content": "上一轮回答"},
+            {"role": "user", "content": "几点入住？"},
+        ],
     )
 
     assert decision.intent == "faq"
     assert len(client.chat.completions.requests) == 2
+    first_context = client.chat.completions.requests[0]["messages"][1:]
+    retry_context = client.chat.completions.requests[1]["messages"][1:]
+    assert [item["content"] for item in first_context] == [
+        "上一轮问题",
+        "上一轮回答",
+        "几点入住？",
+    ]
+    assert retry_context == [{"role": "user", "content": "几点入住？"}]
 
 
 @pytest.mark.asyncio
@@ -759,8 +771,8 @@ async def test_previous_assistant_failure_reply_is_excluded_from_model_context()
 
 
 @pytest.mark.asyncio
-async def test_deepseek_context_keeps_only_five_latest_valid_messages() -> None:
-    """DeepSeek 结构化对话只携带最近五条有效消息。"""
+async def test_deepseek_context_keeps_only_three_latest_valid_messages() -> None:
+    """DeepSeek 结构化对话只携带上一轮问答和当前问题。"""
     client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
@@ -785,10 +797,8 @@ async def test_deepseek_context_keeps_only_five_latest_valid_messages() -> None:
     )
 
     context = client.chat.completions.requests[0]["messages"][1:]
-    assert len(context) == 5
+    assert len(context) == 3
     assert [message["content"] for message in context] == [
-        "第三条",
-        "第四条",
         "第五条",
         "第六条",
         "怎样和朋友协调旅行安排？",
