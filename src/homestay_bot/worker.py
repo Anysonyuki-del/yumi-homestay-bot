@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -162,16 +163,28 @@ class WeComMessagePoller:
         api: WeComPollingApi,
         handler: WeComSyncJobHandler,
         max_pages_per_poll: int = 100,
+        account_refresh_seconds: float = 300.0,
+        monotonic_provider: Callable[[], float] = time.monotonic,
     ) -> None:
-        """注入只读企业微信接口和现有消息处理器。"""
+        """注入企业微信接口、消息处理器和客服账号缓存时钟。"""
         self._api = api
         self._handler = handler
         self._max_pages_per_poll = max_pages_per_poll
+        self._account_refresh_seconds = account_refresh_seconds
+        self._monotonic_provider = monotonic_provider
+        self._account_ids: list[str] | None = None
+        self._accounts_expires_at = 0.0
         self._cursors: dict[str, str] = {}
 
     async def run_once(self) -> None:
         """发现全部客服账号并从各自上次游标补拉到最新页。"""
-        account_ids = await self._api.list_kf_account_ids()
+        now = self._monotonic_provider()
+        if self._account_ids is None or now >= self._accounts_expires_at:
+            # 客服账号变化频率远低于消息频率，缓存列表可避免五秒轮询
+            # 重复消耗账号列表接口额度；到期后仍会发现新增或删除的账号。
+            self._account_ids = await self._api.list_kf_account_ids()
+            self._accounts_expires_at = now + self._account_refresh_seconds
+        account_ids = list(self._account_ids)
         first_error: Exception | None = None
         rate_limit_error: WeComApiError | None = None
         for open_kfid in account_ids:

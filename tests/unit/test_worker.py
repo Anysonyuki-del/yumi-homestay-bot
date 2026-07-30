@@ -219,12 +219,15 @@ async def test_wecom_sync_maps_guest_and_servicer_origins_without_loop() -> None
 async def test_wecom_poller_discovers_accounts_and_reuses_cursor() -> None:
     """定时补拉应自动发现客服账号，并在后续轮次沿用各自游标。"""
     sync_calls: list[dict[str, str]] = []
+    account_list_calls = 0
 
     class ApiStub:
         """返回一个客服账号和连续推进的同步游标。"""
 
         async def list_kf_account_ids(self) -> list[str]:
             """模拟企业微信客服账号列表。"""
+            nonlocal account_list_calls
+            account_list_calls += 1
             return ["wk-1"]
 
         async def sync_messages(self, **kwargs):
@@ -259,6 +262,56 @@ async def test_wecom_poller_discovers_accounts_and_reuses_cursor() -> None:
 
     assert [call["cursor"] for call in sync_calls] == ["", "cursor-1"]
     assert all(call["token"] == "" for call in sync_calls)
+    assert account_list_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_wecom_poller_refreshes_cached_accounts_after_five_minutes() -> None:
+    """客服账号缓存满五分钟后应刷新，避免长期遗漏新增账号。"""
+    clock = iter([0.0, 299.0, 300.0])
+    account_list_calls = 0
+
+    class ApiStub:
+        """记录客服账号列表刷新次数。"""
+
+        async def list_kf_account_ids(self) -> list[str]:
+            """返回固定客服账号。"""
+            nonlocal account_list_calls
+            account_list_calls += 1
+            return ["wk-1"]
+
+        async def sync_messages(self, **kwargs):
+            """返回空消息页并保留游标。"""
+            return SimpleNamespace(
+                msg_list=[],
+                has_more=0,
+                next_cursor=kwargs["cursor"] or "cursor-1",
+            )
+
+    async def handle_message(message):
+        """本测试没有消息需要处理。"""
+
+    async def enqueue(job_type, payload):
+        """轮询不应创建回调续页任务。"""
+        raise AssertionError("轮询不应创建续页任务")
+
+    api = ApiStub()
+    handler = WeComSyncJobHandler(
+        api=api,
+        handle_message=handle_message,
+        enqueue=enqueue,
+    )
+    poller = WeComMessagePoller(
+        api=api,
+        handler=handler,
+        monotonic_provider=lambda: next(clock),
+    )
+
+    await poller.run_once()
+    await poller.run_once()
+    await poller.run_once()
+
+    assert account_list_calls == 2
 
 
 @pytest.mark.asyncio
