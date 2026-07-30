@@ -397,7 +397,7 @@
 - [x] 管理员与普通员工最小权限已确认
 - [x] 可靠性、隐私与验收标准已确认
 - [x] 用户审核本文件中的最终书面 Spec
-- [ ] 编写并确认实施计划
+- [x] 编写并确认实施计划
 - [ ] 按 TDD 实施、验证并部署
 
 ## YuMi Phase One Implementation Plan
@@ -430,7 +430,7 @@
 - Test: `tests/unit/test_models.py`
 - Test: `tests/unit/test_config.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 async def test_customer_identity_is_unique_and_conversation_links_customer():
@@ -456,13 +456,13 @@ async def test_customer_identity_is_unique_and_conversation_links_customer():
 同时覆盖标签多选、相同 `provider + external_id` 唯一、合并建议状态和会话客户外键。
 增加凭证明文不出现在密文、相同手机号产生相同 HMAC 指纹、错误密钥不能解密的测试。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_customer_repository.py tests/unit/test_models.py`
 
 Expected: FAIL，提示 `Customer`、`CustomerIdentityProvider` 等类型不存在。
 
-- [ ] **Step 3：实现最小数据模型和迁移**
+- [x] **Step 3：实现最小数据模型和迁移**
 
 在 `domain/enums.py` 增加：
 
@@ -484,13 +484,13 @@ class CustomerMergeStatus(StrEnum):
 
 增加必填 `DATA_ENCRYPTION_KEY`，与 Session Secret 分离。`SensitiveDataCipher.encrypt()` 使用 Fernet，`fingerprint()` 使用带独立上下文前缀的 HMAC-SHA256；手机号只保存密文和指纹，不保存明文。
 
-- [ ] **Step 4：验证迁移升级、降级和测试**
+- [x] **Step 4：验证迁移升级、降级和测试**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_customer_repository.py tests/unit/test_sensitive_data.py tests/unit/test_models.py tests/unit/test_config.py tests/unit/test_db.py`
 
 Expected: PASS；`alembic upgrade head → downgrade 0002_frequent_faq_candidates → upgrade head` 成功。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add migrations/versions/0003_customer_crm.py src/homestay_bot/services/sensitive_data.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py src/homestay_bot/config.py .env.example tests/integration/test_customer_repository.py tests/unit/test_sensitive_data.py tests/unit/test_models.py tests/unit/test_config.py

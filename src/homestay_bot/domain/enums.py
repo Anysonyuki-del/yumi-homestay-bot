@@ -27,6 +27,23 @@ class EmployeeRole(StrEnum):
     ADMIN = "admin"
 
 
+class CustomerIdentityProvider(StrEnum):
+    """定义客户身份来自哪个经过验证的外部渠道。"""
+
+    WECOM_KF = "wecom_kf"
+    WECOM_CONTACT = "wecom_contact"
+    WECHAT_UNIONID = "wechat_unionid"
+    HOSTEX = "hostex"
+
+
+class CustomerMergeStatus(StrEnum):
+    """表示客户合并建议是否已经过管理员判断。"""
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
 class Language(StrEnum):
     """定义机器人第一期支持的语言。"""
 

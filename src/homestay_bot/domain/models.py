@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -22,6 +23,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from homestay_bot.domain.enums import (
     ApprovalStatus,
     ConversationMode,
+    CustomerIdentityProvider,
+    CustomerMergeStatus,
     EmployeeRole,
     JobStatus,
     KnowledgeCandidateDraftStatus,
@@ -65,6 +68,125 @@ class Employee(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class Customer(TimestampMixin, Base):
+    """保存跨渠道共享的客户主档和加密联系方式。"""
+
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    phone_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    phone_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    merged_into_customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id"), nullable=True
+    )
+    identities: Mapped[list["CustomerIdentity"]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
+    tag_links: Mapped[list["CustomerTagLink"]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="customer"
+    )
+
+
+class CustomerIdentity(TimestampMixin, Base):
+    """保存一个客户在企业微信、微信或百居易中的可靠身份。"""
+
+    __tablename__ = "customer_identities"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "external_id",
+            name="uq_customer_identity_provider_external_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider: Mapped[CustomerIdentityProvider] = mapped_column(
+        Enum(CustomerIdentityProvider, native_enum=False, length=32),
+        nullable=False,
+    )
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    customer: Mapped[Customer] = relationship(back_populates="identities")
+
+
+class CustomerTag(TimestampMixin, Base):
+    """保存 YuMi 内部客户标签及其可选企业微信标签映射。"""
+
+    __tablename__ = "customer_tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    wecom_tag_id: Mapped[str | None] = mapped_column(
+        String(128), unique=True, nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    customer_links: Mapped[list["CustomerTagLink"]] = relationship(
+        back_populates="tag", cascade="all, delete-orphan"
+    )
+
+
+class CustomerTagLink(TimestampMixin, Base):
+    """保存客户多选标签及企业微信同步状态。"""
+
+    __tablename__ = "customer_tag_links"
+
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_id: Mapped[int] = mapped_column(
+        ForeignKey("customer_tags.id", ondelete="CASCADE"), primary_key=True
+    )
+    sync_pending: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_sync_error_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    customer: Mapped[Customer] = relationship(back_populates="tag_links")
+    tag: Mapped[CustomerTag] = relationship(back_populates="customer_links")
+
+
+class CustomerMergeSuggestion(TimestampMixin, Base):
+    """保存可靠身份匹配形成的待管理员确认合并建议。"""
+
+    __tablename__ = "customer_merge_suggestions"
+    __table_args__ = (
+        CheckConstraint(
+            "source_customer_id != target_customer_id",
+            name="ck_customer_merge_distinct",
+        ),
+        Index("ix_customer_merge_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id"), nullable=False
+    )
+    target_customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id"), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[CustomerMergeStatus] = mapped_column(
+        Enum(CustomerMergeStatus, native_enum=False, length=16),
+        default=CustomerMergeStatus.PENDING,
+        nullable=False,
+    )
+    reviewed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class Conversation(TimestampMixin, Base):
     """保存一个微信客服账号与一个外部联系人的会话状态。"""
 
@@ -74,6 +196,9 @@ class Conversation(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id"), nullable=True, index=True
+    )
     open_kfid: Mapped[str] = mapped_column(String(128), nullable=False)
     external_userid: Mapped[str] = mapped_column(String(128), nullable=False)
     language: Mapped[Language] = mapped_column(
@@ -90,6 +215,7 @@ class Conversation(TimestampMixin, Base):
     messages: Mapped[list["Message"]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan"
     )
+    customer: Mapped[Customer | None] = relationship(back_populates="conversations")
 
 
 class Message(Base):

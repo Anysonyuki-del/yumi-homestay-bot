@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from homestay_bot.config import Settings
 
 
@@ -18,6 +21,7 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
         "WECOM_AGENT_SECRET": "agent-secret",
         "WECOM_DUTY_USERIDS": "staff-1",
         "SESSION_SECRET": "local-test-session-secret-at-least-32",
+        "DATA_ENCRYPTION_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
@@ -26,6 +30,7 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
 
     assert settings.deepseek_api_key == "test-deepseek-key"
     assert settings.deepseek_model == "deepseek-v4-flash"
+    assert settings.data_encryption_key.startswith("MDAw")
     assert settings.deepseek_anthropic_base_url == (
         "https://api.deepseek.test/anthropic"
     )
@@ -46,6 +51,7 @@ def test_settings_default_to_five_second_wecom_polling(monkeypatch) -> None:
         "WECOM_AGENT_SECRET": "agent-secret",
         "WECOM_DUTY_USERIDS": "staff-1",
         "SESSION_SECRET": "local-test-session-secret-at-least-32",
+        "DATA_ENCRYPTION_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
@@ -54,3 +60,27 @@ def test_settings_default_to_five_second_wecom_polling(monkeypatch) -> None:
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.wecom_poll_interval_seconds == 5
+
+
+def test_settings_require_independent_data_encryption_key(monkeypatch) -> None:
+    """敏感数据密钥缺失时应用必须拒绝启动，不能复用会话密钥。"""
+    environment = {
+        "DATABASE_URL": "sqlite+aiosqlite:///test.db",
+        "PUBLIC_BASE_URL": "https://local.example",
+        "DEEPSEEK_API_KEY": "test-deepseek-key",
+        "HOSTEX_ACCESS_TOKEN": "test-hostex-token",
+        "WECOM_CORP_ID": "corp-id",
+        "WECOM_KF_SECRET": "kf-secret",
+        "WECOM_CALLBACK_TOKEN": "callback-token",
+        "WECOM_ENCODING_AES_KEY": "A" * 43,
+        "WECOM_AGENT_ID": "100001",
+        "WECOM_AGENT_SECRET": "agent-secret",
+        "WECOM_DUTY_USERIDS": "staff-1",
+        "SESSION_SECRET": "local-test-session-secret-at-least-32",
+    }
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)  # type: ignore[call-arg]

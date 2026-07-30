@@ -64,6 +64,7 @@ def test_configured_application_starts_worker_and_reports_healthy(
         "WECOM_AGENT_SECRET": "agent-secret",
         "WECOM_DUTY_USERIDS": "staff-1",
         "SESSION_SECRET": "local-test-session-secret-at-least-32",
+        "DATA_ENCRYPTION_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)

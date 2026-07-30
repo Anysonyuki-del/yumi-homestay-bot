@@ -1,7 +1,17 @@
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import CheckConstraint, UniqueConstraint
 
-from homestay_bot.domain.enums import ApprovalStatus, ConversationMode
-from homestay_bot.domain.models import BookingApproval, Message
+from homestay_bot.domain.enums import (
+    ApprovalStatus,
+    ConversationMode,
+    CustomerIdentityProvider,
+    CustomerMergeStatus,
+)
+from homestay_bot.domain.models import (
+    BookingApproval,
+    CustomerIdentity,
+    CustomerMergeSuggestion,
+    Message,
+)
 
 
 def test_domain_status_values_are_stable() -> None:
@@ -12,6 +22,9 @@ def test_domain_status_values_are_stable() -> None:
     assert ApprovalStatus.CREATING.value == "creating"
     assert ApprovalStatus.BOOKED.value == "booked"
     assert ApprovalStatus.NEEDS_REVIEW.value == "needs_review"
+    assert CustomerIdentityProvider.WECOM_KF.value == "wecom_kf"
+    assert CustomerIdentityProvider.HOSTEX.value == "hostex"
+    assert CustomerMergeStatus.PENDING.value == "pending"
 
 
 def test_booking_approval_has_idempotency_constraints() -> None:
@@ -29,3 +42,25 @@ def test_booking_approval_has_idempotency_constraints() -> None:
 def test_external_message_id_is_unique() -> None:
     """同一条企业微信消息只能被持久化一次。"""
     assert Message.__table__.c.external_message_id.unique is True
+
+
+def test_customer_identity_has_composite_unique_constraint() -> None:
+    """客户渠道和外部身份组合必须由数据库保证唯一。"""
+    unique_columns = {
+        tuple(constraint.columns.keys())
+        for constraint in CustomerIdentity.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+
+    assert ("provider", "external_id") in unique_columns
+
+
+def test_customer_merge_rejects_self_merge_in_database() -> None:
+    """合并建议必须在数据库层阻止来源客户等于目标客户。"""
+    check_names = {
+        constraint.name
+        for constraint in CustomerMergeSuggestion.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert "ck_customer_merge_distinct" in check_names
