@@ -528,7 +528,7 @@ async def test_phone_match_only_creates_merge_suggestion():
     assert repository.customers_were_merged is False
 ```
 
-同时覆盖重复消息不重复建档、姓名相同不触发合并、管理员接受后迁移身份/会话/订单/任务并写审计。
+同时覆盖重复消息不重复建档、姓名相同不触发合并、管理员接受后迁移现阶段已存在的身份/会话/标签并写审计。订单和业务任务表在 Task 4 创建，因此其关联迁移测试也在 Task 4 同步补齐，避免依赖尚不存在的数据模型。
 
 - [ ] **Step 2：运行测试并确认失败**
 
@@ -563,7 +563,7 @@ class CustomerService:
         )
 ```
 
-`ConversationService.handle_message()` 在记录首次消息前确保客户存在；合并必须锁定两个客户行，在同一事务中迁移关联记录并写 `AuditLog`。HMAC 指纹只用于精确匹配，姓名和 AI 相似度不得触发合并。
+`ConversationService.handle_message()` 在记录首次消息前确保客户存在；合并必须锁定两个客户行，在同一事务中迁移身份、会话和标签，标记来源客户已合并，并写 `AuditLog`。HMAC 指纹只用于精确匹配，姓名和 AI 相似度不得触发合并。Task 4 创建订单与业务任务模型后，必须扩展同一 `merge_locked()` 事务迁移它们的客户外键。
 
 - [ ] **Step 4：运行客户服务测试**
 
@@ -662,7 +662,10 @@ git commit -m "feat: retain seven day customer context"
 - Create: `migrations/versions/0005_operations.py`
 - Modify: `src/homestay_bot/domain/enums.py`
 - Modify: `src/homestay_bot/domain/models.py`
+- Modify: `src/homestay_bot/repositories/customers.py`
+- Modify: `src/homestay_bot/services/customer_service.py`
 - Test: `tests/integration/test_operations_repository.py`
+- Test: `tests/integration/test_customer_repository.py`
 - Test: `tests/unit/test_models.py`
 
 - [ ] **Step 1：先写失败测试**
@@ -678,7 +681,7 @@ async def test_turnover_task_dedupe_key_is_unique():
     assert first.id == second.id
 ```
 
-同时覆盖订单代码唯一、任务来源消息唯一、附件归属、房间状态唯一、凭证投递部件唯一和 Webhook 事件幂等。
+同时覆盖订单代码唯一、任务来源消息唯一、附件归属、房间状态唯一、凭证投递部件唯一和 Webhook 事件幂等；并验证管理员确认客户合并时，已有订单和业务任务的 `customer_id` 在同一事务迁移到目标客户。
 
 - [ ] **Step 2：运行测试并确认失败**
 
@@ -704,6 +707,8 @@ CredentialDeliveryPart
 
 `BusinessTask.dedupe_key`、`StayOrder.hostex_reservation_code`、`HostexWebhookEvent.event_key` 和投递部件组合键必须唯一。凭证字段只保存密文和私有文件引用。
 
+扩展 `SQLAlchemyCustomerRepository.merge_locked()`：锁定合并建议和两个客户后，除 Task 2 已处理的身份、会话和标签外，把 `StayOrder.customer_id` 与 `BusinessTask.customer_id` 一并迁移到目标客户；任何唯一冲突或写入失败都回滚整个合并事务。
+
 - [ ] **Step 4：验证迁移和约束**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_operations_repository.py tests/unit/test_models.py tests/unit/test_db.py`
@@ -713,7 +718,7 @@ Expected: PASS；迁移升级、降级、再升级成功。
 - [ ] **Step 5：提交**
 
 ```bash
-git add migrations/versions/0005_operations.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py tests/integration/test_operations_repository.py tests/unit/test_models.py
+git add migrations/versions/0005_operations.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py src/homestay_bot/repositories/customers.py src/homestay_bot/services/customer_service.py tests/integration/test_operations_repository.py tests/integration/test_customer_repository.py tests/unit/test_models.py
 git commit -m "feat: add operations data model"
 ```
 
