@@ -1,14 +1,21 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import (
     KnowledgeCandidateDraftStatus,
     KnowledgeCandidateStatus,
 )
-from homestay_bot.domain.models import AuditLog, Base, KnowledgeEntry
+from homestay_bot.domain.models import (
+    AuditLog,
+    Base,
+    KnowledgeCandidate,
+    KnowledgeCandidateOccurrence,
+    KnowledgeEntry,
+)
 from homestay_bot.repositories.faq_candidates import (
     SQLAlchemyFaqCandidateRepository,
 )
@@ -190,7 +197,10 @@ async def test_snooze_clears_private_content_and_reopens_after_thirty_days(
     assert refreshed.examples == []
     assert refreshed.draft_payload is None
     assert refreshed.draft_status is KnowledgeCandidateDraftStatus.NONE
-    assert refreshed.last_threshold_total == 1
+    assert refreshed.total_occurrences == 0
+    assert refreshed.last_threshold_total == 0
+    assert refreshed.last_reminded_total == 0
+    assert refreshed.last_reminded_at is None
     assert await candidates.count_since(
         candidate.id,
         since=now - timedelta(days=1),
@@ -261,3 +271,126 @@ async def test_draft_state_conversion_and_occurrence_pruning(repository) -> None
     assert converted.examples == []
     assert converted.draft_payload is None
     assert await candidates.list_context(now=now) == []
+
+
+@pytest.mark.asyncio
+async def test_notification_advances_threshold_to_delivery_time_total(repository) -> None:
+    """冷却等待期间积压的次数应在实际通知时全部纳入阈值游标。"""
+    candidates, session = repository
+    now = datetime(2026, 7, 30, 4, tzinfo=UTC)
+    candidate = await candidates.get_or_create(
+        canonical_question="是否提供儿童用品？",
+        category="设施",
+    )
+    for index in range(1, 9):
+        await candidates.add_occurrence(
+            candidate.id,
+            source_message_id=f"queued-{index}",
+            occurred_at=now,
+            example="是否提供儿童用品？",
+        )
+    candidate.last_threshold_total = 6
+
+    notified = await candidates.mark_notified(
+        candidate.id,
+        reminded_at=now + timedelta(hours=24),
+    )
+    await session.commit()
+
+    assert notified.total_occurrences == 8
+    assert notified.last_reminded_total == 8
+    assert notified.last_threshold_total == 8
+
+
+@pytest.mark.asyncio
+async def test_maintenance_prunes_old_details_without_new_question(repository) -> None:
+    """周期维护应主动清除窗口外明细，不依赖下一条合格 FAQ。"""
+    candidates, session = repository
+    now = datetime(2026, 7, 30, 4, tzinfo=UTC)
+    candidate = await candidates.get_or_create(
+        canonical_question="是否提供儿童用品？",
+        category="设施",
+    )
+    await candidates.add_occurrence(
+        candidate.id,
+        source_message_id="old-without-followup",
+        occurred_at=now - timedelta(hours=73),
+        example="是否提供儿童用品？",
+    )
+
+    removed, reopened = await candidates.maintain(now=now)
+    await session.commit()
+
+    assert removed == 1
+    assert reopened == 0
+    assert await candidates.count_since(
+        candidate.id,
+        since=now - timedelta(days=365),
+        until=now,
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_candidate_and_occurrence_writes_remain_consistent(
+    tmp_path,
+) -> None:
+    """并发创建与消息去重后只能有一个候选，累计数必须等于明细数。"""
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'faq-race.db'}?timeout=30"
+    engine = create_async_engine(database_url)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_candidate() -> int:
+        """在独立事务并发创建同一标准问题。"""
+        async with factory() as session:
+            candidate = await SQLAlchemyFaqCandidateRepository(
+                session
+            ).get_or_create(
+                canonical_question="民宿是否提供停车位？",
+                category="交通",
+            )
+            await session.commit()
+            return candidate.id
+
+    first_id, second_id = await asyncio.gather(
+        create_candidate(),
+        create_candidate(),
+    )
+
+    async def add_message(message_id: str) -> bool:
+        """在独立事务并发写入同一候选的消息。"""
+        async with factory() as session:
+            added = await SQLAlchemyFaqCandidateRepository(
+                session
+            ).add_occurrence(
+                first_id,
+                source_message_id=message_id,
+                occurred_at=datetime(2026, 7, 30, tzinfo=UTC),
+                example=message_id,
+            )
+            await session.commit()
+            return added
+
+    results = await asyncio.gather(
+        add_message("same-message"),
+        add_message("same-message"),
+        add_message("different-message"),
+    )
+
+    async with factory() as session:
+        candidate_count = await session.scalar(
+            select(func.count(KnowledgeCandidate.id))
+        )
+        occurrence_count = await session.scalar(
+            select(func.count(KnowledgeCandidateOccurrence.id))
+        )
+        candidate = await session.get(KnowledgeCandidate, first_id)
+
+    assert first_id == second_id
+    assert candidate_count == 1
+    assert sorted(results) == [False, True, True]
+    assert occurrence_count == 2
+    assert candidate is not None
+    assert candidate.total_occurrences == 2
+    await engine.dispose()

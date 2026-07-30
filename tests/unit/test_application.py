@@ -13,6 +13,10 @@ class StopWorkerRetry(RuntimeError):
     """表示测试已观察到 worker 在数据库锁冲突后继续重试。"""
 
 
+class StopFaqMaintenance(RuntimeError):
+    """表示测试已观察到一次 FAQ 周期维护。"""
+
+
 @pytest.mark.asyncio
 async def test_faq_candidate_catalog_uses_short_session_and_commits_reopen(
     monkeypatch,
@@ -162,6 +166,63 @@ def test_worker_handlers_register_faq_draft_factory() -> None:
     )
 
     assert handlers["faq_draft_generate"] is faq_handler
+
+
+@pytest.mark.asyncio
+async def test_faq_maintenance_runs_without_new_guest_question(monkeypatch) -> None:
+    """应用后台应周期清理 FAQ 明细，不依赖客人再次触发统计服务。"""
+    session = SimpleNamespace(committed=False)
+    maintained_at: list[datetime] = []
+
+    async def commit() -> None:
+        """记录维护事务提交。"""
+        session.committed = True
+
+    session.commit = commit
+
+    class SessionContext:
+        """返回固定维护会话。"""
+
+        async def __aenter__(self):
+            """进入维护会话。"""
+            return session
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出维护会话。"""
+
+    class RepositoryStub:
+        """记录应用调用的周期维护时间。"""
+
+        def __init__(self, selected_session) -> None:
+            """验证仓储绑定维护会话。"""
+            assert selected_session is session
+
+        async def maintain(self, *, now: datetime) -> tuple[int, int]:
+            """记录维护并返回清理数量。"""
+            maintained_at.append(now)
+            return 2, 1
+
+    async def stop_after_first_cycle(delay: float) -> None:
+        """验证维护间隔后结束无限循环。"""
+        assert delay == 3600
+        raise StopFaqMaintenance
+
+    now = datetime(2026, 7, 30, 8, tzinfo=UTC)
+    monkeypatch.setattr(
+        application,
+        "SQLAlchemyFaqCandidateRepository",
+        RepositoryStub,
+    )
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_first_cycle)
+
+    with pytest.raises(StopFaqMaintenance):
+        await application._run_faq_maintenance_loop(
+            factory=cast(Any, lambda: SessionContext()),
+            now_provider=lambda: now,
+        )
+
+    assert maintained_at == [now]
+    assert session.committed is True
 
 
 @pytest.mark.asyncio

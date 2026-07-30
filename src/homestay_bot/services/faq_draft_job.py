@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from homestay_bot.domain.enums import (
@@ -40,6 +40,15 @@ class DraftCandidateRepository(Protocol):
 
     async def get(self, candidate_id: int) -> DraftCandidate | None:
         """按主键读取候选。"""
+
+    async def count_since(
+        self,
+        candidate_id: int,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> int:
+        """统计候选在指定 UTC 窗口内的真实出现次数。"""
 
     async def increment_draft_attempts(
         self, candidate_id: int
@@ -132,7 +141,17 @@ class FaqDraftJobService:
         )
         if needs_draft:
             candidate = await self._generate_draft(candidate)
-        await self._notify_administrators(candidate)
+        now = self._now_provider()
+        recent_count = await self._candidates.count_since(
+            candidate.id,
+            since=now - timedelta(hours=72),
+            until=now,
+        )
+        await self._notify_administrators(
+            candidate,
+            recent_count=recent_count,
+            reminded_at=now,
+        )
 
     async def _generate_draft(
         self,
@@ -196,6 +215,9 @@ class FaqDraftJobService:
     async def _notify_administrators(
         self,
         candidate: DraftCandidate,
+        *,
+        recent_count: int,
+        reminded_at: datetime,
     ) -> None:
         """只向启用管理员登记通知；无人可收时保留待提醒并安全重试。"""
         administrators = (
@@ -206,14 +228,22 @@ class FaqDraftJobService:
         await self._notifications.send_internal_text(
             agent_id=self._agent_id,
             employee_userids=administrators,
-            content=self._notification_content(candidate),
+            content=self._notification_content(
+                candidate,
+                recent_count=recent_count,
+            ),
         )
         await self._candidates.mark_notified(
             candidate.id,
-            reminded_at=self._now_provider(),
+            reminded_at=reminded_at,
         )
 
-    def _notification_content(self, candidate: DraftCandidate) -> str:
+    def _notification_content(
+        self,
+        candidate: DraftCandidate,
+        *,
+        recent_count: int,
+    ) -> str:
         """按段限制长度，确保关键审核信息和管理入口始终保留。"""
         examples = "\n".join(
             f"{index}. {self._limit_segment(text, 180)}"
@@ -245,7 +275,7 @@ class FaqDraftJobService:
             )
         return (
             "高频待归纳问题\n"
-            f"累计出现：{candidate.total_occurrences} 次\n"
+            f"最近72小时出现：{recent_count} 次\n"
             "标准问题："
             f"{self._limit_segment(candidate.canonical_question, 160)}\n"
             f"{summary}\n{verification}\n"

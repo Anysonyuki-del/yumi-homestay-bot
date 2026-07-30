@@ -1,10 +1,12 @@
 import hashlib
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,13 +28,6 @@ def _canonical_key(question: str) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
-def _as_utc(value: datetime) -> datetime:
-    """把 SQLite 返回的无时区时间按 UTC 解释并统一比较格式。"""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
 class SQLAlchemyFaqCandidateRepository:
     """持久化 FAQ 候选、脱敏示例和滚动窗口出现记录。"""
 
@@ -51,7 +46,7 @@ class SQLAlchemyFaqCandidateRepository:
         limit: int = 50,
     ) -> list[KnowledgeCandidate]:
         """重开关闭期已满的候选，并返回模型可匹配的有限上下文。"""
-        await self._reopen_expired(now=now)
+        await self.reopen_expired(now=now)
         result = await self._session.scalars(
             select(KnowledgeCandidate)
             .where(KnowledgeCandidate.status == KnowledgeCandidateStatus.OPEN)
@@ -66,22 +61,44 @@ class SQLAlchemyFaqCandidateRepository:
         canonical_question: str,
         category: str,
     ) -> KnowledgeCandidate:
-        """按规范化主题键复用候选，不用分类差异制造重复主题。"""
+        """用数据库冲突忽略原子复用候选，避免先查后插的并发竞态。"""
         key = _canonical_key(canonical_question)
-        existing = await self._session.scalar(
+        values = {
+            "canonical_key": key,
+            "canonical_question": canonical_question.strip(),
+            "category": category.strip(),
+            "status": KnowledgeCandidateStatus.OPEN,
+            "total_occurrences": 0,
+            "last_threshold_total": 0,
+            "last_reminded_total": 0,
+            "notification_pending": False,
+            "examples": [],
+            "examples_version": 0,
+            "draft_status": KnowledgeCandidateDraftStatus.NONE,
+            "draft_generation": 0,
+            "draft_attempts": 0,
+            "draft_examples_version": 0,
+        }
+        dialect_name = self._session.get_bind().dialect.name
+        statement: Any
+        if dialect_name == "sqlite":
+            statement = sqlite_insert(KnowledgeCandidate).values(**values)
+        elif dialect_name == "postgresql":
+            statement = postgresql_insert(KnowledgeCandidate).values(**values)
+        else:
+            raise RuntimeError(f"不支持的 FAQ 候选数据库方言: {dialect_name}")
+        await self._session.execute(
+            statement.on_conflict_do_nothing(
+                index_elements=[KnowledgeCandidate.canonical_key]
+            )
+        )
+        candidate = await self._session.scalar(
             select(KnowledgeCandidate).where(
                 KnowledgeCandidate.canonical_key == key
             )
         )
-        if existing is not None:
-            return existing
-        candidate = KnowledgeCandidate(
-            canonical_key=key,
-            canonical_question=canonical_question.strip(),
-            category=category.strip(),
-        )
-        self._session.add(candidate)
-        await self._session.flush()
+        if candidate is None:
+            raise RuntimeError("FAQ 候选原子创建后无法读取")
         return candidate
 
     async def add_occurrence(
@@ -93,32 +110,66 @@ class SQLAlchemyFaqCandidateRepository:
         example: str | None,
     ) -> bool:
         """为开放候选增加一次幂等出现，并最多保留三条不同示例。"""
-        candidate = await self.get(candidate_id)
+        candidate = await self._session.scalar(
+            select(KnowledgeCandidate)
+            .where(KnowledgeCandidate.id == candidate_id)
+            .with_for_update()
+        )
         if candidate is None:
             raise LookupError(f"FAQ 候选不存在: {candidate_id}")
         if candidate.status is not KnowledgeCandidateStatus.OPEN:
             return False
-        duplicate = await self._session.scalar(
-            select(KnowledgeCandidateOccurrence.id).where(
-                KnowledgeCandidateOccurrence.source_message_id == source_message_id
+
+        occurrence_values = {
+            "candidate_id": candidate_id,
+            "source_message_id": source_message_id,
+            "occurred_at": occurred_at,
+        }
+        dialect_name = self._session.get_bind().dialect.name
+        occurrence_insert: Any
+        if dialect_name == "sqlite":
+            occurrence_insert = sqlite_insert(
+                KnowledgeCandidateOccurrence
+            ).values(**occurrence_values)
+        elif dialect_name == "postgresql":
+            occurrence_insert = postgresql_insert(
+                KnowledgeCandidateOccurrence
+            ).values(**occurrence_values)
+        else:
+            raise RuntimeError(f"不支持的 FAQ 明细数据库方言: {dialect_name}")
+        inserted = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                occurrence_insert.on_conflict_do_nothing(
+                    index_elements=[
+                        KnowledgeCandidateOccurrence.source_message_id
+                    ]
+                )
             )
         )
-        if duplicate is not None:
+        if inserted.rowcount == 0:
             return False
 
-        self._session.add(
-            KnowledgeCandidateOccurrence(
-                candidate_id=candidate_id,
-                source_message_id=source_message_id,
-                occurred_at=occurred_at,
+        # 累计数必须由数据库原子自增，不能依赖并发会话各自读到的旧值。
+        await self._session.execute(
+            update(KnowledgeCandidate)
+            .where(KnowledgeCandidate.id == candidate_id)
+            .values(
+                total_occurrences=KnowledgeCandidate.total_occurrences + 1,
+                last_seen_at=case(
+                    (
+                        KnowledgeCandidate.last_seen_at.is_(None),
+                        occurred_at,
+                    ),
+                    (
+                        KnowledgeCandidate.last_seen_at < occurred_at,
+                        occurred_at,
+                    ),
+                    else_=KnowledgeCandidate.last_seen_at,
+                ),
             )
         )
-        candidate.total_occurrences += 1
-        if (
-            candidate.last_seen_at is None
-            or _as_utc(occurred_at) > _as_utc(candidate.last_seen_at)
-        ):
-            candidate.last_seen_at = occurred_at
+        await self._session.refresh(candidate)
         clean_example = example.strip() if example else ""
         if clean_example and clean_example not in candidate.examples:
             # 保留最近三条不同问法，让后续提醒能用新表达刷新参考草稿。
@@ -197,6 +248,8 @@ class SQLAlchemyFaqCandidateRepository:
         candidate = await self._require(candidate_id)
         candidate.notification_pending = False
         candidate.last_reminded_total = candidate.total_occurrences
+        # 冷却期内积压的全部次数以实际通知时刻为新基线。
+        candidate.last_threshold_total = candidate.total_occurrences
         candidate.last_reminded_at = reminded_at
         await self._session.flush()
         return candidate
@@ -245,6 +298,14 @@ class SQLAlchemyFaqCandidateRepository:
         await self._session.flush()
         return int(result.rowcount)
 
+    async def maintain(self, *, now: datetime) -> tuple[int, int]:
+        """周期清理窗口外明细并重开关闭期已满的候选。"""
+        removed = await self.prune_occurrences(
+            before=now - timedelta(hours=72)
+        )
+        reopened = await self.reopen_expired(now=now)
+        return removed, reopened
+
     async def _require(self, candidate_id: int) -> KnowledgeCandidate:
         """读取必需候选，不存在时抛出稳定异常。"""
         candidate = await self.get(candidate_id)
@@ -252,19 +313,23 @@ class SQLAlchemyFaqCandidateRepository:
             raise LookupError(f"FAQ 候选不存在: {candidate_id}")
         return candidate
 
-    async def _reopen_expired(self, *, now: datetime) -> None:
-        """关闭期满后清空旧周期并按当前累计数设置新阈值基线。"""
+    async def reopen_expired(self, *, now: datetime) -> int:
+        """关闭期满后清空旧周期的累计数、游标和出现明细。"""
         expired = await self._session.scalars(
             select(KnowledgeCandidate).where(
                 KnowledgeCandidate.status == KnowledgeCandidateStatus.SNOOZED,
                 KnowledgeCandidate.snoozed_until <= now,
             )
         )
+        reopened = 0
         for candidate in expired:
+            reopened += 1
             candidate.status = KnowledgeCandidateStatus.OPEN
             candidate.snoozed_until = None
-            candidate.last_threshold_total = candidate.total_occurrences
-            candidate.last_reminded_total = candidate.total_occurrences
+            candidate.total_occurrences = 0
+            candidate.last_seen_at = None
+            candidate.last_threshold_total = 0
+            candidate.last_reminded_total = 0
             candidate.last_reminded_at = None
             # 自动重开属于系统动作，审计不复制问题、示例或草稿正文。
             self._session.add(
@@ -279,6 +344,7 @@ class SQLAlchemyFaqCandidateRepository:
             candidate.notification_pending = False
             await self._delete_occurrences(candidate.id)
         await self._session.flush()
+        return reopened
 
     async def _delete_occurrences(self, candidate_id: int) -> None:
         """显式删除出现明细，兼容未启用外键级联的 SQLite。"""

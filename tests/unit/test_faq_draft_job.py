@@ -61,6 +61,16 @@ class CandidateRepositoryStub:
         """按固定主键返回候选。"""
         return self.record if candidate_id == self.record.id else None
 
+    async def count_since(
+        self,
+        candidate_id: int,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> int:
+        """返回测试候选在最近窗口内的次数。"""
+        return 3
+
     async def increment_draft_attempts(self, candidate_id: int):
         """增加一次草稿失败次数。"""
         self.record.draft_attempts += 1
@@ -197,6 +207,7 @@ async def test_successful_draft_is_saved_and_only_notifies_admins_without_identi
     content = notifications.messages[0]["content"]
     assert "民宿是否提供停车位" in content
     assert "【待管理员确认】" in content
+    assert "最近72小时出现：3 次" in content
     assert "wm-" not in content
     assert "external_userid" not in content
 

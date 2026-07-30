@@ -458,6 +458,31 @@ async def _run_worker_loop(
             await asyncio.sleep(1)
 
 
+async def _run_faq_maintenance_loop(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    now_provider: Callable[[], datetime] | None = None,
+) -> None:
+    """每小时清理过期明细并重开已结束关闭期的候选。"""
+    current_time = now_provider or (lambda: datetime.now(UTC))
+    while True:
+        try:
+            async with factory() as session:
+                await SQLAlchemyFaqCandidateRepository(session).maintain(
+                    now=current_time()
+                )
+                await session.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # 周期维护失败不影响消息 worker，只记录异常类型等待下轮重试。
+            logger.warning(
+                "FAQ 周期维护失败：error_type=%s",
+                type(error).__name__,
+            )
+        await asyncio.sleep(3600)
+
+
 def _next_wecom_poll_delay(
     *,
     current_delay: float,
@@ -679,13 +704,16 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             interval_seconds=settings.wecom_poll_interval_seconds,
         )
     )
+    faq_maintenance_task = asyncio.create_task(
+        _run_faq_maintenance_loop(factory=factory)
+    )
 
     try:
         yield
     finally:
-        for task in (worker_task, poll_task):
+        for task in (worker_task, poll_task, faq_maintenance_task):
             task.cancel()
-        for task in (worker_task, poll_task):
+        for task in (worker_task, poll_task, faq_maintenance_task):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         # 测试重启或同进程重新装配时不得沿用已关闭的客户端与会话服务。
