@@ -708,7 +708,7 @@ CredentialDelivery
 CredentialDeliveryPart
 ```
 
-`BusinessTask.dedupe_key`、`StayOrder.hostex_reservation_code`、`HostexWebhookEvent.event_key` 和投递部件组合键必须唯一。凭证字段只保存密文和私有文件引用。
+`BusinessTask.dedupe_key`、`StayOrder.hostex_reservation_code`、`HostexWebhookEvent.event_key` 和投递部件组合键必须唯一。AI 创建的 `PENDING_CONFIRMATION` 任务允许 `property_id` 与 `service_date` 暂时为空；进入待分派、已分派、执行中或待检查前必须补齐，数据库检查约束与任务服务共同守卫。周转保洁任务始终要求房间和服务日期。凭证字段只保存密文和私有文件引用。
 
 创建最小 `SQLAlchemyOperationsRepository`，只实现本任务可验证的数据入口：幂等 `create_turnover()`、订单/房态/凭证投递记录的基础读写。Task 5 在同一仓储上继续增加百居易订单 upsert、Webhook 事件和对账查询，禁止测试绕过生产仓储直接伪造幂等行为。
 
@@ -865,13 +865,16 @@ class BusinessTaskService:
 
     async def record_ai_suggestion(
         self, *, customer_id: int, source_message_id: str,
-        task_type: BusinessTaskType, description: str
+        task_type: BusinessTaskType, description: str,
+        property_id: int | None = None, service_date: date | None = None
     ) -> BusinessTask:
         return await self._tasks.create_pending_confirmation(
             customer_id=customer_id,
             source_message_id=source_message_id,
             task_type=task_type,
             description=description,
+            property_id=property_id,
+            service_date=service_date,
         )
 
     async def transition(
@@ -882,7 +885,7 @@ class BusinessTaskService:
         return await self._tasks.save_status(task, target)
 ```
 
-扩展 `AssistantDecision`，同一次 DeepSeek 响应返回可空 `task_suggestion`；本地只允许六种一期任务类型并清除敏感字段。`AnswerPolicy` 在本地执行确定性边界：民宿无关问题礼貌拒答，价格、退款、投诉、提前入住和激烈情绪只提供安抚与流程说明，不替 YuMi 作决定，并创建带会话摘要的接管通知。`ConversationService` 在客人回复成功后记录待确认任务，失败不得回滚回复；任务待确认时通知管理员，分派后只通知执行员工。扩展 `ContextRepository.load_model_context()`，把当前客户的有效订单摘要和未完成任务摘要加入 Task 3 已建立的 `CustomerModelContext`，不得包含金额、完整手机号或入住凭证明文。把 `HostexSyncService` 的订单 upsert 成功事件接入 `create_turnover()`，以房源和服务日期幂等创建周转任务。每次状态变化和接管动作均写不含聊天正文的审计事件。
+扩展 `AssistantDecision`，同一次 DeepSeek 响应返回可空 `task_suggestion`；本地只允许六种一期任务类型并清除敏感字段。AI 未能可靠确定房间或日期时仍可创建 `PENDING_CONFIRMATION`，但确认或分派前必须由管理员补齐；任何可执行状态不得缺少房间和服务日期。`AnswerPolicy` 在本地执行确定性边界：民宿无关问题礼貌拒答，价格、退款、投诉、提前入住和激烈情绪只提供安抚与流程说明，不替 YuMi 作决定，并创建带会话摘要的接管通知。`ConversationService` 在客人回复成功后记录待确认任务，失败不得回滚回复；任务待确认时通知管理员，分派后只通知执行员工。扩展 `ContextRepository.load_model_context()`，把当前客户的有效订单摘要和未完成任务摘要加入 Task 3 已建立的 `CustomerModelContext`，不得包含金额、完整手机号或入住凭证明文。把 `HostexSyncService` 的订单 upsert 成功事件接入 `create_turnover()`，以房源和服务日期幂等创建周转任务。每次状态变化和接管动作均写不含聊天正文的审计事件。
 
 - [ ] **Step 4：运行任务与会话测试**
 
