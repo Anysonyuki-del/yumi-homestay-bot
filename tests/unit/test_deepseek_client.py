@@ -628,6 +628,68 @@ async def test_deepseek_executes_read_only_tool_and_replays_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_room_list_followup_reuses_previous_stay_dates() -> None:
+    """“房源列表”应沿用上一轮日期并查询房态，不得要求客人重复说明。"""
+    client = ToolClientStub()
+    executor = ToolExecutorStub()
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=executor,
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {"role": "user", "content": "今天入住明天退房还有房吗？"},
+            {
+                "role": "assistant",
+                "content": "今天入住、明天退房有可用房间。",
+            },
+            {"role": "user", "content": "房源列表"},
+        ],
+    )
+
+    assert client.chat.completions.requests[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "search_availability"},
+    }
+    assert executor.calls[0][0] == "search_availability"
+
+
+@pytest.mark.asyncio
+async def test_new_topic_does_not_reuse_previous_availability_dates() -> None:
+    """客人切换到新话题时不得被上一轮房态日期强制查询百居易。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {"role": "user", "content": "今天入住明天退房还有房吗？"},
+            {
+                "role": "assistant",
+                "content": "今天入住、明天退房有可用房间。",
+            },
+            {"role": "user", "content": "怎样和朋友协调旅行安排？"},
+        ],
+    )
+
+    assert client.chat.completions.requests[0]["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
 async def test_general_question_clears_model_knowledge_gap_mistake() -> None:
     """普通常识问题不得因模型误标而提醒补知识库。"""
     payload = decision_payload()

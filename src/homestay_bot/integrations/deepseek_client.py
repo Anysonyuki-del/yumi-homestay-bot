@@ -516,8 +516,11 @@ class DeepSeekGuestAssistant:
         return topic in corpus
 
     @staticmethod
-    def _should_force_availability(question_text: str) -> bool:
-        """有完整入住退房信息的房态问题必须调用百居易。"""
+    def _should_force_availability(
+        question_text: str,
+        previous_context: str = "",
+    ) -> bool:
+        """完整房态问题或承接日期的房源追问必须调用百居易。"""
         asks_availability = re.search(
             r"有房|几间房|房态|可订|availability",
             question_text,
@@ -531,7 +534,36 @@ class DeepSeekGuestAssistant:
             )
             or len(re.findall(r"\d{4}-\d{2}-\d{2}", question_text)) >= 2
         )
-        return asks_availability is not None and has_stay_range
+        if asks_availability is not None and has_stay_range:
+            return True
+
+        # “房源列表”等短追问应沿用上一轮已明确的入住退房日期，
+        # 但普通新话题不得被上一轮房态内容错误带入百居易查询。
+        asks_room_followup = re.search(
+            r"房源|房型|房间|客房|房.*列表|还有哪些",
+            question_text,
+        )
+        previous_asks_availability = re.search(
+            r"有房|几间房|房态|可订|可用房|availability",
+            previous_context,
+            re.IGNORECASE,
+        )
+        previous_has_stay_range = (
+            ("入住" in previous_context and "退房" in previous_context)
+            or (
+                re.search(r"今天|今晚|今日", previous_context) is not None
+                and re.search(r"明天|明日|后天", previous_context) is not None
+            )
+            or len(
+                re.findall(r"\d{4}-\d{2}-\d{2}", previous_context)
+            )
+            >= 2
+        )
+        return (
+            asks_room_followup is not None
+            and previous_asks_availability is not None
+            and previous_has_stay_range
+        )
 
     async def _refine_reply(self, reply_text: str) -> str:
         """对超过一千字的回复做一次语义精简，失败时保留原文。"""
@@ -618,6 +650,8 @@ class DeepSeekGuestAssistant:
             f"武汉当前日期：{local_today.isoformat()}；"
             f"今天={local_today.isoformat()}，明天={tomorrow.isoformat()}，"
             f"后天={day_after.isoformat()}。相对日期必须自主换算。"
+            "简短追问必须结合上一轮理解；上一轮已明确入住和退房日期时，"
+            "“房源列表”“有哪些房型”等追问沿用该日期直接查询，不得重复追问。"
             f"审核知识：{json.dumps([item.__dict__ for item in knowledge], ensure_ascii=False)}"
             f"未关闭 FAQ 候选目录：{json.dumps(faq_candidates, ensure_ascii=False)}"
             f"输出结构：{json.dumps(assistant_decision_schema(), ensure_ascii=False)}"
@@ -637,7 +671,13 @@ class DeepSeekGuestAssistant:
                     "type": "function",
                     "function": {"name": "search_availability"},
                 }
-                if self._should_force_availability(question_text)
+                if self._should_force_availability(
+                    question_text,
+                    "\n".join(
+                        str(item.get("content", ""))
+                        for item in minimized_messages[:-1]
+                    ),
+                )
                 else "auto"
             ),
         }
