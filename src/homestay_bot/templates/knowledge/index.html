@@ -12,6 +12,50 @@
       <p>机器人只会使用当前已启用的审核内容。</p>
 
       {% if can_edit %}
+      <section class="candidate-section">
+        <h2>待归纳问题</h2>
+        <p>以下内容由大模型生成，仅供管理员核实和修改，不会自动回复客人。</p>
+        {% for candidate in candidates %}
+        {% set draft = candidate.draft_payload or {} %}
+        <article class="candidate-card">
+          <h3>{{ candidate.category }} · 最近累计 {{ candidate.total_occurrences }} 次</h3>
+          <p><strong>标准问题：</strong>{{ candidate.canonical_question }}</p>
+          {% if candidate.examples %}
+          <h4>脱敏参考问法</h4>
+          <ul>
+            {% for example in candidate.examples %}
+            <li>{{ example }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if draft.get("verification_items") %}
+          <h4>待管理员核实</h4>
+          <ul class="verification-list">
+            {% for item in draft.get("verification_items", []) %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          <form method="post" action="/employee/knowledge/candidates/{{ candidate.id }}/convert">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label>分类<input name="category" value="{{ draft.get('category', candidate.category) }}" required></label>
+            <label>中文问题<textarea name="question_zh" required>{{ draft.get("question_zh", candidate.canonical_question) }}</textarea></label>
+            <label>中文答案<textarea name="answer_zh" required>{{ draft.get("answer_zh", "") }}</textarea></label>
+            <label>English question<textarea name="question_en" required>{{ draft.get("question_en", "") }}</textarea></label>
+            <label>English answer<textarea name="answer_en" required>{{ draft.get("answer_en", "") }}</textarea></label>
+            <label>关键词（逗号分隔）<input name="keywords" value="{{ draft.get('keywords', []) | join(',') }}"></label>
+            <button type="submit">确认并转为知识</button>
+          </form>
+          <form method="post" action="/employee/knowledge/candidates/{{ candidate.id }}/snooze" class="secondary-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="secondary-button">暂不收录（30 天）</button>
+          </form>
+        </article>
+        {% else %}
+        <p>暂无待归纳问题。</p>
+        {% endfor %}
+      </section>
+
       <section>
         <h2>新增知识</h2>
         <form method="post" action="/employee/knowledge">

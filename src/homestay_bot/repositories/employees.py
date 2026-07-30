@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
 
 
@@ -28,3 +29,15 @@ class SQLAlchemyEmployeeRepository:
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def list_active_admin_userids(self) -> list[str]:
+        """按稳定顺序返回所有启用管理员的企业微信 userid。"""
+        result = await self._session.scalars(
+            select(Employee.wecom_userid)
+            .where(
+                Employee.role == EmployeeRole.ADMIN,
+                Employee.is_active.is_(True),
+            )
+            .order_by(Employee.id)
+        )
+        return list(result.all())
