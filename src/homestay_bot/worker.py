@@ -227,6 +227,7 @@ class Worker[JobType: WorkerJob]:
         "hostex_read",
         "hostex_event",
         "faq_draft_generate",
+        "customer_tag_sync",
     }
 
     def __init__(

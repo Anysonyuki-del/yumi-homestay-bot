@@ -81,9 +81,10 @@ def test_configured_application_starts_worker_and_reports_healthy(
             "database": "ok",
             "worker_heartbeat": "ok",
             "wecom_polling": "ok",
-            "configuration": "ok",
-            "web_search": "unknown",
-        }
+                "configuration": "ok",
+                "web_search": "unknown",
+                "wecom_contact_sync": "not_configured",
+            }
         assert chat_configuration == {
             "api_key": "test-deepseek-key",
             "base_url": "https://api.deepseek.test",

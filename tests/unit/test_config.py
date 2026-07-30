@@ -35,6 +35,36 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
     assert settings.deepseek_anthropic_base_url == (
         "https://api.deepseek.test/anthropic"
     )
+    assert settings.wecom_contact_secret is None
+
+
+def test_settings_load_optional_wecom_contact_secret(monkeypatch) -> None:
+    """客户联系 Secret 独立可选，配置后才启用外部联系人标签同步。"""
+    environment = {
+        "DATABASE_URL": "sqlite+aiosqlite:///test.db",
+        "PUBLIC_BASE_URL": "https://local.example",
+        "DEEPSEEK_API_KEY": "test-deepseek-key",
+        "HOSTEX_ACCESS_TOKEN": "test-hostex-token",
+        "HOSTEX_WEBHOOK_SECRET_TOKEN": "test-webhook-secret",
+        "WECOM_CORP_ID": "corp-id",
+        "WECOM_KF_SECRET": "kf-secret",
+        "WECOM_CALLBACK_TOKEN": "callback-token",
+        "WECOM_ENCODING_AES_KEY": "A" * 43,
+        "WECOM_AGENT_ID": "100001",
+        "WECOM_AGENT_SECRET": "agent-secret",
+        "WECOM_DUTY_USERIDS": "staff-1",
+        "WECOM_CONTACT_SECRET": "contact-secret",
+        "SESSION_SECRET": "local-test-session-secret-at-least-32",
+        "DATA_ENCRYPTION_KEY": (
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+        ),
+    }
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.wecom_contact_secret == "contact-secret"
 
 
 def test_settings_default_to_five_second_wecom_polling(monkeypatch) -> None:

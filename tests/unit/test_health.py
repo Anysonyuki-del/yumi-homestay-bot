@@ -22,6 +22,7 @@ async def test_health_endpoint_returns_ok() -> None:
         "wecom_polling": "not_configured",
         "configuration": "incomplete",
         "web_search": "not_configured",
+        "wecom_contact_sync": "not_configured",
     }
 
 
@@ -36,6 +37,19 @@ async def test_main_app_registers_wecom_callback_route() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"] == "企业微信回调服务尚未配置"
+
+
+@pytest.mark.asyncio
+async def test_main_app_registers_customer_crm_route() -> None:
+    """主应用必须暴露管理员客户管理入口。"""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/employee/customers")
+
+    assert response.status_code != 404
 
 
 @pytest.mark.asyncio
@@ -94,3 +108,27 @@ async def test_web_search_status_controls_overall_health(
 
     assert result["web_search"] == web_search_status
     assert result["status"] == overall_status
+
+
+@pytest.mark.asyncio
+async def test_optional_wecom_contact_sync_is_reported_without_degrading() -> None:
+    """未配置可选客户联系 Secret 时应明确展示，但不影响核心健康。"""
+
+    async def database_probe() -> bool:
+        """模拟可用数据库。"""
+        return True
+
+    now = datetime.now(UTC)
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: now,
+        configuration_ok=True,
+        web_search_status_getter=lambda: "ok",
+        contact_sync_configured=False,
+    )
+
+    result = await service.check()
+
+    assert result["status"] == "ok"
+    assert result["wecom_contact_sync"] == "not_configured"

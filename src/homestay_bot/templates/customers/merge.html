@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>复核客户合并</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="card">
+      <a class="back-link" href="/employee/customers">← 返回客户列表</a>
+      <header class="page-header">
+        <p class="eyebrow">合并建议 #{{ suggestion.id }}</p>
+        <h1>复核客户合并</h1>
+        <p>仅当确认是同一位客户时才合并。合并后来源档案将归入目标档案。</p>
+      </header>
+
+      <div class="compare-grid">
+        <section class="action-panel">
+          <h2>来源档案</h2>
+          <p><strong>{{ source.display_name }}</strong></p>
+          <p>{{ source.masked_phone }}</p>
+          <p>{{ source.note or "无员工备注" }}</p>
+        </section>
+        <section class="action-panel">
+          <h2>目标档案</h2>
+          <p><strong>{{ target.display_name }}</strong></p>
+          <p>{{ target.masked_phone }}</p>
+          <p>{{ target.note or "无员工备注" }}</p>
+        </section>
+      </div>
+
+      <div class="decision-grid">
+        <form method="post" action="/employee/customers/merge/{{ suggestion.id }}/confirm">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit">确认是同一客户</button>
+        </form>
+        <form method="post" action="/employee/customers/merge/{{ suggestion.id }}/reject">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="button-danger" type="submit">拒绝合并</button>
+        </form>
+      </div>
+    </main>
+  </body>
+</html>

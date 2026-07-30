@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ customer.display_name }} · 客户管理</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="card">
+      <a class="back-link" href="/employee/customers">← 返回客户列表</a>
+      <header class="page-header">
+        <p class="eyebrow">客户 #{{ customer.id }}</p>
+        <h1>{{ customer.display_name }}</h1>
+        <p class="privacy-line">电话：{{ masked_phone }}</p>
+      </header>
+
+      <section class="action-panel">
+        <h2>客户标签</h2>
+        <form method="post" action="/employee/customers/{{ customer.id }}/tags">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="tag-grid">
+            {% for tag in tags %}
+            <label class="checkbox">
+              <input type="checkbox" name="tag_ids" value="{{ tag.id }}" {% if tag.id in selected_tag_ids %}checked{% endif %}>
+              <span>{{ tag.name }}</span>
+            </label>
+            {% else %}
+            <p>尚未配置客户标签。</p>
+            {% endfor %}
+          </div>
+          <button type="submit">保存标签</button>
+        </form>
+      </section>
+
+      <section class="action-panel">
+        <h2>员工备注</h2>
+        <form method="post" action="/employee/customers/{{ customer.id }}/note">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            备注
+            <textarea name="note" maxlength="2000">{{ customer.note }}</textarea>
+          </label>
+          <button type="submit">保存备注</button>
+        </form>
+      </section>
+
+      <section class="action-panel">
+        <h2>AI 客户摘要</h2>
+        <form method="post" action="/employee/customers/{{ customer.id }}/summary">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            七天内摘要
+            <textarea name="short_summary" maxlength="4000">{{ summary.short_summary if summary else "" }}</textarea>
+          </label>
+          <label>
+            长期摘要
+            <textarea name="long_summary" maxlength="8000">{{ summary.long_summary if summary else "" }}</textarea>
+          </label>
+          <label>
+            待确认事项（每行一项）
+            <textarea name="unresolved_items" maxlength="10000">{% if summary %}{{ summary.unresolved_items | join("\n") }}{% endif %}</textarea>
+          </label>
+          <button type="submit">保存摘要</button>
+        </form>
+        {% if summary %}
+        <form method="post" action="/employee/customers/{{ customer.id }}/summary/delete">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="button-danger" type="submit">删除摘要</button>
+        </form>
+        {% endif %}
+      </section>
+
+      {% if merge_suggestions %}
+      <section class="action-panel">
+        <h2>待审核合并</h2>
+        <ul class="plain-list">
+          {% for suggestion in merge_suggestions %}
+          <li>
+            <a href="/employee/customers/merge/{{ suggestion.id }}">复核合并建议 #{{ suggestion.id }}</a>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+    </main>
+  </body>
+</html>

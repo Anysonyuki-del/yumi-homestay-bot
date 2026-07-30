@@ -1281,14 +1281,22 @@ git commit -m "feat: deliver room credentials safely"
 - Modify: `src/homestay_bot/main.py`
 - Modify: `src/homestay_bot/application.py`
 - Modify: `src/homestay_bot/config.py`
+- Modify: `src/homestay_bot/repositories/customers.py`
+- Modify: `src/homestay_bot/routes/health.py`
+- Modify: `src/homestay_bot/worker.py`
 - Modify: `.env.example`
 - Modify: `src/homestay_bot/static/app.css`
 - Test: `tests/integration/test_customer_routes.py`
+- Test: `tests/integration/test_customer_repository.py`
+- Test: `tests/integration/test_runtime_startup.py`
 - Test: `tests/unit/test_customer_admin_service.py`
 - Test: `tests/unit/test_wecom_contact_client.py`
 - Test: `tests/unit/test_customer_tag_sync.py`
+- Test: `tests/unit/test_config.py`
+- Test: `tests/unit/test_health.py`
+- Test: `tests/unit/test_worker.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 def test_admin_can_confirm_merge_but_staff_cannot(client):
@@ -1303,13 +1311,13 @@ def test_admin_can_confirm_merge_but_staff_cannot(client):
 
 同时覆盖客户列表、标签多选、备注、手机号脱敏、摘要更正/删除、拒绝合并、合并审计无正文。标签始终先在本地成功保存；仅当客户存在已验证的 `WECOM_CONTACT` 身份且配置了客户联系 Secret 时同步企业微信标签；缺少身份或配置时跳过，接口失败时标记待重试且不回滚本地标签。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_customer_routes.py tests/unit/test_customer_admin_service.py tests/unit/test_wecom_contact_client.py tests/unit/test_customer_tag_sync.py`
 
 Expected: FAIL，提示客户管理路由不存在。
 
-- [ ] **Step 3：实现管理员 CRM 页面**
+- [x] **Step 3：实现管理员 CRM 页面**
 
 ```python
 class CustomerAdminService:
@@ -1337,18 +1345,27 @@ class CustomerAdminService:
 
 `CustomerTagSyncService` 仅对已验证的企业微信客户联系身份和配置了 `wecom_tag_id` 的标签调用官方 `/cgi-bin/externalcontact/mark_tag`。增加可选 `WECOM_CONTACT_SECRET`：未配置时健康项显示 `not_configured`，不影响本地 CRM；同步失败只记录错误码并保持 `sync_pending=True`，由 worker 幂等重试，日志不得写外部联系人 ID 或标签正文。
 
-- [ ] **Step 4：运行 CRM 权限测试**
+- [x] **Step 4：运行 CRM 权限测试**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/integration/test_customer_routes.py tests/unit/test_customer_admin_service.py tests/unit/test_wecom_contact_client.py tests/unit/test_customer_tag_sync.py tests/integration/test_task_routes.py`
 
 Expected: PASS。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/homestay_bot/integrations/wecom/contact_client.py src/homestay_bot/services/customer_tag_sync.py src/homestay_bot/routes/customers.py src/homestay_bot/services/customer_admin_service.py src/homestay_bot/templates/customers/index.html src/homestay_bot/templates/customers/detail.html src/homestay_bot/templates/customers/merge.html src/homestay_bot/main.py src/homestay_bot/application.py src/homestay_bot/config.py .env.example src/homestay_bot/static/app.css tests/integration/test_customer_routes.py tests/unit/test_customer_admin_service.py tests/unit/test_wecom_contact_client.py tests/unit/test_customer_tag_sync.py
 git commit -m "feat: add mobile customer crm"
 ```
+
+**Review（Task 11）**
+
+- 管理员客户列表、详情、标签多选、备注、摘要更正/删除和合并确认/拒绝均已接入一次性 CSRF；普通员工入口和伪造写请求返回 403。
+- CRM 页面只接收 `CustomerCard` 安全字段，手机号在内存解密后立即脱敏；审计只保存内部编号、版本和增删数量，不保存备注、摘要或客户聊天正文。
+- 标签始终与本地 CRM 同事务提交；仅在配置可选 `WECOM_CONTACT_SECRET` 且客户存在已验证 `WECOM_CONTACT` 身份时登记异步同步任务。
+- 企业微信标签同步先通过客户详情读取全部有效跟进员工，再按 `userid + external_userid` 客户关系调用 `externalcontact/mark_tag`；失败仅记录异常类型并由 worker 最多重试三次。
+- 390px 手机尺寸实测客户详情与合并确认页无横向溢出，完整手机号和密文字段均未进入页面。
+- 全量验证：`330 passed, 10 skipped`；跳过项仅为未显式开启的 DeepSeek、百居易和企业微信真实契约测试。Ruff、mypy 与 `git diff --check` 均通过。
 
 ### Task 12：入住生命周期提醒、发送窗口失败和人工联系任务
 

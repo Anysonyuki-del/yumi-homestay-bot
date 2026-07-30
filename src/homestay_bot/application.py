@@ -37,6 +37,7 @@ from homestay_bot.integrations.wecom.api_client import (
     WeComApiClient,
     WeComApiError,
 )
+from homestay_bot.integrations.wecom.contact_client import WeComContactClient
 from homestay_bot.repositories.approvals import (
     SQLAlchemyApprovalRepository,
     SQLAlchemyPermissionChecker,
@@ -72,7 +73,9 @@ from homestay_bot.services.credential_delivery import (
     CredentialDeliveryService,
     CredentialPartSender,
 )
+from homestay_bot.services.customer_admin_service import CustomerAdminService
 from homestay_bot.services.customer_service import CustomerService
+from homestay_bot.services.customer_tag_sync import CustomerTagSyncService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
@@ -628,6 +631,146 @@ class SessionPropertyAdminService:
         return self._storage.open_for_read(file_id)
 
 
+class SessionCustomerAdminService:
+    """为每次客户 CRM 请求创建独立数据库事务。"""
+
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        cipher: SensitiveDataCipher,
+        *,
+        tag_sync_enabled: bool,
+    ) -> None:
+        """保存数据库会话工厂、脱敏服务和标签同步开关。"""
+        self._factory = factory
+        self._cipher = cipher
+        self._tag_sync_enabled = tag_sync_enabled
+
+    def _service(self, session: AsyncSession) -> CustomerAdminService:
+        """在同一事务装配客户仓储和持久化任务队列。"""
+        return CustomerAdminService(
+            SQLAlchemyCustomerRepository(session),
+            self._cipher,
+            SQLAlchemyJobRepository(session),
+            tag_sync_enabled=self._tag_sync_enabled,
+        )
+
+    async def list_customers(
+        self,
+        query: str | None,
+        administrator: Employee,
+    ) -> list[Any]:
+        """返回脱敏客户卡片。"""
+        async with self._factory() as session:
+            return await self._service(session).list_customers(
+                query,
+                administrator,
+            )
+
+    async def get_detail(
+        self,
+        customer_id: int,
+        administrator: Employee,
+    ) -> dict[str, Any]:
+        """返回脱敏客户详情。"""
+        async with self._factory() as session:
+            return await self._service(session).get_detail(
+                customer_id,
+                administrator,
+            )
+
+    async def get_merge_detail(
+        self,
+        suggestion_id: int,
+        administrator: Employee,
+    ) -> dict[str, Any]:
+        """返回脱敏合并人工复核信息。"""
+        async with self._factory() as session:
+            return await self._service(session).get_merge_detail(
+                suggestion_id,
+                administrator,
+            )
+
+    async def set_tags(
+        self,
+        customer_id: int,
+        tag_ids: list[int],
+        administrator: Employee,
+    ) -> None:
+        """在同一事务先保存本地标签，再按需登记同步任务。"""
+        async with self._factory() as session:
+            await self._service(session).set_tags(
+                customer_id,
+                tag_ids,
+                administrator,
+            )
+            await session.commit()
+
+    async def update_note(
+        self,
+        customer_id: int,
+        note: str,
+        administrator: Employee,
+    ) -> None:
+        """提交客户员工备注。"""
+        async with self._factory() as session:
+            await self._service(session).update_note(
+                customer_id,
+                note,
+                administrator,
+            )
+            await session.commit()
+
+    async def update_summary(
+        self,
+        customer_id: int,
+        administrator: Employee,
+        *,
+        short_summary: str,
+        long_summary: str,
+        unresolved_items: list[str],
+    ) -> None:
+        """提交管理员更正后的客户摘要。"""
+        async with self._factory() as session:
+            await self._service(session).update_summary(
+                customer_id,
+                administrator,
+                short_summary=short_summary,
+                long_summary=long_summary,
+                unresolved_items=unresolved_items,
+            )
+            await session.commit()
+
+    async def delete_summary(
+        self,
+        customer_id: int,
+        administrator: Employee,
+    ) -> None:
+        """删除客户摘要并提交最小审计。"""
+        async with self._factory() as session:
+            await self._service(session).delete_summary(
+                customer_id,
+                administrator,
+            )
+            await session.commit()
+
+    async def review_merge(
+        self,
+        suggestion_id: int,
+        administrator: Employee,
+        *,
+        accepted: bool,
+    ) -> None:
+        """提交管理员对客户合并建议的明确决定。"""
+        async with self._factory() as session:
+            await self._service(session).review_merge(
+                suggestion_id,
+                administrator,
+                accepted=accepted,
+            )
+            await session.commit()
+
+
 class SessionKnowledgeAdminService:
     """为每次管理操作使用独立数据库会话。"""
 
@@ -717,6 +860,16 @@ def _register_credential_part_handler(
         handlers["credential_send_part"] = factory(session)
 
 
+def _register_customer_tag_handler(
+    handlers: dict[str, JobHandler],
+    session: AsyncSession,
+    factory: Callable[[AsyncSession], JobHandler] | None,
+) -> None:
+    """在配置客户联系 Secret 后注册标签同步处理器。"""
+    if factory is not None:
+        handlers["customer_tag_sync"] = factory(session)
+
+
 async def _run_worker_loop(
     app: FastAPI,
     *,
@@ -730,6 +883,9 @@ async def _run_worker_loop(
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
     credential_part_handler_factory: (
+        Callable[[AsyncSession], JobHandler] | None
+    ) = None,
+    customer_tag_handler_factory: (
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
 ) -> None:
@@ -797,6 +953,11 @@ async def _run_worker_loop(
                     handlers,
                     session,
                     credential_part_handler_factory,
+                )
+                _register_customer_tag_handler(
+                    handlers,
+                    session,
+                    customer_tag_handler_factory,
                 )
                 worker = Worker(
                     repository=repository,
@@ -964,6 +1125,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.wecom_kf_secret,
         settings.wecom_agent_secret,
     )
+    contact_client = (
+        WeComContactClient(
+            settings.wecom_corp_id,
+            settings.wecom_contact_secret,
+        )
+        if settings.wecom_contact_secret
+        else None
+    )
     deepseek_chat = AsyncOpenAI(
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
@@ -1101,6 +1270,16 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         return sender.handle
 
+    def build_customer_tag_handler(session: AsyncSession) -> JobHandler:
+        """为当前 worker 事务创建幂等客户标签同步处理器。"""
+        if contact_client is None:
+            raise RuntimeError("企业微信客户联系尚未配置")
+        service = CustomerTagSyncService(
+            SQLAlchemyCustomerRepository(session),
+            contact_client,
+        )
+        return service.handle
+
     async def database_probe() -> bool:
         """执行无副作用 SELECT 1 检查数据库连接。"""
         try:
@@ -1133,6 +1312,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         private_file_storage,
         settings.private_upload_max_bytes,
     )
+    app.state.customer_admin_service = SessionCustomerAdminService(
+        factory,
+        sensitive_data,
+        tag_sync_enabled=contact_client is not None,
+    )
     app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory)
     app.state.wecom_callback_service = WeComCallbackService.from_credentials(
         settings.wecom_callback_token,
@@ -1153,6 +1337,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
         configuration_ok=bool(duty_userids),
         web_search_status_getter=web_search_state.get,
+        contact_sync_configured=contact_client is not None,
         poll_max_age=timedelta(
             seconds=max(
                 60,
@@ -1169,6 +1354,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             faq_draft_handler_factory=build_faq_draft_handler,
             hostex_event_handler_factory=build_hostex_event_handler,
             credential_part_handler_factory=build_credential_part_handler,
+            customer_tag_handler_factory=(
+                build_customer_tag_handler
+                if contact_client is not None
+                else None
+            ),
         )
     )
     poll_task = asyncio.create_task(
@@ -1217,6 +1407,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "approval_page_service",
             "task_page_service",
             "property_admin_service",
+            "customer_admin_service",
             "knowledge_admin_service",
             "wecom_callback_service",
             "hostex_webhook_service",
@@ -1230,4 +1421,6 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         await deepseek_anthropic.close()
         await hostex.aclose()
         await wecom.aclose()
+        if contact_client is not None:
+            await contact_client.aclose()
         await engine.dispose()

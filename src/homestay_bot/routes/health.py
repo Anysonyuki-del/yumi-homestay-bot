@@ -27,6 +27,7 @@ class UnconfiguredHealthService:
             "wecom_polling": "not_configured",
             "configuration": "incomplete",
             "web_search": "not_configured",
+            "wecom_contact_sync": "not_configured",
         }
 
 
@@ -41,6 +42,7 @@ class OperationalHealthService:
         poll_heartbeat_getter: Callable[[], datetime | None],
         configuration_ok: bool,
         web_search_status_getter: Callable[[], str],
+        contact_sync_configured: bool = False,
         heartbeat_max_age: timedelta = timedelta(minutes=2),
         poll_max_age: timedelta = timedelta(minutes=1),
     ) -> None:
@@ -50,6 +52,7 @@ class OperationalHealthService:
         self._poll_heartbeat_getter = poll_heartbeat_getter
         self._configuration_ok = configuration_ok
         self._web_search_status_getter = web_search_status_getter
+        self._contact_sync_configured = contact_sync_configured
         self._heartbeat_max_age = heartbeat_max_age
         self._poll_max_age = poll_max_age
 
@@ -83,6 +86,9 @@ class OperationalHealthService:
             "wecom_polling": "ok" if poll_ok else "stale",
             "configuration": "ok" if self._configuration_ok else "incomplete",
             "web_search": web_search_status,
+            "wecom_contact_sync": (
+                "ok" if self._contact_sync_configured else "not_configured"
+            ),
         }
         return result
 

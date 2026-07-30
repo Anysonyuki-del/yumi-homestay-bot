@@ -14,8 +14,10 @@ from homestay_bot.domain.models import (
     BusinessTask,
     Conversation,
     Customer,
+    CustomerContextSummary,
     CustomerIdentity,
     CustomerMergeSuggestion,
+    CustomerTag,
     CustomerTagLink,
     Employee,
     StayOrder,
@@ -99,6 +101,368 @@ class SQLAlchemyCustomerRepository:
         self._session.add(suggestion)
         await self._session.flush()
         return suggestion
+
+    async def list_customers(self, query: str | None) -> list[Customer]:
+        """按姓名或备注搜索尚未合并的客户。"""
+        statement = select(Customer).where(
+            Customer.merged_into_customer_id.is_(None)
+        )
+        cleaned = (query or "").strip()
+        if cleaned:
+            pattern = f"%{cleaned[:100]}%"
+            statement = statement.where(
+                Customer.display_name.ilike(pattern)
+                | Customer.note.ilike(pattern)
+            )
+        return list(
+            (
+                await self._session.scalars(
+                    statement.order_by(Customer.updated_at.desc(), Customer.id)
+                )
+            ).all()
+        )
+
+    async def customer_detail(self, customer_id: int) -> dict[str, object]:
+        """返回管理员 CRM 需要的标签、摘要和待合并建议。"""
+        customer = await self._session.get(Customer, customer_id)
+        if customer is None or customer.merged_into_customer_id is not None:
+            raise LookupError("客户不存在或已经合并")
+        tags = list(
+            (
+                await self._session.scalars(
+                    select(CustomerTag)
+                    .where(CustomerTag.is_active.is_(True))
+                    .order_by(CustomerTag.name, CustomerTag.id)
+                )
+            ).all()
+        )
+        selected_tag_ids = list(
+            (
+                await self._session.scalars(
+                    select(CustomerTagLink.tag_id).where(
+                        CustomerTagLink.customer_id == customer_id
+                    )
+                )
+            ).all()
+        )
+        summary = await self._session.scalar(
+            select(CustomerContextSummary).where(
+                CustomerContextSummary.customer_id == customer_id
+            )
+        )
+        merge_suggestions = list(
+            (
+                await self._session.scalars(
+                    select(CustomerMergeSuggestion)
+                    .where(
+                        (
+                            CustomerMergeSuggestion.source_customer_id
+                            == customer_id
+                        )
+                        | (
+                            CustomerMergeSuggestion.target_customer_id
+                            == customer_id
+                        ),
+                        CustomerMergeSuggestion.status
+                        == CustomerMergeStatus.PENDING,
+                    )
+                    .order_by(CustomerMergeSuggestion.created_at.desc())
+                )
+            ).all()
+        )
+        return {
+            "customer": customer,
+            "tags": tags,
+            "selected_tag_ids": selected_tag_ids,
+            "summary": summary,
+            "merge_suggestions": merge_suggestions,
+        }
+
+    async def merge_detail(self, suggestion_id: int) -> dict[str, object]:
+        """返回待审核建议和两个客户，供管理员合并前人工对比。"""
+        suggestion = await self._session.get(
+            CustomerMergeSuggestion,
+            suggestion_id,
+        )
+        if (
+            suggestion is None
+            or suggestion.status is not CustomerMergeStatus.PENDING
+        ):
+            raise LookupError("客户合并建议不存在或已经结束")
+        source = await self._session.get(
+            Customer,
+            suggestion.source_customer_id,
+        )
+        target = await self._session.get(
+            Customer,
+            suggestion.target_customer_id,
+        )
+        if source is None or target is None:
+            raise LookupError("合并建议关联的客户不存在")
+        return {
+            "suggestion": suggestion,
+            "source": source,
+            "target": target,
+        }
+
+    async def replace_tags(
+        self,
+        customer_id: int,
+        tag_ids: list[int],
+        administrator_id: int,
+    ) -> tuple[list[int], list[int], int]:
+        """锁定客户后替换标签，并返回可同步的内部标签差异。"""
+        await self._require_admin(administrator_id)
+        customer = await self._session.scalar(
+            select(Customer)
+            .where(Customer.id == customer_id)
+            .with_for_update()
+        )
+        if customer is None or customer.merged_into_customer_id is not None:
+            raise LookupError("客户不存在或已经合并")
+        requested = set(tag_ids)
+        valid = set(
+            (
+                await self._session.scalars(
+                    select(CustomerTag.id).where(
+                        CustomerTag.id.in_(requested),
+                        CustomerTag.is_active.is_(True),
+                    )
+                )
+            ).all()
+        ) if requested else set()
+        if valid != requested:
+            raise ValueError("包含不存在或停用的客户标签")
+        links = list(
+            (
+                await self._session.scalars(
+                    select(CustomerTagLink)
+                    .where(CustomerTagLink.customer_id == customer_id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        current = {item.tag_id for item in links}
+        added = sorted(requested - current)
+        removed = sorted(current - requested)
+        for link in links:
+            if link.tag_id in removed:
+                await self._session.delete(link)
+            elif link.tag_id in requested:
+                link.sync_pending = True
+                link.last_sync_error_code = None
+        for tag_id in added:
+            self._session.add(
+                CustomerTagLink(
+                    customer_id=customer_id,
+                    tag_id=tag_id,
+                    sync_pending=True,
+                )
+            )
+        audit = AuditLog(
+            actor_employee_id=administrator_id,
+            action="customer_tags_replaced",
+            target_type="customer",
+            target_id=str(customer_id),
+            details={
+                "customer_id": customer_id,
+                "added_count": len(added),
+                "removed_count": len(removed),
+            },
+        )
+        self._session.add(audit)
+        await self._session.flush()
+        return added, removed, audit.id
+
+    async def update_note(
+        self,
+        customer_id: int,
+        note: str,
+        administrator_id: int,
+    ) -> None:
+        """更新客户备注并写入不含备注正文的审计。"""
+        await self._require_admin(administrator_id)
+        customer = await self._session.get(Customer, customer_id)
+        if customer is None or customer.merged_into_customer_id is not None:
+            raise LookupError("客户不存在或已经合并")
+        customer.note = note or None
+        self._add_customer_audit(
+            administrator_id,
+            "customer_note_updated",
+            customer_id,
+        )
+        await self._session.flush()
+
+    async def update_summary(
+        self,
+        *,
+        customer_id: int,
+        administrator_id: int,
+        short_summary: str,
+        long_summary: str,
+        unresolved_items: list[str],
+    ) -> None:
+        """更正客户摘要并递增版本，审计不复制摘要正文。"""
+        await self._require_admin(administrator_id)
+        summary = await self._session.scalar(
+            select(CustomerContextSummary)
+            .where(CustomerContextSummary.customer_id == customer_id)
+            .with_for_update()
+        )
+        if summary is None:
+            if await self._session.get(Customer, customer_id) is None:
+                raise LookupError("客户不存在")
+            summary = CustomerContextSummary(customer_id=customer_id)
+            self._session.add(summary)
+        summary.short_summary = short_summary
+        summary.long_summary = long_summary
+        summary.unresolved_items = unresolved_items
+        # 新建 ORM 对象在 flush 前尚未应用数据库默认值。
+        summary.version = (summary.version or 0) + 1
+        self._add_customer_audit(
+            administrator_id,
+            "customer_summary_updated",
+            customer_id,
+            {"version": summary.version},
+        )
+        await self._session.flush()
+
+    async def delete_summary(
+        self,
+        customer_id: int,
+        administrator_id: int,
+    ) -> None:
+        """物理删除客户摘要并写最小审计。"""
+        await self._require_admin(administrator_id)
+        summary = await self._session.scalar(
+            select(CustomerContextSummary)
+            .where(CustomerContextSummary.customer_id == customer_id)
+            .with_for_update()
+        )
+        if summary is not None:
+            await self._session.delete(summary)
+        self._add_customer_audit(
+            administrator_id,
+            "customer_summary_deleted",
+            customer_id,
+        )
+        await self._session.flush()
+
+    async def review_merge(
+        self,
+        suggestion_id: int,
+        administrator_id: int,
+        accepted: bool,
+    ) -> None:
+        """确认时复用完整合并事务，拒绝时只结束建议。"""
+        if accepted:
+            await self.merge_locked(suggestion_id, administrator_id)
+            return
+        administrator = await self._require_admin(administrator_id)
+        suggestion = await self._session.scalar(
+            select(CustomerMergeSuggestion)
+            .where(CustomerMergeSuggestion.id == suggestion_id)
+            .with_for_update()
+        )
+        if suggestion is None:
+            raise LookupError("客户合并建议不存在")
+        if suggestion.status is not CustomerMergeStatus.PENDING:
+            raise ValueError("客户合并建议已经结束")
+        suggestion.status = CustomerMergeStatus.REJECTED
+        suggestion.reviewed_by = administrator.id
+        suggestion.reviewed_at = datetime.now(UTC)
+        self._session.add(
+            AuditLog(
+                actor_employee_id=administrator.id,
+                action="customer_merge_rejected",
+                target_type="customer_merge_suggestion",
+                target_id=str(suggestion.id),
+                details={"suggestion_id": suggestion.id},
+            )
+        )
+        await self._session.flush()
+
+    async def has_verified_contact_identity(self, customer_id: int) -> bool:
+        """判断客户是否有已验证 WECOM_CONTACT 身份。"""
+        identity_id = await self._session.scalar(
+            select(CustomerIdentity.id)
+            .where(
+                CustomerIdentity.customer_id == customer_id,
+                CustomerIdentity.provider
+                == CustomerIdentityProvider.WECOM_CONTACT,
+                CustomerIdentity.is_verified.is_(True),
+            )
+            .limit(1)
+        )
+        return identity_id is not None
+
+    async def verified_contact_id(self, customer_id: int) -> str | None:
+        """返回已验证 WECOM_CONTACT 外部联系人编号。"""
+        external_id = await self._session.scalar(
+            select(CustomerIdentity.external_id)
+            .where(
+                CustomerIdentity.customer_id == customer_id,
+                CustomerIdentity.provider
+                == CustomerIdentityProvider.WECOM_CONTACT,
+                CustomerIdentity.is_verified.is_(True),
+            )
+            .limit(1)
+        )
+        return str(external_id) if external_id is not None else None
+
+    async def resolve_wecom_tag_ids(self, tag_ids: list[int]) -> list[str]:
+        """把内部标签主键解析为非空企业微信标签编号。"""
+        if not tag_ids:
+            return []
+        mapped_ids = (
+            await self._session.scalars(
+                select(CustomerTag.wecom_tag_id).where(
+                    CustomerTag.id.in_(tag_ids),
+                    CustomerTag.wecom_tag_id.is_not(None),
+                )
+            )
+        ).all()
+        return [
+            str(mapped_id)
+            for mapped_id in mapped_ids
+            if mapped_id is not None
+        ]
+
+    async def mark_sync_completed(self, customer_id: int) -> None:
+        """清除客户当前标签的待同步标记。"""
+        links = list(
+            (
+                await self._session.scalars(
+                    select(CustomerTagLink).where(
+                        CustomerTagLink.customer_id == customer_id
+                    )
+                )
+            ).all()
+        )
+        for link in links:
+            link.sync_pending = False
+            link.last_sync_error_code = None
+        await self._session.flush()
+
+    async def mark_sync_failed(
+        self,
+        customer_id: int,
+        error_code: str,
+    ) -> None:
+        """保留客户当前标签待同步并只记录错误类型。"""
+        links = list(
+            (
+                await self._session.scalars(
+                    select(CustomerTagLink).where(
+                        CustomerTagLink.customer_id == customer_id
+                    )
+                )
+            ).all()
+        )
+        for link in links:
+            link.sync_pending = True
+            link.last_sync_error_code = error_code[:64]
+        await self._session.flush()
 
     async def merge_locked(
         self,
@@ -237,3 +601,39 @@ class SQLAlchemyCustomerRepository:
                 continue
             link.customer_id = target_customer_id
             target_tag_ids.add(link.tag_id)
+
+    async def _require_admin(self, administrator_id: int) -> Employee:
+        """锁定并复核活动管理员，避免只依赖页面层权限。"""
+        administrator = await self._session.scalar(
+            select(Employee)
+            .where(Employee.id == administrator_id)
+            .with_for_update()
+        )
+        if (
+            administrator is None
+            or not administrator.is_active
+            or administrator.role is not EmployeeRole.ADMIN
+        ):
+            raise PermissionError("只有管理员可以管理客户")
+        return administrator
+
+    def _add_customer_audit(
+        self,
+        administrator_id: int,
+        action: str,
+        customer_id: int,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        """登记只含内部编号和计数的客户审计，不复制客户正文。"""
+        self._session.add(
+            AuditLog(
+                actor_employee_id=administrator_id,
+                action=action,
+                target_type="customer",
+                target_id=str(customer_id),
+                details={
+                    "customer_id": customer_id,
+                    **(details or {}),
+                },
+            )
+        )

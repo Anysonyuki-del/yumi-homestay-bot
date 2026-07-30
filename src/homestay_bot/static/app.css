@@ -5,6 +5,10 @@
   background: #f2f5f1;
 }
 
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   padding: 24px 14px;
@@ -45,12 +49,25 @@ form {
 
 input,
 select,
+textarea,
 button {
   min-height: 44px;
   padding: 8px 10px;
   border: 1px solid #c8d0ca;
   border-radius: 8px;
   font: inherit;
+}
+
+input,
+select,
+textarea,
+button {
+  max-width: 100%;
+}
+
+textarea {
+  min-height: 112px;
+  resize: vertical;
 }
 
 .checkbox {
@@ -141,6 +158,39 @@ button {
   text-align: center;
 }
 
+.search-form {
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  margin-bottom: 22px;
+}
+
+.tag-grid,
+.compare-grid,
+.decision-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.tag-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compare-grid,
+.decision-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.privacy-line {
+  margin: 0;
+  color: #627066;
+}
+
+.plain-list {
+  display: grid;
+  gap: 10px;
+  padding-left: 20px;
+}
+
 @media (max-width: 520px) {
   body {
     padding: 12px;
@@ -158,5 +208,12 @@ button {
   button {
     width: 100%;
     min-height: 50px;
+  }
+
+  .search-form,
+  .tag-grid,
+  .compare-grid,
+  .decision-grid {
+    grid-template-columns: 1fr;
   }
 }

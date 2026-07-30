@@ -20,6 +20,7 @@ from homestay_bot.domain.models import (
     BusinessTask,
     Conversation,
     Customer,
+    CustomerContextSummary,
     CustomerIdentity,
     CustomerMergeSuggestion,
     CustomerTag,
@@ -65,6 +66,159 @@ async def test_customer_identity_and_conversation_share_customer() -> None:
         assert conversation.customer_id == customer.id
         assert identity.customer_id == customer.id
         assert link.sync_pending is True
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_admin_can_edit_customer_crm_with_safe_audits() -> None:
+    """CRM 写操作必须复核管理员身份，且审计不得复制备注或摘要正文。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        administrator = Employee(
+            wecom_userid="admin-crm",
+            name="YuMi",
+            role=EmployeeRole.ADMIN,
+        )
+        customer = Customer(display_name="待维护客户")
+        tag = CustomerTag(name="VIP", wecom_tag_id="et-vip")
+        session.add_all([administrator, customer, tag])
+        await session.commit()
+
+        repository = SQLAlchemyCustomerRepository(session)
+        added, removed, _revision = await repository.replace_tags(
+            customer.id,
+            [tag.id],
+            administrator.id,
+        )
+        await repository.update_note(
+            customer.id,
+            "客户明确要求安静房间",
+            administrator.id,
+        )
+        await repository.update_summary(
+            customer_id=customer.id,
+            administrator_id=administrator.id,
+            short_summary="偏好安静",
+            long_summary="过往咨询正文不应进入审计",
+            unresolved_items=["待确认到店时间"],
+        )
+        await session.commit()
+
+        link = await session.scalar(
+            select(CustomerTagLink).where(
+                CustomerTagLink.customer_id == customer.id,
+                CustomerTagLink.tag_id == tag.id,
+            )
+        )
+        summary = await session.scalar(
+            select(CustomerContextSummary).where(
+                CustomerContextSummary.customer_id == customer.id
+            )
+        )
+        audits = list(
+            (
+                await session.scalars(
+                    select(AuditLog).where(
+                        AuditLog.target_id == str(customer.id)
+                    )
+                )
+            ).all()
+        )
+
+        assert added == [tag.id]
+        assert removed == []
+        assert link is not None
+        assert link.sync_pending is True
+        assert summary is not None
+        assert summary.version == 1
+        assert customer.note == "客户明确要求安静房间"
+        audit_payload = repr([audit.details for audit in audits])
+        assert "客户明确要求安静房间" not in audit_payload
+        assert "偏好安静" not in audit_payload
+        assert "过往咨询正文不应进入审计" not in audit_payload
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_staff_cannot_edit_customer_crm() -> None:
+    """普通员工即使知道客户编号也不能修改 CRM。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        staff = Employee(
+            wecom_userid="staff-crm",
+            name="普通员工",
+            role=EmployeeRole.STAFF,
+        )
+        customer = Customer(display_name="受保护客户")
+        session.add_all([staff, customer])
+        await session.commit()
+
+        repository = SQLAlchemyCustomerRepository(session)
+        with pytest.raises(PermissionError):
+            await repository.update_note(
+                customer.id,
+                "越权修改",
+                staff.id,
+            )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_admin_can_reject_merge_without_exposing_customer_text() -> None:
+    """拒绝合并只结束建议，并以最小字段写审计。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        administrator = Employee(
+            wecom_userid="admin-reject",
+            name="YuMi",
+            role=EmployeeRole.ADMIN,
+        )
+        source = Customer(display_name="来源客户", note="来源私密备注")
+        target = Customer(display_name="目标客户", note="目标私密备注")
+        session.add_all([administrator, source, target])
+        await session.flush()
+        suggestion = CustomerMergeSuggestion(
+            source_customer_id=source.id,
+            target_customer_id=target.id,
+            reason="verified_phone",
+        )
+        session.add(suggestion)
+        await session.commit()
+
+        repository = SQLAlchemyCustomerRepository(session)
+        await repository.review_merge(
+            suggestion.id,
+            administrator.id,
+            accepted=False,
+        )
+        await session.commit()
+
+        await session.refresh(suggestion)
+        audit = await session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "customer_merge_rejected"
+            )
+        )
+        assert suggestion.status is CustomerMergeStatus.REJECTED
+        assert source.merged_into_customer_id is None
+        assert audit is not None
+        assert audit.details == {"suggestion_id": suggestion.id}
+        assert "私密备注" not in repr(audit.details)
 
     await engine.dispose()
 

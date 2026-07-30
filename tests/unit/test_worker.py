@@ -157,6 +157,28 @@ async def test_worker_retries_faq_draft_generation_as_safe_read_work() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_retries_idempotent_customer_tag_sync() -> None:
+    """企业微信客户标签采用目标状态写入，暂时失败允许有限重试。"""
+    repository = RepositoryStub(
+        JobStub(job_type="customer_tag_sync", payload={"customer_id": 7})
+    )
+
+    async def failing_handler(payload):
+        """模拟企业微信客户联系接口暂时不可用。"""
+        raise TimeoutError("temporary")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"customer_tag_sync": failing_handler},
+    )
+
+    await worker.run_once()
+
+    assert repository.failure["retry_allowed"] is True
+    assert repository.failure["max_attempts"] == 3
+
+
+@pytest.mark.asyncio
 async def test_worker_keeps_deferred_admin_notification_retriable() -> None:
     """管理员暂不可用时应长期保留任务，等待管理员配置恢复。"""
     repository = RepositoryStub(
