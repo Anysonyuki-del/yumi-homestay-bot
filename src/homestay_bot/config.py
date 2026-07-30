@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,6 +28,12 @@ class Settings(BaseSettings):
     wecom_poll_interval_seconds: float = Field(default=5, ge=5, le=300)
     session_secret: str = Field(min_length=32)
     data_encryption_key: str = Field(min_length=44, max_length=44)
+    private_upload_dir: Path = Path("data/private_uploads")
+    private_upload_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+        le=25 * 1024 * 1024,
+    )
 
     @property
     def deepseek_anthropic_base_url(self) -> str:

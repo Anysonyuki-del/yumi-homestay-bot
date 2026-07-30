@@ -18,8 +18,20 @@
       <dl class="detail-grid">
         <dt>房间</dt><dd>{{ task.property_id or "待管理员确认" }}</dd>
         <dt>服务日期</dt><dd>{{ task.service_date or "待管理员确认" }}</dd>
+        <dt>房间状态</dt><dd>{{ room_state.status.value if room_state else "未开始" }}</dd>
         <dt>任务说明</dt><dd>{{ safe_description }}</dd>
       </dl>
+
+      {% if attachments %}
+      <section class="action-panel">
+        <h2>现场照片</h2>
+        <div class="photo-list">
+          {% for attachment in attachments %}
+          <a href="/employee/private-files/{{ attachment.private_file_id }}" target="_blank" rel="noopener">查看照片 {{ loop.index }}</a>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
 
       {% if is_admin and task.status.value in ["pending_confirmation", "pending_assignment"] %}
       <section class="action-panel">
@@ -60,6 +72,40 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="target" value="pending_inspection">
         <button type="submit">提交检查</button>
+      </form>
+      {% endif %}
+
+      {% if not is_admin and task.status.value in ["assigned", "in_progress", "pending_inspection"] %}
+      <section class="action-panel">
+        <h2>房间检查</h2>
+        <form method="post" action="/employee/tasks/{{ task.id }}/checklist">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label><input type="checkbox" name="clean" value="true" {% if task.checklist.get("clean") %}checked{% endif %}> 清洁已完成</label>
+          <label><input type="checkbox" name="supplies" value="true" {% if task.checklist.get("supplies") %}checked{% endif %}> 耗材已补齐</label>
+          <label><input type="checkbox" name="damage" value="true" {% if task.checklist.get("damage") %}checked{% endif %}> 设施检查完成</label>
+          <button type="submit">保存检查清单</button>
+        </form>
+        <form method="post" enctype="multipart/form-data" action="/employee/tasks/{{ task.id }}/photos">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>现场照片
+            <input type="file" name="photo" accept="image/png,image/jpeg,image/webp" required>
+          </label>
+          <button type="submit">上传现场照片</button>
+        </form>
+      </section>
+      {% endif %}
+
+      {% if not is_admin and task.status.value == "pending_inspection" %}
+      <form method="post" action="/employee/tasks/{{ task.id }}/ready">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">确认房间可入住</button>
+      </form>
+      {% endif %}
+
+      {% if is_admin and room_state and room_state.status.value == "ready" %}
+      <form method="post" action="/employee/tasks/{{ task.id }}/revoke-ready">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="button-danger" type="submit">撤回可入住状态</button>
       </form>
       {% endif %}
 

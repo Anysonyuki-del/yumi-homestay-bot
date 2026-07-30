@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import UTC, datetime
+from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -7,6 +8,8 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from homestay_bot import application
+from homestay_bot.domain.enums import BusinessTaskStatus, EmployeeRole
+from homestay_bot.services.private_file_storage import PrivateFileStorage
 
 
 class StopWorkerRetry(RuntimeError):
@@ -331,3 +334,76 @@ async def test_worker_loop_survives_transient_sqlite_lock(monkeypatch) -> None:
             handler=cast(Any, object()),
             wecom=cast(Any, object()),
         )
+
+
+@pytest.mark.asyncio
+async def test_failed_attachment_transaction_removes_private_file(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """附件数据库写入失败时不得遗留可被误用的孤儿文件。"""
+    task = SimpleNamespace(
+        id=7,
+        assigned_employee_id=2,
+        status=BusinessTaskStatus.IN_PROGRESS,
+    )
+
+    class SessionContext:
+        """提供不实际访问数据库的短会话。"""
+
+        async def __aenter__(self):
+            """返回测试会话标记。"""
+            return SimpleNamespace()
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出测试会话。"""
+
+    class RepositoryStub:
+        """授权任务后模拟附件引用写入失败。"""
+
+        def __init__(self, session) -> None:
+            """接受应用注入的测试会话。"""
+
+        async def get_task(self, task_id: int):
+            """返回分派给当前员工的任务。"""
+            assert task_id == task.id
+            return task
+
+        async def add_task_attachment(self, **fields):
+            """模拟数据库约束或连接异常。"""
+            raise RuntimeError("database write failed")
+
+    monkeypatch.setattr(
+        application,
+        "SQLAlchemyOperationsRepository",
+        RepositoryStub,
+    )
+    storage = PrivateFileStorage(tmp_path)
+    service = application.SessionTaskPageService(
+        cast(Any, lambda: SessionContext()),
+        storage,
+        1024,
+    )
+    employee = SimpleNamespace(
+        id=2,
+        role=EmployeeRole.STAFF,
+        is_active=True,
+    )
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR"
+        b"\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00"
+        b"\x90wS\xde"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        await service.upload_photo(
+            task.id,
+            cast(Any, employee),
+            BytesIO(png),
+            "image/png",
+        )
+
+    assert list(tmp_path.iterdir()) == []

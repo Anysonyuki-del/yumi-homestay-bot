@@ -3,7 +3,12 @@ from datetime import date
 from typing import Protocol
 
 from homestay_bot.domain.enums import BusinessTaskStatus, EmployeeRole
-from homestay_bot.domain.models import BusinessTask, Employee
+from homestay_bot.domain.models import (
+    BusinessTask,
+    Employee,
+    RoomOperationalState,
+    TaskAttachment,
+)
 from homestay_bot.services.business_task_service import BusinessTaskService
 
 
@@ -32,6 +37,30 @@ class TaskPageRepository(Protocol):
 
     async def assignment_options(self) -> dict[str, list[object]]:
         """返回可分派员工和可用房间。"""
+
+    async def update_task_checklist(
+        self,
+        *,
+        task_id: int,
+        employee_id: int,
+        checklist: dict[str, bool],
+    ) -> BusinessTask:
+        """保存任务检查清单。"""
+
+    async def list_task_attachments(self, task_id: int) -> list[TaskAttachment]:
+        """返回任务的附件元数据。"""
+
+    async def get_attachment_by_file_id(
+        self,
+        file_id: str,
+    ) -> TaskAttachment | None:
+        """按私有文件编号读取附件元数据。"""
+
+    async def get_room_state(
+        self,
+        property_id: int,
+    ) -> RoomOperationalState | None:
+        """读取房间当前运营状态。"""
 
 
 class TaskPageService:
@@ -69,6 +98,12 @@ class TaskPageService:
         return {
             "task": task,
             "safe_description": self._safe_description(task.description),
+            "attachments": await self._tasks.list_task_attachments(task.id),
+            "room_state": (
+                await self._tasks.get_room_state(task.property_id)
+                if task.property_id is not None
+                else None
+            ),
         }
 
     async def transition(
@@ -134,6 +169,49 @@ class TaskPageService:
     async def assignment_options(self) -> dict[str, list[object]]:
         """返回管理员分派表单需要的安全选项。"""
         return await self._tasks.assignment_options()
+
+    async def update_checklist(
+        self,
+        task_id: int,
+        employee: Employee,
+        checklist: dict[str, bool],
+    ) -> BusinessTask:
+        """只允许执行员工更新自己任务的检查清单。"""
+        task = await self.require_evidence_editor(task_id, employee)
+        return await self._tasks.update_task_checklist(
+            task_id=task.id,
+            employee_id=employee.id,
+            checklist=checklist,
+        )
+
+    async def require_evidence_editor(
+        self,
+        task_id: int,
+        employee: Employee,
+    ) -> BusinessTask:
+        """要求当前员工是任务的实际执行人。"""
+        task = await self._require_visible(task_id, employee)
+        if task.assigned_employee_id != employee.id:
+            raise PermissionError("只有任务执行员工可以提交现场证据")
+        if task.status not in {
+            BusinessTaskStatus.ASSIGNED,
+            BusinessTaskStatus.IN_PROGRESS,
+            BusinessTaskStatus.PENDING_INSPECTION,
+        }:
+            raise ValueError("当前任务状态不能提交现场证据")
+        return task
+
+    async def require_attachment_visible(
+        self,
+        file_id: str,
+        employee: Employee,
+    ) -> TaskAttachment:
+        """按附件关联任务复用管理员或执行员工可见性。"""
+        attachment = await self._tasks.get_attachment_by_file_id(file_id)
+        if attachment is None:
+            raise LookupError("附件不存在")
+        await self._require_visible(attachment.task_id, employee)
+        return attachment
 
     async def _require_visible(
         self,

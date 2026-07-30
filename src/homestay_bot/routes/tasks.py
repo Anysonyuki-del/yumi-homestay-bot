@@ -1,9 +1,9 @@
 import secrets
 from datetime import date
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Annotated, Any, Protocol, cast
 
-from fastapi import APIRouter, Form, HTTPException, Request, status
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -51,6 +51,29 @@ class TaskPageServicePort(Protocol):
 
     async def assignment_options(self) -> dict[str, list[Any]]:
         """返回员工和房间选项。"""
+
+    async def update_checklist(
+        self,
+        task_id: int,
+        employee: Employee,
+        checklist: dict[str, bool],
+    ) -> BusinessTask:
+        """保存执行员工提交的检查清单。"""
+
+    async def upload_photo(
+        self,
+        task_id: int,
+        employee: Employee,
+        stream: Any,
+        content_type: str,
+    ) -> object:
+        """保存执行员工上传的现场照片。"""
+
+    async def mark_ready(self, task_id: int, employee: Employee) -> object:
+        """把具备完整证据的房间标记为可入住。"""
+
+    async def revoke_ready(self, task_id: int, employee: Employee) -> object:
+        """由管理员撤回任务关联房间的可入住状态。"""
 
 
 def _get_service(request: Request) -> TaskPageServicePort:
@@ -192,6 +215,101 @@ async def assign_task(
             property_id=property_id,
             service_date=date.fromisoformat(service_date_value),
         )
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        f"/employee/tasks/{task_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{task_id}/checklist")
+async def update_task_checklist(
+    request: Request,
+    task_id: int,
+    clean: bool = Form(False),
+    supplies: bool = Form(False),
+    damage: bool = Form(False),
+    csrf_token: str = Form(),
+) -> RedirectResponse:
+    """校验执行权限后保存三项房间检查结果。"""
+    employee = await _current_employee(request)
+    _consume_csrf(request, task_id, csrf_token)
+    try:
+        await _get_service(request).update_checklist(
+            task_id,
+            employee,
+            {
+                "clean": clean,
+                "supplies": supplies,
+                "damage": damage,
+            },
+        )
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        f"/employee/tasks/{task_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{task_id}/photos")
+async def upload_task_photo(
+    request: Request,
+    task_id: int,
+    photo: Annotated[UploadFile, File()],
+    csrf_token: str = Form(),
+) -> RedirectResponse:
+    """校验执行权限后把现场照片存入私有目录。"""
+    employee = await _current_employee(request)
+    _consume_csrf(request, task_id, csrf_token)
+    try:
+        await _get_service(request).upload_photo(
+            task_id,
+            employee,
+            photo.file,
+            photo.content_type or "application/octet-stream",
+        )
+    except Exception as error:
+        _raise_page_error(error)
+    finally:
+        await photo.close()
+    return RedirectResponse(
+        f"/employee/tasks/{task_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{task_id}/ready")
+async def mark_room_ready(
+    request: Request,
+    task_id: int,
+    csrf_token: str = Form(),
+) -> RedirectResponse:
+    """允许任务执行员工在证据完整后标记房间可入住。"""
+    employee = await _current_employee(request)
+    _consume_csrf(request, task_id, csrf_token)
+    try:
+        await _get_service(request).mark_ready(task_id, employee)
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        f"/employee/tasks/{task_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{task_id}/revoke-ready")
+async def revoke_room_ready(
+    request: Request,
+    task_id: int,
+    csrf_token: str = Form(),
+) -> RedirectResponse:
+    """允许管理员把任务关联房间撤回待检查。"""
+    employee = await _current_employee(request)
+    _consume_csrf(request, task_id, csrf_token)
+    try:
+        await _get_service(request).revoke_ready(task_id, employee)
     except Exception as error:
         _raise_page_error(error)
     return RedirectResponse(

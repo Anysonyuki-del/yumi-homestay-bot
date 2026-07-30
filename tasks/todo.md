@@ -1010,9 +1010,12 @@ git commit -m "feat: add employee mobile task center"
 - Modify: `src/homestay_bot/main.py`
 - Test: `tests/unit/test_private_file_storage.py`
 - Test: `tests/unit/test_room_readiness_service.py`
+- Test: `tests/unit/test_task_page_service.py`
+- Test: `tests/unit/test_application.py`
 - Test: `tests/integration/test_task_routes.py`
+- Test: `tests/integration/test_operations_repository.py`
 
-- [ ] **Step 1：先写失败测试**
+- [x] **Step 1：先写失败测试**
 
 ```python
 async def test_assigned_employee_can_mark_ready_after_checklist_and_photo():
@@ -1026,13 +1029,13 @@ async def test_assigned_employee_can_mark_ready_after_checklist_and_photo():
 
 同时覆盖非执行员工403、缺照片/清单拒绝、非待检查状态拒绝、管理员撤回、文件路径穿越和超大/伪图片拒绝。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_private_file_storage.py tests/unit/test_room_readiness_service.py tests/integration/test_task_routes.py`
 
 Expected: FAIL，提示文件存储和可入住服务不存在。
 
-- [ ] **Step 3：实现私有文件和状态守卫**
+- [x] **Step 3：实现私有文件和状态守卫**
 
 ```python
 class PrivateFileStorage:
@@ -1064,18 +1067,27 @@ class RoomReadinessService:
 
 文件使用随机 UUID 名称保存到 `PRIVATE_UPLOAD_DIR`，下载必须经过员工会话和任务归属检查。`SQLAlchemyOperationsRepository` 负责附件归属查询、任务/房态行锁、清单和安全审计；`SessionTaskPageService` 在短事务中组合私有存储、任务页面服务与可入住服务，上传文件落盘失败或附件落库失败时不得留下可访问的孤儿记录。`mark_ready()` 在同一事务中锁定任务与房间状态，验证执行人、待检查状态、完整清单和至少一张有效照片并写审计。
 
-- [ ] **Step 4：运行安全与路由测试**
+- [x] **Step 4：运行安全与路由测试**
 
 Run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/test_private_file_storage.py tests/unit/test_room_readiness_service.py tests/integration/test_task_routes.py`
 
 Expected: PASS。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/homestay_bot/services/private_file_storage.py src/homestay_bot/services/room_readiness_service.py src/homestay_bot/routes/private_files.py src/homestay_bot/config.py .env.example src/homestay_bot/routes/tasks.py src/homestay_bot/templates/tasks/detail.html src/homestay_bot/main.py tests/unit/test_private_file_storage.py tests/unit/test_room_readiness_service.py tests/integration/test_task_routes.py
 git commit -m "feat: verify room readiness with evidence"
 ```
+
+**Review（Task 8）**
+
+- 私有照片只接受经过文件签名核验的 PNG、JPEG 和 WebP，使用随机 UUID 文件名及 0600 权限保存；下载复用员工会话和任务归属授权，并禁止浏览器缓存。
+- 检查清单与照片只允许任务执行员工在已分派、执行中或待检查状态提交；仓储在行锁后再次校验执行人和任务状态，避免并发越权。
+- 可入住操作要求任务处于待检查、三项清单全部完成且至少存在一张已验证照片；维修中或已入住的房间不能被覆盖为可入住。
+- 只有管理员可以把当前可入住房间撤回待检查；重复设置相同房态保持幂等。
+- 附件落库失败会删除已写入文件；审计只记录内部编号、状态和完成数量，不记录任务正文、文件编号或图片内容。
+- 验证：283 passed，10 skipped；Task 8 定向测试 44 passed；Ruff、mypy、`git diff --check` 均通过。
 
 ### Task 9：房源配置、加密凭证和管理员管理页
 

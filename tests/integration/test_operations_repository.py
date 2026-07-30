@@ -9,6 +9,7 @@ from homestay_bot.domain.enums import (
     BusinessTaskStatus,
     BusinessTaskType,
     EmployeeRole,
+    RoomOperationalStatus,
 )
 from homestay_bot.domain.models import (
     AuditLog,
@@ -18,7 +19,9 @@ from homestay_bot.domain.models import (
     Employee,
     Job,
     PropertyProfile,
+    RoomOperationalState,
     StayOrder,
+    TaskAttachment,
 )
 from homestay_bot.integrations.hostex_client import Reservation
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
@@ -253,5 +256,113 @@ async def test_hostex_event_and_reservation_upsert_are_idempotent() -> None:
         assert first_order.id == second_order.id
         assert second_order.status == "cancelled"
         assert order_count == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_checklist_attachment_and_room_state_use_safe_audits() -> None:
+    """检查证据与房态变更落库，审计不得复制图片或任务正文。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        staff = Employee(
+            wecom_userid="room-staff",
+            name="执行员工",
+            role=EmployeeRole.STAFF,
+        )
+        room = PropertyProfile(id=101, title="长江中心")
+        task = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.PENDING_INSPECTION,
+            property_id=101,
+            service_date=date(2026, 8, 2),
+            assigned_employee_id=None,
+            description="敏感任务正文",
+        )
+        session.add_all([staff, room])
+        await session.flush()
+        task.assigned_employee_id = staff.id
+        session.add(task)
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        with pytest.raises(PermissionError):
+            await repository.update_task_checklist(
+                task_id=task.id,
+                employee_id=staff.id + 1,
+                checklist={"clean": True, "supplies": True, "damage": True},
+            )
+        await repository.update_task_checklist(
+            task_id=task.id,
+            employee_id=staff.id,
+            checklist={"clean": True, "supplies": True, "damage": True},
+        )
+        attachment = await repository.add_task_attachment(
+            task_id=task.id,
+            file_id="a" * 32 + ".png",
+            uploaded_by=staff.id,
+        )
+        state = await repository.set_room_status(
+            101,
+            RoomOperationalStatus.READY,
+            staff.id,
+        )
+        await session.commit()
+
+        audits = list(
+            (
+                await session.scalars(
+                    select(AuditLog).where(
+                        AuditLog.target_type.in_(
+                            ["business_task", "room_operational_state"]
+                        )
+                    )
+                )
+            ).all()
+        )
+        stored_attachment = await session.get(TaskAttachment, attachment.id)
+        stored_state = await session.get(RoomOperationalState, 101)
+
+        assert stored_attachment is not None
+        assert stored_state is not None
+        assert stored_state.status is RoomOperationalStatus.READY
+        assert state.version == 1
+        assert await repository.has_photo_attachment(task.id) is True
+        assert "敏感任务正文" not in str([item.details for item in audits])
+        assert "PNG" not in str([item.details for item in audits])
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ready_does_not_overwrite_maintenance_room() -> None:
+    """保洁证据不能把维修中的房间直接覆盖为可入住。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=101, title="维修房"))
+        session.add(
+            RoomOperationalState(
+                property_id=101,
+                status=RoomOperationalStatus.MAINTENANCE,
+                version=3,
+            )
+        )
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        with pytest.raises(ValueError, match="维修"):
+            await repository.set_room_status(
+                101,
+                RoomOperationalStatus.READY,
+                1,
+            )
 
     await engine.dispose()

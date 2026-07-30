@@ -13,7 +13,18 @@ from homestay_bot.domain.enums import (
 )
 from homestay_bot.domain.models import Employee
 from homestay_bot.routes.employee_auth import router as employee_auth_router
+from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.tasks import router as tasks_router
+from homestay_bot.services.private_file_storage import StoredPrivateFile
+
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR"
+    b"\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x02\x00\x00\x00"
+    b"\x90wS\xde"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 class EmployeeAuthStub:
@@ -51,9 +62,15 @@ class TaskPageStub:
             service_date=date(2026, 8, 2),
             assigned_employee_id=2,
             description="完成房间保洁",
+            checklist={},
         )
         self.transition_calls: list[tuple[int, int, str]] = []
         self.assign_calls: list[dict[str, object]] = []
+        self.checklist_calls: list[dict[str, object]] = []
+        self.photo_calls: list[dict[str, object]] = []
+        self.ready_calls: list[tuple[int, int]] = []
+        self.revoke_calls: list[tuple[int, int]] = []
+        self.private_file = None
 
     async def list_for(self, employee):
         """返回当前角色可见任务。"""
@@ -93,6 +110,53 @@ class TaskPageStub:
             "properties": [SimpleNamespace(id=101, title="长江中心")],
         }
 
+    async def update_checklist(self, task_id, employee, checklist):
+        """记录员工提交的清单。"""
+        self.checklist_calls.append(
+            {
+                "task_id": task_id,
+                "employee_id": employee.id,
+                "checklist": checklist,
+            }
+        )
+        return self.item
+
+    async def upload_photo(
+        self,
+        task_id,
+        employee,
+        stream,
+        content_type,
+    ):
+        """记录照片字节和 MIME。"""
+        self.photo_calls.append(
+            {
+                "task_id": task_id,
+                "employee_id": employee.id,
+                "content": stream.read(),
+                "content_type": content_type,
+            }
+        )
+        return SimpleNamespace(private_file_id="a" * 32 + ".png")
+
+    async def mark_ready(self, task_id, employee):
+        """记录执行员工标记可入住。"""
+        self.ready_calls.append((task_id, employee.id))
+        return SimpleNamespace(status="ready")
+
+    async def revoke_ready(self, task_id, employee):
+        """只允许管理员撤回可入住。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以撤回")
+        self.revoke_calls.append((task_id, employee.id))
+        return SimpleNamespace(status="pending_inspection")
+
+    async def file_for(self, file_id, employee):
+        """返回当前员工有权读取的测试文件。"""
+        if file_id == "b" * 32 + ".png":
+            raise PermissionError("附件不可见")
+        return self.private_file
+
 
 def build_client(role: EmployeeRole) -> tuple[TestClient, TaskPageStub]:
     """创建带签名会话的任务页应用。"""
@@ -100,6 +164,7 @@ def build_client(role: EmployeeRole) -> tuple[TestClient, TaskPageStub]:
     app.add_middleware(SessionMiddleware, secret_key="task-test-secret")
     app.include_router(employee_auth_router)
     app.include_router(tasks_router)
+    app.include_router(private_files_router)
     app.state.employee_auth_service = EmployeeAuthStub(role)
     tasks = TaskPageStub()
     if role is EmployeeRole.ADMIN:
@@ -229,3 +294,87 @@ def test_staff_cannot_assign_or_cancel() -> None:
     assert assign.status_code == 403
     assert tasks.transition_calls == []
     assert tasks.assign_calls == []
+
+
+def test_staff_can_submit_checklist_and_photo() -> None:
+    """执行员工可以用一次性令牌提交清单和现场照片。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    login(client)
+    checklist_token = detail_csrf(client)
+    checklist = client.post(
+        "/employee/tasks/1/checklist",
+        data={
+            "clean": "true",
+            "supplies": "true",
+            "damage": "true",
+            "csrf_token": checklist_token,
+        },
+        follow_redirects=False,
+    )
+    photo_token = detail_csrf(client)
+    photo = client.post(
+        "/employee/tasks/1/photos",
+        data={"csrf_token": photo_token},
+        files={"photo": ("room.png", PNG_BYTES, "image/png")},
+        follow_redirects=False,
+    )
+
+    assert checklist.status_code == 303
+    assert photo.status_code == 303
+    assert tasks.checklist_calls[0]["checklist"] == {
+        "clean": True,
+        "supplies": True,
+        "damage": True,
+    }
+    assert tasks.photo_calls[0]["content"] == PNG_BYTES
+
+
+def test_assigned_staff_can_mark_ready_and_admin_can_revoke() -> None:
+    """执行员工可以标记可入住，管理员可以撤回待检查。"""
+    staff_client, staff_tasks = build_client(EmployeeRole.STAFF)
+    login(staff_client)
+    ready_token = detail_csrf(staff_client)
+    ready = staff_client.post(
+        "/employee/tasks/1/ready",
+        data={"csrf_token": ready_token},
+        follow_redirects=False,
+    )
+
+    admin_client, admin_tasks = build_client(EmployeeRole.ADMIN)
+    login(admin_client)
+    revoke_token = detail_csrf(admin_client)
+    revoke = admin_client.post(
+        "/employee/tasks/1/revoke-ready",
+        data={"csrf_token": revoke_token},
+        follow_redirects=False,
+    )
+
+    assert ready.status_code == 303
+    assert staff_tasks.ready_calls == [(1, 2)]
+    assert revoke.status_code == 303
+    assert admin_tasks.revoke_calls == [(1, 1)]
+
+
+def test_private_file_download_requires_task_visibility(tmp_path) -> None:
+    """员工只能下载自己任务关联的私有照片。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    visible_id = "a" * 32 + ".png"
+    path = tmp_path / visible_id
+    path.write_bytes(PNG_BYTES)
+    tasks.private_file = StoredPrivateFile(
+        file_id=visible_id,
+        path=path,
+        content_type="image/png",
+        size=len(PNG_BYTES),
+    )
+    login(client)
+
+    visible = client.get(f"/employee/private-files/{visible_id}")
+    forbidden = client.get(
+        f"/employee/private-files/{'b' * 32}.png"
+    )
+
+    assert visible.status_code == 200
+    assert visible.content == PNG_BYTES
+    assert visible.headers["cache-control"] == "no-store"
+    assert forbidden.status_code == 403

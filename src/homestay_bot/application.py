@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -75,6 +75,11 @@ from homestay_bot.services.faq_draft_job import FaqDraftJobService
 from homestay_bot.services.hostex_sync import HostexSyncService
 from homestay_bot.services.knowledge_service import KnowledgeService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
+from homestay_bot.services.private_file_storage import (
+    PrivateFileStorage,
+    StoredPrivateFile,
+)
+from homestay_bot.services.room_readiness_service import RoomReadinessService
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 from homestay_bot.services.task_page_service import TaskPageService
 from homestay_bot.worker import (
@@ -342,9 +347,13 @@ class SessionTaskPageService:
     def __init__(
         self,
         factory: async_sessionmaker[AsyncSession],
+        storage: PrivateFileStorage,
+        upload_size_limit: int,
     ) -> None:
-        """保存数据库会话工厂。"""
+        """保存数据库会话工厂和私有附件限制。"""
         self._factory = factory
+        self._storage = storage
+        self._upload_size_limit = upload_size_limit
 
     @staticmethod
     def _service(session: AsyncSession) -> TaskPageService:
@@ -410,6 +419,93 @@ class SessionTaskPageService:
         """返回启用员工和房间选项。"""
         async with self._factory() as session:
             return await self._service(session).assignment_options()
+
+    async def update_checklist(
+        self,
+        task_id: int,
+        employee: Employee,
+        checklist: dict[str, bool],
+    ) -> Any:
+        """在独立事务保存执行员工检查清单。"""
+        async with self._factory() as session:
+            result = await self._service(session).update_checklist(
+                task_id,
+                employee,
+                checklist,
+            )
+            await session.commit()
+            return result
+
+    async def upload_photo(
+        self,
+        task_id: int,
+        employee: Employee,
+        stream: BinaryIO,
+        content_type: str,
+    ) -> Any:
+        """先校验任务权限，再保存文件引用；事务失败时清理孤儿文件。"""
+        stored: StoredPrivateFile | None = None
+        try:
+            async with self._factory() as session:
+                service = self._service(session)
+                await service.require_evidence_editor(task_id, employee)
+                stored = await self._storage.save_image(
+                    stream,
+                    content_type,
+                    self._upload_size_limit,
+                )
+                repository = SQLAlchemyOperationsRepository(session)
+                attachment = await repository.add_task_attachment(
+                    task_id=task_id,
+                    file_id=stored.file_id,
+                    uploaded_by=employee.id,
+                )
+                await session.commit()
+                return attachment
+        except Exception:
+            if stored is not None:
+                self._storage.delete(stored.file_id)
+            raise
+
+    async def mark_ready(self, task_id: int, employee: Employee) -> Any:
+        """在同一事务锁定任务和房态并标记可入住。"""
+        async with self._factory() as session:
+            repository = SQLAlchemyOperationsRepository(session)
+            state = await RoomReadinessService(
+                repository,
+                repository,
+            ).mark_ready(task_id, employee)
+            await session.commit()
+            return state
+
+    async def revoke_ready(self, task_id: int, employee: Employee) -> Any:
+        """由管理员撤回任务关联房间的可入住状态。"""
+        async with self._factory() as session:
+            repository = SQLAlchemyOperationsRepository(session)
+            task = await repository.get_task(task_id)
+            if task is None:
+                raise LookupError("任务不存在")
+            if task.property_id is None:
+                raise ValueError("任务尚未关联房间")
+            state = await RoomReadinessService(
+                repository,
+                repository,
+            ).revoke_ready(task.property_id, employee)
+            await session.commit()
+            return state
+
+    async def file_for(
+        self,
+        file_id: str,
+        employee: Employee,
+    ) -> StoredPrivateFile:
+        """数据库授权通过后才解析服务器私有文件。"""
+        async with self._factory() as session:
+            await self._service(session).require_attachment_visible(
+                file_id,
+                employee,
+            )
+        return self._storage.open_for_read(file_id)
 
 
 class SessionKnowledgeAdminService:
@@ -877,7 +973,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         factory=factory,
         hostex=hostex,
     )
-    app.state.task_page_service = SessionTaskPageService(factory)
+    private_file_storage = PrivateFileStorage(settings.private_upload_dir)
+    app.state.task_page_service = SessionTaskPageService(
+        factory,
+        private_file_storage,
+        settings.private_upload_max_bytes,
+    )
     app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory)
     app.state.wecom_callback_service = WeComCallbackService.from_credentials(
         settings.wecom_callback_token,

@@ -51,6 +51,17 @@ class TaskRepositoryStub:
             2: task(2, assigned_employee_id=3),
         }
         self.assign_calls: list[dict[str, object]] = []
+        self.checklist_calls: list[dict[str, object]] = []
+        self.attachments = {
+            "a" * 32 + ".png": SimpleNamespace(
+                task_id=1,
+                private_file_id="a" * 32 + ".png",
+            ),
+            "b" * 32 + ".png": SimpleNamespace(
+                task_id=2,
+                private_file_id="b" * 32 + ".png",
+            ),
+        }
 
     async def list_all_open(self):
         """返回全部未完成任务。"""
@@ -76,6 +87,30 @@ class TaskRepositoryStub:
         item.property_id = kwargs["property_id"]
         item.service_date = kwargs["service_date"]
         return item
+
+    async def update_task_checklist(self, **kwargs):
+        """记录检查清单更新。"""
+        self.checklist_calls.append(kwargs)
+        item = self.items[kwargs["task_id"]]
+        item.checklist = kwargs["checklist"]
+        return item
+
+    async def list_task_attachments(self, task_id):
+        """返回任务的安全附件引用。"""
+        return [
+            item
+            for item in self.attachments.values()
+            if item.task_id == task_id
+        ]
+
+    async def get_attachment_by_file_id(self, file_id):
+        """按私有文件编号返回附件。"""
+        return self.attachments.get(file_id)
+
+    async def get_room_state(self, property_id):
+        """返回尚未建立的房态。"""
+        assert property_id == 101
+        return None
 
 
 class TaskStateStub:
@@ -201,3 +236,57 @@ async def test_assigned_staff_can_start_own_task() -> None:
 
     assert result.status is BusinessTaskStatus.IN_PROGRESS
     assert states.calls == [(1, 2, BusinessTaskStatus.IN_PROGRESS)]
+
+
+@pytest.mark.asyncio
+async def test_only_assigned_staff_can_update_checklist() -> None:
+    """检查清单只允许任务执行员工维护。"""
+    repository = TaskRepositoryStub()
+    service = TaskPageService(repository, TaskStateStub())
+
+    result = await service.update_checklist(
+        1,
+        employee(2, EmployeeRole.STAFF),
+        {"clean": True, "supplies": True, "damage": False},
+    )
+    with pytest.raises(PermissionError):
+        await service.update_checklist(
+            1,
+            employee(3, EmployeeRole.STAFF),
+            {"clean": True, "supplies": True, "damage": True},
+        )
+
+    assert result.checklist["damage"] is False
+    assert len(repository.checklist_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_closed_task_rejects_new_evidence() -> None:
+    """已完成或取消的任务不得继续追加检查证据。"""
+    repository = TaskRepositoryStub()
+    repository.items[1].status = BusinessTaskStatus.COMPLETED
+    service = TaskPageService(repository, TaskStateStub())
+
+    with pytest.raises(ValueError, match="当前任务状态"):
+        await service.require_evidence_editor(
+            1,
+            employee(2, EmployeeRole.STAFF),
+        )
+
+
+@pytest.mark.asyncio
+async def test_attachment_visibility_follows_its_task() -> None:
+    """私有附件必须复用关联任务的员工可见性。"""
+    service = TaskPageService(TaskRepositoryStub(), TaskStateStub())
+
+    visible = await service.require_attachment_visible(
+        "a" * 32 + ".png",
+        employee(2, EmployeeRole.STAFF),
+    )
+    with pytest.raises(PermissionError):
+        await service.require_attachment_visible(
+            "b" * 32 + ".png",
+            employee(2, EmployeeRole.STAFF),
+        )
+
+    assert visible.task_id == 1

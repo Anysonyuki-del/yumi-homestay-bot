@@ -1,5 +1,5 @@
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +8,7 @@ from homestay_bot.domain.enums import (
     BusinessTaskStatus,
     BusinessTaskType,
     CustomerIdentityProvider,
+    RoomOperationalStatus,
 )
 from homestay_bot.domain.models import (
     AuditLog,
@@ -18,7 +19,9 @@ from homestay_bot.domain.models import (
     HostexWebhookEvent,
     Job,
     PropertyProfile,
+    RoomOperationalState,
     StayOrder,
+    TaskAttachment,
 )
 from homestay_bot.integrations.hostex_client import Reservation
 
@@ -168,6 +171,212 @@ class SQLAlchemyOperationsRepository:
             "employees": employees,
             "properties": properties,
         }
+
+    async def update_task_checklist(
+        self,
+        *,
+        task_id: int,
+        employee_id: int,
+        checklist: dict[str, bool],
+    ) -> BusinessTask:
+        """锁定任务并保存白名单检查项，审计不记录任务正文。"""
+        task = await self.require_for_update(task_id)
+        if task.assigned_employee_id != employee_id:
+            raise PermissionError("只有任务执行员工可以更新检查清单")
+        self._require_evidence_status(task)
+        allowed_keys = {"clean", "supplies", "damage"}
+        if set(checklist) != allowed_keys or not all(
+            isinstance(value, bool) for value in checklist.values()
+        ):
+            raise ValueError("检查清单字段无效")
+        task.checklist = dict(checklist)
+        self._session.add(
+            AuditLog(
+                actor_employee_id=employee_id,
+                action="business_task_checklist_updated",
+                target_type="business_task",
+                target_id=str(task.id),
+                details={
+                    "completed_count": sum(checklist.values()),
+                    "required_count": len(allowed_keys),
+                },
+            )
+        )
+        await self._session.flush()
+        return task
+
+    async def add_task_attachment(
+        self,
+        *,
+        task_id: int,
+        file_id: str,
+        uploaded_by: int,
+        kind: str = "photo",
+    ) -> TaskAttachment:
+        """锁定任务并登记私有附件引用，不在审计中保存文件编号。"""
+        task = await self.require_for_update(task_id)
+        if task.assigned_employee_id != uploaded_by:
+            raise PermissionError("只有任务执行员工可以上传现场照片")
+        self._require_evidence_status(task)
+        attachment = TaskAttachment(
+            task_id=task.id,
+            private_file_id=file_id,
+            kind=kind,
+            uploaded_by=uploaded_by,
+        )
+        self._session.add(attachment)
+        await self._session.flush()
+        self._session.add(
+            AuditLog(
+                actor_employee_id=uploaded_by,
+                action="business_task_attachment_added",
+                target_type="business_task",
+                target_id=str(task.id),
+                details={
+                    "attachment_id": attachment.id,
+                    "kind": kind,
+                },
+            )
+        )
+        await self._session.flush()
+        return attachment
+
+    async def list_task_attachments(self, task_id: int) -> list[TaskAttachment]:
+        """返回任务附件元数据，不读取私有文件内容。"""
+        return list(
+            (
+                await self._session.scalars(
+                    select(TaskAttachment)
+                    .where(TaskAttachment.task_id == task_id)
+                    .order_by(TaskAttachment.id)
+                )
+            ).all()
+        )
+
+    async def get_attachment_by_file_id(
+        self,
+        file_id: str,
+    ) -> TaskAttachment | None:
+        """按随机私有文件编号查找任务附件。"""
+        return cast(
+            TaskAttachment | None,
+            await self._session.scalar(
+                select(TaskAttachment).where(
+                    TaskAttachment.private_file_id == file_id
+                )
+            ),
+        )
+
+    async def has_photo_attachment(self, task_id: int) -> bool:
+        """判断任务是否至少登记一张现场照片。"""
+        attachment_id = await self._session.scalar(
+            select(TaskAttachment.id)
+            .where(
+                TaskAttachment.task_id == task_id,
+                TaskAttachment.kind == "photo",
+            )
+            .limit(1)
+        )
+        return attachment_id is not None
+
+    async def set_room_status(
+        self,
+        property_id: int,
+        status: RoomOperationalStatus,
+        actor_employee_id: int,
+    ) -> RoomOperationalState:
+        """锁定房源与房态后更新状态和版本，并写入安全审计。"""
+        property_profile = await self._session.scalar(
+            select(PropertyProfile)
+            .where(PropertyProfile.id == property_id)
+            .with_for_update()
+        )
+        if property_profile is None:
+            raise LookupError("房间不存在")
+        state = await self._session.scalar(
+            select(RoomOperationalState)
+            .where(RoomOperationalState.property_id == property_id)
+            .with_for_update()
+        )
+        previous = (
+            state.status
+            if state is not None
+            else RoomOperationalStatus.NOT_STARTED
+        )
+        if (
+            status is RoomOperationalStatus.READY
+            and previous
+            in {
+                RoomOperationalStatus.OCCUPIED,
+                RoomOperationalStatus.MAINTENANCE,
+            }
+        ):
+            label = (
+                "已入住"
+                if previous is RoomOperationalStatus.OCCUPIED
+                else "维修中"
+            )
+            raise ValueError(f"{label}房间不能直接标记为可入住")
+        if state is not None and previous is status:
+            return state
+        if state is None:
+            state = RoomOperationalState(
+                property_id=property_id,
+                status=status,
+                changed_by=actor_employee_id,
+                version=1,
+            )
+            self._session.add(state)
+        else:
+            state.status = status
+            state.changed_by = actor_employee_id
+            state.version += 1
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="room_operational_status_changed",
+                target_type="room_operational_state",
+                target_id=str(property_id),
+                details={
+                    "from_status": previous.value,
+                    "to_status": status.value,
+                    "version": state.version,
+                },
+            )
+        )
+        await self._session.flush()
+        return state
+
+    async def require_room_state_for_update(
+        self,
+        property_id: int,
+    ) -> RoomOperationalState:
+        """锁定并返回已有房态，供受控状态转换复核。"""
+        state = await self._session.scalar(
+            select(RoomOperationalState)
+            .where(RoomOperationalState.property_id == property_id)
+            .with_for_update()
+        )
+        if state is None:
+            raise LookupError("房间运营状态不存在")
+        return state
+
+    async def get_room_state(
+        self,
+        property_id: int,
+    ) -> RoomOperationalState | None:
+        """读取房间当前运营状态，不加载其他房源资料。"""
+        return await self._session.get(RoomOperationalState, property_id)
+
+    @staticmethod
+    def _require_evidence_status(task: BusinessTask) -> None:
+        """拒绝尚未分派或已经关闭的任务继续写入现场证据。"""
+        if task.status not in {
+            BusinessTaskStatus.ASSIGNED,
+            BusinessTaskStatus.IN_PROGRESS,
+            BusinessTaskStatus.PENDING_INSPECTION,
+        }:
+            raise ValueError("当前任务状态不能提交现场证据")
 
     async def create_pending_confirmation(
         self,
