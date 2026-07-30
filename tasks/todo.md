@@ -662,6 +662,7 @@ git commit -m "feat: retain seven day customer context"
 
 **Files:**
 - Create: `migrations/versions/0005_operations.py`
+- Create: `src/homestay_bot/repositories/operations.py`
 - Modify: `src/homestay_bot/domain/enums.py`
 - Modify: `src/homestay_bot/domain/models.py`
 - Modify: `src/homestay_bot/repositories/customers.py`
@@ -709,6 +710,8 @@ CredentialDeliveryPart
 
 `BusinessTask.dedupe_key`、`StayOrder.hostex_reservation_code`、`HostexWebhookEvent.event_key` 和投递部件组合键必须唯一。凭证字段只保存密文和私有文件引用。
 
+创建最小 `SQLAlchemyOperationsRepository`，只实现本任务可验证的数据入口：幂等 `create_turnover()`、订单/房态/凭证投递记录的基础读写。Task 5 在同一仓储上继续增加百居易订单 upsert、Webhook 事件和对账查询，禁止测试绕过生产仓储直接伪造幂等行为。
+
 扩展 `SQLAlchemyCustomerRepository.merge_locked()`：锁定合并建议和两个客户后，除 Task 2 已处理的身份、会话和标签外，把 `StayOrder.customer_id` 与 `BusinessTask.customer_id` 一并迁移到目标客户；任何唯一冲突或写入失败都回滚整个合并事务。
 
 - [ ] **Step 4：验证迁移和约束**
@@ -720,7 +723,7 @@ Expected: PASS；迁移升级、降级、再升级成功。
 - [ ] **Step 5：提交**
 
 ```bash
-git add migrations/versions/0005_operations.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py src/homestay_bot/repositories/customers.py src/homestay_bot/services/customer_service.py tests/integration/test_operations_repository.py tests/integration/test_customer_repository.py tests/unit/test_models.py
+git add migrations/versions/0005_operations.py src/homestay_bot/domain/enums.py src/homestay_bot/domain/models.py src/homestay_bot/repositories/operations.py src/homestay_bot/repositories/customers.py src/homestay_bot/services/customer_service.py tests/integration/test_operations_repository.py tests/integration/test_customer_repository.py tests/unit/test_models.py
 git commit -m "feat: add operations data model"
 ```
 
@@ -729,7 +732,7 @@ git commit -m "feat: add operations data model"
 **Files:**
 - Create: `src/homestay_bot/routes/hostex_webhook.py`
 - Create: `src/homestay_bot/services/hostex_sync.py`
-- Create: `src/homestay_bot/repositories/operations.py`
+- Modify: `src/homestay_bot/repositories/operations.py`
 - Modify: `src/homestay_bot/config.py`
 - Modify: `.env.example`
 - Modify: `src/homestay_bot/main.py`
