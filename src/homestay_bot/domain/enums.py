@@ -49,3 +49,20 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class KnowledgeCandidateStatus(StrEnum):
+    """表示高频 FAQ 候选是否继续统计或已结束处理。"""
+
+    OPEN = "open"
+    SNOOZED = "snoozed"
+    CONVERTED = "converted"
+
+
+class KnowledgeCandidateDraftStatus(StrEnum):
+    """表示 FAQ 参考草稿的生成状态。"""
+
+    NONE = "none"
+    PENDING = "pending"
+    READY = "ready"
+    FAILED = "failed"

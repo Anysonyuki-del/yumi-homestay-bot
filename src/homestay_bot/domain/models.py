@@ -5,6 +5,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -23,6 +24,8 @@ from homestay_bot.domain.enums import (
     ConversationMode,
     EmployeeRole,
     JobStatus,
+    KnowledgeCandidateDraftStatus,
+    KnowledgeCandidateStatus,
     Language,
     MessageOrigin,
 )
@@ -125,6 +128,76 @@ class KnowledgeEntry(TimestampMixin, Base):
     keywords: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+
+
+class KnowledgeCandidate(TimestampMixin, Base):
+    """保存尚待管理员归纳的高频 FAQ 主题和脱敏草稿。"""
+
+    __tablename__ = "knowledge_candidates"
+    __table_args__ = (
+        CheckConstraint("total_occurrences >= 0", name="ck_candidate_total_nonnegative"),
+        CheckConstraint("last_threshold_total >= 0", name="ck_candidate_threshold_nonnegative"),
+        CheckConstraint("last_reminded_total >= 0", name="ck_candidate_reminded_nonnegative"),
+        CheckConstraint("examples_version >= 0", name="ck_candidate_examples_version_nonnegative"),
+        CheckConstraint("draft_generation >= 0", name="ck_candidate_generation_nonnegative"),
+        Index("ix_candidate_status_snoozed", "status", "snoozed_until"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    canonical_question: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[KnowledgeCandidateStatus] = mapped_column(
+        Enum(KnowledgeCandidateStatus, native_enum=False, length=24),
+        default=KnowledgeCandidateStatus.OPEN,
+        nullable=False,
+    )
+    total_occurrences: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_threshold_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_reminded_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_reminded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notification_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    examples: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    examples_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    draft_status: Mapped[KnowledgeCandidateDraftStatus] = mapped_column(
+        Enum(KnowledgeCandidateDraftStatus, native_enum=False, length=24),
+        default=KnowledgeCandidateDraftStatus.NONE,
+        nullable=False,
+    )
+    draft_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    draft_examples_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    draft_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    knowledge_entry_id: Mapped[int | None] = mapped_column(
+        ForeignKey("knowledge_entries.id"), unique=True, nullable=True
+    )
+    snoozed_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    occurrences: Mapped[list["KnowledgeCandidateOccurrence"]] = relationship(
+        back_populates="candidate", cascade="all, delete-orphan"
+    )
+
+
+class KnowledgeCandidateOccurrence(Base):
+    """保存候选的一次去重出现，不复制客人正文或身份。"""
+
+    __tablename__ = "knowledge_candidate_occurrences"
+    __table_args__ = (
+        Index("ix_candidate_occurrence_window", "candidate_id", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    source_message_id: Mapped[str] = mapped_column(
+        String(128), unique=True, nullable=False
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    candidate: Mapped[KnowledgeCandidate] = relationship(back_populates="occurrences")
 
 
 class BookingApproval(TimestampMixin, Base):
