@@ -78,8 +78,12 @@ class DraftCandidateRepository(Protocol):
         """标记草稿最终失败。"""
 
     async def mark_notified(
-        self, candidate_id: int, *, reminded_at: datetime
-    ) -> DraftCandidate:
+        self,
+        candidate_id: int,
+        *,
+        reminded_at: datetime,
+        expected_generation: int | None = None,
+    ) -> DraftCandidate | None:
         """记录管理员通知已经进入发件箱。"""
 
 
@@ -175,6 +179,7 @@ class FaqDraftJobService:
             candidate,
             recent_count=recent_count,
             reminded_at=now,
+            generation=generation,
         )
 
     async def _generate_draft(
@@ -251,6 +256,7 @@ class FaqDraftJobService:
         *,
         recent_count: int,
         reminded_at: datetime,
+        generation: int,
     ) -> None:
         """只向启用管理员登记通知；无人可收时保留待提醒并安全重试。"""
         administrators = (
@@ -258,17 +264,21 @@ class FaqDraftJobService:
         )
         if not administrators:
             raise DeferredRetryJobError("没有启用管理员")
+        current = await self._candidates.mark_notified(
+            candidate.id,
+            reminded_at=reminded_at,
+            expected_generation=generation,
+        )
+        if current is None:
+            # 管理员查询期间候选被关闭或换代，禁止旧提醒进入发件箱。
+            return
         await self._notifications.send_internal_text(
             agent_id=self._agent_id,
             employee_userids=administrators,
             content=self._notification_content(
-                candidate,
+                current,
                 recent_count=recent_count,
             ),
-        )
-        await self._candidates.mark_notified(
-            candidate.id,
-            reminded_at=reminded_at,
         )
 
     def _notification_content(

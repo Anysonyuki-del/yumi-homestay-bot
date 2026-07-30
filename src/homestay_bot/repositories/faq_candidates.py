@@ -321,22 +321,36 @@ class SQLAlchemyFaqCandidateRepository:
         candidate_id: int,
         *,
         reminded_at: datetime,
-    ) -> KnowledgeCandidate:
+        expected_generation: int | None = None,
+    ) -> KnowledgeCandidate | None:
         """在管理员通知入队后更新本轮提醒游标。"""
         candidate = await self._require(candidate_id)
+        conditions = [KnowledgeCandidate.id == candidate_id]
+        if expected_generation is not None:
+            conditions.extend(
+                [
+                    KnowledgeCandidate.status
+                    == KnowledgeCandidateStatus.OPEN,
+                    KnowledgeCandidate.draft_generation
+                    == expected_generation,
+                ]
+            )
         # 用数据库当前累计数原子推进两个游标，避免 DeepSeek 调用期间新增次数
         # 被当前会话 identity map 中的陈旧对象覆盖。
-        await self._session.execute(
+        result = await self._session.execute(
             update(KnowledgeCandidate)
-            .where(KnowledgeCandidate.id == candidate_id)
+            .where(*conditions)
             .values(
                 notification_pending=False,
                 last_reminded_total=KnowledgeCandidate.total_occurrences,
                 last_threshold_total=KnowledgeCandidate.total_occurrences,
                 last_reminded_at=reminded_at,
             )
+            .returning(KnowledgeCandidate.id)
             .execution_options(synchronize_session=False)
         )
+        if result.scalar_one_or_none() is None:
+            return None
         await self._session.refresh(candidate)
         return candidate
 

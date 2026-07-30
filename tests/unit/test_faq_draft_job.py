@@ -132,8 +132,22 @@ class CandidateRepositoryStub:
         self.record.draft_payload = None
         return self.record
 
-    async def mark_notified(self, candidate_id: int, *, reminded_at: datetime):
+    async def mark_notified(
+        self,
+        candidate_id: int,
+        *,
+        reminded_at: datetime,
+        expected_generation: int | None = None,
+    ):
         """记录管理员提醒已进入事务型发件箱。"""
+        if (
+            expected_generation is not None
+            and (
+                self.record.status is not KnowledgeCandidateStatus.OPEN
+                or self.record.draft_generation != expected_generation
+            )
+        ):
+            return None
         self.record.notification_pending = False
         self.record.last_reminded_total = self.record.total_occurrences
         self.record.last_reminded_at = reminded_at
@@ -210,6 +224,7 @@ def build_service(
     *,
     drafter: DrafterStub | None = None,
     admin_userids: list[str] | None = None,
+    administrators=None,
 ):
     """组装可观察的草稿任务服务及其依赖。"""
     candidates = CandidateRepositoryStub(record)
@@ -221,8 +236,11 @@ def build_service(
         candidates=candidates,
         drafter=selected_drafter,
         knowledge=knowledge,
-        administrators=AdminRepositoryStub(
-            ["admin-1"] if admin_userids is None else admin_userids
+        administrators=(
+            administrators
+            or AdminRepositoryStub(
+                ["admin-1"] if admin_userids is None else admin_userids
+            )
         ),
         notifications=notifications,
         agent_id=1000002,
@@ -369,6 +387,38 @@ async def test_candidate_closed_during_model_call_discards_old_result() -> None:
 
     assert len(drafter.calls) == 1
     assert record.draft_status is KnowledgeCandidateDraftStatus.PENDING
+    assert notifications.messages == []
+
+
+@pytest.mark.asyncio
+async def test_ready_reminder_closed_before_outbox_is_not_sent() -> None:
+    """复用草稿提醒在入队前被关闭时，也不得发送旧通知。"""
+    payload = reviewable_draft().model_dump()
+    record = candidate(
+        draft_status=KnowledgeCandidateDraftStatus.READY,
+        draft_payload=payload,
+        draft_examples_version=2,
+    )
+
+    class ClosingAdministratorRepository(AdminRepositoryStub):
+        """查询管理员时模拟并发关闭候选。"""
+
+        async def list_active_admin_userids(self) -> list[str]:
+            """废止当前代次后返回原管理员。"""
+            record.status = KnowledgeCandidateStatus.SNOOZED
+            record.draft_generation += 1
+            return await super().list_active_admin_userids()
+
+    service, _, drafter, _, notifications, _ = build_service(
+        record,
+        administrators=ClosingAdministratorRepository(["admin-1"]),
+    )
+
+    await service.handle(
+        {"candidate_id": 7, "generation": 1, "refresh_draft": False}
+    )
+
+    assert drafter.calls == []
     assert notifications.messages == []
 
 
