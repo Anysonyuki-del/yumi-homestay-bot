@@ -135,6 +135,33 @@ class ChatClientStub:
         self.chat = SimpleNamespace(completions=CompletionsStub(contents))
 
 
+@pytest.mark.asyncio
+async def test_fast_ack_uses_warm_no_tool_model_prompt() -> None:
+    """快速安抚应使用固定温暖提示并返回客人可见短句。"""
+    client = ChatClientStub(
+        [json.dumps({"reply_text": "收到啦，我来帮您看看。"}, ensure_ascii=False)]
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    reply = await assistant.respond_ack(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        question="可以帮我补两瓶矿泉水吗？",
+    )
+
+    assert reply == "收到啦，我来帮您看看。"
+    request = client.chat.completions.requests[0]
+    assert "温暖管家" in request["messages"][0]["content"]
+    assert "内部任务" in request["messages"][0]["content"]
+    assert "tools" not in request
+
+
 class ToolCompletionsStub:
     """先请求房态工具，再返回最终 JSON。"""
 

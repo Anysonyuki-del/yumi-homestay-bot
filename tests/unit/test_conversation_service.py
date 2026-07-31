@@ -58,7 +58,12 @@ class MessageServiceStub:
         return self.is_new
 
     async def record_bot(
-        self, conversation_id: int, message_id: str, content: str
+        self,
+        conversation_id: int,
+        message_id: str,
+        content: str,
+        sent_at=None,
+        message_type: str = "text",
     ) -> None:
         """记录机器人出站消息。"""
         self.bot_messages.append((conversation_id, message_id, content))
@@ -125,6 +130,10 @@ class AssistantStub:
             handoff_reason=self.handoff_reason,
         )
 
+    async def respond_ack(self, **kwargs) -> str:
+        """返回固定温暖安抚。"""
+        return "收到啦，我来帮您看看。"
+
 
 class FailingTourismAssistantStub(AssistantStub):
     """模拟 DeepSeek 联网超时或不支持。"""
@@ -168,6 +177,18 @@ class WeComStub:
     ) -> None:
         """记录内部升级通知。"""
         self.internal_messages.append(content)
+
+
+class DeferredJobStub:
+    """记录快速安抚阶段登记的最终处理任务。"""
+
+    def __init__(self) -> None:
+        self.jobs: list[tuple[str, dict[str, object], str | None]] = []
+
+    async def enqueue(self, job_type, payload, *, dedupe_key=None):
+        """保存任务类型和稳定去重键。"""
+        self.jobs.append((job_type, payload, dedupe_key))
+        return SimpleNamespace()
 
 
 class ApprovalServiceStub:
@@ -260,6 +281,9 @@ def build_service(
     customer_context: CustomerContextStub | None = None,
     business_tasks=None,
     audit_events=None,
+    jobs=None,
+    defer_model: bool = False,
+    commit_boundary=None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
     """创建注入固定依赖的会话服务。"""
     conversations = ConversationRepositoryStub()
@@ -279,8 +303,36 @@ def build_service(
         customer_context=customer_context,
         business_tasks=business_tasks,
         audit_events=audit_events,
+        jobs=jobs,
+        defer_model=defer_model,
+        commit_boundary=commit_boundary,
     )
     return service, conversations, selected_assistant, wecom
+
+
+@pytest.mark.asyncio
+async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> None:
+    """阶段一应先发送模型安抚，再登记最终处理任务。"""
+    jobs = DeferredJobStub()
+    commits = 0
+
+    async def commit() -> None:
+        nonlocal commits
+        commits += 1
+
+    service, _, assistant, wecom = build_service(
+        jobs=jobs,
+        defer_model=True,
+        commit_boundary=commit,
+    )
+
+    await service.handle_message(incoming(content="请补两瓶矿泉水吗？"))
+
+    assert assistant.calls == 0
+    assert wecom.guest_messages == ["收到啦，我来帮您看看。"]
+    assert jobs.jobs[0][0] == "wecom_process_message"
+    assert jobs.jobs[0][2] == "final:msg-1"
+    assert commits == 1
 
 
 @pytest.mark.asyncio
@@ -558,7 +610,7 @@ async def test_tourism_search_failure_replies_then_switches_to_human() -> None:
 
     await service.handle_message(incoming(content="武汉有哪些地方好玩？"))
 
-    assert "暂时无法查询实时旅游信息" in wecom.guest_messages[0]
+    assert "实时信息刚才没能查完整" in wecom.guest_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
     assert "旅游联网失败：degraded" in wecom.internal_messages[0]
 
@@ -573,7 +625,7 @@ async def test_tourism_search_failure_uses_english_for_english_guest() -> None:
         incoming(content="What attractions are fun in Wuhan?")
     )
 
-    assert "unable to check live travel information" in wecom.guest_messages[0]
+    assert "couldn’t finish the live search" in wecom.guest_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 
@@ -585,7 +637,7 @@ async def test_model_failure_replies_notifies_and_switches_to_human() -> None:
 
     await service.handle_message(incoming(content="几点入住？"))
 
-    assert "暂时无法处理" in wecom.guest_messages[0]
+    assert "查询没有顺利完成" in wecom.guest_messages[0]
     assert "模型服务暂时不可用" in wecom.internal_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 

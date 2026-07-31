@@ -65,6 +65,7 @@ class MessageService:
         message_id: str,
         content: str,
         sent_at: datetime | None = None,
+        message_type: str = "text",
     ) -> None:
         """保存机器人已发送文本，便于审计和恢复对话上下文。"""
         await self._repository.add(
@@ -72,7 +73,7 @@ class MessageService:
                 conversation_id=conversation_id,
                 external_message_id=message_id,
                 origin=MessageOrigin.BOT,
-                message_type="text",
+                message_type=message_type,
                 content=content,
                 # 企业微信入站时间统一为 UTC，机器人消息也必须使用同一时间基准。
                 sent_at=sent_at or datetime.now(UTC),

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.config import Settings
 from homestay_bot.db import create_engine, create_session_factory
+from homestay_bot.domain.enums import MessageOrigin
 from homestay_bot.domain.models import BookingApproval, Employee
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.integrations.deepseek_client import (
@@ -938,6 +939,7 @@ async def _run_worker_loop(
     lifecycle_handler_factory: (
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
+    deferred_message_handler: JobHandler | None = None,
 ) -> None:
     """持续处理持久化任务，并周期恢复五分钟前的遗留锁。"""
     while True:
@@ -989,6 +991,8 @@ async def _run_worker_loop(
                     "wecom_send_text": send_guest,
                     "wecom_send_internal_text": send_internal,
                 }
+                if deferred_message_handler is not None:
+                    handlers["wecom_process_message"] = deferred_message_handler
                 _register_faq_draft_handler(
                     handlers,
                     session,
@@ -1253,8 +1257,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     duty_userids = [item.strip() for item in settings.wecom_duty_userids.split(",") if item.strip()]
     sensitive_data = SensitiveDataCipher(settings.data_encryption_key)
 
-    async def handle_message(message: IncomingMessage) -> None:
-        """在独立事务中处理一条已转换的企业微信消息。"""
+    async def handle_message(
+        message: IncomingMessage,
+        *,
+        deferred: bool = False,
+    ) -> None:
+        """在独立事务中处理入站消息或执行已提交的最终回复任务。"""
         async with factory() as session:
             faq_candidates = SQLAlchemyFaqCandidateRepository(session)
             service = ConversationService(
@@ -1284,9 +1292,28 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                     SQLAlchemyOperationsRepository(session)
                 ),
                 audit_events=SQLAlchemyOperationsRepository(session),
+                jobs=SQLAlchemyJobRepository(session),
+                defer_model=not deferred,
+                commit_boundary=session.commit if not deferred else None,
             )
-            await service.handle_message(message)
+            if deferred:
+                await service.process_recorded_message(message)
+            else:
+                await service.handle_message(message)
             await session.commit()
+
+    async def handle_deferred_message(payload: dict[str, Any]) -> None:
+        """执行已提交入站消息的最终模型回复。"""
+        message = IncomingMessage(
+            msgid=str(payload["msgid"]),
+            open_kfid=str(payload["open_kfid"]),
+            external_userid=str(payload["external_userid"]),
+            origin=MessageOrigin(str(payload["origin"])),
+            msgtype=str(payload["msgtype"]),
+            content=str(payload.get("content", "")),
+            sent_at=datetime.fromisoformat(str(payload["sent_at"])),
+        )
+        await handle_message(message, deferred=True)
 
     def build_lifecycle_service(
         session: AsyncSession,
@@ -1505,6 +1532,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 else None
             ),
             lifecycle_handler_factory=build_lifecycle_handler,
+            deferred_message_handler=handle_deferred_message,
         )
     )
     poll_task = asyncio.create_task(

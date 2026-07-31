@@ -40,6 +40,16 @@ _ASSISTANT_FAILURE_REPLIES = {
         "I’m unable to check live travel information right now. "
         "A staff member has been notified to help you."
     ),
+    "抱歉，实时信息刚才没能查完整。我已经帮您记下，会继续为您查清楚。",
+    "抱歉，刚才查询没有顺利完成。我已经帮您记下，会继续为您处理。",
+    (
+        "Sorry, I couldn’t finish the live search just now. "
+        "I’ve noted it and will continue checking for you."
+    ),
+    (
+        "Sorry, I couldn’t finish checking this just now. "
+        "I’ve noted it and will continue helping you."
+    ),
 }
 
 
@@ -103,6 +113,12 @@ class RefinedReply(BaseModel):
     """约束 DeepSeek 二次精简返回的最小结构。"""
 
     reply_text: str = Field(min_length=1)
+
+
+class FastAckReply(BaseModel):
+    """约束快速安抚阶段只返回一段客人可见文本。"""
+
+    reply_text: str = Field(min_length=1, max_length=180)
 
 
 class TourismSearcher(Protocol):
@@ -279,6 +295,69 @@ class DeepSeekGuestAssistant:
         self._tool_executor = tool_executor
         self._local_date_provider = local_date_provider or _wuhan_today
         self._faq_candidate_context = faq_candidate_context
+
+    async def respond_ack(
+        self,
+        *,
+        guest_identifier: str,
+        language: Language,
+        question: str,
+    ) -> str:
+        """用无工具短请求快速生成温暖安抚，不承诺任何业务结果。"""
+        system_prompt = (
+            "你是武汉民宿的温暖管家。请用自然、亲切、有人情味的中文回复客人，"
+            "像认真接待住客的民宿老板，不要生硬、官僚或机械。"
+            "这只是收到消息后的即时安抚，不要回答事实，不要承诺房态、价格、"
+            "物品已经送达或服务已经完成，不要提员工确认、模型、数据库、接口、"
+            "内部任务或等待流程。控制在40字以内，只输出 JSON："
+            '{"reply_text":"温暖安抚"}。'
+            if language is Language.ZH
+            else (
+                "You are a warm Wuhan homestay host. Reply naturally and kindly, "
+                "like a thoughtful host. This is only a quick acknowledgement: "
+                "do not answer facts or promise availability, price, delivery, "
+                "or completion. Do not mention staff, models, databases, APIs, "
+                "internal tasks, or waiting processes. Keep it under 30 words. "
+                'Output only JSON: {"reply_text":"warm acknowledgement"}. '
+            )
+        )
+        try:
+            response = await self._chat_client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": question[:500]},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=120,
+                extra_body={"thinking": {"type": "disabled"}},
+                timeout=4.0,
+            )
+            reply = FastAckReply.model_validate_json(
+                response.choices[0].message.content or ""
+            ).reply_text.strip()
+            if re.search(r"https?://|员工|模型|数据库|接口|已送达|已完成", reply):
+                raise ValueError("快速安抚包含内部流程或结果承诺")
+            return reply
+        except Exception as error:
+            logger.info(
+                "DeepSeek 快速安抚失败，使用温暖模板：error_type=%s",
+                type(error).__name__,
+            )
+            return self._fast_ack_fallback(language, question)
+
+    @staticmethod
+    def _fast_ack_fallback(language: Language, question: str) -> str:
+        """快速模型超时或协议异常时提供不承诺结果的温暖模板。"""
+        if language is Language.EN:
+            return "Thanks for letting us know. I’m checking this for you now."
+        if re.search(r"矿泉水|补水|保洁|维修|加被子|加枕头|麻将", question):
+            return "收到啦，我先帮您记下这个需求，很快为您安排。"
+        if re.search(r"武汉|好玩|景点|哪里|推荐", question):
+            return "收到啦，我马上帮您整理武汉近期值得去的地方。"
+        if re.search(r"房态|预订|入住|退房|有房|房间", question):
+            return "收到啦，我先帮您查一下，很快把结果告诉您。"
+        return "收到啦，我先帮您看看，很快回复您。"
 
     @staticmethod
     def tool_definitions() -> list[dict[str, Any]]:
@@ -751,11 +830,15 @@ class DeepSeekGuestAssistant:
         day_after = local_today + timedelta(days=2)
         customer_context_payload = asdict(customer_context) if customer_context else {}
         system_prompt = (
-            "你是武汉一家7间房民宿的客服。请只输出 JSON，不要输出代码围栏。"
+            "你是武汉一家7间房民宿的温暖管家。请只输出 JSON，不要输出代码围栏。"
+            "回复要自然、亲切、像熟悉住客的民宿老板，先回应客人的感受，再给出清晰答案；"
+            "不要生硬复述内部流程，不要说‘以员工确认为准’、‘模型’、‘数据库’或‘接口’。"
             "审核知识未覆盖普通常识时可以谨慎回答；民宿专属事实未确认时，"
             "明确说明未确认、提供替代建议并设置 knowledge_gap=true；"
             "价格、房态、退款、取消、改期、付款或订单状态无法确认时不得猜测，"
             "设置 staff_confirmation_required=true；缺少查询日期时允许追问。"
+            "先判断问题需要哪类信息：审核知识库用于已确认资料，实时房态和参考价必须调用百居易只读工具，"
+            "武汉近期活动和旅游推荐必须调用旅游联网搜索；能调用工具时直接调用，不要让客人替你判断来源。"
             "仅当问题适合沉淀为固定 FAQ、审核知识确实缺失且 knowledge_gap=true 时，"
             "设置 faq_candidate=true；房态、价格、订单、退款、预订、实时旅游和"
             "紧急问题必须设置 faq_candidate=false。"

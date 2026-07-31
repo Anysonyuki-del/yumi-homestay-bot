@@ -1,5 +1,6 @@
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from typing import Protocol
 
@@ -60,7 +61,12 @@ class ConversationMessageService(Protocol):
         """保存入站消息并返回是否为新消息。"""
 
     async def record_bot(
-        self, conversation_id: int, message_id: str, content: str
+        self,
+        conversation_id: int,
+        message_id: str,
+        content: str,
+        sent_at: datetime | None = None,
+        message_type: str = "text",
     ) -> None:
         """保存机器人出站消息。"""
 
@@ -82,6 +88,15 @@ class GuestAssistantPort(Protocol):
         customer_context: CustomerModelContext | None = None,
     ) -> AssistantDecision:
         """返回经过结构校验的客服决定。"""
+
+    async def respond_ack(
+        self,
+        *,
+        guest_identifier: str,
+        language: Language,
+        question: str,
+    ) -> str:
+        """返回无工具的快速温暖安抚。"""
 
 
 class WeComMessagingPort(Protocol):
@@ -168,6 +183,19 @@ class ConversationAuditPort(Protocol):
         """只记录内部主键和原因代码。"""
 
 
+class ConversationJobPort(Protocol):
+    """定义会话阶段任务的持久化入口。"""
+
+    async def enqueue(
+        self,
+        job_type: str,
+        payload: dict[str, object],
+        *,
+        dedupe_key: str | None = None,
+    ) -> object:
+        """登记可恢复的后台任务。"""
+
+
 class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
@@ -194,6 +222,9 @@ class ConversationService:
         customer_context: CustomerContextPort | None = None,
         business_tasks: BusinessTaskPort | None = None,
         audit_events: ConversationAuditPort | None = None,
+        jobs: ConversationJobPort | None = None,
+        defer_model: bool = False,
+        commit_boundary: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """注入仓储、AI、安全分类器和企业微信发送端口。"""
         self._conversations = conversations
@@ -210,6 +241,9 @@ class ConversationService:
         self._customer_context = customer_context
         self._business_tasks = business_tasks
         self._audit_events = audit_events
+        self._jobs = jobs
+        self._defer_model = defer_model
+        self._commit_boundary = commit_boundary
 
     async def handle_message(self, message: IncomingMessage) -> None:
         """处理单条已去重消息，确保人工回复不会形成机器人回环。"""
@@ -260,6 +294,55 @@ class ConversationService:
             )
             return
 
+        if self._defer_model and self._jobs is not None:
+            await self._stage_fast_ack(conversation, message)
+            return
+
+        await self._process_model_reply(conversation, message)
+
+    async def process_recorded_message(self, message: IncomingMessage) -> None:
+        """处理已完成入站提交的消息，供后台最终回复任务调用。"""
+        conversation = await self._conversations.get_or_create(message)
+        await self._process_model_reply(conversation, message)
+
+    async def _stage_fast_ack(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+    ) -> None:
+        """登记模型快速安抚和最终处理任务，再提交让发送 worker 立即可见。"""
+        jobs = self._jobs
+        if jobs is None:
+            return
+        ack = await self._assistant.respond_ack(
+            guest_identifier=message.external_userid,
+            language=conversation.language,
+            question=message.content,
+        )
+        await self._send_guest_reply(conversation, ack, message_type="ack")
+        await jobs.enqueue(
+            "wecom_process_message",
+            {
+                "msgid": message.msgid,
+                "open_kfid": message.open_kfid,
+                "external_userid": message.external_userid,
+                "origin": message.origin.value,
+                "msgtype": message.msgtype,
+                "content": message.content,
+                "sent_at": message.sent_at.isoformat(),
+            },
+            dedupe_key=f"final:{message.msgid}",
+        )
+        if self._commit_boundary is not None:
+            await self._commit_boundary()
+
+    async def _process_model_reply(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+    ) -> None:
+        """执行耗时模型和业务副作用；快速安抚已在前一事务发送。"""
+
         try:
             model_context = None
             if self._customer_context is not None and conversation.customer_id is not None:
@@ -278,7 +361,9 @@ class ConversationService:
         except AssistantUnavailableError:
             await self._escalate_assistant_failure(conversation, message)
             return
-        reply_text = self._limit_assistant_reply(decision.reply_text)
+        reply_text = self._warm_guest_reply(
+            self._limit_assistant_reply(decision.reply_text)
+        )
         await self._send_guest_reply(conversation, reply_text)
         await self._track_frequent_faq(message, decision)
         await self._record_task_suggestion(conversation, message, decision)
@@ -439,7 +524,11 @@ class ConversationService:
         return fallback
 
     async def _send_guest_reply(
-        self, conversation: Conversation, content: str
+        self,
+        conversation: Conversation,
+        content: str,
+        *,
+        message_type: str = "text",
     ) -> None:
         """发送并持久化机器人文本。"""
         message_id = await self._wecom.send_text(
@@ -447,7 +536,34 @@ class ConversationService:
             conversation.external_userid,
             content,
         )
-        await self._messages.record_bot(conversation.id, message_id, content)
+        if message_type == "text":
+            await self._messages.record_bot(conversation.id, message_id, content)
+        else:
+            await self._messages.record_bot(
+                conversation.id,
+                message_id,
+                content,
+                message_type=message_type,
+            )
+
+    @staticmethod
+    def _warm_guest_reply(content: str) -> str:
+        """统一把内部确认术语改成温暖、诚实且客人易懂的表达。"""
+        replacements = {
+            (
+                "该需求会提交给工作人员确认并安排，最终是否安排成功需以员工确认为准，"
+                "不便之处敬请谅解。"
+            ): "我已经帮您记下啦，会尽快为您安排，稍后给您反馈。",
+            "以员工确认为准": "以最终安排结果为准",
+            "需员工确认": "我们会尽快帮您核实",
+            "由工作人员进一步确认": "我们会尽快为您核实",
+            "请由工作人员进一步确认": "我会尽快为您核实",
+            "建议到店前由工作人员进一步确认": "建议到店前我再为您核实",
+            "到店前再请工作人员确认": "到店前我再帮您核实",
+        }
+        for source, target in replacements.items():
+            content = content.replace(source, target)
+        return content
 
     @staticmethod
     def _limit_assistant_reply(content: str) -> str:
@@ -477,9 +593,9 @@ class ConversationService:
     ) -> None:
         """对媒体、投诉和客人主动要求人工等情况执行普通接管。"""
         reply = (
-            "A staff member has been notified and will assist you shortly."
+            "Thanks for letting us know. I’ve asked our host team to help you shortly."
             if conversation.language is Language.EN
-            else "已为您通知工作人员，请稍候，我们会尽快人工处理。"
+            else "收到啦，我已经帮您联系管家，很快会来协助您。"
         )
         await self._send_guest_reply(conversation, reply)
         await self._activate_human(
@@ -497,10 +613,10 @@ class ConversationService:
     ) -> None:
         """明确告知联网失败，再切人工并通知值班员工。"""
         reply = (
-            "I’m unable to check live travel information right now. "
-            "A staff member has been notified to help you."
+            "Sorry, I couldn’t finish the live search just now. "
+            "I’ve noted it and will continue checking for you."
             if conversation.language is Language.EN
-            else "暂时无法查询实时旅游信息，已为您通知工作人员协助，请稍候。"
+            else "抱歉，实时信息刚才没能查完整。我已经帮您记下，会继续为您查清楚。"
         )
         await self._send_guest_reply(conversation, reply)
         await self._activate_human(
@@ -517,10 +633,10 @@ class ConversationService:
     ) -> None:
         """告知普通模型暂不可用，再切人工并通知值班员工。"""
         reply = (
-            "I’m temporarily unable to process this request. "
-            "A staff member has been notified to help you."
+            "Sorry, I couldn’t finish checking this just now. "
+            "I’ve noted it and will continue helping you."
             if conversation.language is Language.EN
-            else "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。"
+            else "抱歉，刚才查询没有顺利完成。我已经帮您记下，会继续为您处理。"
         )
         await self._send_guest_reply(conversation, reply)
         await self._activate_human(
