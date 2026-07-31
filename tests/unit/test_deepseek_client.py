@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -188,6 +189,60 @@ class ToolClientStub:
     def __init__(self) -> None:
         """初始化工具请求资源。"""
         self.chat = SimpleNamespace(completions=ToolCompletionsStub())
+
+
+class InvalidToolResultCompletionsStub(ToolCompletionsStub):
+    """工具查询成功但最终结构化回复无效，复现线上失败形状。"""
+
+    async def create(self, **kwargs):
+        """首轮返回工具调用，后续返回不完整 JSON。"""
+        self.requests.append(kwargs)
+        if len(self.requests) % 2 == 1:
+            function = SimpleNamespace(
+                name="search_availability",
+                arguments=(
+                    '{"check_in_date":"2026-07-30",'
+                    '"check_out_date":"2026-07-31"}'
+                ),
+            )
+            call = SimpleNamespace(
+                id=f"call-{len(self.requests)}",
+                type="function",
+                function=function,
+            )
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[call],
+                model_dump=lambda **kwargs: {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": function.name,
+                                "arguments": function.arguments,
+                            },
+                        }
+                    ],
+                },
+            )
+        else:
+            message = SimpleNamespace(
+                content='{"reply_text":"查询完成"}',
+                tool_calls=None,
+            )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class InvalidToolResultClientStub:
+    """暴露最终结构化输出无效的工具调用客户端。"""
+
+    def __init__(self) -> None:
+        """初始化工具请求资源。"""
+        self.chat = SimpleNamespace(
+            completions=InvalidToolResultCompletionsStub()
+        )
 
 
 class ToolExecutorStub:
@@ -830,6 +885,35 @@ async def test_current_booking_status_uses_today_to_tomorrow_availability() -> N
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_tool_followup_returns_safe_availability_fallback() -> None:
+    """工具已成功查询但模型 JSON 无效时仍应返回不猜测的房态答复。"""
+    client = InvalidToolResultClientStub()
+    executor = ToolExecutorStub()
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=executor,
+        local_date_provider=lambda: date(2026, 7, 30),
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "当前房间预订状况"}],
+    )
+
+    assert decision.intent == "availability_query"
+    assert decision.staff_confirmation_required is True
+    assert "2026-07-30" in decision.reply_text
+    assert "2026-07-31" in decision.reply_text
+    assert "房态查询" in decision.reply_text
+    assert executor.calls
 
 
 @pytest.mark.asyncio

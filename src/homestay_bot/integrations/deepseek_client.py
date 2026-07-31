@@ -645,6 +645,7 @@ class DeepSeekGuestAssistant:
         """按需执行语义精简，失败时保留原文；旅游入口可强制排版。"""
         if not force and len(reply_text) <= 1000:
             return reply_text
+
         try:
             response = await self._chat_client.chat.completions.create(
                 model=self._model,
@@ -680,6 +681,38 @@ class DeepSeekGuestAssistant:
                 type(error).__name__,
             )
             return reply_text
+
+    @staticmethod
+    def _availability_fallback(
+        language: Language,
+        arguments: dict[str, Any],
+    ) -> AssistantDecision:
+        """工具查询成功但模型整理失败时，返回不猜测房型的安全结果。"""
+        check_in_date = str(arguments.get("check_in_date", ""))
+        check_out_date = str(arguments.get("check_out_date", ""))
+        if language is Language.EN:
+            reply = (
+                f"Availability was checked for {check_in_date} to "
+                f"{check_out_date}. A staff member will confirm the exact "
+                "room options for you."
+            )
+        else:
+            reply = (
+                f"已完成 {check_in_date} 入住、{check_out_date} 退房的房态查询。"
+                "具体可订房型请由工作人员进一步确认。"
+            )
+        return AssistantDecision(
+            reply_text=reply,
+            language=language,
+            intent="availability_query",
+            confidence=0.5,
+            booking_fields=BookingFields(
+                check_in_date=check_in_date or None,
+                check_out_date=check_out_date or None,
+            ),
+            staff_confirmation_required=True,
+            staff_confirmation_reason="availability_result_confirmation",
+        )
 
     async def respond(
         self,
@@ -772,6 +805,7 @@ class DeepSeekGuestAssistant:
             question_text,
             knowledge,
         )
+        availability_fallback: AssistantDecision | None = None
         for attempt in range(1, 3):
             try:
                 active_request = {**request}
@@ -829,6 +863,12 @@ class DeepSeekGuestAssistant:
                             call.function.name,
                             arguments,
                         )
+                        if call.function.name == "search_availability":
+                            # 保存已成功查询的日期；后续模型 JSON 无效时仍可安全答复。
+                            availability_fallback = self._availability_fallback(
+                                language,
+                                arguments,
+                            )
                         active_messages.append(
                             {
                                 "role": "tool",
@@ -853,6 +893,12 @@ class DeepSeekGuestAssistant:
                 ValidationError,
                 ValueError,
             ) as error:
+                if availability_fallback is not None:
+                    logger.warning(
+                        "DeepSeek 房态结果整理失败，返回安全查询回执：error_type=%s",
+                        type(error).__name__,
+                    )
+                    return availability_fallback
                 # 只记录异常类型，不写响应正文或请求参数，避免日志泄露客人信息。
                 logger.warning(
                     "DeepSeek 对话调用失败，准备重试：attempt=%s error_type=%s",
