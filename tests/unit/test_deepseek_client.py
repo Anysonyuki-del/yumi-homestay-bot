@@ -796,6 +796,43 @@ async def test_deepseek_executes_read_only_tool_and_replays_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_current_booking_status_uses_today_to_tomorrow_availability() -> None:
+    """“当前预订状况”应按今天入住、明天退房查询百居易。"""
+    client = ToolClientStub()
+    executor = ToolExecutorStub()
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=executor,
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "当前房间预订状况"}],
+    )
+
+    request = client.chat.completions.requests[0]
+    assert request["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "search_availability"},
+    }
+    assert "当前房态或预订状况=今天入住、明天退房" in request["messages"][0]["content"]
+    assert executor.calls == [
+        (
+            "search_availability",
+            {
+                "check_in_date": "2026-07-30",
+                "check_out_date": "2026-07-31",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_room_list_followup_reuses_previous_stay_dates() -> None:
     """“房源列表”应沿用上一轮日期并查询房态，不得要求客人重复说明。"""
     client = ToolClientStub()

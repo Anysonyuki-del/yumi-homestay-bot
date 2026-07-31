@@ -584,6 +584,14 @@ class DeepSeekGuestAssistant:
         previous_context: str = "",
     ) -> bool:
         """完整房态问题或承接日期的房源追问必须调用百居易。"""
+        asks_current_status = re.search(
+            r"(?:当前|现在|今日|今天).*"
+            r"(?:预订状况|预订情况|房态|入住状况|入住情况)",
+            question_text,
+        )
+        if asks_current_status is not None:
+            return True
+
         asks_availability = re.search(
             r"有房|几间房|房态|可订|availability",
             question_text,
@@ -727,6 +735,7 @@ class DeepSeekGuestAssistant:
             f"武汉当前日期：{local_today.isoformat()}；"
             f"今天={local_today.isoformat()}，明天={tomorrow.isoformat()}，"
             f"后天={day_after.isoformat()}。相对日期必须自主换算。"
+            "当前房态或预订状况=今天入住、明天退房，必须直接查询。"
             "简短追问必须结合上一轮理解；上一轮已明确入住和退房日期时，"
             "“房源列表”“有哪些房型”等追问沿用该日期直接查询，不得重复追问。"
             f"审核知识：{json.dumps([item.__dict__ for item in knowledge], ensure_ascii=False)}"
