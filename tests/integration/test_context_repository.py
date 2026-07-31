@@ -74,3 +74,49 @@ async def test_model_context_includes_safe_active_orders_and_open_tasks() -> Non
         assert "补水" not in str(context)
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_customer_room_number_requires_one_active_order() -> None:
+    """房间号只在客户恰好一笔有效订单时返回。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        customer = Customer(display_name="房间号客户")
+        first_property = PropertyProfile(id=201, title="房间一")
+        second_property = PropertyProfile(id=202, title="房间二")
+        session.add_all([customer, first_property, second_property])
+        await session.flush()
+        session.add(
+            StayOrder(
+                hostex_reservation_code="R-ROOM-1",
+                stay_code="S-ROOM-1",
+                customer_id=customer.id,
+                property_id=201,
+                check_in_date=date(2026, 8, 1),
+                check_out_date=date(2026, 8, 2),
+                status="confirmed",
+            )
+        )
+        await session.commit()
+        repository = SQLAlchemyContextRepository(session)
+        assert await repository.get_customer_room_number(customer.id) == "201"
+
+        session.add(
+            StayOrder(
+                hostex_reservation_code="R-ROOM-2",
+                stay_code="S-ROOM-2",
+                customer_id=customer.id,
+                property_id=202,
+                check_in_date=date(2026, 8, 3),
+                check_out_date=date(2026, 8, 4),
+                status="confirmed",
+            )
+        )
+        await session.commit()
+        assert await repository.get_customer_room_number(customer.id) is None
+
+    await engine.dispose()

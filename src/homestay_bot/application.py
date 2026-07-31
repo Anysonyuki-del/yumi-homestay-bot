@@ -1283,6 +1283,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         """在独立事务中处理入站消息或执行已提交的最终回复任务。"""
         async with factory() as session:
             faq_candidates = SQLAlchemyFaqCandidateRepository(session)
+            context_repository = SQLAlchemyContextRepository(session)
             service = ConversationService(
                 conversations=SQLAlchemyConversationRepository(session),
                 messages=MessageService(SQLAlchemyMessageRepository(session)),
@@ -1306,7 +1307,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                     SQLAlchemyCustomerRepository(session),
                     sensitive_data,
                 ),
-                customer_context=SQLAlchemyContextRepository(session),
+                customer_context=context_repository,
+                room_assignment=context_repository,
                 business_tasks=BusinessTaskService(
                     SQLAlchemyOperationsRepository(session)
                 ),

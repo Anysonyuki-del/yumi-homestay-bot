@@ -215,12 +215,27 @@ class IdentityResolverStub:
         return "YuMi客服"
 
     async def get_kf_customer_name(
-        self,
-        open_kfid: str,
-        external_userid: str,
+        self, open_kfid: str, external_userid: str
     ) -> str | None:
-        """返回固定客人名称。"""
+        """返回固定客人名称用于房间号缺失时的兜底。"""
         return "张三"
+
+
+
+class RoomAssignmentStub:
+    """返回当前客户唯一有效订单对应的房间号。"""
+
+    async def get_customer_room_number(self, customer_id: int) -> str | None:
+        """返回固定房间号。"""
+        return "12743051"
+
+
+class RoomAssignmentStubWithoutRoom:
+    """模拟无法唯一匹配客户房间的情况。"""
+
+    async def get_customer_room_number(self, customer_id: int) -> str | None:
+        """返回空值，验证员工通知的客人名称兜底。"""
+        return None
 
 
 class DeferredJobStub:
@@ -327,6 +342,7 @@ def build_service(
     audit_events=None,
     jobs=None,
     identity_resolver=None,
+    room_assignment=None,
     defer_model: bool = False,
     commit_boundary=None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
@@ -352,6 +368,7 @@ def build_service(
         defer_model=defer_model,
         commit_boundary=commit_boundary,
         identity_resolver=identity_resolver,
+        room_assignment=room_assignment,
     )
     return service, conversations, selected_assistant, wecom
 
@@ -385,8 +402,11 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
 async def test_employee_notification_uses_display_names() -> None:
     """员工通知不得展示客服账号 UID 和客人 UID。"""
     service, conversations, _, wecom = build_service(
-        identity_resolver=IdentityResolverStub()
+        identity_resolver=IdentityResolverStub(),
+        customer_profiles=CustomerProfileStub(),
+        room_assignment=RoomAssignmentStub(),
     )
+    conversations.conversation.customer_id = 42
 
     await service._notify_employee(
         conversations.conversation,
@@ -396,8 +416,31 @@ async def test_employee_notification_uses_display_names() -> None:
 
     notification = wecom.internal_messages[0]
     assert "客服账号：YuMi客服" in notification
-    assert "客人：张三" in notification
+    assert "房间：12743051" in notification
     assert "wk-1" not in notification
+    assert "wm-1" not in notification
+    assert "客人：" not in notification
+
+
+@pytest.mark.asyncio
+async def test_employee_notification_falls_back_to_guest_name_without_room() -> None:
+    """没有唯一房间号时，员工通知应显示客人名称而不是 UID。"""
+    service, conversations, _, wecom = build_service(
+        identity_resolver=IdentityResolverStub(),
+        customer_profiles=CustomerProfileStub(),
+        room_assignment=RoomAssignmentStubWithoutRoom(),
+    )
+    conversations.conversation.customer_id = 42
+
+    await service._notify_employee(
+        conversations.conversation,
+        incoming(content="需要人工确认"),
+        "新任务待确认",
+    )
+
+    notification = wecom.internal_messages[0]
+    assert "客人：张三" in notification
+    assert "房间待确认" not in notification
     assert "wm-1" not in notification
 
 

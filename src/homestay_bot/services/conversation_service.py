@@ -141,6 +141,13 @@ class WeComIdentityPort(Protocol):
         """返回微信客服客人昵称。"""
 
 
+class RoomAssignmentPort(Protocol):
+    """定义从客户有效订单解析房间号的接口。"""
+
+    async def get_customer_room_number(self, customer_id: int) -> str | None:
+        """返回客户唯一有效订单对应的房间号。"""
+
+
 class PendingApprovalPort(Protocol):
     """定义客人确认资料后创建待审批单的唯一入口。"""
 
@@ -248,6 +255,7 @@ class ConversationService:
         audit_events: ConversationAuditPort | None = None,
         jobs: ConversationJobPort | None = None,
         identity_resolver: WeComIdentityPort | None = None,
+        room_assignment: RoomAssignmentPort | None = None,
         defer_model: bool = False,
         commit_boundary: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
@@ -268,6 +276,7 @@ class ConversationService:
         self._audit_events = audit_events
         self._jobs = jobs
         self._identity_resolver = identity_resolver
+        self._room_assignment = room_assignment
         self._defer_model = defer_model
         self._commit_boundary = commit_boundary
 
@@ -757,11 +766,25 @@ class ConversationService:
                     "企业微信展示名称读取失败，使用友好名称：error_type=%s",
                     type(error).__name__,
                 )
+        # 员工端优先看到房间号；没有唯一有效订单时再显示企业微信客人名称。
+        room_number = None
+        if self._room_assignment is not None and conversation.customer_id is not None:
+            try:
+                room_number = await self._room_assignment.get_customer_room_number(
+                    conversation.customer_id
+                )
+            except Exception as error:
+                # 房间号查询失败不应阻塞人工通知，继续使用客人名称兜底。
+                logger.warning(
+                    "客户房间号读取失败，使用客人名称兜底：error_type=%s",
+                    type(error).__name__,
+                )
+        display_identity = f"房间：{room_number}" if room_number else f"客人：{guest_name}"
         await self._wecom.send_internal_text(
             agent_id=self._agent_id,
             employee_userids=self._duty_employee_userids,
             content=(
                 f"{reason}\n客服账号：{customer_service_name}\n"
-                f"客人：{guest_name}\n消息：{message.content[:500]}"
+                f"{display_identity}\n消息：{message.content[:500]}"
             ),
         )

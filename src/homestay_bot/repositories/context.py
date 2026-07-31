@@ -202,6 +202,27 @@ class SQLAlchemyContextRepository:
             ],
         )
 
+    async def get_customer_room_number(self, customer_id: int) -> str | None:
+        """返回客户唯一有效订单对应的房间号，无法唯一确定时返回空值。"""
+        room_numbers = list(
+            (
+                await self._session.scalars(
+                    select(StayOrder.property_id)
+                    .where(
+                        StayOrder.customer_id == customer_id,
+                        StayOrder.status.not_in(
+                            ["cancelled", "canceled", "checked_out", "completed"]
+                        ),
+                    )
+                    .order_by(StayOrder.id)
+                    .limit(2)
+                )
+            ).all()
+        )
+        if len(room_numbers) != 1:
+            return None
+        return str(room_numbers[0])
+
     async def _get_or_create_summary(
         self, customer_id: int
     ) -> CustomerContextSummary:
