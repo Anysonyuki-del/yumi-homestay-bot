@@ -102,6 +102,82 @@ class SQLAlchemyCustomerRepository:
         await self._session.flush()
         return suggestion
 
+    async def create_manual_merge_suggestion(
+        self,
+        source_customer_id: int,
+        target_customer_id: int,
+        administrator_id: int,
+    ) -> int:
+        """锁定管理员和两侧客户，幂等创建待二次确认的手动合并建议。"""
+        administrator = await self._require_admin(administrator_id)
+        if source_customer_id == target_customer_id:
+            raise ValueError("不能把客户合并到自身")
+
+        # 按主键顺序同时锁定两侧客户，降低并发反向操作形成死锁的风险。
+        customers = list(
+            (
+                await self._session.scalars(
+                    select(Customer)
+                    .where(
+                        Customer.id.in_(
+                            [source_customer_id, target_customer_id]
+                        )
+                    )
+                    .order_by(Customer.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        customers_by_id = {customer.id: customer for customer in customers}
+        source = customers_by_id.get(source_customer_id)
+        target = customers_by_id.get(target_customer_id)
+        if (
+            source is None
+            or target is None
+            or source.merged_into_customer_id is not None
+            or target.merged_into_customer_id is not None
+        ):
+            raise LookupError("来源或目标客户不存在或已经合并")
+
+        existing = await self._session.scalar(
+            select(CustomerMergeSuggestion)
+            .where(
+                CustomerMergeSuggestion.source_customer_id
+                == source_customer_id,
+                CustomerMergeSuggestion.target_customer_id
+                == target_customer_id,
+                CustomerMergeSuggestion.status
+                == CustomerMergeStatus.PENDING,
+            )
+            .with_for_update()
+        )
+        if existing is not None:
+            return existing.id
+
+        suggestion = CustomerMergeSuggestion(
+            source_customer_id=source.id,
+            target_customer_id=target.id,
+            reason="administrator_manual",
+            status=CustomerMergeStatus.PENDING,
+        )
+        self._session.add(suggestion)
+        await self._session.flush()
+        self._session.add(
+            AuditLog(
+                actor_employee_id=administrator.id,
+                action="customer_manual_merge_suggested",
+                target_type="customer_merge_suggestion",
+                target_id=str(suggestion.id),
+                details={
+                    "source_customer_id": source.id,
+                    "target_customer_id": target.id,
+                    "suggestion_id": suggestion.id,
+                },
+            )
+        )
+        await self._session.flush()
+        return suggestion.id
+
     async def list_customers(self, query: str | None) -> list[Customer]:
         """按姓名或备注搜索尚未合并的客户。"""
         statement = select(Customer).where(
@@ -493,8 +569,8 @@ class SQLAlchemyCustomerRepository:
             .where(Customer.id == suggestion.target_customer_id)
             .with_for_update()
         )
-        if target is None:
-            raise LookupError("目标客户不存在")
+        if target is None or target.merged_into_customer_id is not None:
+            raise LookupError("目标客户不存在或已经合并")
         if suggestion.status is CustomerMergeStatus.ACCEPTED:
             return target
         if suggestion.status is not CustomerMergeStatus.PENDING:
@@ -529,15 +605,28 @@ class SQLAlchemyCustomerRepository:
             .values(customer_id=target.id)
         )
         await self._merge_tag_links(source.id, target.id)
+        await self._merge_customer_summaries(source.id, target.id)
 
         # 目标客户没有联系方式时才继承来源密文，避免覆盖管理员已确认资料。
         if target.phone_ciphertext is None and source.phone_ciphertext is not None:
             target.phone_ciphertext = source.phone_ciphertext
             target.phone_fingerprint = source.phone_fingerprint
+        # 目标显示名始终保留；备注仅追加一次，重复确认会在上方直接返回。
+        target.note = self._append_merged_text(
+            target.note,
+            source.note,
+            limit=2000,
+        )
         source.merged_into_customer_id = target.id
         suggestion.status = CustomerMergeStatus.ACCEPTED
         suggestion.reviewed_by = administrator.id
         suggestion.reviewed_at = datetime.now(UTC)
+        await self._close_source_pending_suggestions(
+            source.id,
+            suggestion.id,
+            administrator.id,
+            suggestion.reviewed_at,
+        )
         self._session.add(
             AuditLog(
                 actor_employee_id=administrator.id,
@@ -601,6 +690,110 @@ class SQLAlchemyCustomerRepository:
                 continue
             link.customer_id = target_customer_id
             target_tag_ids.add(link.tag_id)
+
+    async def _merge_customer_summaries(
+        self,
+        source_customer_id: int,
+        target_customer_id: int,
+    ) -> None:
+        """迁移或合并客户摘要，不触碰摘要所依据的原始消息。"""
+        summaries = list(
+            (
+                await self._session.scalars(
+                    select(CustomerContextSummary)
+                    .where(
+                        CustomerContextSummary.customer_id.in_(
+                            [source_customer_id, target_customer_id]
+                        )
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        summaries_by_customer = {
+            summary.customer_id: summary for summary in summaries
+        }
+        source = summaries_by_customer.get(source_customer_id)
+        target = summaries_by_customer.get(target_customer_id)
+        if source is None:
+            return
+        if target is None:
+            source.customer_id = target_customer_id
+            return
+
+        target.short_summary = (
+            self._append_merged_text(
+                target.short_summary,
+                source.short_summary,
+                limit=4000,
+            )
+            or ""
+        )
+        target.long_summary = (
+            self._append_merged_text(
+                target.long_summary,
+                source.long_summary,
+                limit=8000,
+            )
+            or ""
+        )
+        # 目标待确认项优先，随后补充来源且稳定去重，最多保留二十项。
+        target.unresolved_items = list(
+            dict.fromkeys(
+                [
+                    *target.unresolved_items,
+                    *source.unresolved_items,
+                ]
+            )
+        )[:20]
+        target.version = (target.version or 0) + 1
+        await self._session.delete(source)
+
+    async def _close_source_pending_suggestions(
+        self,
+        source_customer_id: int,
+        accepted_suggestion_id: int,
+        administrator_id: int,
+        reviewed_at: datetime,
+    ) -> None:
+        """拒绝所有涉及已合并来源的其他未决建议，避免继续操作失效档案。"""
+        await self._session.execute(
+            update(CustomerMergeSuggestion)
+            .where(
+                CustomerMergeSuggestion.id != accepted_suggestion_id,
+                CustomerMergeSuggestion.status
+                == CustomerMergeStatus.PENDING,
+                (
+                    CustomerMergeSuggestion.source_customer_id
+                    == source_customer_id
+                )
+                | (
+                    CustomerMergeSuggestion.target_customer_id
+                    == source_customer_id
+                ),
+            )
+            .values(
+                status=CustomerMergeStatus.REJECTED,
+                reason="source_customer_merged",
+                reviewed_by=administrator_id,
+                reviewed_at=reviewed_at,
+            )
+        )
+
+    @staticmethod
+    def _append_merged_text(
+        target_text: str | None,
+        source_text: str | None,
+        *,
+        limit: int,
+    ) -> str | None:
+        """在保留目标内容优先级的前提下追加来源档案文字并截断。"""
+        if not source_text:
+            return target_text[:limit] if target_text else None
+        if not target_text:
+            return source_text[:limit]
+        merged = f"{target_text}\n\n来自合并档案：\n{source_text}"
+        return merged[:limit]
 
     async def _require_admin(self, administrator_id: int) -> Employee:
         """锁定并复核活动管理员，避免只依赖页面层权限。"""
