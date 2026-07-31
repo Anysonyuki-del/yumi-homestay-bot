@@ -1606,3 +1606,147 @@ git commit -m "chore: verify yumi phase one delivery"
 - LaunchAgent 运行于 `127.0.0.1:8010`，持续运行超过三个轮询周期后健康检查仍返回 HTTP 200；四个待发送任务均为尚未到执行时间的生命周期提醒。
 - 企业微信兜底补拉实测返回 `45009` 频率限制后，已从每 5 秒调整为每 60 秒；实时 Webhook 不变，首个新周期成功且健康心跳已刷新。
 - 提交前独立审查发现的未来心跳误判、事务提交前刷新心跳和生产装配覆盖不足均已修复，最终复审无 Critical/Important；全量验证为 `367 passed, 15 skipped`，Ruff、mypy（71 个源文件）及 `git diff --check` 全部通过。
+
+### Task 14：管理员手动合并客户并继续一期真实验收
+
+**Goal：** 允许管理员在没有手机号自动匹配建议时，安全选择两个客户档案，经脱敏预览和二次确认后原子合并，使百居易订单与正确的企业微信会话归属同一客户。
+
+**现状依据：**
+
+- `src/homestay_bot/repositories/customers.py::merge_locked()` 已迁移身份、会话、订单、任务和标签，但只能消费既有 `CustomerMergeSuggestion`，尚未处理双方备注、摘要和其他遗留建议。
+- `src/homestay_bot/services/customer_admin_service.py::review_merge()` 只允许管理员审核现有建议，没有手动创建建议的服务边界。
+- `src/homestay_bot/routes/customers.py::customer_merge_detail()` 已提供脱敏二次确认页和一次性 CSRF；客户详情页尚无选择目标客户的入口。
+- 真实验收订单 `5-6BUAAN7FE` 属于测试订单客户 `7`，测试微信会话属于客户 `5`；两者没有可自动匹配的共同手机号。
+
+**确认的功能规则：**
+
+1. 只有启用中的 `ADMIN` 可以搜索目标客户、创建手动建议和确认合并。
+2. 来源和目标必须是两个不同、存在且尚未合并的客户；目标列表只返回脱敏卡片。
+3. 创建手动建议不迁移数据，必须继续使用现有合并对比页二次确认。
+4. 确认时在一个事务内迁移身份、会话、订单、任务和标签；目标档案保留。
+5. 目标电话优先，目标为空时才继承来源电话；目标显示名称保留。
+6. 备注按“目标内容 + 来源档案补充”合并并限制为 2000 字；重复确认不得重复追加。
+7. 摘要只有来源存在时迁移；双方都存在时保留目标并追加来源补充，待确认项去重且最多 20 项；原始消息不删除。
+8. 其他涉及来源客户的待审核建议统一结束，防止继续操作已失效档案。
+9. 任意权限、约束或提交失败必须整体回滚；已确认建议重复提交保持幂等。
+10. 审计仅记录管理员、来源/目标客户编号和建议编号，不记录电话、备注、摘要或聊天正文。
+
+**Files：**
+
+- Modify: `src/homestay_bot/repositories/customers.py`
+- Modify: `src/homestay_bot/services/customer_admin_service.py`
+- Modify: `src/homestay_bot/routes/customers.py`
+- Modify: `src/homestay_bot/templates/customers/detail.html`
+- Modify: `src/homestay_bot/templates/customers/merge.html`
+- Modify: `tests/unit/test_customer_admin_service.py`
+- Modify: `tests/integration/test_customer_repository.py`
+- Modify: `tests/integration/test_customer_routes.py`
+
+- [x] **Step 1：为服务层手动建议编写失败测试**
+
+新增 `CustomerAdminService.create_manual_merge(source_id, target_id, administrator)` 测试，验证普通员工被拒绝、自合并被拒绝、管理员只把编号交给仓储且返回建议编号。
+
+Run:
+
+```bash
+../../.venv/bin/pytest -q tests/unit/test_customer_admin_service.py
+```
+
+Expected: FAIL，服务和仓储协议尚无 `create_manual_merge()`。
+
+- [x] **Step 2：实现最小服务边界并通过单元测试**
+
+仓储协议新增：
+
+```python
+async def create_manual_merge_suggestion(
+    self,
+    source_customer_id: int,
+    target_customer_id: int,
+    administrator_id: int,
+) -> int:
+    """创建待二次确认的管理员手动合并建议。"""
+```
+
+服务层复核管理员、拒绝相同编号并调用仓储，不读取或返回客户敏感字段。
+
+- [x] **Step 3：为仓储原子合并规则编写失败测试**
+
+在 `tests/integration/test_customer_repository.py` 覆盖：
+
+- 手动建议创建前锁定管理员和两侧客户；
+- 重复未决的同方向建议复用同一编号；
+- 合并迁移身份、会话、订单、任务和标签；
+- 备注、摘要、待确认项按已确认规则合并；
+- 其他未决建议结束；
+- 重复确认不重复追加；
+- 事务异常后所有关系仍归来源客户。
+
+Run:
+
+```bash
+../../.venv/bin/pytest -q tests/integration/test_customer_repository.py
+```
+
+Expected: FAIL，手动建议和补全的合并规则尚未实现。
+
+- [x] **Step 4：实现仓储事务并通过集成测试**
+
+`SQLAlchemyCustomerRepository.create_manual_merge_suggestion()` 使用 `with_for_update()` 复核管理员和两侧活动客户，写入 `reason="administrator_manual"` 的 `PENDING` 建议。`merge_locked()` 在现有关系迁移基础上合并备注和摘要、关闭其他未决建议，最后写最小审计并统一 `flush()`。
+
+- [x] **Step 5：为管理员页面编写失败测试**
+
+在 `tests/integration/test_customer_routes.py` 覆盖：
+
+- 普通员工无法打开或提交手动合并；
+- 管理员在客户详情页看到目标搜索表单；
+- 搜索结果不包含来源客户和完整电话；
+- POST 使用详情页一次性 CSRF 创建建议并 303 跳转到现有复核页；
+- 伪造、重放令牌和自合并均返回稳定错误；
+- 复核页显示迁移方向和关联数据计数，不展示密文。
+
+- [x] **Step 6：实现非技术化搜索、预览和二次确认页面**
+
+扩展 `CustomerAdminServicePort`、客户详情页上下文和路由：
+
+```text
+GET  /employee/customers/{source_id}?merge_query=...
+POST /employee/customers/{source_id}/merge/manual
+GET  /employee/customers/merge/{suggestion_id}
+POST /employee/customers/merge/{suggestion_id}/confirm
+```
+
+详情页复用现有客户搜索服务输出 `CustomerCard`；POST 消耗 `customer_csrf` 后创建建议并跳转，确认继续复用 `customer_merge_csrf`。
+
+- [x] **Step 7：运行安全专项与全量验证**
+
+Run:
+
+```bash
+../../.venv/bin/pytest -q tests/unit/test_customer_admin_service.py tests/integration/test_customer_repository.py tests/integration/test_customer_routes.py tests/unit/test_employee_auth.py
+../../.venv/bin/pytest -q
+../../.venv/bin/ruff check src tests
+../../.venv/bin/mypy src
+git diff --check
+```
+
+Expected: 全部通过；真实契约测试只在未显式启用时跳过；页面、日志和审计无完整电话、聊天正文、备注或摘要正文。
+
+验证结果（2026-08-01）：安全专项 `64 passed`；全量测试 `392 passed, 15 skipped`；Ruff、mypy（72 个源文件）与 `git diff --check` 全部通过。15 个跳过项均为未显式开启的 DeepSeek、Hostex、企业微信真实契约测试。
+
+- [x] **Step 8：部署并继续真实业务验收**
+
+备份本机运行数据库和源码，同步变更并重启 LaunchAgent。通过管理员页面将来源客户 `7` 合入目标客户 `5`，验证：
+
+- 订单 `5-6BUAAN7FE` 与测试微信会话的 `customer_id` 相同；
+- 保洁任务仍唯一且归属正确订单；
+- 合并审计不含敏感正文；
+- 机器人不会在房源凭证缺失或房间未标记可入住时发送密码或二维码。
+
+真实验收结果（2026-08-01）：已备份运行目录至 `/private/tmp/HomestayBot-pre-manual-merge-20260801-0355.tar.gz`，同步已验证源码并重启 LaunchAgent。管理员页面流程创建建议 `1` 返回 `303`，复核页返回 `200` 且仅显示脱敏档案和关联计数；二次确认返回 `303`。订单和微信会话均已归客户 `5`，保洁任务保持唯一，审计仅包含员工编号、客户编号和建议编号；订单无凭证投递，房间凭证和运营状态均为空，未发送密码或二维码。健康端点复核为 HTTP `200`，数据库、worker、企业微信轮询、Hostex 同步、上下文维护和生命周期调度均为 `ok`。
+
+#### Task 14 Review
+
+- 实现复核：手动建议、脱敏预览、CSRF 二次确认、原子迁移、幂等重放、锁顺序、查询隐私和异常脱敏均已覆盖。
+- 验证复核：安全专项 `64 passed`，全量 `392 passed, 15 skipped`，Ruff、mypy 和 `git diff --check` 通过；真实本机业务验收完成。
+- 未覆盖项：15 个真实外部契约测试仍因未显式开启而跳过；云服务器部署和外部渠道真实消息回归不属于本次本地一期验收。
