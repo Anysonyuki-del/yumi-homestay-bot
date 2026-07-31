@@ -47,6 +47,27 @@ class CustomerAdminRepositoryStub:
             "merge_suggestions": [],
         }
 
+    async def merge_detail(self, suggestion_id):
+        """返回不含电话、备注或 ORM 对象的复核安全投影。"""
+        assert suggestion_id == 9
+        return {
+            "suggestion": SimpleNamespace(id=9),
+            "source": {"id": 7, "display_name": "来源客户"},
+            "target": {"id": 8, "display_name": "目标客户"},
+            "source_counts": {
+                "identities": 1,
+                "conversations": 2,
+                "orders": 0,
+                "tasks": 1,
+            },
+            "target_counts": {
+                "identities": 1,
+                "conversations": 0,
+                "orders": 3,
+                "tasks": 2,
+            },
+        }
+
     async def replace_tags(self, customer_id, tag_ids, administrator_id):
         """记录标签替换并返回增删差异。"""
         self.tag_calls.append((customer_id, tag_ids, administrator_id))
@@ -156,6 +177,39 @@ async def test_detail_masks_phone_and_never_returns_plaintext() -> None:
 
     assert detail["masked_phone"] == "138****8000"
     assert "13800138000" not in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_merge_detail_returns_dedicated_safe_cards() -> None:
+    """合并复核卡片只保留编号、名称和四类聚合计数。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    service = CustomerAdminService(
+        CustomerAdminRepositoryStub(cipher),
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+    )
+
+    detail = await service.get_merge_detail(9, employee())
+
+    assert vars(detail["source"]) == {
+        "id": 7,
+        "display_name": "来源客户",
+        "identity_count": 1,
+        "conversation_count": 2,
+        "order_count": 0,
+        "task_count": 1,
+    }
+    assert vars(detail["target"]) == {
+        "id": 8,
+        "display_name": "目标客户",
+        "identity_count": 1,
+        "conversation_count": 0,
+        "order_count": 3,
+        "task_count": 2,
+    }
+    assert "note" not in repr(detail)
+    assert "phone" not in repr(detail)
 
 
 @pytest.mark.asyncio

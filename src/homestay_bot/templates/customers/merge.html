@@ -18,26 +18,22 @@
       <div class="compare-grid">
         <section class="action-panel">
           <h2>来源档案将停用</h2>
-          <p><strong>{{ source.display_name }}</strong></p>
-          <p>{{ source.masked_phone }}</p>
-          <p>{{ source.note or "无员工备注" }}</p>
+          <p><strong>{{ source.display_name }}（客户 #{{ source.id }}）</strong></p>
           <p>
-            关联内容：身份 {{ source_counts.identities }} 个，
-            会话 {{ source_counts.conversations }} 个，
-            订单 {{ source_counts.orders }} 笔，
-            任务 {{ source_counts.tasks }} 项
+            关联内容：身份 {{ source.identity_count }} 个，
+            会话 {{ source.conversation_count }} 个，
+            订单 {{ source.order_count }} 笔，
+            任务 {{ source.task_count }} 项
           </p>
         </section>
         <section class="action-panel">
           <h2>目标档案将保留</h2>
-          <p><strong>{{ target.display_name }}</strong></p>
-          <p>{{ target.masked_phone }}</p>
-          <p>{{ target.note or "无员工备注" }}</p>
+          <p><strong>{{ target.display_name }}（客户 #{{ target.id }}）</strong></p>
           <p>
-            当前关联：身份 {{ target_counts.identities }} 个，
-            会话 {{ target_counts.conversations }} 个，
-            订单 {{ target_counts.orders }} 笔，
-            任务 {{ target_counts.tasks }} 项
+            当前关联：身份 {{ target.identity_count }} 个，
+            会话 {{ target.conversation_count }} 个，
+            订单 {{ target.order_count }} 笔，
+            任务 {{ target.task_count }} 项
           </p>
         </section>
       </div>

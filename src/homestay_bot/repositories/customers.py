@@ -266,13 +266,11 @@ class SQLAlchemyCustomerRepository:
             or suggestion.status is not CustomerMergeStatus.PENDING
         ):
             raise LookupError("客户合并建议不存在或已经结束")
-        source = await self._session.get(
-            Customer,
-            suggestion.source_customer_id,
+        source = await self._safe_merge_customer(
+            suggestion.source_customer_id
         )
-        target = await self._session.get(
-            Customer,
-            suggestion.target_customer_id,
+        target = await self._safe_merge_customer(
+            suggestion.target_customer_id
         )
         if source is None or target is None:
             raise LookupError("合并建议关联的客户不存在")
@@ -280,8 +278,30 @@ class SQLAlchemyCustomerRepository:
             "suggestion": suggestion,
             "source": source,
             "target": target,
-            "source_counts": await self._association_counts(source.id),
-            "target_counts": await self._association_counts(target.id),
+            "source_counts": await self._association_counts(
+                suggestion.source_customer_id
+            ),
+            "target_counts": await self._association_counts(
+                suggestion.target_customer_id
+            ),
+        }
+
+    async def _safe_merge_customer(
+        self,
+        customer_id: int,
+    ) -> dict[str, object] | None:
+        """只选择复核页允许展示的客户编号和名称列。"""
+        result = await self._session.execute(
+            select(Customer.id, Customer.display_name).where(
+                Customer.id == customer_id
+            )
+        )
+        row = result.mappings().one_or_none()
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "display_name": str(row["display_name"]),
         }
 
     async def _association_counts(self, customer_id: int) -> dict[str, int]:

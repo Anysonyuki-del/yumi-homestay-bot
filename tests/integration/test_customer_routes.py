@@ -42,13 +42,13 @@ class CustomerAdminStub:
         self.card = CustomerCard(
             id=7,
             display_name="测试客户",
-            note="需要安静房间",
+            note="ROUTE_SOURCE_SECRET_NOTE",
             masked_phone="138****8000",
         )
         self.target_card = CustomerCard(
             id=8,
             display_name="订单客户",
-            note="",
+            note="ROUTE_TARGET_SECRET_NOTE",
             masked_phone="139****9000",
         )
         self.tags = [
@@ -103,19 +103,21 @@ class CustomerAdminStub:
             raise LookupError("合并建议不存在")
         return {
             "suggestion": self.suggestion,
-            "source": self.card,
-            "target": self.target_card,
-            "source_counts": SimpleNamespace(
-                identities=1,
-                conversations=2,
-                orders=0,
-                tasks=1,
+            "source": SimpleNamespace(
+                id=7,
+                display_name="测试客户",
+                identity_count=1,
+                conversation_count=2,
+                order_count=0,
+                task_count=1,
             ),
-            "target_counts": SimpleNamespace(
-                identities=1,
-                conversations=0,
-                orders=3,
-                tasks=2,
+            "target": SimpleNamespace(
+                id=8,
+                display_name="订单客户",
+                identity_count=1,
+                conversation_count=0,
+                order_count=3,
+                task_count=2,
             ),
         }
 
@@ -250,6 +252,7 @@ def test_staff_cannot_open_customer_crm() -> None:
         "/employee/customers/7",
         params={"merge_query": "订单"},
     )
+    merge_detail = client.get("/employee/customers/merge/9")
     manual_merge = client.post(
         "/employee/customers/7/merge/manual",
         data={"target_customer_id": "8", "csrf_token": "forged"},
@@ -261,6 +264,7 @@ def test_staff_cannot_open_customer_crm() -> None:
 
     assert index.status_code == 403
     assert detail.status_code == 403
+    assert merge_detail.status_code == 403
     assert manual_merge.status_code == 403
     assert merge.status_code == 403
     assert customers.list_calls == []
@@ -455,3 +459,7 @@ def test_merge_review_explains_direction_and_safe_association_counts() -> None:
     assert "13800138000" not in response.text
     assert "13900139000" not in response.text
     assert "phone_ciphertext" not in response.text
+    assert "ROUTE_SOURCE_SECRET_NOTE" not in response.text
+    assert "ROUTE_TARGET_SECRET_NOTE" not in response.text
+    assert "138****8000" not in response.text
+    assert "139****9000" not in response.text

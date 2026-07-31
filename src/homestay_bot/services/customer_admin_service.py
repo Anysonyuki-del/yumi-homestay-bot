@@ -17,13 +17,15 @@ class CustomerCard:
 
 
 @dataclass(frozen=True)
-class CustomerAssociationCounts:
-    """只包含合并复核允许展示的聚合关联数量。"""
+class MergeCustomerCard:
+    """只包含合并复核所需的安全标量与关联数量。"""
 
-    identities: int
-    conversations: int
-    orders: int
-    tasks: int
+    id: int
+    display_name: str
+    identity_count: int
+    conversation_count: int
+    order_count: int
+    task_count: int
 
 
 class CustomerAdminRepository(Protocol):
@@ -186,15 +188,19 @@ class CustomerAdminService:
         suggestion_id: int,
         administrator: Employee,
     ) -> dict[str, Any]:
-        """返回只含脱敏客户卡片的合并人工复核信息。"""
+        """返回不含电话、备注或正文的合并人工复核信息。"""
         self._require_admin(administrator)
         detail = await self._repository.merge_detail(suggestion_id)
         return {
             "suggestion": detail["suggestion"],
-            "source": self._card(detail["source"]),
-            "target": self._card(detail["target"]),
-            "source_counts": self._counts(detail["source_counts"]),
-            "target_counts": self._counts(detail["target_counts"]),
+            "source": self._merge_card(
+                detail["source"],
+                detail["source_counts"],
+            ),
+            "target": self._merge_card(
+                detail["target"],
+                detail["target_counts"],
+            ),
         }
 
     async def create_manual_merge(
@@ -303,13 +309,15 @@ class CustomerAdminService:
         return "已登记"
 
     @staticmethod
-    def _counts(counts: Any) -> CustomerAssociationCounts:
-        """把仓储聚合结果收窄为页面可使用的整数数据。"""
-        return CustomerAssociationCounts(
-            identities=int(counts["identities"]),
-            conversations=int(counts["conversations"]),
-            orders=int(counts["orders"]),
-            tasks=int(counts["tasks"]),
+    def _merge_card(customer: Any, counts: Any) -> MergeCustomerCard:
+        """把安全列投影和计数收窄为专用复核卡片。"""
+        return MergeCustomerCard(
+            id=int(customer["id"]),
+            display_name=str(customer["display_name"]),
+            identity_count=int(counts["identities"]),
+            conversation_count=int(counts["conversations"]),
+            order_count=int(counts["orders"]),
+            task_count=int(counts["tasks"]),
         )
 
     @staticmethod

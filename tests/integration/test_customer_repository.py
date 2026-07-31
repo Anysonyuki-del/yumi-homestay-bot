@@ -420,8 +420,16 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with factory() as session:
-        source = Customer(display_name="来源客户")
-        target = Customer(display_name="目标客户")
+        source = Customer(
+            display_name="来源客户",
+            note="REPOSITORY_SOURCE_SECRET_NOTE",
+            phone_ciphertext=b"source-secret-ciphertext",
+        )
+        target = Customer(
+            display_name="目标客户",
+            note="REPOSITORY_TARGET_SECRET_NOTE",
+            phone_ciphertext=b"target-secret-ciphertext",
+        )
         property_profile = PropertyProfile(id=101, title="测试房源")
         session.add_all([source, target, property_profile])
         await session.flush()
@@ -469,6 +477,21 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
             suggestion.id
         )
 
+        assert detail["source"] == {
+            "id": source.id,
+            "display_name": "来源客户",
+        }
+        assert detail["target"] == {
+            "id": target.id,
+            "display_name": "目标客户",
+        }
+        assert not isinstance(detail["source"], Customer)
+        assert not isinstance(detail["target"], Customer)
+        serialized = repr(detail)
+        assert "REPOSITORY_SOURCE_SECRET_NOTE" not in serialized
+        assert "REPOSITORY_TARGET_SECRET_NOTE" not in serialized
+        assert "source-secret-ciphertext" not in serialized
+        assert "target-secret-ciphertext" not in serialized
         assert detail["source_counts"] == {
             "identities": 1,
             "conversations": 1,
