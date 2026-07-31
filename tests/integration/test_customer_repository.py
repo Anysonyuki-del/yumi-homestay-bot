@@ -560,6 +560,19 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
             and "customers.note" not in statement
             for statement in customer_queries
         )
+        business_task_queries = [
+            statement
+            for statement in normalized_sql
+            if "business_tasks" in statement
+        ]
+        assert len(business_task_queries) == 2
+        assert all(
+            "count(business_tasks.id)" in statement
+            and "business_tasks.customer_id" in statement
+            and "business_tasks.description" not in statement
+            and "business_tasks.checklist" not in statement
+            for statement in business_task_queries
+        )
         assert detail["source_counts"] == {
             "identities": 1,
             "conversations": 1,
