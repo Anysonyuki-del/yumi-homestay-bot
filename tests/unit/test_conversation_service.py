@@ -619,6 +619,26 @@ async def test_guest_wording_filter_keeps_scenic_staff_reference() -> None:
 
 
 @pytest.mark.asyncio
+async def test_guest_task_reply_hides_staff_delivery_wording() -> None:
+    """服务安排回复不得把内部人员调度直接展示给客人。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="好的，这就帮您安排补两瓶矿泉水，马上让工作人员给您送过去，稍等一下就好。",
+            language=Language.ZH,
+            intent="room_service",
+            confidence=0.96,
+        )
+    )
+    service, _, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="需要补两瓶矿泉水"))
+
+    reply = wecom.guest_messages[0]
+    assert "工作人员" not in reply
+    assert "会尽快为您补上" in reply
+
+
+@pytest.mark.asyncio
 async def test_ai_task_failure_does_not_rollback_guest_reply(caplog) -> None:
     """任务落库失败不得撤销已经成功发送的客人回复。"""
     tasks = BusinessTaskStub(fail=True)

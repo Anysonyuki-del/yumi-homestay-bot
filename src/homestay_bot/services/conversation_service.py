@@ -616,6 +616,12 @@ class ConversationService:
             "会尽快为您",
             content,
         )
+        # 服务安排只向客人承诺已记录和持续跟进，不展示内部派送动作。
+        content = re.sub(
+            r"(?:马上|尽快)?让(?:工作人员|员工)(?:给您)?(?:送|补)[^，。！？]*",
+            "会尽快为您补上",
+            content,
+        )
         content = content.replace("确认后会尽快给您回复", "有结果后马上告诉您")
         return content
 
