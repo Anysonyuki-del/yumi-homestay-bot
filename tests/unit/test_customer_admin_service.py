@@ -113,6 +113,34 @@ class JobQueueStub:
         )
 
 
+class ManualMergeRepositoryStub:
+    """只暴露手动合并所需编号接口，禁止读取客户敏感资料。"""
+
+    def __init__(self) -> None:
+        """初始化手动合并调用记录。"""
+        self.manual_merge_calls: list[tuple[int, int, int]] = []
+
+    async def create_manual_merge_suggestion(
+        self,
+        source_customer_id,
+        target_customer_id,
+        administrator_id,
+    ):
+        """记录三个编号并返回固定建议编号。"""
+        self.manual_merge_calls.append(
+            (
+                source_customer_id,
+                target_customer_id,
+                administrator_id,
+            )
+        )
+        return 23
+
+    def __getattr__(self, name):
+        """任何额外仓储访问都视为读取了不必要的客户资料。"""
+        raise AssertionError(f"手动合并不应访问仓储属性：{name}")
+
+
 @pytest.mark.asyncio
 async def test_detail_masks_phone_and_never_returns_plaintext() -> None:
     """CRM 页面只能得到脱敏手机号。"""
@@ -192,7 +220,7 @@ async def test_linked_customer_enqueues_internal_tag_diff_only() -> None:
 async def test_staff_cannot_create_manual_merge() -> None:
     """普通员工不能创建手动合并建议。"""
     cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
-    repository = CustomerAdminRepositoryStub(cipher)
+    repository = ManualMergeRepositoryStub()
     service = CustomerAdminService(
         repository,
         cipher,
@@ -214,7 +242,7 @@ async def test_staff_cannot_create_manual_merge() -> None:
 async def test_manual_merge_rejects_same_customer() -> None:
     """手动合并不能把客户档案合并到自身。"""
     cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
-    repository = CustomerAdminRepositoryStub(cipher)
+    repository = ManualMergeRepositoryStub()
     service = CustomerAdminService(
         repository,
         cipher,
@@ -232,7 +260,7 @@ async def test_manual_merge_rejects_same_customer() -> None:
 async def test_admin_creates_manual_merge_with_identifiers_only() -> None:
     """管理员仅提交三个编号并得到待复核建议编号。"""
     cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
-    repository = CustomerAdminRepositoryStub(cipher)
+    repository = ManualMergeRepositoryStub()
     service = CustomerAdminService(
         repository,
         cipher,
