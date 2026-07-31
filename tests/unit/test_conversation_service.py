@@ -207,6 +207,22 @@ class WeComStub:
         self.internal_messages.append(content)
 
 
+class IdentityResolverStub:
+    """返回员工通知中使用的客服账号和客人显示名。"""
+
+    async def get_kf_account_name(self, open_kfid: str) -> str | None:
+        """返回固定客服账号名称。"""
+        return "YuMi客服"
+
+    async def get_kf_customer_name(
+        self,
+        open_kfid: str,
+        external_userid: str,
+    ) -> str | None:
+        """返回固定客人名称。"""
+        return "张三"
+
+
 class DeferredJobStub:
     """记录快速安抚阶段登记的最终处理任务。"""
 
@@ -310,6 +326,7 @@ def build_service(
     business_tasks=None,
     audit_events=None,
     jobs=None,
+    identity_resolver=None,
     defer_model: bool = False,
     commit_boundary=None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
@@ -334,6 +351,7 @@ def build_service(
         jobs=jobs,
         defer_model=defer_model,
         commit_boundary=commit_boundary,
+        identity_resolver=identity_resolver,
     )
     return service, conversations, selected_assistant, wecom
 
@@ -361,6 +379,26 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
     assert jobs.jobs[0][0] == "wecom_process_message"
     assert jobs.jobs[0][2] == "final:msg-1"
     assert commits == 1
+
+
+@pytest.mark.asyncio
+async def test_employee_notification_uses_display_names() -> None:
+    """员工通知不得展示客服账号 UID 和客人 UID。"""
+    service, conversations, _, wecom = build_service(
+        identity_resolver=IdentityResolverStub()
+    )
+
+    await service._notify_employee(
+        conversations.conversation,
+        incoming(content="需要补矿泉水"),
+        "新任务待确认",
+    )
+
+    notification = wecom.internal_messages[0]
+    assert "客服账号：YuMi客服" in notification
+    assert "客人：张三" in notification
+    assert "wk-1" not in notification
+    assert "wm-1" not in notification
 
 
 @pytest.mark.asyncio
@@ -635,7 +673,7 @@ async def test_guest_task_reply_hides_staff_delivery_wording() -> None:
 
     reply = wecom.guest_messages[0]
     assert "工作人员" not in reply
-    assert "会尽快为您补上" in reply
+    assert "已联系管家" in reply
 
 
 @pytest.mark.asyncio

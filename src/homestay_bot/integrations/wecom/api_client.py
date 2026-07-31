@@ -83,6 +83,11 @@ class WeComApiClient:
 
     async def list_kf_account_ids(self) -> list[str]:
         """读取全部微信客服账号，供回调丢失时自动补拉消息。"""
+        accounts = await self.list_kf_accounts()
+        return [item["open_kfid"] for item in accounts]
+
+    async def list_kf_accounts(self) -> list[dict[str, str]]:
+        """读取微信客服账号的稳定 ID 和展示名称。"""
         access_token = await self._get_access_token(self._kf_secret)
         response = await self._client.get(
             "/cgi-bin/kf/account/list",
@@ -92,10 +97,44 @@ class WeComApiClient:
         payload = response.json()
         self._raise_for_error(payload)
         return [
-            str(item["open_kfid"])
+            {
+                "open_kfid": str(item["open_kfid"]),
+                "name": str(item.get("name", "")).strip(),
+            }
             for item in payload.get("account_list", [])
             if item.get("open_kfid")
         ]
+
+    async def get_kf_account_name(self, open_kfid: str) -> str | None:
+        """按客服账号 ID 读取员工通知使用的客服名称。"""
+        for account in await self.list_kf_accounts():
+            if account["open_kfid"] == open_kfid:
+                return account["name"] or None
+        return None
+
+    async def get_kf_customer_name(
+        self,
+        open_kfid: str,
+        external_userid: str,
+    ) -> str | None:
+        """读取微信客服会话客人的昵称，查不到时由上层使用友好兜底名。"""
+        access_token = await self._get_access_token(self._kf_secret)
+        response = await self._client.post(
+            "/cgi-bin/kf/customer/batchget",
+            params={"access_token": access_token},
+            json={
+                "open_kfid": open_kfid,
+                "external_userid_list": [external_userid],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._raise_for_error(payload)
+        customers = payload.get("customer_list", [])
+        if not customers:
+            return None
+        nickname = str(customers[0].get("nickname", "")).strip()
+        return nickname or None
 
     async def sync_messages(
         self,

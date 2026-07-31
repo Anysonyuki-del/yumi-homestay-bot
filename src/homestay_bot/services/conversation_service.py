@@ -127,6 +127,20 @@ class WeComMessagingPort(Protocol):
         """通知值班员工处理人工会话。"""
 
 
+class WeComIdentityPort(Protocol):
+    """定义员工通知所需的企业微信展示名称查询接口。"""
+
+    async def get_kf_account_name(self, open_kfid: str) -> str | None:
+        """返回微信客服账号名称。"""
+
+    async def get_kf_customer_name(
+        self,
+        open_kfid: str,
+        external_userid: str,
+    ) -> str | None:
+        """返回微信客服客人昵称。"""
+
+
 class PendingApprovalPort(Protocol):
     """定义客人确认资料后创建待审批单的唯一入口。"""
 
@@ -233,6 +247,7 @@ class ConversationService:
         business_tasks: BusinessTaskPort | None = None,
         audit_events: ConversationAuditPort | None = None,
         jobs: ConversationJobPort | None = None,
+        identity_resolver: WeComIdentityPort | None = None,
         defer_model: bool = False,
         commit_boundary: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
@@ -252,6 +267,7 @@ class ConversationService:
         self._business_tasks = business_tasks
         self._audit_events = audit_events
         self._jobs = jobs
+        self._identity_resolver = identity_resolver
         self._defer_model = defer_model
         self._commit_boundary = commit_boundary
 
@@ -613,13 +629,18 @@ class ConversationService:
         )
         content = re.sub(
             r"会安排(?:工作人员|员工)[^。！？，]*?给您",
-            "会尽快为您",
+            "已联系管家，会尽快为您",
             content,
         )
         # 服务安排只向客人承诺已记录和持续跟进，不展示内部派送动作。
         content = re.sub(
             r"(?:马上|尽快)?让(?:工作人员|员工)(?:给您)?(?:送|补)[^，。！？]*",
-            "会尽快为您补上",
+            "已联系管家，会尽快为您补上",
+            content,
+        )
+        content = re.sub(
+            r"已提交(?:给)?(?:工作人员|员工)确认",
+            "已联系管家核实",
             content,
         )
         content = content.replace("确认后会尽快给您回复", "有结果后马上告诉您")
@@ -713,11 +734,34 @@ class ConversationService:
         reason: str,
     ) -> None:
         """向值班员工发送不包含接口密钥的会话摘要。"""
+        customer_service_name = "微信客服"
+        guest_name = "客人"
+        if self._identity_resolver is not None:
+            try:
+                customer_service_name = (
+                    await self._identity_resolver.get_kf_account_name(
+                        conversation.open_kfid
+                    )
+                    or customer_service_name
+                )
+                guest_name = (
+                    await self._identity_resolver.get_kf_customer_name(
+                        conversation.open_kfid,
+                        conversation.external_userid,
+                    )
+                    or guest_name
+                )
+            except Exception as error:
+                # 名称接口不可用不应阻塞任务通知，且不把 UID 回退给员工端。
+                logger.warning(
+                    "企业微信展示名称读取失败，使用友好名称：error_type=%s",
+                    type(error).__name__,
+                )
         await self._wecom.send_internal_text(
             agent_id=self._agent_id,
             employee_userids=self._duty_employee_userids,
             content=(
-                f"{reason}\n客服账号：{conversation.open_kfid}\n"
-                f"客人：{conversation.external_userid}\n消息：{message.content[:500]}"
+                f"{reason}\n客服账号：{customer_service_name}\n"
+                f"客人：{guest_name}\n消息：{message.content[:500]}"
             ),
         )

@@ -1312,6 +1312,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ),
                 audit_events=SQLAlchemyOperationsRepository(session),
                 jobs=SQLAlchemyJobRepository(session),
+                identity_resolver=wecom,
                 defer_model=not deferred,
                 commit_boundary=session.commit if not deferred else None,
             )

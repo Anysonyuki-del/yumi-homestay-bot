@@ -48,6 +48,39 @@ async def test_list_kf_account_ids_uses_customer_service_secret() -> None:
 
 
 @pytest.mark.asyncio
+async def test_identity_lookups_return_kf_and_customer_names() -> None:
+    """员工通知使用企业微信返回的客服账号名和客人昵称。"""
+    def responder(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/gettoken"):
+            return httpx.Response(
+                200,
+                json={"errcode": 0, "access_token": "kf-access", "expires_in": 7200},
+            )
+        if request.url.path.endswith("/kf/account/list"):
+            return httpx.Response(
+                200,
+                json={"errcode": 0, "account_list": [{"open_kfid": "wk-1", "name": "YuMi客服"}]},
+            )
+        assert request.url.path.endswith("/kf/customer/batchget")
+        return httpx.Response(
+            200,
+            json={"errcode": 0, "customer_list": [{"external_userid": "wm-1", "nickname": "张三"}]},
+        )
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        transport=httpx.MockTransport(responder),
+    )
+    try:
+        assert await client.get_kf_account_name("wk-1") == "YuMi客服"
+        assert await client.get_kf_customer_name("wk-1", "wm-1") == "张三"
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_sync_messages_uses_kf_token_and_cursor() -> None:
     """读取客服消息必须先取凭证，再提交回调中的同步 Token。"""
     requests: list[httpx.Request] = []
