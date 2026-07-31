@@ -1,6 +1,7 @@
 import re
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
@@ -10,6 +11,11 @@ from homestay_bot.domain.models import Employee
 from homestay_bot.routes.customers import router as customers_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.services.customer_admin_service import CustomerCard
+from homestay_bot.services.customer_errors import (
+    CustomerConflictError,
+    CustomerNotFoundError,
+    CustomerPermissionError,
+)
 
 
 class EmployeeAuthStub:
@@ -87,7 +93,7 @@ class CustomerAdminStub:
         """返回不包含手机号明文和密文的客户详情。"""
         self._require_admin(administrator)
         if customer_id != 7:
-            raise LookupError("客户不存在")
+            raise CustomerNotFoundError("客户不存在")
         return {
             "customer": self.card,
             "masked_phone": self.card.masked_phone,
@@ -101,7 +107,7 @@ class CustomerAdminStub:
         """返回合并前人工对比所需的脱敏信息。"""
         self._require_admin(administrator)
         if suggestion_id != 9:
-            raise LookupError("合并建议不存在")
+            raise CustomerNotFoundError("合并建议不存在")
         return {
             "suggestion": self.suggestion,
             "source": SimpleNamespace(
@@ -133,7 +139,7 @@ class CustomerAdminStub:
         if self.manual_merge_error is not None:
             raise self.manual_merge_error
         if source_customer_id == target_customer_id:
-            raise ValueError("不能将客户档案合并到自身")
+            raise CustomerConflictError("不能将客户档案合并到自身")
         self.manual_merge_calls.append(
             (source_customer_id, target_customer_id, administrator.id)
         )
@@ -192,7 +198,7 @@ class CustomerAdminStub:
     def _require_admin(administrator) -> None:
         """模拟服务层的管理员复核。"""
         if administrator.role is not EmployeeRole.ADMIN:
-            raise PermissionError("只有管理员可以管理客户")
+            raise CustomerPermissionError("只有管理员可以管理客户")
 
 
 def build_client(
@@ -465,6 +471,72 @@ def test_unknown_manual_merge_error_returns_redacted_server_error() -> None:
     assert response.json()["detail"] == "客户管理操作失败"
     assert "phone_ciphertext" not in response.text
     assert "SECRET_DATABASE_VALUE" not in response.text
+
+
+@pytest.mark.parametrize(
+    "error, secret",
+    [
+        (KeyError("SECRET_KEY"), "SECRET_KEY"),
+        (UnicodeError("SECRET_UNICODE_VALUE"), "SECRET_UNICODE_VALUE"),
+        (
+            UnicodeDecodeError(
+                "utf-8",
+                b"SECRET_DECODE_VALUE",
+                0,
+                1,
+                "SECRET_DECODE_REASON",
+            ),
+            "SECRET_DECODE_REASON",
+        ),
+    ],
+)
+def test_builtin_error_subclasses_return_redacted_server_error(
+    error: Exception,
+    secret: str,
+) -> None:
+    """内建异常即使继承查找或值错误，也不能碰撞领域映射。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    customers.manual_merge_error = error
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "8", "csrf_token": token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "客户管理操作失败"
+    assert secret not in response.text
+
+
+@pytest.mark.parametrize(
+    "error, expected_status",
+    [
+        (CustomerPermissionError("只有管理员可以管理客户"), 403),
+        (CustomerNotFoundError("目标客户不存在"), 404),
+        (CustomerConflictError("客户状态冲突"), 409),
+    ],
+)
+def test_customer_domain_errors_keep_stable_status(
+    error: Exception,
+    expected_status: int,
+) -> None:
+    """CRM 专用异常继续映射为稳定且可读的页面状态。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    customers.manual_merge_error = error
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "8", "csrf_token": token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == expected_status
+    assert response.json()["detail"] == str(error)
 
 
 def test_merge_review_explains_direction_and_safe_association_counts() -> None:

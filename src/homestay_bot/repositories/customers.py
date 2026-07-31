@@ -22,6 +22,11 @@ from homestay_bot.domain.models import (
     Employee,
     StayOrder,
 )
+from homestay_bot.services.customer_errors import (
+    CustomerConflictError,
+    CustomerNotFoundError,
+    CustomerPermissionError,
+)
 
 
 class SQLAlchemyCustomerRepository:
@@ -111,7 +116,7 @@ class SQLAlchemyCustomerRepository:
         """锁定管理员和两侧客户，幂等创建待二次确认的手动合并建议。"""
         administrator = await self._require_admin(administrator_id)
         if source_customer_id == target_customer_id:
-            raise ValueError("不能把客户合并到自身")
+            raise CustomerConflictError("不能把客户合并到自身")
 
         # 按主键顺序同时锁定两侧客户，降低并发反向操作形成死锁的风险。
         customers = list(
@@ -137,7 +142,7 @@ class SQLAlchemyCustomerRepository:
             or source.merged_into_customer_id is not None
             or target.merged_into_customer_id is not None
         ):
-            raise LookupError("来源或目标客户不存在或已经合并")
+            raise CustomerNotFoundError("来源或目标客户不存在或已经合并")
 
         existing = await self._session.scalar(
             select(CustomerMergeSuggestion)
@@ -213,7 +218,7 @@ class SQLAlchemyCustomerRepository:
         """返回管理员 CRM 需要的标签、摘要和待合并建议。"""
         customer = await self._session.get(Customer, customer_id)
         if customer is None or customer.merged_into_customer_id is not None:
-            raise LookupError("客户不存在或已经合并")
+            raise CustomerNotFoundError("客户不存在或已经合并")
         tags = list(
             (
                 await self._session.scalars(
@@ -275,7 +280,7 @@ class SQLAlchemyCustomerRepository:
             suggestion is None
             or suggestion.status is not CustomerMergeStatus.PENDING
         ):
-            raise LookupError("客户合并建议不存在或已经结束")
+            raise CustomerNotFoundError("客户合并建议不存在或已经结束")
         source = await self._safe_merge_customer(
             suggestion.source_customer_id
         )
@@ -283,7 +288,7 @@ class SQLAlchemyCustomerRepository:
             suggestion.target_customer_id
         )
         if source is None or target is None:
-            raise LookupError("合并建议关联的客户不存在")
+            raise CustomerNotFoundError("合并建议关联的客户不存在")
         return {
             "suggestion": suggestion,
             "source": source,
@@ -356,7 +361,7 @@ class SQLAlchemyCustomerRepository:
             .with_for_update()
         )
         if customer is None or customer.merged_into_customer_id is not None:
-            raise LookupError("客户不存在或已经合并")
+            raise CustomerNotFoundError("客户不存在或已经合并")
         requested = set(tag_ids)
         valid = set(
             (
@@ -369,7 +374,7 @@ class SQLAlchemyCustomerRepository:
             ).all()
         ) if requested else set()
         if valid != requested:
-            raise ValueError("包含不存在或停用的客户标签")
+            raise CustomerConflictError("包含不存在或停用的客户标签")
         links = list(
             (
                 await self._session.scalars(
@@ -421,7 +426,7 @@ class SQLAlchemyCustomerRepository:
         await self._require_admin(administrator_id)
         customer = await self._session.get(Customer, customer_id)
         if customer is None or customer.merged_into_customer_id is not None:
-            raise LookupError("客户不存在或已经合并")
+            raise CustomerNotFoundError("客户不存在或已经合并")
         customer.note = note or None
         self._add_customer_audit(
             administrator_id,
@@ -448,7 +453,7 @@ class SQLAlchemyCustomerRepository:
         )
         if summary is None:
             if await self._session.get(Customer, customer_id) is None:
-                raise LookupError("客户不存在")
+                raise CustomerNotFoundError("客户不存在")
             summary = CustomerContextSummary(customer_id=customer_id)
             self._session.add(summary)
         summary.short_summary = short_summary
@@ -502,9 +507,9 @@ class SQLAlchemyCustomerRepository:
             .with_for_update()
         )
         if suggestion is None:
-            raise LookupError("客户合并建议不存在")
+            raise CustomerNotFoundError("客户合并建议不存在")
         if suggestion.status is not CustomerMergeStatus.PENDING:
-            raise ValueError("客户合并建议已经结束")
+            raise CustomerConflictError("客户合并建议已经结束")
         suggestion.status = CustomerMergeStatus.REJECTED
         suggestion.reviewed_by = administrator.id
         suggestion.reviewed_at = datetime.now(UTC)
@@ -616,7 +621,7 @@ class SQLAlchemyCustomerRepository:
             )
         )
         if snapshot is None:
-            raise LookupError("客户合并建议不存在")
+            raise CustomerNotFoundError("客户合并建议不存在")
 
         # 已接受建议只做权限复核和只读链解析，不再参与写路径的行锁竞争。
         if snapshot.status is CustomerMergeStatus.ACCEPTED:
@@ -624,7 +629,7 @@ class SQLAlchemyCustomerRepository:
                 snapshot.target_customer_id
             )
         if snapshot.status is not CustomerMergeStatus.PENDING:
-            raise ValueError("客户合并建议已经结束")
+            raise CustomerConflictError("客户合并建议已经结束")
         snapshot_id = snapshot.id
         snapshot_source_id = snapshot.source_customer_id
         snapshot_target_id = snapshot.target_customer_id
@@ -693,25 +698,25 @@ class SQLAlchemyCustomerRepository:
             None,
         )
         if suggestion is None:
-            raise LookupError("客户合并建议不存在")
+            raise CustomerNotFoundError("客户合并建议不存在")
         if (
             suggestion.source_customer_id != snapshot_source_id
             or suggestion.target_customer_id != snapshot_target_id
         ):
-            raise ValueError("客户合并建议已发生变化")
+            raise CustomerConflictError("客户合并建议已发生变化")
         if suggestion.status is CustomerMergeStatus.ACCEPTED:
             return await self._resolve_final_customer(
                 suggestion.target_customer_id
             )
         if suggestion.status is not CustomerMergeStatus.PENDING:
-            raise ValueError("客户合并建议已经结束")
+            raise CustomerConflictError("客户合并建议已经结束")
 
         source = customers_by_id.get(suggestion.source_customer_id)
         target = customers_by_id.get(suggestion.target_customer_id)
         if target is None or target.merged_into_customer_id is not None:
-            raise LookupError("目标客户不存在或已经合并")
+            raise CustomerNotFoundError("目标客户不存在或已经合并")
         if source is None or source.merged_into_customer_id is not None:
-            raise ValueError("来源客户已失效或已经合并")
+            raise CustomerConflictError("来源客户已失效或已经合并")
 
         await self._session.execute(
             update(CustomerIdentity)
@@ -929,11 +934,11 @@ class SQLAlchemyCustomerRepository:
                 .where(Customer.id == current_id)
             )
             if customer is None:
-                raise LookupError("客户合并链指向不存在的客户")
+                raise CustomerNotFoundError("客户合并链指向不存在的客户")
             if customer.merged_into_customer_id is None:
                 return customer
             current_id = customer.merged_into_customer_id
-        raise ValueError("客户合并链存在循环")
+        raise CustomerConflictError("客户合并链存在循环")
 
     async def _require_admin_readonly(
         self,
@@ -950,7 +955,7 @@ class SQLAlchemyCustomerRepository:
             or not administrator.is_active
             or administrator.role is not EmployeeRole.ADMIN
         ):
-            raise PermissionError("只有管理员可以确认客户合并")
+            raise CustomerPermissionError("只有管理员可以确认客户合并")
         return administrator
 
     async def _require_admin(self, administrator_id: int) -> Employee:
@@ -965,7 +970,7 @@ class SQLAlchemyCustomerRepository:
             or not administrator.is_active
             or administrator.role is not EmployeeRole.ADMIN
         ):
-            raise PermissionError("只有管理员可以管理客户")
+            raise CustomerPermissionError("只有管理员可以管理客户")
         return administrator
 
     def _add_customer_audit(

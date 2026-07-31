@@ -3,6 +3,10 @@ from typing import Any, Protocol
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
+from homestay_bot.services.customer_errors import (
+    CustomerConflictError,
+    CustomerPermissionError,
+)
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 
 
@@ -212,7 +216,7 @@ class CustomerAdminService:
         """只允许管理员为两个不同客户创建待复核合并建议。"""
         self._require_admin(administrator)
         if source_customer_id == target_customer_id:
-            raise ValueError("不能将客户档案合并到自身")
+            raise CustomerConflictError("不能将客户档案合并到自身")
         return await self._repository.create_manual_merge_suggestion(
             source_customer_id,
             target_customer_id,
@@ -229,7 +233,7 @@ class CustomerAdminService:
         self._require_admin(administrator)
         cleaned = note.strip()
         if len(cleaned) > 2000:
-            raise ValueError("客户备注不得超过 2000 个字符")
+            raise CustomerConflictError("客户备注不得超过 2000 个字符")
         await self._repository.update_note(
             customer_id,
             cleaned,
@@ -250,7 +254,7 @@ class CustomerAdminService:
         short_value = short_summary.strip()
         long_value = long_summary.strip()
         if len(short_value) > 4000 or len(long_value) > 8000:
-            raise ValueError("客户摘要内容过长")
+            raise CustomerConflictError("客户摘要内容过长")
         await self._repository.update_summary(
             customer_id=customer_id,
             administrator_id=administrator.id,
@@ -327,4 +331,4 @@ class CustomerAdminService:
             not administrator.is_active
             or administrator.role is not EmployeeRole.ADMIN
         ):
-            raise PermissionError("只有管理员可以管理客户")
+            raise CustomerPermissionError("只有管理员可以管理客户")

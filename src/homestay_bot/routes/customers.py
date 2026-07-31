@@ -9,6 +9,11 @@ from fastapi.templating import Jinja2Templates
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.services.customer_errors import (
+    CustomerConflictError,
+    CustomerNotFoundError,
+    CustomerPermissionError,
+)
 
 router = APIRouter(prefix="/employee/customers")
 templates = Jinja2Templates(
@@ -148,11 +153,11 @@ def _consume_csrf(
 
 def _raise_page_error(error: Exception) -> None:
     """把客户服务领域异常转换为稳定 HTTP 状态。"""
-    if isinstance(error, PermissionError):
+    if isinstance(error, CustomerPermissionError):
         raise HTTPException(status_code=403, detail=str(error)) from error
-    if isinstance(error, LookupError):
+    if isinstance(error, CustomerNotFoundError):
         raise HTTPException(status_code=404, detail=str(error)) from error
-    if isinstance(error, ValueError):
+    if isinstance(error, CustomerConflictError):
         raise HTTPException(status_code=409, detail=str(error)) from error
     # 未知异常可能携带 SQL 或敏感值，只向页面返回统一文案。
     raise HTTPException(
