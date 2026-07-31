@@ -181,7 +181,7 @@ async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
     assert "每项活动日期必须注明完整年份" in request["system"]
     assert "优先选出最值得推荐的3项" in request["system"]
     assert "700至900字" in request["system"]
-    assert request["max_tokens"] == 1100
+    assert request["max_tokens"] == 3000
     assert "参考来源：武汉市文化和旅游局" in result
     assert "https://" not in result
     assert statuses == ["ok"]

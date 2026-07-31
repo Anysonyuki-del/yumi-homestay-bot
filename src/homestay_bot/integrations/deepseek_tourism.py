@@ -302,7 +302,8 @@ class DeepSeekTourismSearcher:
         try:
             response = await self._client.messages.create(
                 model=self._model,
-                max_tokens=1100,
+                # 兼容 DeepSeek 思考块与多轮搜索工具结果，避免正文在预算耗尽前缺失。
+                max_tokens=3000,
                 system=system,
                 messages=[{"role": "user", "content": question}],
                 tools=[

@@ -528,9 +528,13 @@ async def test_long_general_reply_is_semantically_refined_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tourism_reply_skips_second_model_refinement() -> None:
-    """已由联网搜索选优并校验的旅游回复不得再次串行调用模型。"""
-    client = ChatClientStub([])
+async def test_tourism_reply_is_refined_for_guest_readability() -> None:
+    """长旅游回复应精简排版，并保留查询日期和来源证据。"""
+    refined_reply = (
+        "精选建议：\n1. 东湖适合散步。\n2. 黄鹤楼适合首次到访。\n"
+        "查询日期：2026-07-30\n参考来源：武汉市文化和旅游局"
+    )
+    client = ChatClientStub([json.dumps({"reply_text": refined_reply}, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
         tourism_searcher=LongTourismStub(),
@@ -545,10 +549,12 @@ async def test_tourism_reply_skips_second_model_refinement() -> None:
         messages=[{"role": "user", "content": "武汉最近有什么好玩的？"}],
     )
 
-    assert decision.reply_text.startswith("武汉旅游建议。")
+    assert decision.reply_text.startswith("精选建议：")
     assert "查询日期：2026-07-30" in decision.reply_text
     assert "参考来源：武汉市文化和旅游局" in decision.reply_text
-    assert client.chat.completions.requests == []
+    assert len(client.chat.completions.requests) == 1
+    assert "不得新增事实" in client.chat.completions.requests[0]["messages"][0]["content"]
+    assert "短段落或项目符号" in client.chat.completions.requests[0]["messages"][0]["content"]
 
 
 @pytest.mark.asyncio
@@ -588,9 +594,11 @@ async def test_refinement_failure_keeps_original_reply_for_hard_limit_fallback(
 
 
 @pytest.mark.asyncio
-async def test_tourism_reply_preserves_validated_evidence_without_chat_call() -> None:
-    """旅游入口应原样保留搜索层附加的日期和来源证据。"""
-    client = ChatClientStub([])
+async def test_tourism_refinement_failure_preserves_validated_evidence(
+    caplog,
+) -> None:
+    """旅游精简失败时应保留搜索层附加的日期和来源证据。"""
+    client = ChatClientStub(["{}"])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
         tourism_searcher=LongTourismStub(),
@@ -607,7 +615,11 @@ async def test_tourism_reply_preserves_validated_evidence_without_chat_call() ->
 
     assert "查询日期：2026-07-30" in decision.reply_text
     assert "参考来源：武汉市文化和旅游局" in decision.reply_text
-    assert client.chat.completions.requests == []
+    assert len(client.chat.completions.requests) == 1
+    assert any(
+        "DeepSeek 回复精简失败" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

@@ -642,6 +642,7 @@ class DeepSeekGuestAssistant:
                             "你是民宿客服回复编辑。请精简选优原回复，"
                             "目标不超过1000个字符；保留关键事实、日期、"
                             "房态、价格说明、风险提示、查询日期和来源名称。"
+                            "使用短段落或项目符号，方便旅客快速阅读。"
                             "不得新增事实，不得添加链接，不得改变原意。"
                             "只输出 JSON：{\"reply_text\":\"精简后的完整回复\"}。"
                         ),
@@ -684,6 +685,8 @@ class DeepSeekGuestAssistant:
                 language=language,
                 queried_on=local_today,
             )
+            # 联网搜索负责事实和来源校验，统一精简层负责旅客可读性与版式。
+            reply = await self._refine_reply(reply)
             return AssistantDecision(
                 reply_text=reply,
                 language=language,

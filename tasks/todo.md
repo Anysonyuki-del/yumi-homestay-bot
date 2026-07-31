@@ -1750,3 +1750,116 @@ Expected: 全部通过；真实契约测试只在未显式启用时跳过；页�
 - 实现复核：手动建议、脱敏预览、CSRF 二次确认、原子迁移、幂等重放、锁顺序、查询隐私和异常脱敏均已覆盖。
 - 验证复核：安全专项 `64 passed`，全量 `392 passed, 15 skipped`，Ruff、mypy 和 `git diff --check` 通过；真实本机业务验收完成。
 - 未覆盖项：15 个真实外部契约测试仍因未显式开启而跳过；云服务器部署和外部渠道真实消息回归不属于本次本地一期验收。
+
+### Task 15：一期真实外部链路最终验收与证据回填
+
+**Goal：** 在不增加业务功能和不触发凭证发送的前提下，验证百居易、DeepSeek、企业微信与本机消息处理链路，并明确记录仍受外部凭据限制的验收项。
+
+**范围与停止条件：**
+
+- 只使用现有测试客户和测试问题；不创建真实订单、不修改百居易数据、不修改房间可入住状态、不上传凭证照片。
+- 不把本地健康检查、模拟 Webhook 或单元测试当作企业微信端到端通过。
+- 任一外部链路失败、客户归属异常、敏感信息泄露或产生凭证投递时立即停止，不在验收过程中直接修复代码。
+- 缺陷必须另行形成 Spec 后再实施；本任务只记录证据和验收结论。
+
+**涉及文件与接口：**
+
+- Read: `src/homestay_bot/application.py::_run_wecom_poll_loop()`、`handle_message()`、`_run_hostex_reconcile_loop()`
+- Read: `src/homestay_bot/integrations/hostex_client.py::HostexClient`
+- Read: `src/homestay_bot/integrations/deepseek_client.py::DeepSeekGuestAssistant.respond()`
+- Test: `tests/contract/test_hostex_contract.py`
+- Test: `tests/contract/test_deepseek_contract.py`
+- Test: `tests/contract/test_wecom_contract.py`
+- Verify: `/Users/rin/Library/Application Support/HomestayBot/homestay.db`、LaunchAgent 健康端点与运行日志
+
+- [x] **Step 1：建立验收前只读基线**
+
+记录当前 LaunchAgent PID、`/health` 响应、数据库 schema、测试客户/订单/会话/任务/发件箱/凭证数量和最近审计数量。不得读取或输出电话密文、模型密钥、聊天正文或房间凭证。
+
+Run:
+
+```bash
+launchctl print gui/$(id -u)/com.rin.homestay-bot
+curl --max-time 5 -sS http://127.0.0.1:8010/health
+sqlite3 -readonly "$HOMESTAY_DB" 'PRAGMA user_version; SELECT version_num FROM alembic_version;'
+```
+
+Expected: LaunchAgent running；健康端点 HTTP 200；schema 为 `0007_lifecycle_reminders`；测试客户 5/7、订单 `5-6BUAAN7FE` 和会话归属均可核对。
+
+执行结果（2026-08-02）：LaunchAgent PID `20227` running；健康端点 HTTP 200；schema `0007_lifecycle_reminders`；客户 7 已合并至 5，订单和会话均归客户 5；凭证投递和房间凭证数量均为 0。
+
+- [x] **Step 2：执行百居易真实只读契约**
+
+仅在当前 shell 临时设置 `RUN_LIVE_CONTRACT_TESTS=1`，运行房源、房态、参考价格、收益方式和近期订单对账测试；不写入 `.env`，不调用创建订单接口。
+
+Run:
+
+```bash
+RUN_LIVE_CONTRACT_TESTS=1 ../../.venv/bin/pytest -q tests/contract/test_hostex_contract.py
+```
+
+Expected: 两项真实只读查询通过；Webhook 白名单测试不保存电话或门锁密码。
+
+执行结果（2026-08-02）：`RUN_LIVE_CONTRACT_TESTS=1 pytest -q tests/contract/test_hostex_contract.py`，`3 passed`。
+
+- [x] **Step 3：执行 DeepSeek 真实契约**
+
+仅在当前 shell 临时设置 `RUN_DEEPSEEK_CONTRACT=1`，运行普通回答、房源缺口、旅游近期窗口、FAQ 草稿、摘要脱敏和待确认任务提取测试。不得把真实响应原文写入日志或任务记录。
+
+Run:
+
+```bash
+RUN_DEEPSEEK_CONTRACT=1 ../../.venv/bin/pytest -q tests/contract/test_deepseek_contract.py
+```
+
+Expected: 真实模型返回结构化决策；未知房源事实包含 `【待管理员确认】`；回复不含链接；摘要不含手机号、密码和详细门牌。
+
+执行结果（2026-08-02）：首次运行发现旅游搜索预算不足，`7 passed, 3 failed`；修复后最终运行 `RUN_DEEPSEEK_CONTRACT=1 pytest -q tests/contract/test_deepseek_contract.py` 为 `10 passed`。旅游联网预算调整为 3000 token，返回结果统一经过一次语义精简和旅客可读排版，精简失败仍保留已验证日期与来源并交由 1500 字硬上限兜底。全量测试 `392 passed, 15 skipped`，未发送企业微信测试消息。
+
+- [ ] **Step 4：完成企业微信客服账号与消息链路验收**
+
+先运行只读客服账号发现；由于测试专用同步 Token 当前缺失，不得伪造参数。使用现有测试客户发送以下受控问题，并逐条等待系统处理后核对：
+
+```text
+当前房间预订状况
+今天入住明天退房
+武汉最近有什么好玩的？
+可以帮我补两瓶矿泉水吗？
+```
+
+每条消息验证：入站消息归属正确客户；回复对应最新问题；普通问题由机器人回答；日期问题触发百居易房态查询；服务需求只生成待确认任务；旅游回复无链接；发件箱最终状态与实际发送结果一致。
+
+Run:
+
+```bash
+../../.venv/bin/pytest -q tests/contract/test_wecom_contract.py::test_live_wecom_can_list_customer_service_accounts
+```
+
+Expected: 客服账号发现通过；真实消息回归结果逐条记录。`WECOM_TEST_SYNC_TOKEN` 或 `WECOM_TEST_OPEN_KFID` 缺失时，将消息补拉契约明确标记为 skipped，不得标记通过。
+
+- [ ] **Step 5：执行安全与隔离核验**
+
+对测试前后数量做差异比对，确认不同客户的消息、摘要、订单和任务未串线；确认没有新增凭证投递、房间凭证或二维码；审计不包含电话、聊天正文、摘要正文、密码和密钥；普通员工无管理员客户合并权限。
+
+Run:
+
+```bash
+sqlite3 -readonly "$HOMESTAY_DB" 'SELECT COUNT(*) FROM credential_deliveries; SELECT COUNT(*) FROM room_credentials;'
+../../.venv/bin/pytest -q tests/integration/test_customer_routes.py tests/integration/test_task_routes.py tests/integration/test_credential_delivery.py
+```
+
+Expected: 凭证投递和房间凭证数量不因本次验收增加；权限与安全测试通过。
+
+- [ ] **Step 6：回填证据并提交验收记录**
+
+只更新本任务清单的勾选状态和 Review；分别记录百居易、DeepSeek、企业微信客服账号发现、企业微信消息补拉和真实消息回归的通过/跳过/失败状态。若有失败，保留失败原因与下一步 Spec，不修改业务代码。
+
+Run:
+
+```bash
+git diff --check
+git add tasks/todo.md
+git commit -m "chore: record phase one external acceptance"
+```
+
+Expected: 只提交验收记录；工作区干净；不合并 `main`，不部署云服务器。
