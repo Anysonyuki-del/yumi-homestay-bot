@@ -178,3 +178,60 @@ async def test_context_follows_processing_order_when_timestamps_use_different_zo
         ]
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_context_is_bounded_by_source_message_and_ack_does_not_consume_limit() -> None:
+    """最终模型只能读取来源消息及之前的正式文本，安抚不占上下文条数。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 1, tzinfo=UTC)
+
+    async with factory() as session:
+        conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+        session.add(conversation)
+        await session.flush()
+        session.add_all(
+            [
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="guest-1",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content="今天入住明天退房",
+                    sent_at=now,
+                ),
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="ack-1",
+                    origin=MessageOrigin.BOT,
+                    message_type="ack",
+                    content="收到啦，我来帮您看看。",
+                    sent_at=now,
+                ),
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="guest-2",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content="可以补两瓶矿泉水吗？",
+                    sent_at=now,
+                ),
+            ]
+        )
+        await session.commit()
+        messages = MessageService(SQLAlchemyMessageRepository(session))
+
+        context = await messages.build_context(
+            conversation.id,
+            limit=3,
+            through_external_message_id="guest-1",
+        )
+
+        assert context == [
+            {"role": "user", "content": "今天入住明天退房"}
+        ]
+
+    await engine.dispose()

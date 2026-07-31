@@ -250,6 +250,7 @@ class Worker[JobType: WorkerJob]:
         "hostex_event",
         "faq_draft_generate",
         "customer_tag_sync",
+        "wecom_process_message",
     }
 
     def __init__(

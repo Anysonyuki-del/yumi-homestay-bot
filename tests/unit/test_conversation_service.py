@@ -69,14 +69,42 @@ class MessageServiceStub:
         self.bot_messages.append((conversation_id, message_id, content))
 
     async def build_context(
-        self, conversation_id: int, limit: int = 20
+        self,
+        conversation_id: int,
+        limit: int = 20,
+        through_external_message_id: str | None = None,
     ) -> list[dict[str, str]]:
         """把测试中已记录的客人文本转换为模型历史。"""
+        recorded = self.recorded
+        if through_external_message_id is not None:
+            boundary = next(
+                (
+                    index + 1
+                    for index, item in enumerate(recorded)
+                    if item.msgid == through_external_message_id
+                ),
+                len(recorded),
+            )
+            recorded = recorded[:boundary]
         return [
             {"role": "user", "content": item.content}
-            for item in self.recorded[-limit:]
+            for item in recorded[-limit:]
             if item.origin is MessageOrigin.GUEST and item.msgtype == "text"
         ]
+
+    async def has_newer_guest_message(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源消息之后是否已有更新客人消息。"""
+        guest_messages = [
+            item for item in self.recorded if item.origin is MessageOrigin.GUEST
+        ]
+        for index, item in enumerate(guest_messages):
+            if item.msgid == external_message_id:
+                return index < len(guest_messages) - 1
+        return False
 
 
 class CustomerProfileStub:
@@ -336,6 +364,29 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
 
 
 @pytest.mark.asyncio
+async def test_deferred_final_is_discarded_after_newer_guest_message() -> None:
+    """同一会话已有新问题时，旧问题的最终回复不得再发给客人。"""
+    messages = MessageServiceStub()
+    first = incoming(content="今天入住明天退房")
+    second = IncomingMessage(
+        msgid="msg-2",
+        open_kfid=first.open_kfid,
+        external_userid=first.external_userid,
+        origin=MessageOrigin.GUEST,
+        msgtype="text",
+        content="可以补两瓶矿泉水吗？",
+        sent_at=first.sent_at,
+    )
+    messages.recorded.extend([first, second])
+    service, _, assistant, wecom = build_service(messages=messages)
+
+    await service.process_recorded_message(first)
+
+    assert assistant.calls == 0
+    assert wecom.guest_messages == []
+
+
+@pytest.mark.asyncio
 async def test_first_message_links_formal_customer_before_recording() -> None:
     """首次消息进入上下文前必须建立客户并关联当前会话。"""
     profiles = CustomerProfileStub()
@@ -495,6 +546,76 @@ async def test_ai_task_is_recorded_after_guest_reply_and_notifies_staff() -> Non
     assert tasks.calls[0]["customer_id"] == 42
     assert tasks.calls[0]["source_message_id"] == "msg-1"
     assert "新任务待确认" in wecom.internal_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_guest_task_reply_hides_natural_staff_confirmation_wording() -> None:
+    """客人任务回复需保留温暖跟进语义，但不得泄露内部员工确认流程。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text=(
+                "好的，您需要补充两瓶矿泉水，没问题！我已经记下了，"
+                "会安排工作人员在处理房间时给您补上。"
+                "不过最终能否安排到位，还需要我这边跟员工确认一下，"
+                "确认后会尽快给您回复，请稍等哦。"
+            ),
+            language=Language.ZH,
+            intent="room_service",
+            confidence=0.96,
+        )
+    )
+    service, _, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="可以帮我补两瓶矿泉水吗？"))
+
+    reply = wecom.guest_messages[0]
+    assert "两瓶矿泉水" in reply
+    assert "进一步核实" in reply
+    assert "有结果后马上告诉您" in reply
+    assert "员工" not in reply
+    assert "工作人员" not in reply
+
+
+@pytest.mark.asyncio
+async def test_guest_wording_filter_preserves_refund_facts() -> None:
+    """退款回复可隐藏内部角色，但不得删除金额核实对象和不确定性。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text=(
+                "退款金额需要跟工作人员确认原支付记录，"
+                "确认后才能告知您。"
+            ),
+            language=Language.ZH,
+            intent="refund",
+            confidence=0.8,
+        )
+    )
+    service, _, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="这个订单能退款多少？"))
+
+    reply = wecom.guest_messages[0]
+    assert "退款金额" in reply
+    assert "原支付记录" in reply
+    assert "进一步核实" in reply
+
+
+@pytest.mark.asyncio
+async def test_guest_wording_filter_keeps_scenic_staff_reference() -> None:
+    """景区等外部工作人员不是民宿内部流程，不得被错误改写。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="到黄鹤楼后可以咨询景区工作人员确认寄存点位置。",
+            language=Language.ZH,
+            intent="tourism",
+            confidence=0.9,
+        )
+    )
+    service, _, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="黄鹤楼哪里能寄存行李？"))
+
+    assert "景区工作人员" in wecom.guest_messages[0]
 
 
 @pytest.mark.asyncio

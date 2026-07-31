@@ -71,9 +71,19 @@ class ConversationMessageService(Protocol):
         """保存机器人出站消息。"""
 
     async def build_context(
-        self, conversation_id: int, limit: int = 20
+        self,
+        conversation_id: int,
+        limit: int = 20,
+        through_external_message_id: str | None = None,
     ) -> list[dict[str, str]]:
         """返回有限的客人与机器人历史上下文。"""
+
+    async def has_newer_guest_message(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源消息后是否已经有更新的客人问题。"""
 
 
 class GuestAssistantPort(Protocol):
@@ -104,8 +114,8 @@ class WeComMessagingPort(Protocol):
 
     async def send_text(
         self, open_kfid: str, external_userid: str, content: str
-    ) -> str:
-        """发送客人文本并返回消息编号。"""
+    ) -> str | None:
+        """发送客人文本并返回消息编号；重复阶段返回空值。"""
 
     async def send_internal_text(
         self,
@@ -303,7 +313,16 @@ class ConversationService:
     async def process_recorded_message(self, message: IncomingMessage) -> None:
         """处理已完成入站提交的消息，供后台最终回复任务调用。"""
         conversation = await self._conversations.get_or_create(message)
-        await self._process_model_reply(conversation, message)
+        if await self._messages.has_newer_guest_message(
+            conversation.id,
+            message.msgid,
+        ):
+            return
+        await self._process_model_reply(
+            conversation,
+            message,
+            discard_if_stale=True,
+        )
 
     async def _stage_fast_ack(
         self,
@@ -340,6 +359,8 @@ class ConversationService:
         self,
         conversation: Conversation,
         message: IncomingMessage,
+        *,
+        discard_if_stale: bool = False,
     ) -> None:
         """执行耗时模型和业务副作用；快速安抚已在前一事务发送。"""
 
@@ -352,7 +373,11 @@ class ConversationService:
             decision = await self._assistant.respond(
                 guest_identifier=message.external_userid,
                 language=conversation.language,
-                messages=await self._messages.build_context(conversation.id, limit=3),
+                messages=await self._messages.build_context(
+                    conversation.id,
+                    limit=3,
+                    through_external_message_id=message.msgid,
+                ),
                 customer_context=model_context,
             )
         except TourismSearchError as error:
@@ -360,6 +385,11 @@ class ConversationService:
             return
         except AssistantUnavailableError:
             await self._escalate_assistant_failure(conversation, message)
+            return
+        if discard_if_stale and await self._messages.has_newer_guest_message(
+            conversation.id,
+            message.msgid,
+        ):
             return
         reply_text = self._warm_guest_reply(
             self._limit_assistant_reply(decision.reply_text)
@@ -536,6 +566,8 @@ class ConversationService:
             conversation.external_userid,
             content,
         )
+        if message_id is None:
+            return
         if message_type == "text":
             await self._messages.record_bot(conversation.id, message_id, content)
         else:
@@ -563,6 +595,28 @@ class ConversationService:
         }
         for source, target in replacements.items():
             content = content.replace(source, target)
+        # 只替换内部角色短语，保留退款对象、核实依据等业务事实。
+        content = re.sub(
+            r"(?:跟|与)(?:工作人员|员工)确认",
+            "进一步核实",
+            content,
+        )
+        content = re.sub(
+            r"(?:需|需要)(?:工作人员|员工)(?:进一步|再)?确认",
+            "需要进一步核实",
+            content,
+        )
+        content = re.sub(
+            r"(?:请|由)(?:工作人员|员工)(?:进一步|再)?确认",
+            "我会尽快为您核实",
+            content,
+        )
+        content = re.sub(
+            r"会安排(?:工作人员|员工)[^。！？，]*?给您",
+            "会尽快为您",
+            content,
+        )
+        content = content.replace("确认后会尽快给您回复", "有结果后马上告诉您")
         return content
 
     @staticmethod

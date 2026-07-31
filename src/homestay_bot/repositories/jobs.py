@@ -12,9 +12,22 @@ from homestay_bot.domain.models import Job
 class SQLAlchemyJobRepository:
     """使用数据库行锁实现可恢复的持久化任务队列。"""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        included_job_types: set[str] | None = None,
+        excluded_job_types: set[str] | None = None,
+    ) -> None:
         """绑定当前 worker 数据库会话。"""
         self._session = session
+        self._included_job_types = included_job_types
+        self._excluded_job_types = excluded_job_types or set()
+
+    async def exists_dedupe_key(self, dedupe_key: str) -> bool:
+        """判断幂等键是否已有任务，供分阶段出站避免重复写入。"""
+        statement = select(Job.id).where(Job.dedupe_key == dedupe_key)
+        return await self._session.scalar(statement) is not None
 
     async def enqueue(
         self,
@@ -46,12 +59,17 @@ class SQLAlchemyJobRepository:
     async def claim_next(self, *, now: datetime | None = None) -> Job | None:
         """使用 FOR UPDATE SKIP LOCKED 领取一项到期任务。"""
         claim_time = now or datetime.now(UTC)
+        conditions = [
+            Job.status == JobStatus.PENDING,
+            Job.available_at <= claim_time,
+        ]
+        if self._included_job_types is not None:
+            conditions.append(Job.job_type.in_(self._included_job_types))
+        if self._excluded_job_types:
+            conditions.append(Job.job_type.not_in(self._excluded_job_types))
         statement = (
             select(Job)
-            .where(
-                Job.status == JobStatus.PENDING,
-                Job.available_at <= claim_time,
-            )
+            .where(*conditions)
             .order_by(Job.available_at, Job.id)
             .with_for_update(skip_locked=True)
             .limit(1)

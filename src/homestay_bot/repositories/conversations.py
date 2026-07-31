@@ -1,6 +1,7 @@
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from homestay_bot.domain.enums import MessageOrigin
 from homestay_bot.domain.models import Conversation, Message
 from homestay_bot.services.message_service import IncomingMessage
 
@@ -56,18 +57,49 @@ class SQLAlchemyMessageRepository:
         await self._session.flush()
 
     async def list_recent(
-        self, conversation_id: int, limit: int
+        self,
+        conversation_id: int,
+        limit: int,
+        through_external_message_id: str | None = None,
     ) -> list[Message]:
         """按系统实际处理顺序读取最近消息，避免外部时区扰乱上下文。"""
+        conditions = [
+            Message.conversation_id == conversation_id,
+            Message.message_type == "text",
+        ]
+        if through_external_message_id is not None:
+            boundary = select(Message.id).where(
+                Message.external_message_id == through_external_message_id
+            ).scalar_subquery()
+            conditions.append(Message.id <= boundary)
         statement = (
             select(Message)
-            .where(Message.conversation_id == conversation_id)
+            .where(*conditions)
             .order_by(Message.id.desc())
             .limit(limit)
         )
         recent = list((await self._session.scalars(statement)).all())
         recent.reverse()
         return recent
+
+    async def has_newer_guest_message(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源消息之后是否已保存更新的客人文本。"""
+        boundary = select(Message.id).where(
+            Message.external_message_id == external_message_id
+        ).scalar_subquery()
+        statement = select(
+            exists().where(
+                Message.conversation_id == conversation_id,
+                Message.id > boundary,
+                Message.origin == MessageOrigin.GUEST,
+                Message.message_type == "text",
+            )
+        )
+        return bool(await self._session.scalar(statement))
 
     async def replace_external_message_id(
         self, temporary_id: str, external_message_id: str

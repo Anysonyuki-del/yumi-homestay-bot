@@ -29,9 +29,19 @@ class MessageRepository(Protocol):
         """保存一条入站或机器人消息。"""
 
     async def list_recent(
-        self, conversation_id: int, limit: int
+        self,
+        conversation_id: int,
+        limit: int,
+        through_external_message_id: str | None = None,
     ) -> list[Message]:
-        """按时间正序返回最近消息。"""
+        """按时间正序返回指定来源消息之前的最近消息。"""
+
+    async def has_newer_guest_message(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源消息之后是否已经出现更新的客人问题。"""
 
 
 class MessageService:
@@ -68,6 +78,8 @@ class MessageService:
         message_type: str = "text",
     ) -> None:
         """保存机器人已发送文本，便于审计和恢复对话上下文。"""
+        if await self._repository.exists(message_id):
+            return
         await self._repository.add(
             Message(
                 conversation_id=conversation_id,
@@ -81,10 +93,17 @@ class MessageService:
         )
 
     async def build_context(
-        self, conversation_id: int, limit: int = 20
+        self,
+        conversation_id: int,
+        limit: int = 20,
+        through_external_message_id: str | None = None,
     ) -> list[dict[str, str]]:
         """返回最近客人与机器人文本，人工消息绝不重新交给模型。"""
-        messages = await self._repository.list_recent(conversation_id, limit)
+        messages = await self._repository.list_recent(
+            conversation_id,
+            limit,
+            through_external_message_id,
+        )
         context: list[dict[str, str]] = []
         for message in messages:
             if message.message_type != "text" or not message.content:
@@ -94,3 +113,14 @@ class MessageService:
             elif message.origin is MessageOrigin.BOT:
                 context.append({"role": "assistant", "content": message.content})
         return context
+
+    async def has_newer_guest_message(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源消息之后是否已经保存新的客人文本。"""
+        return await self._repository.has_newer_guest_message(
+            conversation_id,
+            external_message_id,
+        )

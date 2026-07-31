@@ -177,10 +177,15 @@ class TransactionalOutboxWeCom:
         session: AsyncSession,
         *,
         source_message_id: str,
+        delivery_phase: str | None = None,
     ) -> None:
-        """绑定当前消息事务和稳定的来源消息编号。"""
+        """绑定来源消息及可选发送阶段，确保分阶段回复分别保持幂等。"""
         self._repository = SQLAlchemyJobRepository(session)
-        self._source_message_id = source_message_id
+        self._source_message_id = (
+            f"{source_message_id}:{delivery_phase}"
+            if delivery_phase
+            else source_message_id
+        )
         self._sequence = 0
 
     def _outbox_id(self, kind: str) -> str:
@@ -189,9 +194,16 @@ class TransactionalOutboxWeCom:
         raw_key = f"{self._source_message_id}:{kind}:{self._sequence}"
         return f"outbox:{hashlib.sha256(raw_key.encode()).hexdigest()}"
 
-    async def send_text(self, open_kfid: str, external_userid: str, content: str) -> str:
+    async def send_text(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        content: str,
+    ) -> str | None:
         """事务内登记客人回复，真实发送由 worker 在提交后执行。"""
         outbox_id = self._outbox_id("guest")
+        if await self._repository.exists_dedupe_key(outbox_id):
+            return None
         await self._repository.enqueue(
             "wecom_send_text",
             {
@@ -940,12 +952,18 @@ async def _run_worker_loop(
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
     deferred_message_handler: JobHandler | None = None,
+    included_job_types: set[str] | None = None,
+    excluded_job_types: set[str] | None = None,
 ) -> None:
     """持续处理持久化任务，并周期恢复五分钟前的遗留锁。"""
     while True:
         try:
             async with factory() as session:
-                repository = SQLAlchemyJobRepository(session)
+                repository = SQLAlchemyJobRepository(
+                    session,
+                    included_job_types=included_job_types,
+                    excluded_job_types=excluded_job_types,
+                )
                 await SQLAlchemyApprovalRepository(session).recover_stale_creating(
                     before=datetime.now(UTC) - timedelta(minutes=5)
                 )
@@ -1273,6 +1291,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 wecom=TransactionalOutboxWeCom(
                     session,
                     source_message_id=message.msgid,
+                    delivery_phase="final" if deferred else None,
                 ),
                 agent_id=settings.wecom_agent_id,
                 duty_employee_userids=duty_userids,
@@ -1533,6 +1552,26 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             ),
             lifecycle_handler_factory=build_lifecycle_handler,
             deferred_message_handler=handle_deferred_message,
+            excluded_job_types={"wecom_process_message"},
+        )
+    )
+    deferred_worker_task = asyncio.create_task(
+        _run_worker_loop(
+            app,
+            factory=factory,
+            handler=sync_handler,
+            wecom=wecom,
+            faq_draft_handler_factory=build_faq_draft_handler,
+            hostex_event_handler_factory=build_hostex_event_handler,
+            credential_part_handler_factory=build_credential_part_handler,
+            customer_tag_handler_factory=(
+                build_customer_tag_handler
+                if contact_client is not None
+                else None
+            ),
+            lifecycle_handler_factory=build_lifecycle_handler,
+            deferred_message_handler=handle_deferred_message,
+            included_job_types={"wecom_process_message"},
         )
     )
     poll_task = asyncio.create_task(
@@ -1580,6 +1619,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         background_tasks = (
             worker_task,
+            deferred_worker_task,
             poll_task,
             faq_maintenance_task,
             context_maintenance_task,

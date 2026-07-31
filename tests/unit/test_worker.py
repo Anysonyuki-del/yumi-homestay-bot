@@ -71,6 +71,27 @@ async def test_worker_executes_registered_handler() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deferred_message_failure_is_retryable() -> None:
+    """最终回复生成的暂时性失败应允许有限重试。"""
+    repository = RepositoryStub(
+        JobStub(job_type="wecom_process_message", payload={"msgid": "msg-1"})
+    )
+
+    async def handler(payload):
+        """模拟最终生成遇到暂时性异常。"""
+        raise RuntimeError("temporary")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"wecom_process_message": handler},
+    )
+
+    await worker.run_once()
+
+    assert repository.failure["retry_allowed"] is True
+
+
+@pytest.mark.asyncio
 async def test_worker_reports_success_only_after_final_commit() -> None:
     """成功回调必须发生在任务完成状态真正提交之后。"""
     job = JobStub(job_type="hostex_event")

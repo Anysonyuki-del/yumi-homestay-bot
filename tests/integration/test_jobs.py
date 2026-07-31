@@ -236,6 +236,106 @@ async def test_outbound_messages_are_committed_to_outbox_before_network_send() -
 
 
 @pytest.mark.asyncio
+async def test_ack_and_final_reply_use_different_outbox_keys() -> None:
+    """同一客人消息的安抚与最终回复必须各自创建发送任务。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        ack_outbox = TransactionalOutboxWeCom(
+            session,
+            source_message_id="msg-1",
+        )
+        final_outbox = TransactionalOutboxWeCom(
+            session,
+            source_message_id="msg-1",
+            delivery_phase="final",
+        )
+
+        await ack_outbox.send_text("wk-1", "wm-1", "收到啦，我来帮您看看。")
+        await final_outbox.send_text("wk-1", "wm-1", "已经为您查好啦。")
+        await session.commit()
+
+        jobs = list(
+            (
+                await session.scalars(
+                    select(Job).where(Job.job_type == "wecom_send_text")
+                )
+            ).all()
+        )
+        assert len(jobs) == 2
+        assert jobs[0].dedupe_key != jobs[1].dedupe_key
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_replayed_final_outbox_reports_existing_message() -> None:
+    """同一最终阶段重放时不得再次登记或记录客人消息。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        first = TransactionalOutboxWeCom(
+            session,
+            source_message_id="msg-1",
+            delivery_phase="final",
+        )
+        replay = TransactionalOutboxWeCom(
+            session,
+            source_message_id="msg-1",
+            delivery_phase="final",
+        )
+
+        first_id = await first.send_text("wk-1", "wm-1", "已经为您查好啦。")
+        replay_id = await replay.send_text("wk-1", "wm-1", "已经为您查好啦。")
+
+        assert first_id is not None
+        assert replay_id is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_job_repository_can_separate_fast_and_deferred_queues() -> None:
+    """快速发送 worker 与耗时最终生成 worker 必须领取不同任务类型。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        repository = SQLAlchemyJobRepository(session)
+        await repository.enqueue("wecom_send_text", {"content": "收到啦"})
+        await repository.enqueue("wecom_process_message", {"msgid": "msg-1"})
+        await session.commit()
+
+        fast_repository = SQLAlchemyJobRepository(
+            session,
+            excluded_job_types={"wecom_process_message"},
+        )
+        fast_job = await fast_repository.claim_next()
+        assert fast_job is not None
+        assert fast_job.job_type == "wecom_send_text"
+        await fast_repository.mark_completed(fast_job)
+        await session.commit()
+
+        deferred_repository = SQLAlchemyJobRepository(
+            session,
+            included_job_types={"wecom_process_message"},
+        )
+        deferred_job = await deferred_repository.claim_next()
+        assert deferred_job is not None
+        assert deferred_job.job_type == "wecom_process_message"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_job_dedupe_key_prevents_duplicate_callback_chain() -> None:
     """相同回调游标重复入队时只能保留一项任务。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
