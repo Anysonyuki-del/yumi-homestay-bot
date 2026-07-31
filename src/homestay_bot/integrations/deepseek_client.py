@@ -837,6 +837,7 @@ class DeepSeekGuestAssistant:
                             question_text,
                             property_knowledge_grounded=(
                                 property_knowledge_grounded
+                                or availability_fallback is not None
                             ),
                             faq_candidate_ids=faq_candidate_ids,
                         )

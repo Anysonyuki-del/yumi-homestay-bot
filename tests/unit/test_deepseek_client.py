@@ -176,8 +176,15 @@ class ToolCompletionsStub:
                 },
             )
         else:
+            payload = decision_payload()
+            payload.update(
+                {
+                    "reply_text": "当前有1间房可订。",
+                    "intent": "availability_query",
+                }
+            )
             message = SimpleNamespace(
-                content=json.dumps(decision_payload(), ensure_ascii=False),
+                content=json.dumps(payload, ensure_ascii=False),
                 tool_calls=None,
             )
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
@@ -864,7 +871,7 @@ async def test_current_booking_status_uses_today_to_tomorrow_availability() -> N
         tool_executor=executor,
     )
 
-    await assistant.respond(
+    decision = await assistant.respond(
         guest_identifier="wm-guest",
         language=Language.ZH,
         messages=[{"role": "user", "content": "当前房间预订状况"}],
@@ -885,6 +892,8 @@ async def test_current_booking_status_uses_today_to_tomorrow_availability() -> N
             },
         )
     ]
+    assert decision.reply_text == "当前有1间房可订。"
+    assert decision.knowledge_gap is False
 
 
 @pytest.mark.asyncio
