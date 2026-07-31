@@ -149,6 +149,7 @@ class SQLAlchemyCustomerRepository:
                 CustomerMergeSuggestion.status
                 == CustomerMergeStatus.PENDING,
             )
+            .order_by(CustomerMergeSuggestion.id)
             .with_for_update()
         )
         if existing is not None:
@@ -545,46 +546,110 @@ class SQLAlchemyCustomerRepository:
         suggestion_id: int,
         administrator_id: int,
     ) -> Customer:
-        """锁定建议与客户后迁移现有关系，任何失败均交给外层事务回滚。"""
-        administrator = await self._session.scalar(
-            select(Employee).where(Employee.id == administrator_id).with_for_update()
+        """按统一层级锁定管理员、客户和建议，并由外层事务处理提交或回滚。"""
+        # 无锁权限复核避免未授权调用者通过异常差异探测建议状态。
+        await self._require_admin_readonly(administrator_id)
+        # 先无锁读取建议快照，避免为了取得客户编号而提前锁住建议行。
+        snapshot = await self._session.scalar(
+            select(CustomerMergeSuggestion).where(
+                CustomerMergeSuggestion.id == suggestion_id
+            )
         )
-        if (
-            administrator is None
-            or not administrator.is_active
-            or administrator.role is not EmployeeRole.ADMIN
-        ):
-            raise PermissionError("只有管理员可以确认客户合并")
+        if snapshot is None:
+            raise LookupError("客户合并建议不存在")
 
-        suggestion = await self._session.scalar(
-            select(CustomerMergeSuggestion)
-            .where(CustomerMergeSuggestion.id == suggestion_id)
-            .with_for_update()
+        # 已接受建议只做权限复核和只读链解析，不再参与写路径的行锁竞争。
+        if snapshot.status is CustomerMergeStatus.ACCEPTED:
+            return await self._resolve_final_customer(
+                snapshot.target_customer_id
+            )
+        if snapshot.status is not CustomerMergeStatus.PENDING:
+            raise ValueError("客户合并建议已经结束")
+        snapshot_id = snapshot.id
+        snapshot_source_id = snapshot.source_customer_id
+        snapshot_target_id = snapshot.target_customer_id
+
+        administrator = await self._require_admin(administrator_id)
+        locked_customers = list(
+            (
+                await self._session.scalars(
+                    select(Customer)
+                    .where(
+                        Customer.id.in_(
+                            [
+                                snapshot_source_id,
+                                snapshot_target_id,
+                            ]
+                        )
+                    )
+                    .order_by(Customer.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        customers_by_id = {
+            customer.id: customer for customer in locked_customers
+        }
+
+        # 当前建议和所有涉及来源的待处理建议按主键升序一次锁齐。
+        locked_suggestions = list(
+            (
+                await self._session.scalars(
+                    select(CustomerMergeSuggestion)
+                    .where(
+                        (
+                            CustomerMergeSuggestion.id
+                            == snapshot_id
+                        )
+                        | (
+                            (
+                                (
+                                    CustomerMergeSuggestion.source_customer_id
+                                    == snapshot_source_id
+                                )
+                                | (
+                                    CustomerMergeSuggestion.target_customer_id
+                                    == snapshot_source_id
+                                )
+                            )
+                            & (
+                                CustomerMergeSuggestion.status
+                                == CustomerMergeStatus.PENDING
+                            )
+                        )
+                    )
+                    .order_by(CustomerMergeSuggestion.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+        )
+        suggestion = next(
+            (
+                item
+                for item in locked_suggestions
+                if item.id == snapshot_id
+            ),
+            None,
         )
         if suggestion is None:
             raise LookupError("客户合并建议不存在")
-
-        # 已接受建议重放时沿后续合并链返回当前最终主档，不再次迁移或追加正文。
+        if (
+            suggestion.source_customer_id != snapshot_source_id
+            or suggestion.target_customer_id != snapshot_target_id
+        ):
+            raise ValueError("客户合并建议已发生变化")
         if suggestion.status is CustomerMergeStatus.ACCEPTED:
             return await self._resolve_final_customer(
                 suggestion.target_customer_id
             )
-
-        target = await self._session.scalar(
-            select(Customer)
-            .where(Customer.id == suggestion.target_customer_id)
-            .with_for_update()
-        )
-        if target is None or target.merged_into_customer_id is not None:
-            raise LookupError("目标客户不存在或已经合并")
         if suggestion.status is not CustomerMergeStatus.PENDING:
             raise ValueError("客户合并建议已经结束")
 
-        source = await self._session.scalar(
-            select(Customer)
-            .where(Customer.id == suggestion.source_customer_id)
-            .with_for_update()
-        )
+        source = customers_by_id.get(suggestion.source_customer_id)
+        target = customers_by_id.get(suggestion.target_customer_id)
+        if target is None or target.merged_into_customer_id is not None:
+            raise LookupError("目标客户不存在或已经合并")
         if source is None or source.merged_into_customer_id is not None:
             raise ValueError("来源客户已失效或已经合并")
 
@@ -625,8 +690,8 @@ class SQLAlchemyCustomerRepository:
         suggestion.status = CustomerMergeStatus.ACCEPTED
         suggestion.reviewed_by = administrator.id
         suggestion.reviewed_at = datetime.now(UTC)
-        await self._close_source_pending_suggestions(
-            source.id,
+        self._close_source_pending_suggestions(
+            locked_suggestions,
             suggestion.id,
             administrator.id,
             suggestion.reviewed_at,
@@ -759,36 +824,24 @@ class SQLAlchemyCustomerRepository:
         target.version = (target.version or 0) + 1
         await self._session.delete(source)
 
-    async def _close_source_pending_suggestions(
-        self,
-        source_customer_id: int,
+    @staticmethod
+    def _close_source_pending_suggestions(
+        locked_suggestions: list[CustomerMergeSuggestion],
         accepted_suggestion_id: int,
         administrator_id: int,
         reviewed_at: datetime,
     ) -> None:
-        """拒绝所有涉及已合并来源的其他未决建议，避免继续操作失效档案。"""
-        await self._session.execute(
-            update(CustomerMergeSuggestion)
-            .where(
-                CustomerMergeSuggestion.id != accepted_suggestion_id,
-                CustomerMergeSuggestion.status
-                == CustomerMergeStatus.PENDING,
-                (
-                    CustomerMergeSuggestion.source_customer_id
-                    == source_customer_id
-                )
-                | (
-                    CustomerMergeSuggestion.target_customer_id
-                    == source_customer_id
-                ),
-            )
-            .values(
-                status=CustomerMergeStatus.REJECTED,
-                reason="source_customer_merged",
-                reviewed_by=administrator_id,
-                reviewed_at=reviewed_at,
-            )
-        )
+        """只修改已经按主键升序锁定的其他未决建议。"""
+        for suggestion in locked_suggestions:
+            if (
+                suggestion.id == accepted_suggestion_id
+                or suggestion.status is not CustomerMergeStatus.PENDING
+            ):
+                continue
+            suggestion.status = CustomerMergeStatus.REJECTED
+            suggestion.reason = "source_customer_merged"
+            suggestion.reviewed_by = administrator_id
+            suggestion.reviewed_at = reviewed_at
 
     @staticmethod
     def _append_merged_text(
@@ -806,7 +859,7 @@ class SQLAlchemyCustomerRepository:
         return merged[:limit]
 
     async def _resolve_final_customer(self, customer_id: int) -> Customer:
-        """锁定并沿合并链解析当前最终客户，检测异常循环或断链。"""
+        """只读沿合并链解析当前最终客户，检测异常循环或断链。"""
         visited: set[int] = set()
         current_id = customer_id
         while current_id not in visited:
@@ -814,7 +867,6 @@ class SQLAlchemyCustomerRepository:
             customer = await self._session.scalar(
                 select(Customer)
                 .where(Customer.id == current_id)
-                .with_for_update()
             )
             if customer is None:
                 raise LookupError("客户合并链指向不存在的客户")
@@ -822,6 +874,24 @@ class SQLAlchemyCustomerRepository:
                 return customer
             current_id = customer.merged_into_customer_id
         raise ValueError("客户合并链存在循环")
+
+    async def _require_admin_readonly(
+        self,
+        administrator_id: int,
+    ) -> Employee:
+        """只读复核活动管理员，供已完成建议的幂等重放使用。"""
+        administrator = await self._session.scalar(
+            select(Employee)
+            .where(Employee.id == administrator_id)
+            .execution_options(populate_existing=True)
+        )
+        if (
+            administrator is None
+            or not administrator.is_active
+            or administrator.role is not EmployeeRole.ADMIN
+        ):
+            raise PermissionError("只有管理员可以确认客户合并")
+        return administrator
 
     async def _require_admin(self, administrator_id: int) -> Employee:
         """锁定并复核活动管理员，避免只依赖页面层权限。"""

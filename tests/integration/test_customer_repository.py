@@ -89,6 +89,82 @@ class _RecordingMergeSession:
                 value.id = 41
 
 
+class _StopAfterSuggestionLocks(RuntimeError):
+    """表示锁序测试已记录到建议锁，无需继续执行合并写入。"""
+
+
+class _RecordingMergeLockSession:
+    """记录确认合并路径的加锁实体和客户锁顺序。"""
+
+    def __init__(self, source_id: int, target_id: int) -> None:
+        """按指定方向构造建议快照与两个客户。"""
+        self.administrator = SimpleNamespace(
+            id=1,
+            role=EmployeeRole.ADMIN,
+            is_active=True,
+        )
+        self.suggestion = SimpleNamespace(
+            id=31,
+            source_customer_id=source_id,
+            target_customer_id=target_id,
+            status=CustomerMergeStatus.PENDING,
+        )
+        self.customers = [
+            SimpleNamespace(id=customer_id, merged_into_customer_id=None)
+            for customer_id in sorted([source_id, target_id])
+        ]
+        self.locked_entities: list[type[object]] = []
+        self.customer_order_by: tuple[str, ...] = ()
+        self.suggestion_order_by: tuple[str, ...] = ()
+        self.locked_customer_ids: tuple[int, ...] = ()
+
+    async def scalar(self, statement):
+        """返回无锁建议快照或管理员，并记录旧式逐条锁行为。"""
+        entity = statement.column_descriptions[0]["entity"]
+        is_locked = statement._for_update_arg is not None
+        if entity is CustomerMergeSuggestion:
+            if is_locked:
+                self.locked_entities.append(entity)
+                raise _StopAfterSuggestionLocks
+            return self.suggestion
+        if entity is Employee:
+            if is_locked:
+                self.locked_entities.append(entity)
+            return self.administrator
+        if entity is Customer:
+            if is_locked:
+                self.locked_entities.append(entity)
+            customer_id = (
+                self.suggestion.target_customer_id
+                if len(self.locked_entities) == 3
+                else self.suggestion.source_customer_id
+            )
+            return next(
+                item for item in self.customers if item.id == customer_id
+            )
+        return None
+
+    async def scalars(self, statement):
+        """记录批量客户锁和建议锁，并在锁齐建议后停止。"""
+        entity = statement.column_descriptions[0]["entity"]
+        if statement._for_update_arg is not None:
+            self.locked_entities.append(entity)
+        if entity is Customer:
+            self.customer_order_by = tuple(
+                str(clause) for clause in statement._order_by_clauses
+            )
+            self.locked_customer_ids = tuple(
+                item.id for item in self.customers
+            )
+            return _RecordedScalarResult(self.customers)
+        if entity is CustomerMergeSuggestion:
+            self.suggestion_order_by = tuple(
+                str(clause) for clause in statement._order_by_clauses
+            )
+            raise _StopAfterSuggestionLocks
+        return _RecordedScalarResult([])
+
+
 @pytest.mark.asyncio
 async def test_customer_identity_and_conversation_share_customer() -> None:
     """客户身份、标签和会话必须稳定关联到同一个客户主档。"""
@@ -455,6 +531,48 @@ async def test_manual_merge_locks_administrator_and_both_customers() -> None:
     assert suggestion_id == 41
     assert session.scalar_statements[0]._for_update_arg is not None
     assert session.scalars_statements[0]._for_update_arg is not None
+    assert tuple(
+        str(clause)
+        for clause in session.scalars_statements[0]._order_by_clauses
+    ) == ("customers.id",)
+    assert session.scalar_statements[1]._for_update_arg is not None
+    assert tuple(
+        str(clause)
+        for clause in session.scalar_statements[1]._order_by_clauses
+    ) == ("customer_merge_suggestions.id",)
+    assert [
+        session.scalar_statements[0].column_descriptions[0]["entity"],
+        session.scalars_statements[0].column_descriptions[0]["entity"],
+        session.scalar_statements[1].column_descriptions[0]["entity"],
+    ] == [Employee, Customer, CustomerMergeSuggestion]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_id", "target_id"),
+    [(7, 8), (8, 7)],
+)
+async def test_merge_uses_same_lock_hierarchy_for_reverse_directions(
+    source_id: int,
+    target_id: int,
+) -> None:
+    """共享客户的正反合并都按员工、客户主键、建议主键顺序加锁。"""
+    session = _RecordingMergeLockSession(source_id, target_id)
+    repository = SQLAlchemyCustomerRepository(session)  # type: ignore[arg-type]
+
+    with pytest.raises(_StopAfterSuggestionLocks):
+        await repository.merge_locked(31, 1)
+
+    assert session.locked_entities == [
+        Employee,
+        Customer,
+        CustomerMergeSuggestion,
+    ]
+    assert session.customer_order_by == ("customers.id",)
+    assert session.locked_customer_ids == (7, 8)
+    assert session.suggestion_order_by == (
+        "customer_merge_suggestions.id",
+    )
 
 
 @pytest.mark.asyncio
