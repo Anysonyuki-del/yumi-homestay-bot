@@ -152,7 +152,13 @@ def _raise_page_error(error: Exception) -> None:
         raise HTTPException(status_code=403, detail=str(error)) from error
     if isinstance(error, LookupError):
         raise HTTPException(status_code=404, detail=str(error)) from error
-    raise HTTPException(status_code=409, detail=str(error)) from error
+    if isinstance(error, ValueError):
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    # 未知异常可能携带 SQL 或敏感值，只向页面返回统一文案。
+    raise HTTPException(
+        status_code=500,
+        detail="客户管理操作失败",
+    ) from error
 
 
 @router.get("", response_class=HTMLResponse)

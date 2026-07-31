@@ -202,6 +202,44 @@ async def test_customer_identity_and_conversation_share_customer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_customer_search_escapes_wildcards_and_limits_results() -> None:
+    """客户搜索按字面处理通配符，并始终最多返回五十条。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add_all(
+            [
+                Customer(display_name="普通客户"),
+                Customer(display_name="百分号%客户"),
+                Customer(display_name="下划线_客户"),
+                *[
+                    Customer(display_name=f"批量客户{index:02d}")
+                    for index in range(55)
+                ],
+            ]
+        )
+        await session.commit()
+        repository = SQLAlchemyCustomerRepository(session)
+
+        percent_matches = await repository.list_customers("%")
+        underscore_matches = await repository.list_customers("_")
+        all_customers = await repository.list_customers(None)
+
+        assert [customer.display_name for customer in percent_matches] == [
+            "百分号%客户"
+        ]
+        assert [customer.display_name for customer in underscore_matches] == [
+            "下划线_客户"
+        ]
+        assert len(all_customers) == 50
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_admin_can_edit_customer_crm_with_safe_audits() -> None:
     """CRM 写操作必须复核管理员身份，且审计不得复制备注或摘要正文。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

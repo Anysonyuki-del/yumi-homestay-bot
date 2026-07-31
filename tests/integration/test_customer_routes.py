@@ -73,6 +73,7 @@ class CustomerAdminStub:
         self.merge_calls: list[tuple[int, int, bool]] = []
         self.manual_merge_calls: list[tuple[int, int, int]] = []
         self.list_calls: list[tuple[str | None, int]] = []
+        self.manual_merge_error: Exception | None = None
 
     async def list_customers(self, query, administrator):
         """按测试查询返回安全客户卡片并记录管理员编号。"""
@@ -129,6 +130,8 @@ class CustomerAdminStub:
     ):
         """记录手动建议并稳定模拟自合并领域错误。"""
         self._require_admin(administrator)
+        if self.manual_merge_error is not None:
+            raise self.manual_merge_error
         if source_customer_id == target_customer_id:
             raise ValueError("不能将客户档案合并到自身")
         self.manual_merge_calls.append(
@@ -441,6 +444,27 @@ def test_manual_merge_self_target_returns_stable_conflict() -> None:
     assert response.json()["detail"] == "不能将客户档案合并到自身"
     assert replay.status_code == 409
     assert customers.manual_merge_calls == []
+
+
+def test_unknown_manual_merge_error_returns_redacted_server_error() -> None:
+    """未知异常返回统一错误，不能向管理员泄露 SQL 或秘密文本。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    customers.manual_merge_error = RuntimeError(
+        "SELECT phone_ciphertext FROM customers; SECRET_DATABASE_VALUE"
+    )
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "8", "csrf_token": token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "客户管理操作失败"
+    assert "phone_ciphertext" not in response.text
+    assert "SECRET_DATABASE_VALUE" not in response.text
 
 
 def test_merge_review_explains_direction_and_safe_association_counts() -> None:

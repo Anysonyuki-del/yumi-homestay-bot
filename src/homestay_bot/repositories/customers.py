@@ -186,15 +186,25 @@ class SQLAlchemyCustomerRepository:
         )
         cleaned = (query or "").strip()
         if cleaned:
-            pattern = f"%{cleaned[:100]}%"
+            # 先转义转义符自身，再把 SQL 通配符按普通字符搜索。
+            escaped = (
+                cleaned[:100]
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            pattern = f"%{escaped}%"
             statement = statement.where(
-                Customer.display_name.ilike(pattern)
-                | Customer.note.ilike(pattern)
+                Customer.display_name.ilike(pattern, escape="\\")
+                | Customer.note.ilike(pattern, escape="\\")
             )
         return list(
             (
                 await self._session.scalars(
-                    statement.order_by(Customer.updated_at.desc(), Customer.id)
+                    statement.order_by(
+                        Customer.updated_at.desc(),
+                        Customer.id,
+                    ).limit(50)
                 )
             ).all()
         )
