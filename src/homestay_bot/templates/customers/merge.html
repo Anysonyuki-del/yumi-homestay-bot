@@ -12,21 +12,33 @@
       <header class="page-header">
         <p class="eyebrow">合并建议 #{{ suggestion.id }}</p>
         <h1>复核客户合并</h1>
-        <p>仅当确认是同一位客户时才合并。合并后来源档案将归入目标档案。</p>
+        <p>仅当确认是同一位客户时才合并。来源档案将停用，目标档案将保留。</p>
       </header>
 
       <div class="compare-grid">
         <section class="action-panel">
-          <h2>来源档案</h2>
+          <h2>来源档案将停用</h2>
           <p><strong>{{ source.display_name }}</strong></p>
           <p>{{ source.masked_phone }}</p>
           <p>{{ source.note or "无员工备注" }}</p>
+          <p>
+            关联内容：身份 {{ source_counts.identities }} 个，
+            会话 {{ source_counts.conversations }} 个，
+            订单 {{ source_counts.orders }} 笔，
+            任务 {{ source_counts.tasks }} 项
+          </p>
         </section>
         <section class="action-panel">
-          <h2>目标档案</h2>
+          <h2>目标档案将保留</h2>
           <p><strong>{{ target.display_name }}</strong></p>
           <p>{{ target.masked_phone }}</p>
           <p>{{ target.note or "无员工备注" }}</p>
+          <p>
+            当前关联：身份 {{ target_counts.identities }} 个，
+            会话 {{ target_counts.conversations }} 个，
+            订单 {{ target_counts.orders }} 笔，
+            任务 {{ target_counts.tasks }} 项
+          </p>
         </section>
       </div>
 

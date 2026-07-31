@@ -83,6 +83,14 @@ class CustomerAdminServicePort(Protocol):
     ) -> None:
         """确认或拒绝客户合并建议。"""
 
+    async def create_manual_merge(
+        self,
+        source_customer_id: int,
+        target_customer_id: int,
+        administrator: Employee,
+    ) -> int:
+        """创建待二次确认的管理员手动合并建议。"""
+
 
 def _get_service(request: Request) -> CustomerAdminServicePort:
     """从应用状态读取客户管理服务。"""
@@ -228,13 +236,30 @@ async def review_customer_merge(
 
 
 @router.get("/{customer_id}", response_class=HTMLResponse)
-async def customer_detail(request: Request, customer_id: int) -> Response:
+async def customer_detail(
+    request: Request,
+    customer_id: int,
+    merge_query: Annotated[str | None, Query(max_length=100)] = None,
+) -> Response:
     """展示脱敏手机号、标签、备注、摘要和待合并建议。"""
     administrator = await _current_admin(request)
+    service = _get_service(request)
     try:
-        detail = await _get_service(request).get_detail(
+        detail = await service.get_detail(
             customer_id,
             administrator,
+        )
+        merge_targets = (
+            [
+                customer
+                for customer in await service.list_customers(
+                    merge_query,
+                    administrator,
+                )
+                if customer.id != customer_id
+            ]
+            if merge_query and merge_query.strip()
+            else []
         )
     except Exception as error:
         _raise_page_error(error)
@@ -243,6 +268,8 @@ async def customer_detail(request: Request, customer_id: int) -> Response:
         name="customers/detail.html",
         context={
             **detail,
+            "merge_query": merge_query or "",
+            "merge_targets": merge_targets,
             "csrf_token": _issue_csrf(
                 request,
                 namespace="customer_csrf",
@@ -272,6 +299,33 @@ def _customer_redirect(customer_id: int) -> RedirectResponse:
     """返回客户详情页的统一 303 跳转。"""
     return RedirectResponse(
         f"/employee/customers/{customer_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{customer_id}/merge/manual")
+async def create_manual_customer_merge(
+    request: Request,
+    customer_id: int,
+    target_customer_id: int = Form(),
+    csrf_token: str = Form(),
+) -> RedirectResponse:
+    """消耗详情页令牌后创建建议，并进入既有二次复核页。"""
+    administrator, service = await _customer_form_context(
+        request,
+        customer_id,
+        csrf_token,
+    )
+    try:
+        suggestion_id = await service.create_manual_merge(
+            customer_id,
+            target_customer_id,
+            administrator,
+        )
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        f"/employee/customers/merge/{suggestion_id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

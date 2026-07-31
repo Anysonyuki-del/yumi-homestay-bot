@@ -713,6 +713,22 @@ class SessionCustomerAdminService:
             )
             await session.commit()
 
+    async def create_manual_merge(
+        self,
+        source_customer_id: int,
+        target_customer_id: int,
+        administrator: Employee,
+    ) -> int:
+        """创建手动建议并提交，实际迁移仍等待二次确认。"""
+        async with self._factory() as session:
+            suggestion_id = await self._service(session).create_manual_merge(
+                source_customer_id,
+                target_customer_id,
+                administrator,
+            )
+            await session.commit()
+            return suggestion_id
+
     async def update_note(
         self,
         customer_id: int,

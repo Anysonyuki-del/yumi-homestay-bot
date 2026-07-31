@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -280,6 +280,36 @@ class SQLAlchemyCustomerRepository:
             "suggestion": suggestion,
             "source": source,
             "target": target,
+            "source_counts": await self._association_counts(source.id),
+            "target_counts": await self._association_counts(target.id),
+        }
+
+    async def _association_counts(self, customer_id: int) -> dict[str, int]:
+        """只用聚合查询统计合并会迁移的关联记录，不加载敏感正文。"""
+        statement = select(
+            select(func.count(CustomerIdentity.id))
+            .where(CustomerIdentity.customer_id == customer_id)
+            .scalar_subquery()
+            .label("identities"),
+            select(func.count(Conversation.id))
+            .where(Conversation.customer_id == customer_id)
+            .scalar_subquery()
+            .label("conversations"),
+            select(func.count(StayOrder.id))
+            .where(StayOrder.customer_id == customer_id)
+            .scalar_subquery()
+            .label("orders"),
+            select(func.count(BusinessTask.id))
+            .where(BusinessTask.customer_id == customer_id)
+            .scalar_subquery()
+            .label("tasks"),
+        )
+        row = (await self._session.execute(statement)).one()
+        return {
+            "identities": int(row.identities),
+            "conversations": int(row.conversations),
+            "orders": int(row.orders),
+            "tasks": int(row.tasks),
         }
 
     async def replace_tags(

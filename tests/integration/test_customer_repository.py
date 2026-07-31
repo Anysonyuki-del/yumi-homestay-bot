@@ -412,6 +412,83 @@ async def test_customer_merge_suggestion_defaults_to_pending() -> None:
 
 
 @pytest.mark.asyncio
+async def test_merge_detail_returns_only_safe_association_counts() -> None:
+    """合并复核只查询两侧关联数量，不加载消息、订单或任务正文。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        source = Customer(display_name="来源客户")
+        target = Customer(display_name="目标客户")
+        property_profile = PropertyProfile(id=101, title="测试房源")
+        session.add_all([source, target, property_profile])
+        await session.flush()
+        session.add_all(
+            [
+                CustomerIdentity(
+                    customer_id=source.id,
+                    provider=CustomerIdentityProvider.WECOM_KF,
+                    external_id="wm-count-source",
+                    is_verified=True,
+                ),
+                Conversation(
+                    customer_id=source.id,
+                    open_kfid="wk-count",
+                    external_userid="wm-count-source",
+                ),
+                StayOrder(
+                    hostex_reservation_code="count-order",
+                    stay_code="count-stay",
+                    customer_id=target.id,
+                    property_id=property_profile.id,
+                    check_in_date=date(2026, 8, 1),
+                    check_out_date=date(2026, 8, 2),
+                    status="confirmed",
+                ),
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.PENDING_CONFIRMATION,
+                    customer_id=target.id,
+                    description="不应加载的任务正文",
+                    checklist={},
+                ),
+            ]
+        )
+        await session.flush()
+        suggestion = CustomerMergeSuggestion(
+            source_customer_id=source.id,
+            target_customer_id=target.id,
+            reason="administrator_manual",
+        )
+        session.add(suggestion)
+        await session.commit()
+
+        detail = await SQLAlchemyCustomerRepository(session).merge_detail(
+            suggestion.id
+        )
+
+        assert detail["source_counts"] == {
+            "identities": 1,
+            "conversations": 1,
+            "orders": 0,
+            "tasks": 0,
+        }
+        assert detail["target_counts"] == {
+            "identities": 0,
+            "conversations": 0,
+            "orders": 1,
+            "tasks": 1,
+        }
+        assert "不应加载的任务正文" not in repr(
+            [detail["source_counts"], detail["target_counts"]]
+        )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_manual_merge_suggestion_validates_and_reuses_pending() -> None:
     """手动建议复核管理员和两侧客户，并复用同方向未决建议。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

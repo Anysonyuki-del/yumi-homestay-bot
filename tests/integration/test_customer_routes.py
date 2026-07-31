@@ -45,6 +45,12 @@ class CustomerAdminStub:
             note="需要安静房间",
             masked_phone="138****8000",
         )
+        self.target_card = CustomerCard(
+            id=8,
+            display_name="订单客户",
+            note="",
+            masked_phone="139****9000",
+        )
         self.tags = [
             SimpleNamespace(id=1, name="VIP"),
             SimpleNamespace(id=2, name="老客户"),
@@ -65,10 +71,15 @@ class CustomerAdminStub:
         self.summary_calls: list[dict[str, object]] = []
         self.delete_calls: list[tuple[int, int]] = []
         self.merge_calls: list[tuple[int, int, bool]] = []
+        self.manual_merge_calls: list[tuple[int, int, int]] = []
+        self.list_calls: list[tuple[str | None, int]] = []
 
     async def list_customers(self, query, administrator):
-        """返回单条安全客户卡片。"""
+        """按测试查询返回安全客户卡片并记录管理员编号。"""
         self._require_admin(administrator)
+        self.list_calls.append((query, administrator.id))
+        if query == "订单":
+            return [self.card, self.target_card]
         return [self.card]
 
     async def get_detail(self, customer_id, administrator):
@@ -93,13 +104,35 @@ class CustomerAdminStub:
         return {
             "suggestion": self.suggestion,
             "source": self.card,
-            "target": CustomerCard(
-                id=8,
-                display_name="订单客户",
-                note="",
-                masked_phone="138****8000",
+            "target": self.target_card,
+            "source_counts": SimpleNamespace(
+                identities=1,
+                conversations=2,
+                orders=0,
+                tasks=1,
+            ),
+            "target_counts": SimpleNamespace(
+                identities=1,
+                conversations=0,
+                orders=3,
+                tasks=2,
             ),
         }
+
+    async def create_manual_merge(
+        self,
+        source_customer_id,
+        target_customer_id,
+        administrator,
+    ):
+        """记录手动建议并稳定模拟自合并领域错误。"""
+        self._require_admin(administrator)
+        if source_customer_id == target_customer_id:
+            raise ValueError("不能将客户档案合并到自身")
+        self.manual_merge_calls.append(
+            (source_customer_id, target_customer_id, administrator.id)
+        )
+        return 9
 
     async def set_tags(self, customer_id, tag_ids, administrator):
         """记录标签多选提交。"""
@@ -213,13 +246,25 @@ def test_staff_cannot_open_customer_crm() -> None:
     login(client)
 
     index = client.get("/employee/customers")
+    detail = client.get(
+        "/employee/customers/7",
+        params={"merge_query": "订单"},
+    )
+    manual_merge = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "8", "csrf_token": "forged"},
+    )
     merge = client.post(
         "/employee/customers/merge/9/confirm",
         data={"csrf_token": "forged"},
     )
 
     assert index.status_code == 403
+    assert detail.status_code == 403
+    assert manual_merge.status_code == 403
     assert merge.status_code == 403
+    assert customers.list_calls == []
+    assert customers.manual_merge_calls == []
     assert customers.merge_calls == []
 
 
@@ -318,3 +363,95 @@ def test_admin_can_delete_summary_and_review_merge() -> None:
     assert rejected.status_code == 303
     assert customers.delete_calls == [(7, 1)]
     assert customers.merge_calls == [(9, 1, True), (9, 1, False)]
+
+
+def test_admin_searches_masked_manual_merge_targets_from_detail() -> None:
+    """详情页保留既有内容，并只显示排除来源后的脱敏目标卡片。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    detail = client.get(
+        "/employee/customers/7",
+        params={"merge_query": "订单"},
+    )
+
+    assert detail.status_code == 200
+    assert "AI 客户摘要" in detail.text
+    assert "合并客户档案" in detail.text
+    assert "来源档案：测试客户（客户 #7）" in detail.text
+    assert "目标档案：订单客户（客户 #8）" in detail.text
+    assert "139****9000" in detail.text
+    assert "13900139000" not in detail.text
+    assert "phone_ciphertext" not in detail.text
+    assert "目标档案：测试客户（客户 #7）" not in detail.text
+    assert customers.list_calls == [("订单", 1)]
+
+
+def test_manual_merge_uses_one_time_csrf_and_redirects_to_review() -> None:
+    """创建建议消耗详情页令牌，并跳转到现有二次复核页。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    token = detail_csrf(client)
+
+    created = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "8", "csrf_token": token},
+        follow_redirects=False,
+    )
+    replay = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "8", "csrf_token": token},
+        follow_redirects=False,
+    )
+    forged = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "8", "csrf_token": "forged"},
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    assert created.headers["location"] == "/employee/customers/merge/9"
+    assert replay.status_code == 409
+    assert forged.status_code == 409
+    assert customers.manual_merge_calls == [(7, 8, 1)]
+
+
+def test_manual_merge_self_target_returns_stable_conflict() -> None:
+    """自合并领域错误稳定返回冲突，且令牌已经被消耗。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "7", "csrf_token": token},
+        follow_redirects=False,
+    )
+    replay = client.post(
+        "/employee/customers/7/merge/manual",
+        data={"target_customer_id": "8", "csrf_token": token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "不能将客户档案合并到自身"
+    assert replay.status_code == 409
+    assert customers.manual_merge_calls == []
+
+
+def test_merge_review_explains_direction_and_safe_association_counts() -> None:
+    """复核页明确来源停用、目标保留，并只展示聚合关联数量。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/customers/merge/9")
+
+    assert response.status_code == 200
+    assert "来源档案将停用" in response.text
+    assert "目标档案将保留" in response.text
+    assert "会话 2 个" in response.text
+    assert "订单 3 笔" in response.text
+    assert "任务 2 项" in response.text
+    assert "13800138000" not in response.text
+    assert "13900139000" not in response.text
+    assert "phone_ciphertext" not in response.text

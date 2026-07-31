@@ -83,6 +83,37 @@
         </ul>
       </section>
       {% endif %}
+
+      <section class="action-panel">
+        <h2>合并客户档案</h2>
+        <p>先搜索另一份客户档案。创建建议后，还需要在复核页再次确认，当前页面不会直接合并。</p>
+        <form method="get" action="/employee/customers/{{ customer.id }}">
+          <label>
+            按客户名称或备注搜索
+            <input type="search" name="merge_query" maxlength="100" value="{{ merge_query }}">
+          </label>
+          <button type="submit">查找目标档案</button>
+        </form>
+
+        {% if merge_query %}
+        <p><strong>来源档案：{{ customer.display_name }}（客户 #{{ customer.id }}）</strong></p>
+        <ul class="plain-list">
+          {% for target in merge_targets %}
+          <li>
+            <p><strong>目标档案：{{ target.display_name }}（客户 #{{ target.id }}）</strong></p>
+            <p>电话：{{ target.masked_phone }}</p>
+            <form method="post" action="/employee/customers/{{ customer.id }}/merge/manual">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="target_customer_id" value="{{ target.id }}">
+              <button type="submit">选择此目标并进入复核</button>
+            </form>
+          </li>
+          {% else %}
+          <li>没有找到其他可合并的客户档案。</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </section>
     </main>
   </body>
 </html>

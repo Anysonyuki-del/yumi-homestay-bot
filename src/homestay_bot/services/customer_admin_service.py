@@ -16,6 +16,16 @@ class CustomerCard:
     masked_phone: str
 
 
+@dataclass(frozen=True)
+class CustomerAssociationCounts:
+    """只包含合并复核允许展示的聚合关联数量。"""
+
+    identities: int
+    conversations: int
+    orders: int
+    tasks: int
+
+
 class CustomerAdminRepository(Protocol):
     """定义管理员 CRM 页面所需的查询和写操作。"""
 
@@ -183,6 +193,8 @@ class CustomerAdminService:
             "suggestion": detail["suggestion"],
             "source": self._card(detail["source"]),
             "target": self._card(detail["target"]),
+            "source_counts": self._counts(detail["source_counts"]),
+            "target_counts": self._counts(detail["target_counts"]),
         }
 
     async def create_manual_merge(
@@ -289,6 +301,16 @@ class CustomerAdminService:
         if len(phone) >= 7:
             return f"{phone[:3]}****{phone[-4:]}"
         return "已登记"
+
+    @staticmethod
+    def _counts(counts: Any) -> CustomerAssociationCounts:
+        """把仓储聚合结果收窄为页面可使用的整数数据。"""
+        return CustomerAssociationCounts(
+            identities=int(counts["identities"]),
+            conversations=int(counts["conversations"]),
+            orders=int(counts["orders"]),
+            tasks=int(counts["tasks"]),
+        )
 
     @staticmethod
     def _require_admin(administrator: Employee) -> None:
