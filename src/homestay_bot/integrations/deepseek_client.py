@@ -628,9 +628,14 @@ class DeepSeekGuestAssistant:
             and previous_has_stay_range
         )
 
-    async def _refine_reply(self, reply_text: str) -> str:
-        """对超过一千字的回复做一次语义精简，失败时保留原文。"""
-        if len(reply_text) <= 1000:
+    async def _refine_reply(
+        self,
+        reply_text: str,
+        *,
+        force: bool = False,
+    ) -> str:
+        """按需执行语义精简，失败时保留原文；旅游入口可强制排版。"""
+        if not force and len(reply_text) <= 1000:
             return reply_text
         try:
             response = await self._chat_client.chat.completions.create(
@@ -686,7 +691,7 @@ class DeepSeekGuestAssistant:
                 queried_on=local_today,
             )
             # 联网搜索负责事实和来源校验，统一精简层负责旅客可读性与版式。
-            reply = await self._refine_reply(reply)
+            reply = await self._refine_reply(reply, force=True)
             return AssistantDecision(
                 reply_text=reply,
                 language=language,

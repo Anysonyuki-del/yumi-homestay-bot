@@ -86,6 +86,14 @@ class LongTourismStub:
         )
 
 
+class ShortTourismStub:
+    """返回短旅游回复，验证旅游入口仍执行可读性精简。"""
+
+    async def search(self, **kwargs) -> str:
+        """提供带日期和来源的短回复。"""
+        return "东湖适合散步。\n查询日期：2026-07-30\n参考来源：武汉市文化和旅游局"
+
+
 def decision_payload() -> dict[str, object]:
     """返回完整、严格的客服决定。"""
     return {
@@ -555,6 +563,32 @@ async def test_tourism_reply_is_refined_for_guest_readability() -> None:
     assert len(client.chat.completions.requests) == 1
     assert "不得新增事实" in client.chat.completions.requests[0]["messages"][0]["content"]
     assert "短段落或项目符号" in client.chat.completions.requests[0]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_short_tourism_reply_is_also_refined_for_layout() -> None:
+    """短旅游回复也应经过一次模型排版，保持旅客侧格式统一。"""
+    refined_reply = (
+        "推荐：东湖适合散步。\n查询日期：2026-07-30\n"
+        "参考来源：武汉市文化和旅游局"
+    )
+    client = ChatClientStub([json.dumps({"reply_text": refined_reply}, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=ShortTourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "武汉有什么好玩的？"}],
+    )
+
+    assert decision.reply_text.startswith("推荐：")
+    assert len(client.chat.completions.requests) == 1
 
 
 @pytest.mark.asyncio
