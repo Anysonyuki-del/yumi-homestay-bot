@@ -70,6 +70,14 @@ class CustomerAdminRepository(Protocol):
     ) -> None:
         """确认或拒绝客户合并建议。"""
 
+    async def create_manual_merge_suggestion(
+        self,
+        source_customer_id: int,
+        target_customer_id: int,
+        administrator_id: int,
+    ) -> int:
+        """创建待二次确认的管理员手动合并建议。"""
+
     async def has_verified_contact_identity(self, customer_id: int) -> bool:
         """判断客户是否关联已验证企业微信客户联系身份。"""
 
@@ -176,6 +184,22 @@ class CustomerAdminService:
             "source": self._card(detail["source"]),
             "target": self._card(detail["target"]),
         }
+
+    async def create_manual_merge(
+        self,
+        source_customer_id: int,
+        target_customer_id: int,
+        administrator: Employee,
+    ) -> int:
+        """只允许管理员为两个不同客户创建待复核合并建议。"""
+        self._require_admin(administrator)
+        if source_customer_id == target_customer_id:
+            raise ValueError("不能将客户档案合并到自身")
+        return await self._repository.create_manual_merge_suggestion(
+            source_customer_id,
+            target_customer_id,
+            administrator.id,
+        )
 
     async def update_note(
         self,

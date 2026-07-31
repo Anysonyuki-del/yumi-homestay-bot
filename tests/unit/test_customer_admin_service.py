@@ -29,6 +29,7 @@ class CustomerAdminRepositoryStub:
         self.summary_calls: list[dict[str, object]] = []
         self.deleted_summaries: list[tuple[int, int]] = []
         self.merge_calls: list[tuple[int, int, bool]] = []
+        self.manual_merge_calls: list[tuple[int, int, int]] = []
         self.sync_completed: list[int] = []
 
     async def list_customers(self, query):
@@ -68,6 +69,22 @@ class CustomerAdminRepositoryStub:
         self.merge_calls.append(
             (suggestion_id, administrator_id, accepted)
         )
+
+    async def create_manual_merge_suggestion(
+        self,
+        source_customer_id,
+        target_customer_id,
+        administrator_id,
+    ):
+        """记录手动合并建议并返回固定编号。"""
+        self.manual_merge_calls.append(
+            (
+                source_customer_id,
+                target_customer_id,
+                administrator_id,
+            )
+        )
+        return 23
 
     async def has_verified_contact_identity(self, customer_id):
         """返回客户存在已验证企业微信客户联系身份。"""
@@ -169,3 +186,61 @@ async def test_linked_customer_enqueues_internal_tag_diff_only() -> None:
         "add_tag_ids": [2],
         "remove_tag_ids": [3],
     }
+
+
+@pytest.mark.asyncio
+async def test_staff_cannot_create_manual_merge() -> None:
+    """普通员工不能创建手动合并建议。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+    )
+
+    with pytest.raises(PermissionError):
+        await service.create_manual_merge(
+            7,
+            8,
+            employee(EmployeeRole.STAFF),
+        )
+
+    assert repository.manual_merge_calls == []
+
+
+@pytest.mark.asyncio
+async def test_manual_merge_rejects_same_customer() -> None:
+    """手动合并不能把客户档案合并到自身。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+    )
+
+    with pytest.raises(ValueError):
+        await service.create_manual_merge(7, 7, employee())
+
+    assert repository.manual_merge_calls == []
+
+
+@pytest.mark.asyncio
+async def test_admin_creates_manual_merge_with_identifiers_only() -> None:
+    """管理员仅提交三个编号并得到待复核建议编号。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+    )
+
+    suggestion_id = await service.create_manual_merge(7, 8, employee())
+
+    assert suggestion_id == 23
+    assert repository.manual_merge_calls == [(7, 8, 1)]
