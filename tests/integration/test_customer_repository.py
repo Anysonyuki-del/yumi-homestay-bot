@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -27,6 +27,7 @@ from homestay_bot.domain.models import (
     CustomerTag,
     CustomerTagLink,
     Employee,
+    Message,
     PropertyProfile,
     StayOrder,
 )
@@ -433,6 +434,11 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
         property_profile = PropertyProfile(id=101, title="测试房源")
         session.add_all([source, target, property_profile])
         await session.flush()
+        conversation = Conversation(
+            customer_id=source.id,
+            open_kfid="wk-count",
+            external_userid="wm-count-source",
+        )
         session.add_all(
             [
                 CustomerIdentity(
@@ -441,11 +447,7 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
                     external_id="wm-count-source",
                     is_verified=True,
                 ),
-                Conversation(
-                    customer_id=source.id,
-                    open_kfid="wk-count",
-                    external_userid="wm-count-source",
-                ),
+                conversation,
                 StayOrder(
                     hostex_reservation_code="count-order",
                     stay_code="count-stay",
@@ -465,6 +467,24 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
             ]
         )
         await session.flush()
+        session.add_all(
+            [
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="merge-detail-secret-message",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content="SECRET_MESSAGE_BODY",
+                    sent_at=datetime(2026, 7, 31, tzinfo=UTC),
+                ),
+                CustomerContextSummary(
+                    customer_id=source.id,
+                    short_summary="SECRET_SUMMARY_BODY",
+                    long_summary="SECRET_SUMMARY_LONG_BODY",
+                    unresolved_items=["SECRET_SUMMARY_ITEM"],
+                ),
+            ]
+        )
         suggestion = CustomerMergeSuggestion(
             source_customer_id=source.id,
             target_customer_id=target.id,
@@ -473,9 +493,34 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
         session.add(suggestion)
         await session.commit()
 
-        detail = await SQLAlchemyCustomerRepository(session).merge_detail(
-            suggestion.id
+        executed_sql: list[str] = []
+
+        def record_sql(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ) -> None:
+            """记录本次复核查询实际提交给数据库的 SQL。"""
+            executed_sql.append(str(statement))
+
+        event.listen(
+            engine.sync_engine,
+            "before_cursor_execute",
+            record_sql,
         )
+        try:
+            detail = await SQLAlchemyCustomerRepository(
+                session
+            ).merge_detail(suggestion.id)
+        finally:
+            event.remove(
+                engine.sync_engine,
+                "before_cursor_execute",
+                record_sql,
+            )
 
         assert detail["source"] == {
             "id": source.id,
@@ -492,6 +537,29 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
         assert "REPOSITORY_TARGET_SECRET_NOTE" not in serialized
         assert "source-secret-ciphertext" not in serialized
         assert "target-secret-ciphertext" not in serialized
+        assert "SECRET_MESSAGE_BODY" not in serialized
+        assert "SECRET_SUMMARY_BODY" not in serialized
+        assert "不应加载的任务正文" not in serialized
+        normalized_sql = [
+            " ".join(statement.lower().split())
+            for statement in executed_sql
+        ]
+        assert all(" messages " not in statement for statement in normalized_sql)
+        assert all(
+            "customer_context_summaries" not in statement
+            for statement in normalized_sql
+        )
+        customer_queries = [
+            statement
+            for statement in normalized_sql
+            if " from customers " in f" {statement} "
+        ]
+        assert len(customer_queries) == 2
+        assert all(
+            "customers.phone_ciphertext" not in statement
+            and "customers.note" not in statement
+            for statement in customer_queries
+        )
         assert detail["source_counts"] == {
             "identities": 1,
             "conversations": 1,
@@ -504,9 +572,6 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
             "orders": 1,
             "tasks": 1,
         }
-        assert "不应加载的任务正文" not in repr(
-            [detail["source_counts"], detail["target_counts"]]
-        )
 
     await engine.dispose()
 
