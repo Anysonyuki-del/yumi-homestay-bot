@@ -564,6 +564,12 @@ class SQLAlchemyCustomerRepository:
         if suggestion is None:
             raise LookupError("客户合并建议不存在")
 
+        # 已接受建议重放时沿后续合并链返回当前最终主档，不再次迁移或追加正文。
+        if suggestion.status is CustomerMergeStatus.ACCEPTED:
+            return await self._resolve_final_customer(
+                suggestion.target_customer_id
+            )
+
         target = await self._session.scalar(
             select(Customer)
             .where(Customer.id == suggestion.target_customer_id)
@@ -571,8 +577,6 @@ class SQLAlchemyCustomerRepository:
         )
         if target is None or target.merged_into_customer_id is not None:
             raise LookupError("目标客户不存在或已经合并")
-        if suggestion.status is CustomerMergeStatus.ACCEPTED:
-            return target
         if suggestion.status is not CustomerMergeStatus.PENDING:
             raise ValueError("客户合并建议已经结束")
 
@@ -718,6 +722,12 @@ class SQLAlchemyCustomerRepository:
         if source is None:
             return
         if target is None:
+            # 即使没有目标摘要，也在迁移前统一执行长度和数量边界。
+            source.short_summary = source.short_summary[:4000]
+            source.long_summary = source.long_summary[:8000]
+            source.unresolved_items = list(
+                dict.fromkeys(source.unresolved_items)
+            )[:20]
             source.customer_id = target_customer_id
             return
 
@@ -794,6 +804,24 @@ class SQLAlchemyCustomerRepository:
             return source_text[:limit]
         merged = f"{target_text}\n\n来自合并档案：\n{source_text}"
         return merged[:limit]
+
+    async def _resolve_final_customer(self, customer_id: int) -> Customer:
+        """锁定并沿合并链解析当前最终客户，检测异常循环或断链。"""
+        visited: set[int] = set()
+        current_id = customer_id
+        while current_id not in visited:
+            visited.add(current_id)
+            customer = await self._session.scalar(
+                select(Customer)
+                .where(Customer.id == current_id)
+                .with_for_update()
+            )
+            if customer is None:
+                raise LookupError("客户合并链指向不存在的客户")
+            if customer.merged_into_customer_id is None:
+                return customer
+            current_id = customer.merged_into_customer_id
+        raise ValueError("客户合并链存在循环")
 
     async def _require_admin(self, administrator_id: int) -> Employee:
         """锁定并复核活动管理员，避免只依赖页面层权限。"""

@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
@@ -33,6 +34,59 @@ from homestay_bot.repositories.customers import SQLAlchemyCustomerRepository
 from homestay_bot.services.customer_service import CustomerService
 from homestay_bot.services.message_service import IncomingMessage
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
+
+
+class _RecordedScalarResult:
+    """为锁语句测试返回固定客户集合。"""
+
+    def __init__(self, values: list[object]) -> None:
+        """保存即将由 all() 返回的对象。"""
+        self._values = values
+
+    def all(self) -> list[object]:
+        """返回固定查询结果。"""
+        return self._values
+
+
+class _RecordingMergeSession:
+    """记录仓储发出的查询，并提供创建建议所需最小会话行为。"""
+
+    def __init__(self) -> None:
+        """构造管理员、两个客户及语句记录容器。"""
+        self.administrator = SimpleNamespace(
+            id=1,
+            role=EmployeeRole.ADMIN,
+            is_active=True,
+        )
+        self.customers = [
+            SimpleNamespace(id=7, merged_into_customer_id=None),
+            SimpleNamespace(id=8, merged_into_customer_id=None),
+        ]
+        self.scalar_statements: list[object] = []
+        self.scalars_statements: list[object] = []
+        self.added: list[object] = []
+
+    async def scalar(self, statement):
+        """依次返回管理员和不存在的同方向建议。"""
+        self.scalar_statements.append(statement)
+        if len(self.scalar_statements) == 1:
+            return self.administrator
+        return None
+
+    async def scalars(self, statement):
+        """记录客户锁查询并返回两个有效客户。"""
+        self.scalars_statements.append(statement)
+        return _RecordedScalarResult(self.customers)
+
+    def add(self, value) -> None:
+        """记录新增建议或审计对象。"""
+        self.added.append(value)
+
+    async def flush(self) -> None:
+        """模拟数据库为新建议生成主键。"""
+        for value in self.added:
+            if isinstance(value, CustomerMergeSuggestion) and value.id is None:
+                value.id = 41
 
 
 @pytest.mark.asyncio
@@ -391,6 +445,19 @@ async def test_manual_merge_suggestion_validates_and_reuses_pending() -> None:
 
 
 @pytest.mark.asyncio
+async def test_manual_merge_locks_administrator_and_both_customers() -> None:
+    """手动建议的管理员查询和两侧客户查询都必须请求行锁。"""
+    session = _RecordingMergeSession()
+    repository = SQLAlchemyCustomerRepository(session)  # type: ignore[arg-type]
+
+    suggestion_id = await repository.create_manual_merge_suggestion(7, 8, 1)
+
+    assert suggestion_id == 41
+    assert session.scalar_statements[0]._for_update_arg is not None
+    assert session.scalars_statements[0]._for_update_arg is not None
+
+
+@pytest.mark.asyncio
 async def test_ensure_for_message_is_idempotent() -> None:
     """重复处理同一联系人消息不得重复建立客户或身份。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -649,9 +716,13 @@ async def test_merge_inherits_phone_and_moves_source_only_summary() -> None:
         await session.flush()
         summary = CustomerContextSummary(
             customer_id=source.id,
-            short_summary="来源短摘要",
-            long_summary="来源长摘要",
-            unresolved_items=["待确认入住人数"],
+            short_summary="短" * 4100,
+            long_summary="长" * 8100,
+            unresolved_items=[
+                "重复事项",
+                *[f"事项-{index}" for index in range(25)],
+                "重复事项",
+            ],
         )
         suggestion = CustomerMergeSuggestion(
             source_customer_id=source.id,
@@ -671,16 +742,127 @@ async def test_merge_inherits_phone_and_moves_source_only_summary() -> None:
         assert target.phone_fingerprint == source.phone_fingerprint
         assert target.note == "来源备注"
         assert summary.customer_id == target.id
-        assert summary.short_summary == "来源短摘要"
-        assert summary.long_summary == "来源长摘要"
-        assert summary.unresolved_items == ["待确认入住人数"]
+        assert summary.short_summary == "短" * 4000
+        assert summary.long_summary == "长" * 8000
+        assert summary.unresolved_items == [
+            "重复事项",
+            *[f"事项-{index}" for index in range(19)],
+        ]
 
     await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_merge_changes_are_rolled_back_by_outer_transaction() -> None:
-    """外层事务回滚后，合并涉及的全部关系仍归来源客户。"""
+async def test_merge_keeps_target_phone_and_limits_merged_note() -> None:
+    """双方电话不同时保留目标电话，并把合并备注限制在两千字。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+
+    async with factory() as session:
+        administrator = Employee(
+            wecom_userid="admin-phone-priority",
+            name="YuMi",
+            role=EmployeeRole.ADMIN,
+        )
+        source = Customer(
+            display_name="来源客户",
+            phone_ciphertext=cipher.encrypt("13800000000"),
+            phone_fingerprint=cipher.fingerprint("13800000000"),
+            note="来源" * 100,
+        )
+        target_phone = cipher.encrypt("13900000000")
+        target_fingerprint = cipher.fingerprint("13900000000")
+        target_note = "目标" * 995
+        target = Customer(
+            display_name="目标客户",
+            phone_ciphertext=target_phone,
+            phone_fingerprint=target_fingerprint,
+            note=target_note,
+        )
+        session.add_all([administrator, source, target])
+        await session.flush()
+        suggestion = CustomerMergeSuggestion(
+            source_customer_id=source.id,
+            target_customer_id=target.id,
+            reason="administrator_manual",
+        )
+        session.add(suggestion)
+        await session.commit()
+
+        repository = SQLAlchemyCustomerRepository(session)
+        await repository.merge_locked(suggestion.id, administrator.id)
+        await session.commit()
+
+        assert target.phone_ciphertext == target_phone
+        assert target.phone_fingerprint == target_fingerprint
+        assert target.note is not None
+        assert len(target.note) == 2000
+        assert target.note.startswith(f"{target_note}\n\n来自合并档案：\n")
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_replayed_merge_resolves_current_final_customer() -> None:
+    """A 合并到 B、B 再合并到 C 后，重放 A 到 B 应直接返回 C。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        administrator = Employee(
+            wecom_userid="admin-chain-merge",
+            name="YuMi",
+            role=EmployeeRole.ADMIN,
+        )
+        customer_a = Customer(display_name="客户 A", note="A 备注")
+        customer_b = Customer(display_name="客户 B", note="B 备注")
+        customer_c = Customer(display_name="客户 C", note="C 备注")
+        session.add_all(
+            [administrator, customer_a, customer_b, customer_c]
+        )
+        await session.flush()
+        suggestion_ab = CustomerMergeSuggestion(
+            source_customer_id=customer_a.id,
+            target_customer_id=customer_b.id,
+            reason="administrator_manual",
+        )
+        suggestion_bc = CustomerMergeSuggestion(
+            source_customer_id=customer_b.id,
+            target_customer_id=customer_c.id,
+            reason="administrator_manual",
+        )
+        session.add_all([suggestion_ab, suggestion_bc])
+        await session.commit()
+
+        repository = SQLAlchemyCustomerRepository(session)
+        await repository.merge_locked(suggestion_ab.id, administrator.id)
+        await session.commit()
+        await repository.merge_locked(suggestion_bc.id, administrator.id)
+        await session.commit()
+        note_after_two_merges = customer_c.note
+
+        replayed = await repository.merge_locked(
+            suggestion_ab.id,
+            administrator.id,
+        )
+        await session.commit()
+
+        assert replayed.id == customer_c.id
+        assert customer_c.note == note_after_two_merges
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_merge_changes_are_rolled_back_when_final_flush_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """末次 flush 异常并由外层回滚后，全部关系和正文保持原状。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -694,6 +876,7 @@ async def test_merge_changes_are_rolled_back_by_outer_transaction() -> None:
         )
         source = Customer(display_name="来源客户", note="来源备注")
         target = Customer(display_name="目标客户", note="目标备注")
+        tag = CustomerTag(name="回滚标签")
         identity = CustomerIdentity(
             customer=source,
             provider=CustomerIdentityProvider.WECOM_KF,
@@ -706,25 +889,70 @@ async def test_merge_changes_are_rolled_back_by_outer_transaction() -> None:
             external_userid="wm-rollback-source",
         )
         session.add_all(
-            [administrator, source, target, identity, conversation]
+            [
+                administrator,
+                source,
+                target,
+                tag,
+                identity,
+                conversation,
+            ]
         )
         await session.flush()
+        tag_link = CustomerTagLink(customer_id=source.id, tag_id=tag.id)
+        property_profile = PropertyProfile(id=202, title="回滚测试房间")
+        session.add_all([tag_link, property_profile])
+        await session.flush()
+        order = StayOrder(
+            hostex_reservation_code="R-MERGE-ROLLBACK",
+            stay_code="S-MERGE-ROLLBACK",
+            customer_id=source.id,
+            property_id=property_profile.id,
+            check_in_date=date(2026, 8, 1),
+            check_out_date=date(2026, 8, 2),
+            status="confirmed",
+        )
+        task = BusinessTask(
+            dedupe_key="manual:merge-rollback",
+            task_type=BusinessTaskType.SUPPLIES,
+            status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+            customer_id=source.id,
+            property_id=property_profile.id,
+            service_date=date(2026, 8, 1),
+            description="回滚测试任务",
+        )
+        summary = CustomerContextSummary(
+            customer_id=source.id,
+            short_summary="来源短摘要",
+            long_summary="来源长摘要",
+            unresolved_items=["来源待确认项"],
+        )
         suggestion = CustomerMergeSuggestion(
             source_customer_id=source.id,
             target_customer_id=target.id,
             reason="administrator_manual",
         )
-        session.add(suggestion)
+        session.add_all([order, task, summary, suggestion])
         await session.commit()
 
+        async def fail_final_flush() -> None:
+            """在仓储完成所有内存和数据库改动后模拟最终写入失败。"""
+            raise RuntimeError("injected final flush failure")
+
         repository = SQLAlchemyCustomerRepository(session)
-        await repository.merge_locked(suggestion.id, administrator.id)
+        monkeypatch.setattr(session, "flush", fail_final_flush)
+        with pytest.raises(RuntimeError, match="injected final flush failure"):
+            await repository.merge_locked(suggestion.id, administrator.id)
         await session.rollback()
 
         await session.refresh(source)
         await session.refresh(target)
         await session.refresh(identity)
         await session.refresh(conversation)
+        await session.refresh(order)
+        await session.refresh(task)
+        await session.refresh(tag_link)
+        await session.refresh(summary)
         await session.refresh(suggestion)
         audit_count = await session.scalar(
             select(func.count(AuditLog.id)).where(
@@ -735,6 +963,13 @@ async def test_merge_changes_are_rolled_back_by_outer_transaction() -> None:
         assert target.note == "目标备注"
         assert identity.customer_id == source.id
         assert conversation.customer_id == source.id
+        assert order.customer_id == source.id
+        assert task.customer_id == source.id
+        assert tag_link.customer_id == source.id
+        assert summary.customer_id == source.id
+        assert summary.short_summary == "来源短摘要"
+        assert summary.long_summary == "来源长摘要"
+        assert summary.unresolved_items == ["来源待确认项"]
         assert suggestion.status is CustomerMergeStatus.PENDING
         assert audit_count == 0
 
