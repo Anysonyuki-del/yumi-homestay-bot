@@ -19,6 +19,7 @@
         <form method="post" action="/employee/properties/{{ property.id }}/profile">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>房源名称<input name="title" value="{{ property.title }}" maxlength="128" required></label>
+          <label>真实房间号<input name="room_number" value="{{ property.room_number or '' }}" maxlength="32"></label>
           <label>房型<input name="room_type" value="{{ property.room_type or '' }}" maxlength="128"></label>
           <label>区域<input name="district" value="{{ property.district or '' }}" maxlength="64"></label>
           <label>地址提示<textarea name="address_hint" maxlength="2000">{{ property.address_hint or "" }}</textarea></label>

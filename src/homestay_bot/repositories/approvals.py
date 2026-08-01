@@ -30,6 +30,19 @@ class SQLAlchemyApprovalRepository:
         await self._session.flush()
         return approval
 
+    async def get_by_source_message_id(
+        self, source_message_id: str
+    ) -> BookingApproval | None:
+        """按来源消息读取已创建审批单，供延迟任务幂等重放。"""
+        return cast(
+            BookingApproval | None,
+            await self._session.scalar(
+            select(BookingApproval).where(
+                BookingApproval.source_message_id == source_message_id
+            )
+            ),
+        )
+
     async def get_for_update(self, approval_id: int) -> BookingApproval:
         """使用数据库行锁读取审批单，阻止并发重复确认。"""
         statement = (

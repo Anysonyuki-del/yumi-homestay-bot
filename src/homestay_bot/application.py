@@ -14,19 +14,20 @@ from anthropic import AsyncAnthropic
 from fastapi import FastAPI
 from openai import AsyncOpenAI
 from pydantic import ValidationError
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.config import Settings
 from homestay_bot.db import create_engine, create_session_factory
 from homestay_bot.domain.enums import MessageOrigin
-from homestay_bot.domain.models import BookingApproval, Employee
+from homestay_bot.domain.models import BookingApproval, Conversation, Employee
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
     HostexReadOnlyToolExecutor,
 )
+from homestay_bot.integrations.deepseek_complaint import DeepSeekComplaintAnalyzer
 from homestay_bot.integrations.deepseek_context_summarizer import (
     DeepSeekContextSummarizer,
 )
@@ -43,6 +44,7 @@ from homestay_bot.repositories.approvals import (
     SQLAlchemyApprovalRepository,
     SQLAlchemyPermissionChecker,
 )
+from homestay_bot.repositories.complaints import SQLAlchemyComplaintRepository
 from homestay_bot.repositories.context import SQLAlchemyContextRepository
 from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
@@ -71,6 +73,12 @@ from homestay_bot.services.approval_page_service import ApprovalPageService
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
 from homestay_bot.services.business_task_service import BusinessTaskService
+from homestay_bot.services.complaint_admin_service import ComplaintAdminService
+from homestay_bot.services.complaint_review_job import (
+    ComplaintReviewJobService,
+    SQLAlchemyComplaintMessageContext,
+)
+from homestay_bot.services.complaint_service import ComplaintService
 from homestay_bot.services.context_retention import ContextRetentionService
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.credential_delivery import (
@@ -199,6 +207,8 @@ class TransactionalOutboxWeCom:
         open_kfid: str,
         external_userid: str,
         content: str,
+        *,
+        message_type: str = "text",
     ) -> str | None:
         """事务内登记客人回复，真实发送由 worker 在提交后执行。"""
         outbox_id = self._outbox_id("guest")
@@ -211,6 +221,7 @@ class TransactionalOutboxWeCom:
                 "open_kfid": open_kfid,
                 "external_userid": external_userid,
                 "content": content,
+                "message_type": message_type,
             },
             dedupe_key=outbox_id,
         )
@@ -232,6 +243,30 @@ class TransactionalOutboxWeCom:
                 "agent_id": agent_id,
                 "employee_userids": employee_userids,
                 "content": content,
+            },
+            dedupe_key=outbox_id,
+        )
+
+    async def send_internal_card(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        title: str,
+        description: str,
+        url: str,
+    ) -> None:
+        """事务内登记员工后台入口卡片。"""
+        outbox_id = self._outbox_id("internal-card")
+        await self._repository.enqueue(
+            "wecom_send_internal_card",
+            {
+                "outbox_id": outbox_id,
+                "agent_id": agent_id,
+                "employee_userids": employee_userids,
+                "title": title,
+                "description": description,
+                "url": url,
             },
             dedupe_key=outbox_id,
         )
@@ -866,6 +901,58 @@ class SessionKnowledgeAdminService:
             )
 
 
+class SessionComplaintAdminService:
+    """为每次客诉页面操作使用独立事务。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def get_detail(self, review_id: int) -> dict[str, Any]:
+        """读取客诉详情。"""
+        async with self._factory() as session:
+            return await ComplaintAdminService(
+                session,
+                TransactionalOutboxWeCom(session, source_message_id=f"complaint:{review_id}"),
+            ).get_detail(review_id)
+
+    async def update_draft(self, review_id: int, version: int, draft: str) -> None:
+        """保存客诉草稿并提交。"""
+        async with self._factory() as session:
+            await ComplaintAdminService(
+                session,
+                TransactionalOutboxWeCom(session, source_message_id=f"complaint:{review_id}"),
+            ).update_draft(review_id, version, draft)
+            await session.commit()
+
+    async def send(self, review_id: int, version: int, draft: str, employee_id: int) -> None:
+        """登记客人回复、状态和审计。"""
+        async with self._factory() as session:
+            await ComplaintAdminService(
+                session,
+                TransactionalOutboxWeCom(session, source_message_id=f"complaint:{review_id}"),
+            ).send(review_id, version, draft, employee_id)
+            await session.commit()
+
+    async def return_for_analysis(self, review_id: int, version: int, employee_id: int) -> None:
+        """退回分析并提交审计。"""
+        async with self._factory() as session:
+            await ComplaintAdminService(
+                session,
+                TransactionalOutboxWeCom(session, source_message_id=f"complaint:{review_id}"),
+            ).return_for_analysis(review_id, version, employee_id)
+            await session.commit()
+
+    async def cancel(self, review_id: int, version: int, employee_id: int) -> None:
+        """关闭客诉并提交审计。"""
+        async with self._factory() as session:
+            await ComplaintAdminService(
+                session,
+                TransactionalOutboxWeCom(session, source_message_id=f"complaint:{review_id}"),
+            ).cancel(review_id, version, employee_id)
+            await session.commit()
+
+
 def _register_faq_draft_handler(
     handlers: dict[str, JobHandler],
     session: AsyncSession,
@@ -939,6 +1026,9 @@ async def _run_worker_loop(
     faq_draft_handler_factory: (
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
+    complaint_review_handler_factory: (
+        Callable[[AsyncSession], JobHandler] | None
+    ) = None,
     hostex_event_handler_factory: (
         Callable[[AsyncSession], JobHandler] | None
     ) = None,
@@ -988,6 +1078,22 @@ async def _run_worker_loop(
                         str(payload["outbox_id"]),
                         real_message_id,
                     )
+                    conversation = await session.scalar(
+                        select(Conversation).where(
+                            Conversation.open_kfid == str(payload["open_kfid"]),
+                            Conversation.external_userid
+                            == str(payload["external_userid"]),
+                        )
+                    )
+                    if conversation is not None:
+                        await MessageService(
+                            SQLAlchemyMessageRepository(session)
+                        ).record_bot(
+                            conversation.id,
+                            real_message_id,
+                            str(payload["content"]),
+                            message_type=str(payload.get("message_type", "text")),
+                        )
 
                 async def send_internal(payload: dict[str, Any]) -> None:
                     """发送员工通知；连接失败或明确限流时才允许有限重试。"""
@@ -1004,10 +1110,28 @@ async def _run_worker_loop(
                             raise RetrySafeJobError("企业微信明确限流") from error
                         raise
 
+                async def send_internal_card(payload: dict[str, Any]) -> None:
+                    """发送后台入口卡片；卡片本身不包含客人回复动作。"""
+                    try:
+                        await wecom.send_internal_card(
+                            agent_id=int(payload["agent_id"]),
+                            employee_userids=list(payload["employee_userids"]),
+                            title=str(payload["title"]),
+                            description=str(payload["description"]),
+                            url=str(payload["url"]),
+                        )
+                    except httpx.ConnectError as error:
+                        raise RetrySafeJobError("企业微信连接尚未建立") from error
+                    except WeComApiError as error:
+                        if error.error_code == 45009:
+                            raise RetrySafeJobError("企业微信明确限流") from error
+                        raise
+
                 handlers: dict[str, JobHandler] = {
                     "wecom_sync": handler,
                     "wecom_send_text": send_guest,
                     "wecom_send_internal_text": send_internal,
+                    "wecom_send_internal_card": send_internal_card,
                 }
                 if deferred_message_handler is not None:
                     handlers["wecom_process_message"] = deferred_message_handler
@@ -1016,6 +1140,10 @@ async def _run_worker_loop(
                     session,
                     faq_draft_handler_factory,
                 )
+                if complaint_review_handler_factory is not None:
+                    handlers["complaint_review_generate"] = (
+                        complaint_review_handler_factory(session)
+                    )
                 _register_hostex_event_handler(
                     handlers,
                     session,
@@ -1268,6 +1396,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         client=deepseek_chat,
         model=settings.deepseek_model,
     )
+    complaint_analyzer = DeepSeekComplaintAnalyzer(
+        client=deepseek_chat,
+        model=settings.deepseek_model,
+    )
     context_summarizer = DeepSeekContextSummarizer(
         deepseek_chat,
         settings.deepseek_model,
@@ -1315,6 +1447,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 audit_events=SQLAlchemyOperationsRepository(session),
                 jobs=SQLAlchemyJobRepository(session),
                 identity_resolver=wecom,
+                complaint_service=ComplaintService(),
+                complaint_reviews=SQLAlchemyComplaintRepository(session),
                 defer_model=not deferred,
                 commit_boundary=session.commit if not deferred else None,
             )
@@ -1404,6 +1538,31 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return handle_faq_draft
 
+    def build_complaint_review_handler(session: AsyncSession) -> JobHandler:
+        """为客诉后台任务装配分析、脱敏上下文和员工通知。"""
+
+        async def handle_complaint_review(payload: dict[str, Any]) -> None:
+            """生成客诉分析并把后台编辑入口写入事务型发件箱。"""
+            service = ComplaintReviewJobService(
+                reviews=SQLAlchemyComplaintRepository(session),
+                analyzer=complaint_analyzer,
+                messages=SQLAlchemyComplaintMessageContext(
+                    SQLAlchemyMessageRepository(session)
+                ),
+                notifications=TransactionalOutboxWeCom(
+                    session,
+                    source_message_id=f"complaint-review:{payload['review_id']}",
+                ),
+                employee_userids=duty_userids,
+                agent_id=settings.wecom_agent_id,
+                edit_url=(
+                    f"{settings.public_base_url.rstrip('/')}/employee/complaints"
+                ),
+            )
+            await service.handle(payload)
+
+        return handle_complaint_review
+
     def build_hostex_event_handler(session: AsyncSession) -> JobHandler:
         """为当前 worker 事务创建百居易事件同步处理器。"""
         service = HostexSyncService(
@@ -1487,6 +1646,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         tag_sync_enabled=contact_client is not None,
     )
     app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory)
+    app.state.complaint_admin_service = SessionComplaintAdminService(factory)
     app.state.wecom_callback_service = WeComCallbackService.from_credentials(
         settings.wecom_callback_token,
         settings.wecom_encoding_aes_key,
@@ -1546,6 +1706,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             handler=sync_handler,
             wecom=wecom,
             faq_draft_handler_factory=build_faq_draft_handler,
+            complaint_review_handler_factory=build_complaint_review_handler,
             hostex_event_handler_factory=build_hostex_event_handler,
             credential_part_handler_factory=build_credential_part_handler,
             customer_tag_handler_factory=(
@@ -1565,6 +1726,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             handler=sync_handler,
             wecom=wecom,
             faq_draft_handler_factory=build_faq_draft_handler,
+            complaint_review_handler_factory=build_complaint_review_handler,
             hostex_event_handler_factory=build_hostex_event_handler,
             credential_part_handler_factory=build_credential_part_handler,
             customer_tag_handler_factory=(

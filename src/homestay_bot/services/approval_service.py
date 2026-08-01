@@ -13,6 +13,11 @@ class PendingApprovalRepository(Protocol):
     async def add(self, approval: BookingApproval) -> BookingApproval:
         """持久化并返回已分配主键的审批单。"""
 
+    async def get_by_source_message_id(
+        self, source_message_id: str
+    ) -> BookingApproval | None:
+        """按来源消息读取已存在的审批单。"""
+
 
 def generate_approval_code() -> str:
     """生成不可预测且适合放入百居易备注的审批编号。"""
@@ -33,14 +38,25 @@ class ApprovalService:
         self._code_factory = code_factory
 
     async def create_pending(
-        self, conversation_id: int, request: BookingRequest
+        self,
+        conversation_id: int,
+        request: BookingRequest,
+        *,
+        source_message_id: str | None = None,
     ) -> BookingApproval:
         """校验日期并创建尚未选择具体房间的审批单。"""
         if request.check_out_date <= request.check_in_date:
             raise ValueError("退房日期必须晚于入住日期")
 
+        if source_message_id is not None:
+            existing = await self._repository.get_by_source_message_id(
+                source_message_id
+            )
+            if existing is not None:
+                return existing
         approval = BookingApproval(
             approval_code=self._code_factory(),
+            source_message_id=source_message_id,
             conversation_id=conversation_id,
             status=ApprovalStatus.PENDING,
             check_in_date=request.check_in_date,

@@ -24,6 +24,7 @@ from homestay_bot.domain.enums import (
     ApprovalStatus,
     BusinessTaskStatus,
     BusinessTaskType,
+    ComplaintReviewStatus,
     ConversationMode,
     CredentialDeliveryStatus,
     CustomerIdentityProvider,
@@ -273,6 +274,44 @@ class Message(Base):
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
+class ComplaintReview(TimestampMixin, Base):
+    """保存脱敏客诉分析和人工回复草稿，不复制客人原始正文。"""
+
+    __tablename__ = "complaint_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_message_id",
+            name="uq_complaint_review_source_message",
+        ),
+        Index("ix_complaint_review_status_updated", "status", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_message_id: Mapped[str] = mapped_column(
+        String(128), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[ComplaintReviewStatus] = mapped_column(
+        Enum(ComplaintReviewStatus, native_enum=False, length=32),
+        default=ComplaintReviewStatus.PENDING_ANALYSIS,
+        nullable=False,
+    )
+    analysis: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, nullable=False
+    )
+    draft: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class KnowledgeEntry(TimestampMixin, Base):
     """保存经过人工审核的中英文民宿知识。"""
 
@@ -373,6 +412,9 @@ class BookingApproval(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     approval_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_message_id: Mapped[str | None] = mapped_column(
+        String(128), unique=True, nullable=True
+    )
     conversation_id: Mapped[int] = mapped_column(
         ForeignKey("conversations.id"), nullable=False, index=True
     )
@@ -477,6 +519,7 @@ class PropertyProfile(TimestampMixin, Base):
     __tablename__ = "property_profiles"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    room_number: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(128), nullable=False)
     room_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     district: Mapped[str | None] = mapped_column(String(64), nullable=True)

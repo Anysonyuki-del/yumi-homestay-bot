@@ -2,7 +2,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import ValidationError
 
@@ -113,7 +113,12 @@ class WeComMessagingPort(Protocol):
     """定义会话层发送客人消息和员工通知的企业微信接口。"""
 
     async def send_text(
-        self, open_kfid: str, external_userid: str, content: str
+        self,
+        open_kfid: str,
+        external_userid: str,
+        content: str,
+        *,
+        message_type: str = "text",
     ) -> str | None:
         """发送客人文本并返回消息编号；重复阶段返回空值。"""
 
@@ -152,7 +157,11 @@ class PendingApprovalPort(Protocol):
     """定义客人确认资料后创建待审批单的唯一入口。"""
 
     async def create_pending(
-        self, conversation_id: int, request: BookingRequest
+        self,
+        conversation_id: int,
+        request: BookingRequest,
+        *,
+        source_message_id: str | None = None,
     ) -> BookingApproval:
         """只创建待审批单，不执行百居易写入。"""
 
@@ -227,6 +236,31 @@ class ConversationJobPort(Protocol):
         """登记可恢复的后台任务。"""
 
 
+class ComplaintClassifierPort(Protocol):
+    """定义本地客诉识别和固定安抚接口。"""
+
+    def classify(self, text: str) -> Any:
+        """识别客诉风险。"""
+
+    @staticmethod
+    def guest_acknowledgement() -> str:
+        """返回客诉固定安抚。"""
+
+
+class ComplaintReviewPort(Protocol):
+    """定义客诉记录所需的最小接口。"""
+
+    async def create_or_get(
+        self,
+        *,
+        conversation_id: int,
+        source_message_id: str,
+        reason: str,
+        risk_level: str,
+    ) -> Any:
+        """按来源消息幂等创建客诉记录。"""
+
+
 class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
@@ -256,6 +290,8 @@ class ConversationService:
         jobs: ConversationJobPort | None = None,
         identity_resolver: WeComIdentityPort | None = None,
         room_assignment: RoomAssignmentPort | None = None,
+        complaint_service: ComplaintClassifierPort | None = None,
+        complaint_reviews: ComplaintReviewPort | None = None,
         defer_model: bool = False,
         commit_boundary: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
@@ -277,6 +313,8 @@ class ConversationService:
         self._jobs = jobs
         self._identity_resolver = identity_resolver
         self._room_assignment = room_assignment
+        self._complaint_service = complaint_service
+        self._complaint_reviews = complaint_reviews
         self._defer_model = defer_model
         self._commit_boundary = commit_boundary
 
@@ -312,6 +350,16 @@ class ConversationService:
             await self._escalate_emergency(conversation, message, emergency)
             return
 
+        if self._complaint_service is not None:
+            classification = self._complaint_service.classify(message.content)
+            if classification.is_complaint:
+                await self._enter_complaint_mode(
+                    conversation,
+                    message,
+                    classification,
+                )
+                return
+
         if conversation.mode is ConversationMode.HUMAN_ACTIVE:
             await self._notify_employee(conversation, message, "人工接待会话收到新消息")
             return
@@ -338,6 +386,9 @@ class ConversationService:
     async def process_recorded_message(self, message: IncomingMessage) -> None:
         """处理已完成入站提交的消息，供后台最终回复任务调用。"""
         conversation = await self._conversations.get_or_create(message)
+        # 员工接管后，旧的延迟任务必须直接丢弃，不能重新唤醒机器人。
+        if conversation.mode is ConversationMode.HUMAN_ACTIVE:
+            return
         if await self._messages.has_newer_guest_message(
             conversation.id,
             message.msgid,
@@ -348,6 +399,42 @@ class ConversationService:
             message,
             discard_if_stale=True,
         )
+
+    async def _enter_complaint_mode(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        classification: Any,
+    ) -> None:
+        """切换人工并登记客诉分析任务，客人只收到固定安抚。"""
+        await self._switch_to_human(
+            conversation,
+            f"complaint:{classification.reason or 'complaint'}",
+        )
+        if self._complaint_service is not None:
+            await self._send_guest_reply(
+                conversation,
+                self._complaint_service.guest_acknowledgement(),
+                message_type="complaint_ack",
+            )
+        if self._complaint_reviews is None:
+            return
+        review = await self._complaint_reviews.create_or_get(
+            conversation_id=conversation.id,
+            source_message_id=message.msgid,
+            reason=classification.reason or "complaint",
+            risk_level=classification.risk_level,
+        )
+        if self._jobs is not None:
+            await self._jobs.enqueue(
+                "complaint_review_generate",
+                {
+                    "review_id": int(review.id),
+                    "conversation_id": conversation.id,
+                    "source_message_id": message.msgid,
+                },
+                dedupe_key=f"complaint:{message.msgid}",
+            )
 
     async def _stage_fast_ack(
         self,
@@ -525,7 +612,11 @@ class ConversationService:
             )
             return
 
-        approval = await self._approvals.create_pending(conversation.id, request)
+        approval = await self._approvals.create_pending(
+            conversation.id,
+            request,
+            source_message_id=message.msgid,
+        )
         await self._switch_to_human(
             conversation,
             "booking_approval_created",
@@ -590,8 +681,9 @@ class ConversationService:
             conversation.open_kfid,
             conversation.external_userid,
             content,
+            message_type=message_type,
         )
-        if message_id is None:
+        if message_id is None or message_id.startswith("outbox:"):
             return
         if message_type == "text":
             await self._messages.record_bot(conversation.id, message_id, content)

@@ -11,6 +11,7 @@ from homestay_bot.application import application_lifespan
 from homestay_bot.config import Settings
 from homestay_bot.logging import configure_logging_redaction
 from homestay_bot.routes.approvals import router as approvals_router
+from homestay_bot.routes.complaints import router as complaints_router
 from homestay_bot.routes.customers import router as customers_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.routes.health import router as health_router
@@ -61,6 +62,7 @@ app.include_router(tasks_router)
 app.include_router(private_files_router)
 app.include_router(properties_router)
 app.include_router(customers_router)
+app.include_router(complaints_router)
 app.include_router(health_router)
 app.mount(
     "/static",

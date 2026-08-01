@@ -86,7 +86,11 @@ async def test_customer_room_number_requires_one_active_order() -> None:
 
     async with factory() as session:
         customer = Customer(display_name="房间号客户")
-        first_property = PropertyProfile(id=201, title="房间一")
+        first_property = PropertyProfile(
+            id=201,
+            title="房间一",
+            room_number="1201",
+        )
         second_property = PropertyProfile(id=202, title="房间二")
         session.add_all([customer, first_property, second_property])
         await session.flush()
@@ -103,7 +107,7 @@ async def test_customer_room_number_requires_one_active_order() -> None:
         )
         await session.commit()
         repository = SQLAlchemyContextRepository(session)
-        assert await repository.get_customer_room_number(customer.id) == "201"
+        assert await repository.get_customer_room_number(customer.id) == "1201"
 
         session.add(
             StayOrder(

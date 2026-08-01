@@ -50,18 +50,24 @@ async def test_list_kf_account_ids_uses_customer_service_secret() -> None:
 @pytest.mark.asyncio
 async def test_identity_lookups_return_kf_and_customer_names() -> None:
     """员工通知使用企业微信返回的客服账号名和客人昵称。"""
+    account_requests = 0
+    customer_requests = 0
+
     def responder(request: httpx.Request) -> httpx.Response:
+        nonlocal account_requests, customer_requests
         if request.url.path.endswith("/gettoken"):
             return httpx.Response(
                 200,
                 json={"errcode": 0, "access_token": "kf-access", "expires_in": 7200},
             )
         if request.url.path.endswith("/kf/account/list"):
+            account_requests += 1
             return httpx.Response(
                 200,
                 json={"errcode": 0, "account_list": [{"open_kfid": "wk-1", "name": "YuMi客服"}]},
             )
         assert request.url.path.endswith("/kf/customer/batchget")
+        customer_requests += 1
         return httpx.Response(
             200,
             json={"errcode": 0, "customer_list": [{"external_userid": "wm-1", "nickname": "张三"}]},
@@ -75,7 +81,11 @@ async def test_identity_lookups_return_kf_and_customer_names() -> None:
     )
     try:
         assert await client.get_kf_account_name("wk-1") == "YuMi客服"
+        assert await client.get_kf_account_name("wk-1") == "YuMi客服"
         assert await client.get_kf_customer_name("wk-1", "wm-1") == "张三"
+        assert await client.get_kf_customer_name("wk-1", "wm-1") == "张三"
+        assert account_requests == 1
+        assert customer_requests == 1
     finally:
         await client.aclose()
 
@@ -333,6 +343,39 @@ async def test_send_internal_message_uses_agent_secret() -> None:
     )
 
     assert token_secrets == ["agent-secret"]
+
+
+@pytest.mark.asyncio
+async def test_send_internal_card_only_contains_backend_entrypoint() -> None:
+    """客诉卡片只能打开后台编辑页，不携带可直接发送客人的动作。"""
+    def responder(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/gettoken"):
+            return httpx.Response(
+                200,
+                json={
+                    "errcode": 0,
+                    "errmsg": "ok",
+                    "access_token": "agent-access",
+                    "expires_in": 7200,
+                },
+            )
+        assert request.url.path.endswith("/cgi-bin/message/send")
+        body = request.content.decode()
+        assert '"msgtype":"template_card"' in body
+        assert '"url":"https://example.test/employee/complaints/7"' in body
+        assert "发送给客人" not in body
+        return httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+
+    client = WeComApiClient(
+        "corp-id", "kf-secret", "agent-secret", transport=httpx.MockTransport(responder)
+    )
+    await client.send_internal_card(
+        agent_id=100001,
+        employee_userids=["staff-1"],
+        title="客诉待复核",
+        description="房间设施问题",
+        url="https://example.test/employee/complaints/7",
+    )
 
 
 @pytest.mark.asyncio

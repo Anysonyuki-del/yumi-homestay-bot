@@ -145,3 +145,15 @@ class KnowledgeCandidateDraftStatus(StrEnum):
     PENDING = "pending"
     READY = "ready"
     FAILED = "failed"
+
+
+class ComplaintReviewStatus(StrEnum):
+    """定义客诉分析、人工编辑和发送状态。"""
+
+    PENDING_ANALYSIS = "pending_analysis"
+    READY_FOR_REVIEW = "ready_for_review"
+    EDITING = "editing"
+    SENT = "sent"
+    RETURNED = "returned"
+    ANALYSIS_FAILED = "analysis_failed"
+    CANCELLED = "cancelled"

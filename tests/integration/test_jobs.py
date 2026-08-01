@@ -236,6 +236,33 @@ async def test_outbound_messages_are_committed_to_outbox_before_network_send() -
 
 
 @pytest.mark.asyncio
+async def test_completed_guest_processing_job_purges_original_payload() -> None:
+    """完成的延迟客服任务不得长期保存客人原文。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        job = Job(
+            job_type="wecom_process_message",
+            payload={"content": "我的手机号是13800138000", "msgid": "msg-1"},
+            status=JobStatus.RUNNING,
+            attempts=1,
+            available_at=datetime.now(UTC),
+        )
+        session.add(job)
+        await session.commit()
+        await SQLAlchemyJobRepository(session).mark_completed(job)
+        await session.commit()
+        await session.refresh(job)
+
+        assert job.payload == {}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_ack_and_final_reply_use_different_outbox_keys() -> None:
     """同一客人消息的安抚与最终回复必须各自创建发送任务。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

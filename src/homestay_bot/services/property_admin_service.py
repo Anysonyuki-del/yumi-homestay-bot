@@ -24,6 +24,7 @@ class PropertyFields:
     address_hint: str
     parking_instructions: str
     is_active: bool
+    room_number: str = ""
 
 
 class PropertyAdminService:
@@ -94,6 +95,7 @@ class PropertyAdminService:
         property_profile = await self._require_property_for_update(property_id)
         cleaned = self._clean_fields(fields)
         property_profile.title = cleaned.title
+        property_profile.room_number = cleaned.room_number or None
         property_profile.room_type = cleaned.room_type or None
         property_profile.district = cleaned.district or None
         property_profile.address_hint = cleaned.address_hint or None
@@ -220,9 +222,12 @@ class PropertyAdminService:
             address_hint=fields.address_hint.strip(),
             parking_instructions=fields.parking_instructions.strip(),
             is_active=fields.is_active,
+            room_number=fields.room_number.strip(),
         )
         if not cleaned.title or len(cleaned.title) > 128:
             raise ValueError("房源名称不能为空且不得超过 128 个字符")
+        if len(cleaned.room_number) > 32:
+            raise ValueError("房间号不得超过 32 个字符")
         if len(cleaned.room_type) > 128 or len(cleaned.district) > 64:
             raise ValueError("房型或区域内容过长")
         if (

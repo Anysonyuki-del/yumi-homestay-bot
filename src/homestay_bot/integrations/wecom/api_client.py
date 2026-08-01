@@ -42,6 +42,8 @@ class WeComApiClient:
         self._kf_secret = kf_secret
         self._agent_secret = agent_secret
         self._tokens: dict[str, CachedToken] = {}
+        self._kf_accounts_cache: tuple[float, list[dict[str, str]]] | None = None
+        self._kf_customer_names: dict[tuple[str, str], tuple[float, str | None]] = {}
         self._client = httpx.AsyncClient(
             base_url=WECOM_BASE_URL,
             timeout=10.0,
@@ -88,6 +90,11 @@ class WeComApiClient:
 
     async def list_kf_accounts(self) -> list[dict[str, str]]:
         """读取微信客服账号的稳定 ID 和展示名称。"""
+        now = time.monotonic()
+        if self._kf_accounts_cache is not None:
+            expires_at, cached = self._kf_accounts_cache
+            if expires_at > now:
+                return [dict(item) for item in cached]
         access_token = await self._get_access_token(self._kf_secret)
         response = await self._client.get(
             "/cgi-bin/kf/account/list",
@@ -96,7 +103,7 @@ class WeComApiClient:
         response.raise_for_status()
         payload = response.json()
         self._raise_for_error(payload)
-        return [
+        accounts = [
             {
                 "open_kfid": str(item["open_kfid"]),
                 "name": str(item.get("name", "")).strip(),
@@ -104,6 +111,8 @@ class WeComApiClient:
             for item in payload.get("account_list", [])
             if item.get("open_kfid")
         ]
+        self._kf_accounts_cache = (now + 60, accounts)
+        return [dict(item) for item in accounts]
 
     async def get_kf_account_name(self, open_kfid: str) -> str | None:
         """按客服账号 ID 读取员工通知使用的客服名称。"""
@@ -118,6 +127,11 @@ class WeComApiClient:
         external_userid: str,
     ) -> str | None:
         """读取微信客服会话客人的昵称，查不到时由上层使用友好兜底名。"""
+        cache_key = (open_kfid, external_userid)
+        now = time.monotonic()
+        cached = self._kf_customer_names.get(cache_key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
         access_token = await self._get_access_token(self._kf_secret)
         response = await self._client.post(
             "/cgi-bin/kf/customer/batchget",
@@ -132,9 +146,12 @@ class WeComApiClient:
         self._raise_for_error(payload)
         customers = payload.get("customer_list", [])
         if not customers:
+            self._kf_customer_names[cache_key] = (now + 300, None)
             return None
         nickname = str(customers[0].get("nickname", "")).strip()
-        return nickname or None
+        value = nickname or None
+        self._kf_customer_names[cache_key] = (now + 300, value)
+        return value
 
     async def sync_messages(
         self,
@@ -284,6 +301,35 @@ class WeComApiClient:
                 "agentid": agent_id,
                 "text": {"content": content},
                 "safe": 0,
+            },
+        )
+        response.raise_for_status()
+        self._raise_for_error(response.json())
+
+    async def send_internal_card(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        title: str,
+        description: str,
+        url: str,
+    ) -> None:
+        """发送只能打开后台入口的内部应用卡片。"""
+        access_token = await self._get_access_token(self._agent_secret)
+        response = await self._client.post(
+            "/cgi-bin/message/send",
+            params={"access_token": access_token},
+            json={
+                "touser": "|".join(employee_userids),
+                "msgtype": "template_card",
+                "agentid": agent_id,
+                "template_card": {
+                    "card_type": "text_notice",
+                    "main_title": {"title": title[:64], "desc": description[:128]},
+                    "sub_title_text": "请进入后台复核后发送",
+                    "card_action": {"type": 1, "url": url},
+                },
             },
         )
         response.raise_for_status()

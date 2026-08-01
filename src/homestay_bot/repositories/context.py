@@ -207,7 +207,9 @@ class SQLAlchemyContextRepository:
         room_numbers = list(
             (
                 await self._session.scalars(
-                    select(StayOrder.property_id)
+                    select(PropertyProfile.room_number)
+                    .select_from(StayOrder)
+                    .join(PropertyProfile, PropertyProfile.id == StayOrder.property_id)
                     .where(
                         StayOrder.customer_id == customer_id,
                         StayOrder.status.not_in(
@@ -221,7 +223,8 @@ class SQLAlchemyContextRepository:
         )
         if len(room_numbers) != 1:
             return None
-        return str(room_numbers[0])
+        room_number = room_numbers[0]
+        return str(room_number) if room_number else None
 
     async def _get_or_create_summary(
         self, customer_id: int

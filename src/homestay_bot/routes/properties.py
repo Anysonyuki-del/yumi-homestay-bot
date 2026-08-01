@@ -151,6 +151,7 @@ async def update_property_profile(
     request: Request,
     property_id: int,
     title: str = Form(),
+    room_number: str = Form(""),
     room_type: str = Form(""),
     district: str = Form(""),
     address_hint: str = Form(""),
@@ -167,6 +168,7 @@ async def update_property_profile(
             administrator,
             PropertyFields(
                 title=title,
+                room_number=room_number,
                 room_type=room_type,
                 district=district,
                 address_hint=address_hint,

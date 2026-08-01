@@ -89,6 +89,7 @@ class SQLAlchemyJobRepository:
             "credential_send_part",
             "wecom_send_text",
             "wecom_send_internal_text",
+            "wecom_send_internal_card",
             "hostex_create_reservation",
             "lifecycle_send",
         }
@@ -132,6 +133,9 @@ class SQLAlchemyJobRepository:
         job.status = JobStatus.COMPLETED
         job.locked_at = None
         job.last_error_code = None
+        if job.job_type in {"wecom_process_message", "wecom_send_text"}:
+            # 完成后不再需要原始客文，避免任务表绕过七天消息清理长期留存正文。
+            job.payload = {}
         await self._session.flush()
 
     async def mark_failed(

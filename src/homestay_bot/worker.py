@@ -249,8 +249,10 @@ class Worker[JobType: WorkerJob]:
         "hostex_read",
         "hostex_event",
         "faq_draft_generate",
+        "complaint_review_generate",
         "customer_tag_sync",
         "wecom_process_message",
+        "wecom_send_internal_card",
     }
 
     def __init__(

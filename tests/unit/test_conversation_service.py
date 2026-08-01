@@ -15,6 +15,7 @@ from homestay_bot.integrations.tourism import (
     TourismSearchError,
     WebSearchStatus,
 )
+from homestay_bot.services.complaint_service import ComplaintService
 from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
@@ -194,7 +195,12 @@ class WeComStub:
         self.internal_messages: list[str] = []
 
     async def send_text(
-        self, open_kfid: str, external_userid: str, content: str
+        self,
+        open_kfid: str,
+        external_userid: str,
+        content: str,
+        *,
+        message_type: str = "text",
     ) -> str:
         """记录客人消息并返回企业微信消息编号。"""
         self.guest_messages.append(content)
@@ -238,6 +244,25 @@ class RoomAssignmentStubWithoutRoom:
         return None
 
 
+class ComplaintReviewStub:
+    """记录客诉来源并返回固定客诉编号。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str, str, str]] = []
+
+    async def create_or_get(
+        self,
+        *,
+        conversation_id: int,
+        source_message_id: str,
+        reason: str,
+        risk_level: str,
+    ):
+        """记录客诉创建参数。"""
+        self.calls.append((conversation_id, source_message_id, reason, risk_level))
+        return SimpleNamespace(id=17)
+
+
 class DeferredJobStub:
     """记录快速安抚阶段登记的最终处理任务。"""
 
@@ -256,7 +281,9 @@ class ApprovalServiceStub:
     def __init__(self) -> None:
         self.calls = []
 
-    async def create_pending(self, conversation_id, request):
+    async def create_pending(
+        self, conversation_id, request, *, source_message_id=None
+    ):
         """记录会话和预订资料，不调用任何百居易写接口。"""
         self.calls.append((conversation_id, request))
         return SimpleNamespace(id=9, approval_code="APP-9")
@@ -343,6 +370,8 @@ def build_service(
     jobs=None,
     identity_resolver=None,
     room_assignment=None,
+    complaint_service=None,
+    complaint_reviews=None,
     defer_model: bool = False,
     commit_boundary=None,
 ) -> tuple[ConversationService, ConversationRepositoryStub, AssistantStub, WeComStub]:
@@ -369,6 +398,8 @@ def build_service(
         commit_boundary=commit_boundary,
         identity_resolver=identity_resolver,
         room_assignment=room_assignment,
+        complaint_service=complaint_service,
+        complaint_reviews=complaint_reviews,
     )
     return service, conversations, selected_assistant, wecom
 
@@ -396,6 +427,27 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
     assert jobs.jobs[0][0] == "wecom_process_message"
     assert jobs.jobs[0][2] == "final:msg-1"
     assert commits == 1
+
+
+@pytest.mark.asyncio
+async def test_complaint_enters_human_mode_and_skips_final_model_reply() -> None:
+    """客诉触发后只发固定安抚，不再调用普通客服模型。"""
+    jobs = DeferredJobStub()
+    reviews = ComplaintReviewStub()
+    service, conversations, assistant, wecom = build_service(
+        jobs=jobs,
+        complaint_service=ComplaintService(),
+        complaint_reviews=reviews,
+    )
+
+    await service.handle_message(incoming(content="我要退款，不处理我就投诉平台"))
+
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert assistant.calls == 0
+    assert wecom.guest_messages == [ComplaintService.guest_acknowledgement()]
+    assert reviews.calls == [(1, "msg-1", "refund", "critical")]
+    assert jobs.jobs[0][0] == "complaint_review_generate"
+    assert jobs.jobs[0][1]["review_id"] == 17
 
 
 @pytest.mark.asyncio
@@ -790,6 +842,21 @@ async def test_deepseek_reply_over_1500_characters_is_truncated_before_recording
     assert wecom.guest_messages == [expected]
     assert len(wecom.guest_messages[0]) == 1500
     assert messages.bot_messages == [(1, "bot-1", expected)]
+
+
+@pytest.mark.asyncio
+async def test_outbox_message_is_not_recorded_before_delivery() -> None:
+    """事务型 outbox 仅登记待发送任务时不能污染机器人上下文。"""
+    messages = MessageServiceStub()
+    service, _, _, wecom = build_service(messages=messages)
+
+    async def enqueue_only(*args, **kwargs) -> str:
+        return "outbox:pending"
+
+    wecom.send_text = enqueue_only  # type: ignore[method-assign]
+    await service.handle_message(incoming())
+
+    assert messages.bot_messages == []
 
 
 @pytest.mark.asyncio

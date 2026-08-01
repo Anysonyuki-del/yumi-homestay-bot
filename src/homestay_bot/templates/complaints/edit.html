@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>客诉复核</title><link rel="stylesheet" href="/static/app.css"></head>
+<body>
+<main class="page-shell">
+  <h1>客诉复核</h1>
+  <p>状态：{{ review.status }}　风险：{{ review.risk_level }}</p>
+  <section>
+    <h2>AI 分析</h2>
+    <pre>{{ review.analysis | tojson(indent=2) }}</pre>
+  </section>
+  <section>
+    <h2>完整对话</h2>
+    {% for message in messages %}<p><strong>{{ message.origin }}：</strong>{{ message.content }}</p>{% endfor %}
+  </section>
+  <form method="post" action="/employee/complaints/{{ review.id }}/save">
+    <input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>回复草稿<textarea name="draft" rows="8">{{ review.draft or '' }}</textarea></label><button type="submit">保存草稿</button>
+  </form>
+  <form method="post" action="/employee/complaints/{{ review.id }}/send"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="draft" value="{{ review.draft or '' }}"><button type="submit">发送给客人</button></form>
+  <form method="post" action="/employee/complaints/{{ review.id }}/return"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">退回重新分析</button></form>
+  <form method="post" action="/employee/complaints/{{ review.id }}/cancel"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">关闭客诉</button></form>
+</main>
+</body>
+</html>
