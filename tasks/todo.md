@@ -2356,6 +2356,14 @@ Expected: 只提交验收记录；工作区干净；不合并 `main`，不部署
 - [ ] 在行为测试保持不变的前提下，只提取应用装配和 worker handler 注册边界，不重写 ConversationService 或 DeepSeek 协议。
 - [ ] 运行全量 pytest、Ruff、mypy、pip check、compileall、迁移回放和 `git diff --check`，再检查本机运行健康状态。
 
+### Review（2026-08-03 部署收尾）
+
+- [x] 主干提交 `a57afd2` 已包含本轮代码、迁移、测试和部署入口改动；历史功能分支提交已在主干祖先链中。
+- [x] 本机运行副本已同步主干源码，数据库实际版本为 `0014_query_indexes (head)`，LaunchAgent `com.rin.homestay-bot` 正常运行。
+- [x] 新鲜验证：`514 passed, 15 skipped`；Ruff、mypy（79 个源文件）、pip check、compileall 和 `git diff --check` 全部通过。
+- [x] 运行目录已有部署前备份；两份房源资料因包含敏感信息，继续作为未跟踪文件保留，不纳入 Git。
+- [ ] 未配置 Git 远程仓库，因此本次无法执行远程 push；当前交付为本地 `main` 主干合并及本机部署。
+
 ### 当前只读基线
 
 - 全量测试：`466 passed, 15 skipped, 1 warning`；15 项为显式关闭的真实 DeepSeek、百居易和企业微信契约测试。
