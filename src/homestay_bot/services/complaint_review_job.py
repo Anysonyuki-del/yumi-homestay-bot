@@ -29,6 +29,53 @@ class ComplaintMessageContextPort(Protocol):
 class SQLAlchemyComplaintMessageContext:
     """把消息仓储转换为客诉分析所需的最小上下文。"""
 
+    # 这些规则只在发送给客诉分析模型前执行，避免凭证和可定位住址越过边界。
+    _REDACTION_RULES = (
+        (
+            re.compile(
+                r"(?:详细地址|地址)\s*[:：]?\s*"
+                r"(?:湖北省)?武汉市?"
+                r"(?:洪山区|武昌区|青山区|汉阳区|江汉区|江岸区|硚口区|"
+                r"蔡甸区|东西湖区|黄陂区|新洲区|江夏区)"
+                r"[^，。；;\n]{0,60}(?:路|街|大道|小区|号|栋|室)"
+                r"[^，。；;\n]{0,20}"
+            ),
+            "[详细地址已脱敏]",
+        ),
+        (
+            re.compile(
+                r"(?:门锁|房门|开门)\s*密码\s*(?:是|为)?\s*[:：]?"
+                r"[A-Za-z0-9_-]{4,}"
+            ),
+            "[门锁密码已过滤]",
+        ),
+        (
+            re.compile(
+                r"验证码\s*(?:是|为)?\s*[:：]?\s*[A-Za-z0-9_-]{4,}"
+            ),
+            "[验证码已过滤]",
+        ),
+        (
+            re.compile(
+                r"(?:二维码|QR\s*code)\s*[:：]?\s*"
+                r"(?:https?://\S+|[A-Za-z0-9+/=_-]{4,})",
+                re.IGNORECASE,
+            ),
+            "[二维码已过滤]",
+        ),
+        (
+            re.compile(
+                r"(?:入住指南|入住说明|入住凭证|开门指南)\s*[:：]?"
+                r"[^\n。；;!?！？]*[。；;!?！？]?"
+            ),
+            "[入住凭证内容已过滤]",
+        ),
+        (
+            re.compile(r"https?://\S+", re.IGNORECASE),
+            "[链接已过滤]",
+        ),
+    )
+
     def __init__(self, repository: Any) -> None:
         """绑定 SQLAlchemy 消息仓储。"""
         self._repository = repository
@@ -57,7 +104,7 @@ class SQLAlchemyComplaintMessageContext:
 
     @staticmethod
     def _sanitize(content: str) -> str:
-        """在模型边界遮盖手机号、邮箱和长编号。"""
+        """在模型边界遮盖身份信息、凭证、地址和链接。"""
         content = re.sub(r"(?<!\d)\d{11}(?!\d)", "[手机号已脱敏]", content)
         content = re.sub(
             r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
@@ -65,7 +112,10 @@ class SQLAlchemyComplaintMessageContext:
             content,
             flags=re.IGNORECASE,
         )
-        return re.sub(r"(?<!\d)\d{12,}(?!\d)", "[编号已脱敏]", content)
+        content = re.sub(r"(?<!\d)\d{12,}(?!\d)", "[编号已脱敏]", content)
+        for pattern, replacement in SQLAlchemyComplaintMessageContext._REDACTION_RULES:
+            content = pattern.sub(replacement, content)
+        return content
 
 
 class ComplaintNotificationPort(Protocol):
@@ -121,9 +171,13 @@ class ComplaintReviewJobService:
         review = await self._reviews.get(review_id)
         if review is None:
             raise LookupError("客诉记录不存在")
-        if review.status is not ComplaintReviewStatus.PENDING_ANALYSIS and str(
-            review.status
-        ) != ComplaintReviewStatus.PENDING_ANALYSIS.value:
+        if review.status not in {
+            ComplaintReviewStatus.PENDING_ANALYSIS,
+            ComplaintReviewStatus.RETURNED,
+        } and str(review.status) not in {
+            ComplaintReviewStatus.PENDING_ANALYSIS.value,
+            ComplaintReviewStatus.RETURNED.value,
+        }:
             return
         context = await self._messages.list_context(
             review.conversation_id,
@@ -135,12 +189,12 @@ class ComplaintReviewJobService:
             messages=context,
             customer_context={},
         )
-        await self._reviews.mark_ready(
-            review_id,
-            analysis=draft.model_dump(exclude={"reply_draft"}),
-            draft=draft.reply_draft,
-        )
         if not self._employee_userids:
+            await self._reviews.mark_ready(
+                review_id,
+                analysis=draft.model_dump(exclude={"reply_draft"}),
+                draft=draft.reply_draft,
+            )
             return
         analysis = draft.model_dump()
         await self._notifications.send_internal_card(
@@ -152,4 +206,10 @@ class ComplaintReviewJobService:
                 f"诉求：{analysis['customer_request']}"
             ),
             url=f"{self._edit_url}/{review_id}",
+        )
+        # 通知成功后才进入 READY；通知失败时任务重试仍会重新生成入口。
+        await self._reviews.mark_ready(
+            review_id,
+            analysis=draft.model_dump(exclude={"reply_draft"}),
+            draft=draft.reply_draft,
         )

@@ -171,6 +171,12 @@ class CustomerMergeSuggestion(TimestampMixin, Base):
             name="ck_customer_merge_distinct",
         ),
         Index("ix_customer_merge_status_created", "status", "created_at"),
+        Index(
+            "ix_customer_merge_source_target_status",
+            "source_customer_id",
+            "target_customer_id",
+            "status",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -250,6 +256,14 @@ class Message(Base):
     """保存已去重的企业微信消息和机器人发送记录。"""
 
     __tablename__ = "messages"
+    __table_args__ = (
+        Index(
+            "ix_messages_conversation_type_id",
+            "conversation_id",
+            "message_type",
+            "id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     conversation_id: Mapped[int] = mapped_column(
@@ -261,6 +275,9 @@ class Message(Base):
     )
     message_type: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSON, default=dict, nullable=False
+    )
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -309,6 +326,15 @@ class ComplaintReview(TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    delivery_error_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    delivery_outbox_id: Mapped[str | None] = mapped_column(
+        String(128), unique=True, nullable=True
+    )
+    delivery_external_message_id: Mapped[str | None] = mapped_column(
+        String(128), unique=True, nullable=True
     )
 
 
@@ -463,7 +489,10 @@ class Job(TimestampMixin, Base):
     """保存可恢复的后台任务及其重试状态。"""
 
     __tablename__ = "jobs"
-    __table_args__ = (Index("ix_jobs_claim", "status", "available_at"),)
+    __table_args__ = (
+        Index("ix_jobs_claim", "status", "available_at"),
+        Index("ix_jobs_type_claim", "status", "job_type", "available_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -532,6 +561,14 @@ class StayOrder(TimestampMixin, Base):
     """保存从百居易同步的入住订单关键事实。"""
 
     __tablename__ = "stay_orders"
+    __table_args__ = (
+        Index(
+            "ix_stay_orders_customer_status_checkin",
+            "customer_id",
+            "status",
+            "check_in_date",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     hostex_reservation_code: Mapped[str] = mapped_column(
@@ -642,6 +679,12 @@ class BusinessTask(TimestampMixin, Base):
                 "OR (property_id IS NOT NULL AND service_date IS NOT NULL)"
             ),
             name="ck_business_task_execution_fields",
+        ),
+        Index(
+            "ix_business_tasks_status_assignee_service_date",
+            "status",
+            "assigned_employee_id",
+            "service_date",
         ),
     )
 

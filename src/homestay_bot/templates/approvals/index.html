@@ -21,6 +21,10 @@
         <li>当前没有待处理审批。</li>
         {% endfor %}
       </ul>
+      <nav aria-label="审批分页">
+        {% if previous_page %}<a href="/employee/approvals?page={{ previous_page }}">上一页</a>{% endif %}
+        {% if next_page %}<a href="/employee/approvals?page={{ next_page }}">下一页</a>{% endif %}
+      </nav>
     </main>
   </body>
 </html>

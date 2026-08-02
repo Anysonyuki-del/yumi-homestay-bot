@@ -63,8 +63,10 @@ class ApprovalPageService:
             ],
         }
 
-    async def list_pending(self) -> list[BookingApproval]:
-        """返回需要员工关注的待处理审批单。"""
+    async def list_pending(
+        self, *, offset: int, limit: int
+    ) -> list[BookingApproval]:
+        """按稳定顺序分页返回需要员工关注的审批单。"""
         statement = (
             select(BookingApproval)
             .where(
@@ -77,7 +79,9 @@ class ApprovalPageService:
                     }
                 )
             )
-            .order_by(BookingApproval.created_at.desc())
+            .order_by(BookingApproval.created_at.desc(), BookingApproval.id.desc())
+            .offset(offset)
+            .limit(limit)
         )
         return list((await self._session.scalars(statement)).all())
 

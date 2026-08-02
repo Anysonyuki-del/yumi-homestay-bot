@@ -35,8 +35,14 @@ class MergeCustomerCard:
 class CustomerAdminRepository(Protocol):
     """定义管理员 CRM 页面所需的查询和写操作。"""
 
-    async def list_customers(self, query: str | None) -> list[Any]:
-        """搜索未合并客户。"""
+    async def list_customers(
+        self,
+        query: str | None,
+        *,
+        offset: int,
+        limit: int,
+    ) -> list[Any]:
+        """按分页边界搜索未合并客户。"""
 
     async def customer_detail(self, customer_id: int) -> dict[str, Any]:
         """返回客户关联标签、摘要和合并建议。"""
@@ -135,10 +141,17 @@ class CustomerAdminService:
         self,
         query: str | None,
         administrator: Employee,
+        *,
+        offset: int,
+        limit: int,
     ) -> list[CustomerCard]:
-        """只向管理员返回不含密文的客户卡片。"""
+        """按分页边界向管理员返回不含密文的客户卡片。"""
         self._require_admin(administrator)
-        customers = await self._repository.list_customers(query)
+        customers = await self._repository.list_customers(
+            query,
+            offset=offset,
+            limit=limit,
+        )
         return [self._card(item) for item in customers]
 
     async def get_detail(

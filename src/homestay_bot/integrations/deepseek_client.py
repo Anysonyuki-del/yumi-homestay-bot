@@ -52,6 +52,11 @@ _ASSISTANT_FAILURE_REPLIES = {
     ),
 }
 
+_HIGH_RISK_CONTEXT_PATTERN = re.compile(
+    r"退款|退钱|退费|投诉|差评|举报|赔偿|赔付|平台介入|refund|complaint",
+    re.IGNORECASE,
+)
+
 
 class AssistantUnavailableError(RuntimeError):
     """表示普通模型无法生成可安全发送的客服决定。"""
@@ -176,8 +181,12 @@ class HostexReadOnlyToolExecutor:
         self, name: str, arguments: dict[str, Any]
     ) -> list[dict[str, Any]]:
         """执行白名单查询并返回可序列化结果。"""
+        if name == "list_properties":
+            result = await self._hostex.list_properties()
+            return [item.model_dump(mode="json") for item in result]
         if name == "search_availability":
             properties = await self._hostex.list_properties()
+            property_titles = {item.id: item.title for item in properties}
             result = await self._hostex.list_availabilities(
                 [item.id for item in properties],
                 arguments["check_in_date"],
@@ -188,9 +197,16 @@ class HostexReadOnlyToolExecutor:
                 arguments["check_in_date"],
                 arguments["check_out_date"],
             )
+            return [item.model_dump(mode="json") for item in result]
         else:
             raise ValueError(f"不允许执行工具: {name}")
-        return [item.model_dump(mode="json") for item in result]
+        return [
+            {
+                **item.model_dump(mode="json"),
+                "property_title": property_titles.get(item.property_id),
+            }
+            for item in result
+        ]
 
 
 def assistant_decision_schema() -> dict[str, Any]:
@@ -309,7 +325,8 @@ class DeepSeekGuestAssistant:
             "像认真接待住客的民宿老板，不要生硬、官僚或机械。"
             "这只是收到消息后的即时安抚，不要回答事实，不要承诺房态、价格、"
             "物品已经送达或服务已经完成，不要提员工确认、模型、数据库、接口、"
-            "内部任务或等待流程。控制在40字以内，只输出 JSON："
+            "内部任务或等待流程。优先使用‘我已收到您的诉求，正在火速通知管家，"
+            "麻烦您稍作等待’这类温暖表达。控制在60字以内，只输出 JSON："
             '{"reply_text":"温暖安抚"}。'
             if language is Language.ZH
             else (
@@ -331,13 +348,15 @@ class DeepSeekGuestAssistant:
                 response_format={"type": "json_object"},
                 max_tokens=120,
                 extra_body={"thinking": {"type": "disabled"}},
-                timeout=4.0,
+                timeout=1.5,
             )
             reply = FastAckReply.model_validate_json(
                 response.choices[0].message.content or ""
             ).reply_text.strip()
             if re.search(r"https?://|员工|模型|数据库|接口|已送达|已完成", reply):
                 raise ValueError("快速安抚包含内部流程或结果承诺")
+            if not re.search(r"管家", reply) or not re.search(r"稍作等待|稍等", reply):
+                raise ValueError("快速安抚未使用统一管家话术")
             return reply
         except Exception as error:
             logger.info(
@@ -352,16 +371,25 @@ class DeepSeekGuestAssistant:
         if language is Language.EN:
             return "Thanks for letting us know. I’m checking this for you now."
         if re.search(r"矿泉水|补水|保洁|维修|加被子|加枕头|麻将", question):
-            return "收到啦，我先帮您记下这个需求，很快为您安排。"
+            return (
+                "我已收到您的诉求，正在火速通知管家，麻烦您稍作等待，"
+                "我们的管家了解情况后一定会为您解决问题"
+            )
         if re.search(r"武汉|好玩|景点|哪里|推荐", question):
-            return "收到啦，我马上帮您整理武汉近期值得去的地方。"
+            return "我已收到您的诉求，正在火速通知管家，麻烦您稍作等待。"
         if re.search(r"房态|预订|入住|退房|有房|房间", question):
-            return "收到啦，我先帮您查一下，很快把结果告诉您。"
-        return "收到啦，我先帮您看看，很快回复您。"
+            return "我已收到您的诉求，正在火速通知管家，麻烦您稍作等待。"
+        return "我已收到您的诉求，正在火速通知管家，麻烦您稍作等待。"
 
     @staticmethod
     def tool_definitions() -> list[dict[str, Any]]:
-        """只暴露房态和参考价查询函数。"""
+        """只暴露房源名称、房态和参考价查询函数。"""
+        property_parameters = {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
         date_parameters = {
             "type": "object",
             "properties": {
@@ -372,6 +400,17 @@ class DeepSeekGuestAssistant:
             "additionalProperties": False,
         }
         return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_properties",
+                    "description": (
+                        "读取百居易物理房源的名称、编号和地址，"
+                        "用于房源介绍；不得自行编造房间名称。"
+                    ),
+                    "parameters": property_parameters,
+                },
+            },
             {
                 "type": "function",
                 "function": {
@@ -394,7 +433,7 @@ class DeepSeekGuestAssistant:
     def _minimize_personal_data(
         messages: list[dict[str, str]],
     ) -> list[dict[str, str]]:
-        """移除失败轮次，并在非预订阶段隐藏姓名和手机号。"""
+        """移除失败轮次，并在所有语境隐藏姓名和手机号。"""
         cleaned: list[dict[str, str]] = []
         for item in messages:
             if (
@@ -410,14 +449,25 @@ class DeepSeekGuestAssistant:
 
         # DeepSeek V4 Flash 在结构化输出和工具同时启用时，多轮历史仍可能
         # 返回纯空白；只保留上一轮问答和当前问题，兼顾连续性与稳定性。
+        latest_user = next(
+            (item for item in reversed(cleaned) if item.get("role") == "user"),
+            None,
+        )
+        if latest_user is not None:
+            latest_content = latest_user.get("content", "")
+            previous_content = " ".join(
+                item.get("content", "")
+                for item in cleaned
+                if item is not latest_user
+            )
+            # 新问题与上一轮客诉无关时，不携带高风险历史，避免退款承诺、
+            # 客诉情绪或任务安排串入房间介绍和补给等独立问题。
+            if (
+                not _HIGH_RISK_CONTEXT_PATTERN.search(latest_content)
+                and _HIGH_RISK_CONTEXT_PATTERN.search(previous_content)
+            ):
+                cleaned = [latest_user]
         cleaned = cleaned[-3:]
-        combined = "\n".join(item.get("content", "") for item in cleaned)
-        if re.search(
-            r"预订|订房|下单|booking|reservation|reserve",
-            combined,
-            re.IGNORECASE,
-        ):
-            return [dict(item) for item in cleaned]
         minimized: list[dict[str, str]] = []
         for item in cleaned:
             content = re.sub(
@@ -472,7 +522,11 @@ class DeepSeekGuestAssistant:
                     "staff_confirmation_reason": None,
                 }
             )
-        elif property_specific and not property_knowledge_grounded:
+        elif (
+            property_specific
+            and not property_knowledge_grounded
+            and decision.task_suggestion is None
+        ):
             topic = self._property_topic(question_text)
             safe_reply = (
                 f"当前审核资料尚未确认{topic}信息。"
@@ -715,6 +769,17 @@ class DeepSeekGuestAssistant:
             and previous_has_stay_range
         )
 
+    @staticmethod
+    def _should_force_property_catalog(question_text: str) -> bool:
+        """独立房间介绍必须先读取百居易房源名称，避免模型凭空描述。"""
+        return re.search(
+            r"介绍.*(?:房|房间|房源|房型)|"
+            r"(?:房间|房源|房型).*(?:介绍|详情|名称)|"
+            r"room.*(?:intro|detail|name)",
+            question_text,
+            re.IGNORECASE,
+        ) is not None
+
     async def _refine_reply(
         self,
         reply_text: str,
@@ -832,12 +897,16 @@ class DeepSeekGuestAssistant:
         system_prompt = (
             "你是武汉一家7间房民宿的温暖管家。请只输出 JSON，不要输出代码围栏。"
             "回复要自然、亲切、像熟悉住客的民宿老板，先回应客人的感受，再给出清晰答案；"
+            "历史消息只用于补全当前问题缺失的代词或日期；与当前问题无关的投诉、退款、"
+            "任务或情绪不得带入本轮回复，也不得凭空延续历史承诺；"
             "不要生硬复述内部流程，不要说‘以员工确认为准’、‘模型’、‘数据库’或‘接口’。"
             "审核知识未覆盖普通常识时可以谨慎回答；民宿专属事实未确认时，"
             "明确说明未确认、提供替代建议并设置 knowledge_gap=true；"
             "价格、房态、退款、取消、改期、付款或订单状态无法确认时不得猜测，"
             "设置 staff_confirmation_required=true；缺少查询日期时允许追问。"
-            "先判断问题需要哪类信息：审核知识库用于已确认资料，实时房态和参考价必须调用百居易只读工具，"
+            "先判断问题需要哪类信息：审核知识库用于已确认资料，"
+            "房间介绍和房源名称必须调用百居易只读的 list_properties，"
+            "实时房态和参考价必须调用百居易只读工具，"
             "武汉近期活动和旅游推荐必须调用旅游联网搜索；能调用工具时直接调用，不要让客人替你判断来源。"
             "仅当问题适合沉淀为固定 FAQ、审核知识确实缺失且 knowledge_gap=true 时，"
             "设置 faq_candidate=true；房态、价格、订单、退款、预订、实时旅游和"
@@ -881,13 +950,21 @@ class DeepSeekGuestAssistant:
                         for item in minimized_messages[:-1]
                     ),
                 )
-                else "auto"
+                else (
+                    {
+                        "type": "function",
+                        "function": {"name": "list_properties"},
+                    }
+                    if self._should_force_property_catalog(question_text)
+                    else "auto"
+                )
             ),
         }
         property_knowledge_grounded = self._has_relevant_property_knowledge(
             question_text,
             knowledge,
         )
+        property_tool_grounded = False
         availability_fallback: AssistantDecision | None = None
         for attempt in range(1, 3):
             try:
@@ -920,7 +997,7 @@ class DeepSeekGuestAssistant:
                             question_text,
                             property_knowledge_grounded=(
                                 property_knowledge_grounded
-                                or availability_fallback is not None
+                                or property_tool_grounded
                             ),
                             faq_candidate_ids=faq_candidate_ids,
                         )
@@ -947,6 +1024,11 @@ class DeepSeekGuestAssistant:
                             call.function.name,
                             arguments,
                         )
+                        if call.function.name in {
+                            "list_properties",
+                            "search_availability",
+                        }:
+                            property_tool_grounded = True
                         if call.function.name == "search_availability":
                             # 保存已成功查询的日期；后续模型 JSON 无效时仍可安全答复。
                             availability_fallback = self._availability_fallback(

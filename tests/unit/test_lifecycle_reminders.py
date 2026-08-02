@@ -206,6 +206,51 @@ def build_service(
 
 
 @pytest.mark.asyncio
+async def test_delivery_commits_context_before_external_send() -> None:
+    """提醒读取锁应在调用天气或企业微信前释放。"""
+    sequence: list[str] = []
+
+    async def commit_before_external() -> None:
+        """记录外部调用前提交。"""
+        sequence.append("committed")
+
+    class RecordingSender(SenderStub):
+        """记录企业微信调用顺序。"""
+
+        async def send_text(self, open_kfid, external_userid, content):
+            """记录发送发生在提交之后。"""
+            sequence.append("network")
+            return await super().send_text(open_kfid, external_userid, content)
+
+    repository = ReminderRepositoryStub()
+    repository.context = ReminderSendContext(
+        reminder=SimpleNamespace(reminder_type=ReminderType.ARRIVAL_DAY),
+        order=repository.order,
+        property_title="春和景明",
+        district="洪山区",
+        address_hint="附近",
+        parking_instructions="请联系管家",
+        open_kfid="wk-1",
+        external_userid="wm-1",
+        last_guest_at=datetime(2026, 8, 1, 8, tzinfo=UTC),
+        sent_count=0,
+    )
+    sender = RecordingSender()
+    service = LifecycleReminderService(
+        repository,
+        JobQueueStub(),
+        sender,
+        TaskStub(),
+        now_provider=lambda: datetime(2026, 8, 1, 9, tzinfo=UTC),
+        before_external=commit_before_external,
+    )
+
+    await service.deliver(11)
+
+    assert sequence == ["committed", "network"]
+
+
+@pytest.mark.asyncio
 async def test_schedule_uses_four_wuhan_local_times_and_dedupe_keys() -> None:
     """四个提醒必须按武汉时间换算 UTC，并使用订单级幂等键。"""
     repository = ReminderRepositoryStub()

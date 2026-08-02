@@ -61,6 +61,8 @@ class KnowledgeAdminStub:
     """在内存中实现管理页和机器人共享的知识源。"""
 
     def __init__(self) -> None:
+        self.list_all_calls: list[tuple[int, int]] = []
+        self.list_candidate_calls: list[tuple[int, int]] = []
         self.entries = [
             EntryStub(
                 id=1,
@@ -93,9 +95,10 @@ class KnowledgeAdminStub:
         self.converted: tuple[int, int, dict[str, object]] | None = None
         self.snoozed: tuple[int, int] | None = None
 
-    async def list_all(self) -> list[EntryStub]:
+    async def list_all(self, *, offset: int, limit: int) -> list[EntryStub]:
         """返回全部条目供管理页展示。"""
-        return self.entries
+        self.list_all_calls.append((offset, limit))
+        return self.entries * (limit if offset == 50 else 1)
 
     async def list_active(self) -> list[EntryStub]:
         """只返回启用条目供机器人使用。"""
@@ -121,9 +124,12 @@ class KnowledgeAdminStub:
         entry = next(item for item in self.entries if item.id == entry_id)
         entry.is_enabled = enabled
 
-    async def list_candidates(self) -> list[CandidateStub]:
+    async def list_candidates(
+        self, *, offset: int, limit: int
+    ) -> list[CandidateStub]:
         """返回管理员待归纳候选。"""
-        return self.candidates
+        self.list_candidate_calls.append((offset, limit))
+        return self.candidates * (limit if offset == 50 else 1)
 
     async def convert_candidate(
         self,
@@ -176,6 +182,25 @@ def test_regular_customer_service_can_read_but_cannot_modify() -> None:
     assert "几点入住" in detail.text
     assert "是否提供停车位" not in detail.text
     assert disable.status_code == 403
+
+
+def test_knowledge_lists_use_independent_bounded_pagination() -> None:
+    """正式知识和 FAQ 候选必须分别分页且保留彼此页码。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+
+    response = client.get("/employee/knowledge?page=2&candidate_page=2")
+
+    assert response.status_code == 200
+    assert service.list_all_calls == [(50, 51)]
+    assert service.list_candidate_calls == [(50, 51)]
+    assert (
+        'href="/employee/knowledge?page=1&amp;candidate_page=2"'
+        in response.text
+    )
+    assert (
+        'href="/employee/knowledge?page=2&amp;candidate_page=3"'
+        in response.text
+    )
 
 
 @pytest.mark.asyncio

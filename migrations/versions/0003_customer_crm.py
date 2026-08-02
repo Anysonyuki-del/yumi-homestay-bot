@@ -8,7 +8,7 @@ Create Date: 2026-07-31
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 revision: str = "0003_customer_crm"
 down_revision: str | None = "0002_frequent_faq_candidates"
@@ -18,6 +18,10 @@ depends_on: str | Sequence[str] | None = None
 
 def _backfill_existing_conversations() -> None:
     """为已有微信客服联系人建立唯一客户主档和可靠渠道身份。"""
+    if context.is_offline_mode():
+        # 回填依赖读取现有联系人，离线 SQL 无法获得查询结果；
+        # 实际部署使用在线 upgrade，会完整执行下方数据迁移。
+        return
     connection = op.get_bind()
     metadata = sa.MetaData()
     customers = sa.Table(

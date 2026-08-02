@@ -1,5 +1,7 @@
 from collections.abc import AsyncIterator
+from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -15,7 +17,22 @@ def create_engine(database_url: str) -> AsyncEngine:
     if url.get_backend_name() == "sqlite" and "timeout" not in url.query:
         # 本地轮询与发送会并发写 SQLite，短暂锁冲突应等待而非立即失败。
         url = url.update_query_dict({"timeout": "30"})
-    return create_async_engine(url, pool_pre_ping=True)
+    engine = create_async_engine(url, pool_pre_ping=True)
+    if url.get_backend_name() == "sqlite":
+        # SQLite 默认关闭外键校验；显式开启，确保本地行为与 PostgreSQL 一致。
+        @event.listens_for(engine.sync_engine, "connect")
+        def _enable_sqlite_foreign_keys(
+            dbapi_connection: Any,
+            connection_record: Any,
+        ) -> None:
+            """为每个 SQLite 连接开启外键约束。"""
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("PRAGMA foreign_keys=ON")
+            finally:
+                cursor.close()
+
+    return engine
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

@@ -78,16 +78,23 @@ class CustomerAdminStub:
         self.delete_calls: list[tuple[int, int]] = []
         self.merge_calls: list[tuple[int, int, bool]] = []
         self.manual_merge_calls: list[tuple[int, int, int]] = []
-        self.list_calls: list[tuple[str | None, int]] = []
+        self.list_calls: list[tuple[str | None, int, int, int]] = []
         self.manual_merge_error: Exception | None = None
 
-    async def list_customers(self, query, administrator):
+    async def list_customers(
+        self,
+        query,
+        administrator,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+    ):
         """按测试查询返回安全客户卡片并记录管理员编号。"""
         self._require_admin(administrator)
-        self.list_calls.append((query, administrator.id))
+        self.list_calls.append((query, administrator.id, offset, limit))
         if query == "订单":
             return [self.card, self.target_card]
-        return [self.card]
+        return [self.card] * (limit if offset == 50 else 1)
 
     async def get_detail(self, customer_id, administrator):
         """返回不包含手机号明文和密文的客户详情。"""
@@ -397,7 +404,26 @@ def test_admin_searches_masked_manual_merge_targets_from_detail() -> None:
     assert "13900139000" not in detail.text
     assert "phone_ciphertext" not in detail.text
     assert "目标档案：测试客户（客户 #7）" not in detail.text
-    assert customers.list_calls == [("订单", 1)]
+    assert customers.list_calls == [("订单", 1, 0, 50)]
+
+
+def test_customer_list_uses_bounded_pagination_and_preserves_search() -> None:
+    """客户第二页必须有查询上限，导航链接应保留搜索词。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/customers?query=老客户&page=2")
+
+    assert response.status_code == 200
+    assert customers.list_calls == [("老客户", 1, 50, 51)]
+    assert (
+        'href="/employee/customers?query=%E8%80%81%E5%AE%A2%E6%88%B7&amp;page=1"'
+        in response.text
+    )
+    assert (
+        'href="/employee/customers?query=%E8%80%81%E5%AE%A2%E6%88%B7&amp;page=3"'
+        in response.text
+    )
 
 
 def test_manual_merge_uses_one_time_csrf_and_redirects_to_review() -> None:

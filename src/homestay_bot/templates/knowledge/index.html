@@ -54,6 +54,10 @@
         {% else %}
         <p>暂无待归纳问题。</p>
         {% endfor %}
+        <nav aria-label="FAQ 候选分页">
+          {% if previous_candidate_page %}<a href="/employee/knowledge?page={{ page }}&amp;candidate_page={{ previous_candidate_page }}">上一页</a>{% endif %}
+          {% if next_candidate_page %}<a href="/employee/knowledge?page={{ page }}&amp;candidate_page={{ next_candidate_page }}">下一页</a>{% endif %}
+        </nav>
       </section>
 
       <section>
@@ -90,6 +94,10 @@
         {% else %}
         <p>暂无知识条目。</p>
         {% endfor %}
+        <nav aria-label="知识条目分页">
+          {% if previous_page %}<a href="/employee/knowledge?page={{ previous_page }}&amp;candidate_page={{ candidate_page }}">上一页</a>{% endif %}
+          {% if next_page %}<a href="/employee/knowledge?page={{ next_page }}&amp;candidate_page={{ candidate_page }}">下一页</a>{% endif %}
+        </nav>
       </section>
     </main>
   </body>

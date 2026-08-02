@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -36,6 +37,7 @@ class RepositoryStub:
         self.job = job
         self.completed = False
         self.failure = None
+        self.release_calls = 0
 
     async def claim_next(self):
         """返回一次任务后置空。"""
@@ -49,6 +51,10 @@ class RepositoryStub:
     async def mark_failed(self, job, **kwargs) -> None:
         """记录失败策略。"""
         self.failure = kwargs
+
+    async def release_claim_lock(self) -> None:
+        """记录 worker 在所有退出路径上尝试释放领取锁。"""
+        self.release_calls += 1
 
 
 @pytest.mark.asyncio
@@ -156,6 +162,32 @@ async def test_worker_does_not_report_success_when_final_commit_fails() -> None:
         await worker.run_once()
 
     assert reported == []
+    assert repository.release_calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_worker_cancellation_reliably_releases_claim_lock() -> None:
+    """handler 被取消时也必须进入 finally 释放 SQLite 领取锁。"""
+    repository = RepositoryStub(JobStub(job_type="wecom_process_message"))
+    handler_started = asyncio.Event()
+
+    async def blocked_handler(payload) -> None:
+        """停在可取消等待点，模拟应用关闭时中止耗时模型调用。"""
+        handler_started.set()
+        await asyncio.Event().wait()
+
+    worker = Worker(
+        repository=repository,
+        handlers={"wecom_process_message": blocked_handler},
+    )
+    task = asyncio.create_task(worker.run_once())
+    await asyncio.wait_for(handler_started.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert repository.release_calls == 1
 
 
 @pytest.mark.asyncio
@@ -220,6 +252,25 @@ async def test_worker_retries_only_explicitly_safe_send_failure() -> None:
     await worker.run_once()
 
     assert repository.failure["retry_allowed"] is True
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_retry_uncertain_internal_card_failure() -> None:
+    """内部卡片发送结果不明确时必须冻结，不能按任务类型盲目重放。"""
+    repository = RepositoryStub(JobStub(job_type="wecom_send_internal_card"))
+
+    async def uncertain_failure(payload):
+        """模拟请求发出后等待响应超时。"""
+        raise TimeoutError("unknown external result")
+
+    worker = Worker(
+        repository=repository,
+        handlers={"wecom_send_internal_card": uncertain_failure},
+    )
+
+    await worker.run_once()
+
+    assert repository.failure["retry_allowed"] is False
 
 
 @pytest.mark.asyncio
@@ -347,6 +398,57 @@ async def test_wecom_sync_maps_guest_and_servicer_origins_without_loop() -> None
         MessageOrigin.GUEST,
         MessageOrigin.SERVICER,
     ]
+
+
+@pytest.mark.asyncio
+async def test_wecom_sync_preserves_safe_media_metadata_without_guest_content() -> None:
+    """图片消息只保留 media_id 等安全元数据，不把媒体正文送入模型。"""
+    page = SimpleNamespace(
+        msg_list=[
+            SimpleNamespace(
+                msgid="image-1",
+                open_kfid="wk-1",
+                external_userid="wm-1",
+                send_time=1785283200,
+                origin=3,
+                msgtype="image",
+                text=None,
+                image={
+                    "media_id": "media-1",
+                    "pic_url": "https://private.example/image.jpg",
+                },
+            )
+        ],
+        has_more=0,
+        next_cursor="",
+    )
+
+    class ApiStub:
+        """返回一条图片消息。"""
+
+        async def sync_messages(self, **kwargs):
+            """返回固定同步页。"""
+            return page
+
+    handled = []
+
+    async def handle_message(message):
+        """记录统一消息。"""
+        handled.append(message)
+
+    async def enqueue(job_type, payload):
+        """单页消息不应创建续页任务。"""
+
+    handler = WeComSyncJobHandler(
+        api=ApiStub(),
+        handle_message=handle_message,
+        enqueue=enqueue,
+    )
+
+    await handler.sync_page(cursor="", token="sync-token", open_kfid="wk-1")
+
+    assert handled[0].content == ""
+    assert handled[0].metadata == {"media_id": "media-1"}
 
 
 @pytest.mark.asyncio

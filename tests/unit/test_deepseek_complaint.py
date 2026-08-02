@@ -74,6 +74,70 @@ async def test_analyzer_returns_structured_complaint_draft_without_identity() ->
 
 
 @pytest.mark.asyncio
+async def test_analyzer_derives_flags_when_model_returns_descriptions() -> None:
+    """模型返回描述句时应按本地客诉信号确定风险布尔值。"""
+    payload = valid_payload()
+    payload["refund_or_compensation"] = "是否退款或补偿需由管家核实后决定"
+    payload["platform_escalation_risk"] = "高，因客人提出平台投诉"
+    analyzer = DeepSeekComplaintAnalyzer(
+        client=ClientStub(json.dumps(payload, ensure_ascii=False)),
+        model="deepseek-v4-flash",
+    )
+
+    result = await analyzer.generate(
+        reason="refund",
+        risk_level="high",
+        messages=[{"role": "user", "content": "我要退款并投诉平台"}],
+        customer_context={},
+    )
+
+    assert result.refund_or_compensation is True
+    assert result.platform_escalation_risk is True
+
+
+@pytest.mark.asyncio
+async def test_analyzer_ignores_vague_model_flags_without_local_signals() -> None:
+    """没有本地退款或平台信号时，模型模糊描述不得制造风险标记。"""
+    payload = valid_payload()
+    payload["refund_or_compensation"] = "待确认"
+    payload["platform_escalation_risk"] = "待评估"
+    analyzer = DeepSeekComplaintAnalyzer(
+        client=ClientStub(json.dumps(payload, ensure_ascii=False)),
+        model="deepseek-v4-flash",
+    )
+
+    result = await analyzer.generate(
+        reason="agitated",
+        risk_level="high",
+        messages=[{"role": "user", "content": "我现在很生气"}],
+        customer_context={},
+    )
+
+    assert result.refund_or_compensation is False
+    assert result.platform_escalation_risk is False
+
+
+@pytest.mark.asyncio
+async def test_analyzer_falls_back_when_responsibility_risk_is_not_text() -> None:
+    """模型把责任风险返回为布尔值时应安全回退为待核实。"""
+    payload = valid_payload()
+    payload["responsibility_risk"] = True
+    analyzer = DeepSeekComplaintAnalyzer(
+        client=ClientStub(json.dumps(payload, ensure_ascii=False)),
+        model="deepseek-v4-flash",
+    )
+
+    result = await analyzer.generate(
+        reason="complaint",
+        risk_level="critical",
+        messages=[{"role": "user", "content": "我要投诉平台"}],
+        customer_context={},
+    )
+
+    assert result.responsibility_risk == "待核实"
+
+
+@pytest.mark.asyncio
 async def test_analyzer_rejects_refund_amount_or_responsibility_commitment() -> None:
     """模型不得替人工承诺责任、退款或赔偿金额。"""
     payload = valid_payload()

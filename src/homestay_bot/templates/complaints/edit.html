@@ -11,6 +11,8 @@
   </section>
   <section>
     <h2>完整对话</h2>
+    {% if has_older_messages %}<p><a href="/employee/complaints/{{ review.id }}?before_message_id={{ older_before_message_id }}">查看更早消息</a></p>{% endif %}
+    {% if not is_latest_message_page %}<p><a href="/employee/complaints/{{ review.id }}">返回最新消息</a></p>{% endif %}
     {% for message in messages %}<p><strong>{{ message.origin }}：</strong>{{ message.content }}</p>{% endfor %}
   </section>
   <form method="post" action="/employee/complaints/{{ review.id }}/save">

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from homestay_bot.domain.enums import MessageOrigin
 from homestay_bot.domain.models import Message
@@ -17,6 +17,7 @@ class IncomingMessage:
     msgtype: str
     content: str
     sent_at: datetime
+    metadata: dict[str, str] | None = None
 
 
 class MessageRepository(Protocol):
@@ -25,8 +26,8 @@ class MessageRepository(Protocol):
     async def exists(self, external_message_id: str) -> bool:
         """判断外部消息编号是否已经保存。"""
 
-    async def add(self, message: Message) -> None:
-        """保存一条入站或机器人消息。"""
+    async def add(self, message: Message) -> bool:
+        """保存一条入站或机器人消息；唯一键竞争返回 False。"""
 
     async def list_recent(
         self,
@@ -57,17 +58,17 @@ class MessageService:
         """只保存首次出现的消息编号，并向编排层返回去重结果。"""
         if await self._repository.exists(incoming.msgid):
             return False
-        await self._repository.add(
+        return await self._repository.add(
             Message(
                 conversation_id=conversation_id,
                 external_message_id=incoming.msgid,
                 origin=incoming.origin,
                 message_type=incoming.msgtype,
                 content=incoming.content,
+                message_metadata=incoming.metadata or {},
                 sent_at=incoming.sent_at,
             )
         )
-        return True
 
     async def record_bot(
         self,
@@ -76,6 +77,7 @@ class MessageService:
         content: str,
         sent_at: datetime | None = None,
         message_type: str = "text",
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """保存机器人已发送文本，便于审计和恢复对话上下文。"""
         if await self._repository.exists(message_id):
@@ -87,6 +89,7 @@ class MessageService:
                 origin=MessageOrigin.BOT,
                 message_type=message_type,
                 content=content,
+                message_metadata=metadata or {},
                 # 企业微信入站时间统一为 UTC，机器人消息也必须使用同一时间基准。
                 sent_at=sent_at or datetime.now(UTC),
             )
@@ -111,6 +114,9 @@ class MessageService:
             if message.origin is MessageOrigin.GUEST:
                 context.append({"role": "user", "content": message.content})
             elif message.origin is MessageOrigin.BOT:
+                # 企业微信异步失败回执确认未送达，不能让模型误以为客人已看到。
+                if message.message_metadata.get("delivery_status") == "failed":
+                    continue
                 context.append({"role": "assistant", "content": message.content})
         return context
 

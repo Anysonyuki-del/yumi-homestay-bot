@@ -22,6 +22,7 @@ def test_configured_application_starts_worker_and_reports_healthy(
         "hostex": threading.Event(),
     }
     worker_wiring: dict[str, bool] = {}
+    worker_recovery_wiring: list[tuple[set[str] | None, set[str], bool]] = []
 
     class FakeOpenAI:
         """记录生命周期传给 OpenAI 客户端的连接配置。"""
@@ -90,6 +91,13 @@ def test_configured_application_starts_worker_and_reports_healthy(
             "lifecycle_handler_factory",
         ):
             worker_wiring[name] = callable(kwargs.get(name))
+        worker_recovery_wiring.append(
+            (
+                kwargs.get("included_job_types"),
+                kwargs.get("excluded_job_types") or set(),
+                bool(kwargs.get("recover_stale")),
+            )
+        )
         started["worker"].set()
         await asyncio.Event().wait()
 
@@ -137,24 +145,17 @@ def test_configured_application_starts_worker_and_reports_healthy(
         response = client.get("/health")
 
         assert response.status_code == 200
-        assert response.json() == {
-            "status": "ok",
-            "database": "ok",
-            "worker_heartbeat": "ok",
-            "wecom_polling": "ok",
-            "hostex_webhook_sync": "ok",
-            "context_maintenance": "ok",
-            "lifecycle_scheduler": "ok",
-            "configuration": "ok",
-            "web_search": "unknown",
-            "wecom_contact_sync": "not_configured",
-        }
+        assert response.json() == {"status": "ok"}
         assert worker_wiring == {
             "faq_draft_handler_factory": True,
             "hostex_event_handler_factory": True,
             "credential_part_handler_factory": True,
             "lifecycle_handler_factory": True,
         }
+        assert worker_recovery_wiring == [
+            (None, {"wecom_process_message"}, True),
+            ({"wecom_process_message"}, set(), True),
+        ]
         assert app.state.private_file_service is app.state.task_page_service
         assert app.state.hostex_webhook_service is not None
         assert chat_configuration == {

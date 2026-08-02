@@ -30,6 +30,10 @@
         <li class="empty-state">当前没有需要处理的任务。</li>
         {% endfor %}
       </ul>
+      <nav aria-label="任务分页">
+        {% if previous_page %}<a href="/employee/tasks?page={{ previous_page }}">上一页</a>{% endif %}
+        {% if next_page %}<a href="/employee/tasks?page={{ next_page }}">下一页</a>{% endif %}
+      </nav>
     </main>
   </body>
 </html>

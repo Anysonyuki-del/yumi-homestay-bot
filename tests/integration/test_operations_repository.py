@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from sqlalchemy import func, select
@@ -17,6 +17,7 @@ from homestay_bot.domain.models import (
     BusinessTask,
     Customer,
     Employee,
+    HostexWebhookEvent,
     Job,
     PropertyProfile,
     RoomOperationalState,
@@ -83,6 +84,115 @@ async def test_pending_ai_task_allows_unknown_property_and_date() -> None:
             )
         )
         await session.commit()
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hostex_completion_does_not_overwrite_newer_event_status() -> None:
+    """百居易网络调用后的旧快照不得覆盖其他事务写入的终态。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        event = HostexWebhookEvent(
+            event_key="conditional-event",
+            event_type="reservation.updated",
+            reservation_code="R-1",
+            payload={},
+        )
+        session.add(event)
+        await session.commit()
+        event_id = event.id
+
+    async with factory() as worker_session:
+        repository = SQLAlchemyOperationsRepository(worker_session)
+        stale_event = await repository.require_pending_event("conditional-event")
+        await worker_session.commit()
+
+        async with factory() as newer_session:
+            newer_event = await newer_session.get(HostexWebhookEvent, event_id)
+            assert newer_event is not None
+            newer_event.status = "failed"
+            newer_event.last_error_code = "newer_failure"
+            await newer_session.commit()
+
+        completed = await repository.mark_event_completed(stale_event)
+        await worker_session.commit()
+
+        await worker_session.refresh(stale_event)
+        assert completed is False
+        assert stale_event.status == "failed"
+        assert stale_event.last_error_code == "newer_failure"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pending_task_unique_race_preserves_outer_transaction(monkeypatch) -> None:
+    """AI 任务来源键竞争应返回已有任务，且不能破坏外层事务。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        customer = Customer(display_name="并发客户")
+        session.add(customer)
+        await session.flush()
+        existing = BusinessTask(
+            source_message_id="task-race-message",
+            task_type=BusinessTaskType.SUPPLIES,
+            status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            customer_id=customer.id,
+            description="竞争方任务",
+        )
+        session.add(existing)
+        await session.commit()
+        existing_id = existing.id
+        customer_id = customer.id
+
+    async with factory() as session:
+        session.add(
+            AuditLog(
+                actor_employee_id=None,
+                action="task_outer_marker",
+                target_type="test",
+                target_id="task-race",
+                details={},
+            )
+        )
+        original_scalar = session.scalar
+        scalar_calls = 0
+
+        async def scalar_after_race(statement, *args, **kwargs):
+            """第一次查询模拟未命中，冲突后读取竞争方已提交的任务。"""
+            nonlocal scalar_calls
+            scalar_calls += 1
+            if scalar_calls == 1:
+                return None
+            return await original_scalar(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "scalar", scalar_after_race)
+        task = await SQLAlchemyOperationsRepository(session).create_pending_confirmation(
+            customer_id=customer_id,
+            source_message_id="task-race-message",
+            task_type=BusinessTaskType.SUPPLIES,
+            description="本 worker 任务",
+        )
+        await session.commit()
+
+        assert task.id == existing_id
+        assert await session.scalar(
+            select(AuditLog.id).where(AuditLog.action == "task_outer_marker")
+        ) is not None
+        assert await session.scalar(
+            select(func.count(AuditLog.id)).where(
+                AuditLog.action == "ai_task_suggested"
+            )
+        ) == 0
 
     await engine.dispose()
 
@@ -256,6 +366,112 @@ async def test_hostex_event_and_reservation_upsert_are_idempotent() -> None:
         assert first_order.id == second_order.id
         assert second_order.status == "cancelled"
         assert order_count == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hostex_event_unique_race_preserves_outer_transaction(monkeypatch) -> None:
+    """Webhook 事件与任务竞争应整体回滚候选写入，并保留外层事务。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(
+            HostexWebhookEvent(
+                event_key="hostex-race-event",
+                event_type="reservation_updated",
+                reservation_code="R-RACE",
+                payload={"source": "competitor"},
+            )
+        )
+        session.add(
+            Job(
+                job_type="hostex_event",
+                dedupe_key="hostex-event:hostex-race-event",
+                payload={"event_key": "hostex-race-event"},
+                available_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+    async with factory() as session:
+        session.add(
+            AuditLog(
+                actor_employee_id=None,
+                action="hostex_outer_marker",
+                target_type="test",
+                target_id="hostex-race",
+                details={},
+            )
+        )
+        original_scalar = session.scalar
+        scalar_calls = 0
+
+        async def scalar_after_race(statement, *args, **kwargs):
+            """第一次查询模拟未命中，让保存点处理事件和任务的联合竞争。"""
+            nonlocal scalar_calls
+            scalar_calls += 1
+            if scalar_calls == 1:
+                return None
+            return await original_scalar(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "scalar", scalar_after_race)
+        created = await SQLAlchemyOperationsRepository(session).record_hostex_event(
+            event_key="hostex-race-event",
+            event_type="reservation_updated",
+            reservation_code="R-RACE",
+            payload={"source": "current-worker"},
+        )
+        await session.commit()
+
+        assert created is False
+        assert await session.scalar(
+            select(AuditLog.id).where(AuditLog.action == "hostex_outer_marker")
+        ) is not None
+        assert await session.scalar(
+            select(func.count(HostexWebhookEvent.id)).where(
+                HostexWebhookEvent.event_key == "hostex-race-event"
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count(Job.id)).where(
+                Job.dedupe_key == "hostex-event:hostex-race-event"
+            )
+        ) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hostex_savepoint_does_not_swallow_outer_integrity_error() -> None:
+    """保存点建立前的外层约束错误不得被误判成重复 Webhook。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(
+            BusinessTask(
+                source_message_id="invalid-outer-task",
+                task_type=BusinessTaskType.SUPPLIES,
+                status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+                property_id=None,
+                service_date=None,
+                description="缺少执行字段",
+            )
+        )
+
+        with pytest.raises(IntegrityError):
+            await SQLAlchemyOperationsRepository(session).record_hostex_event(
+                event_key="hostex-new-event",
+                event_type="reservation_updated",
+                reservation_code="R-NEW",
+                payload={},
+            )
 
     await engine.dispose()
 

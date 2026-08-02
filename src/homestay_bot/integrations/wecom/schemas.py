@@ -20,6 +20,11 @@ class WeComMessage(WeComModel):
     origin: int | None = None
     msgtype: str | None = None
     text: dict[str, Any] | None = None
+    image: dict[str, Any] | None = None
+    voice: dict[str, Any] | None = None
+    video: dict[str, Any] | None = None
+    file: dict[str, Any] | None = None
+    location: dict[str, Any] | None = None
     event: dict[str, Any] | None = None
 
 

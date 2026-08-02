@@ -224,9 +224,15 @@ async def test_customer_search_escapes_wildcards_and_limits_results() -> None:
         await session.commit()
         repository = SQLAlchemyCustomerRepository(session)
 
-        percent_matches = await repository.list_customers("%")
-        underscore_matches = await repository.list_customers("_")
-        all_customers = await repository.list_customers(None)
+        percent_matches = await repository.list_customers(
+            "%", offset=0, limit=50
+        )
+        underscore_matches = await repository.list_customers(
+            "_", offset=0, limit=50
+        )
+        all_customers = await repository.list_customers(
+            None, offset=0, limit=50
+        )
 
         assert [customer.display_name for customer in percent_matches] == [
             "百分号%客户"

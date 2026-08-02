@@ -1,8 +1,11 @@
 import json
+import logging
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+logger = logging.getLogger(__name__)
 
 
 class ComplaintDraftUnavailableError(RuntimeError):
@@ -43,7 +46,6 @@ class ComplaintDraft(BaseModel):
         """限制分析列表长度并稳定去重。"""
         return list(dict.fromkeys(item.strip()[:500] for item in values if item.strip()))
 
-
 class DeepSeekComplaintAnalyzer:
     """调用 DeepSeek 生成仅供人工审核的客诉分析。"""
 
@@ -54,6 +56,14 @@ class DeepSeekComplaintAnalyzer:
         re.IGNORECASE,
     )
     _link = re.compile(r"https?://|\[[^\]]+\]\([^)]+\)", re.IGNORECASE)
+    _refund_signal = re.compile(
+        r"退款|退钱|退费|赔偿|赔钱|补偿|refund|compensation",
+        re.IGNORECASE,
+    )
+    _platform_signal = re.compile(
+        r"平台|介入|举报|媒体|曝光|投诉到|差评|平台投诉|投诉|complaint",
+        re.IGNORECASE,
+    )
 
     def __init__(self, *, client: Any, model: str) -> None:
         """注入 OpenAI 兼容客户端和模型名称。"""
@@ -68,6 +78,27 @@ class DeepSeekComplaintAnalyzer:
             draft.reply_draft
         ):
             raise ComplaintDraftUnavailableError()
+
+    @classmethod
+    def _derive_risk_flags(
+        cls,
+        reason: str,
+        messages: list[dict[str, str]],
+    ) -> tuple[bool, bool]:
+        """从本地原因和最新客人消息确定退款及平台升级标记。"""
+        latest_user_message = next(
+            (
+                message.get("content", "")
+                for message in reversed(messages)
+                if message.get("role") == "user"
+            ),
+            "",
+        )
+        refund = reason == "refund" or bool(
+            cls._refund_signal.search(latest_user_message)
+        )
+        platform = bool(cls._platform_signal.search(latest_user_message))
+        return refund, platform
 
     async def generate(
         self,
@@ -87,6 +118,9 @@ class DeepSeekComplaintAnalyzer:
             "只输出 JSON，字段为 core_issue、customer_request、emotion_level、"
             "customer_claims、known_facts、facts_to_verify、responsibility_risk、"
             "refund_or_compensation、platform_escalation_risk、reply_tone、reply_draft。"
+            "responsibility_risk 必须输出简短文字，不得输出布尔值。"
+            "refund_or_compensation 和 platform_escalation_risk 只能输出 JSON 布尔值 "
+            "true 或 false，不得输出说明文字。"
         )
         payload = {
             "reason": reason[:64],
@@ -105,12 +139,35 @@ class DeepSeekComplaintAnalyzer:
                 extra_body={"thinking": {"type": "disabled"}},
                 max_tokens=1400,
             )
-            draft = ComplaintDraft.model_validate_json(
-                response.choices[0].message.content or ""
-            )
+            raw_draft = json.loads(response.choices[0].message.content or "")
+            if not isinstance(raw_draft, dict):
+                raise ComplaintDraftUnavailableError()
+            refund, platform = self._derive_risk_flags(reason, messages)
+            # 风险标记由本地确定性规则覆盖，模型的模糊描述不能阻断草稿生成。
+            raw_draft["refund_or_compensation"] = refund
+            raw_draft["platform_escalation_risk"] = platform
+            if not isinstance(raw_draft.get("responsibility_risk"), str):
+                # 责任判断必须留给人工；模型返回错误类型时使用中性文字回退。
+                raw_draft["responsibility_risk"] = "待核实"
+            draft = ComplaintDraft.model_validate(raw_draft)
             self._validate_safety(draft)
             return draft
         except ComplaintDraftUnavailableError:
             raise
+        except ValidationError as error:
+            # 只记录失败字段路径，避免把客诉正文或模型原始输出写入日志。
+            fields = tuple(
+                ".".join(str(part) for part in item.get("loc", ()))
+                for item in error.errors()
+            )
+            logger.warning(
+                "DeepSeek 客诉草稿字段校验失败：fields=%s",
+                ",".join(fields),
+            )
+            raise ComplaintDraftUnavailableError() from error
         except Exception as error:
+            logger.warning(
+                "DeepSeek 客诉草稿生成失败：error_type=%s",
+                type(error).__name__,
+            )
             raise ComplaintDraftUnavailableError() from error

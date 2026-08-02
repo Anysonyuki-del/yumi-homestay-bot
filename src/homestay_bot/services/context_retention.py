@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -81,11 +82,13 @@ class ContextRetentionService:
         summarizer: ContextSummarizer,
         *,
         raw_limit: int = 3,
+        before_external: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """注入仓储、摘要器和模型最近原文数量。"""
+        """注入仓储、摘要器、事务边界和模型最近原文数量。"""
         self._repository = repository
         self._summarizer = summarizer
         self._raw_limit = raw_limit
+        self._before_external = before_external
 
     async def maintain_customer(self, customer_id: int, now: datetime) -> None:
         """依次更新短摘要和长期摘要，任一步失败都保留相应原文。"""
@@ -96,6 +99,9 @@ class ContextRetentionService:
             self._raw_limit,
         )
         if short_candidates:
+            if self._before_external is not None:
+                # 读取消息快照后提交，避免模型调用长时间占用数据库连接事务。
+                await self._before_external()
             result = await self._summarizer.summarize(
                 tier="short",
                 existing_summary=summary.short_summary if summary else "",
@@ -114,6 +120,9 @@ class ContextRetentionService:
         )
         if not expired:
             return
+        if self._before_external is not None:
+            # 短摘要可能刚写入数据库，先提交再开始下一次模型调用。
+            await self._before_external()
         result = await self._summarizer.summarize(
             tier="long",
             existing_summary=summary.long_summary if summary else "",

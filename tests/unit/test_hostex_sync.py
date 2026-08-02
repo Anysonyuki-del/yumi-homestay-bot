@@ -106,6 +106,34 @@ async def test_hostex_event_upserts_exact_reservation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hostex_event_releases_event_lock_before_network_call() -> None:
+    """事件行锁应在调用百居易前提交释放，避免网络延迟占用数据库事务。"""
+    sequence: list[str] = []
+
+    async def commit_before_network() -> None:
+        """记录外部调用前的事务边界。"""
+        sequence.append("committed")
+
+    class RecordingHostex(HostexStub):
+        """记录百居易读取发生在提交之后。"""
+
+        async def list_reservations(self, query):
+            """记录网络调用顺序并返回订单。"""
+            sequence.append("network")
+            return await super().list_reservations(query)
+
+    service = HostexSyncService(
+        RecordingHostex([reservation()]),
+        OperationsStub(),
+        before_external=commit_before_network,
+    )
+
+    await service.handle_event("event-1")
+
+    assert sequence == ["committed", "network"]
+
+
+@pytest.mark.asyncio
 async def test_hostex_event_conflict_does_not_guess_order() -> None:
     """零条或多条结果必须保留事件待复核，不能猜测订单。"""
     operations = OperationsStub()

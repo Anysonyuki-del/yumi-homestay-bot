@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import date
 from types import SimpleNamespace
@@ -71,13 +72,22 @@ class TaskPageStub:
         self.ready_calls: list[tuple[int, int]] = []
         self.revoke_calls: list[tuple[int, int]] = []
         self.private_file = None
+        self.detail_error: Exception | None = None
+        self.list_error: Exception | None = None
+        self.assignment_error: Exception | None = None
+        self.list_calls: list[tuple[int, int]] = []
 
-    async def list_for(self, employee):
+    async def list_for(self, employee, *, offset: int, limit: int):
         """返回当前角色可见任务。"""
-        return [self.item]
+        self.list_calls.append((offset, limit))
+        if self.list_error is not None:
+            raise self.list_error
+        return [self.item] * (limit if offset == 50 else 1)
 
     async def detail_for(self, task_id, employee):
         """普通员工只能读取自己的固定任务。"""
+        if self.detail_error is not None:
+            raise self.detail_error
         if employee.role is EmployeeRole.STAFF and task_id != 1:
             raise PermissionError("任务不可见")
         if task_id == 404:
@@ -105,6 +115,8 @@ class TaskPageStub:
 
     async def assignment_options(self):
         """返回管理员可选员工和房间。"""
+        if self.assignment_error is not None:
+            raise self.assignment_error
         return {
             "employees": [SimpleNamespace(id=2, name="阿姨")],
             "properties": [SimpleNamespace(id=101, title="长江中心")],
@@ -237,6 +249,19 @@ def test_admin_sees_all_tasks_and_assignment_form() -> None:
     assert 'name="assigned_employee_id"' in detail.text
 
 
+def test_task_list_uses_bounded_pagination() -> None:
+    """任务第二页必须按固定边界查询并展示前后页入口。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/tasks?page=2")
+
+    assert response.status_code == 200
+    assert tasks.list_calls == [(50, 51)]
+    assert 'href="/employee/tasks?page=1"' in response.text
+    assert 'href="/employee/tasks?page=3"' in response.text
+
+
 def test_staff_cannot_view_other_task_id() -> None:
     """越权任务编号统一返回 403。"""
     client, _ = build_client(EmployeeRole.STAFF)
@@ -246,6 +271,65 @@ def test_staff_cannot_view_other_task_id() -> None:
 
     assert response.status_code == 403
     assert "13800138000" not in response.text
+
+
+def test_task_unknown_error_uses_stable_detail_and_safe_log(caplog) -> None:
+    """任务未知异常不得把内部异常原文返回给页面。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    tasks.detail_error = RuntimeError("secret database value")
+    login(client)
+
+    with caplog.at_level(logging.ERROR):
+        response = client.get("/employee/tasks/1")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "任务操作未完成"
+    assert "secret database value" not in response.text
+    assert any(
+        record.getMessage().startswith("任务页面操作失败")
+        and "RuntimeError" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_task_list_unknown_error_uses_stable_detail_and_safe_log(caplog) -> None:
+    """任务列表未知异常不得把内部异常原文返回给页面。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    tasks.list_error = RuntimeError("secret task list value")
+    login(client)
+
+    with caplog.at_level(logging.ERROR):
+        response = client.get("/employee/tasks")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "任务操作未完成"
+    assert "secret task list value" not in response.text
+    assert any(
+        record.getMessage().startswith("任务页面操作失败")
+        and "RuntimeError" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_task_assignment_options_unknown_error_uses_stable_detail_and_safe_log(
+    caplog,
+) -> None:
+    """管理员详情的分派选项异常也不得泄露内部原文。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.assignment_error = RuntimeError("secret assignment value")
+    login(client)
+
+    with caplog.at_level(logging.ERROR):
+        response = client.get("/employee/tasks/1")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "任务操作未完成"
+    assert "secret assignment value" not in response.text
+    assert any(
+        record.getMessage().startswith("任务页面操作失败")
+        and "RuntimeError" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_task_transition_requires_one_time_csrf() -> None:

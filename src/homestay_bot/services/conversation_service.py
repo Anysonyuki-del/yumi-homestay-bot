@@ -360,8 +360,17 @@ class ConversationService:
                 )
                 return
 
-        if conversation.mode is ConversationMode.HUMAN_ACTIVE:
-            await self._notify_employee(conversation, message, "人工接待会话收到新消息")
+        # 人工接管只拦截新的高风险事项；客诉处理期间出现房态、旅游等
+        # 独立低风险问题时继续由机器人回答，避免一次投诉永久阻塞客服。
+        if (
+            conversation.mode is ConversationMode.HUMAN_ACTIVE
+            and determine_handoff_reason(message.content) is not None
+        ):
+            await self._notify_employee(
+                conversation,
+                message,
+                "人工接待会话收到新的高风险消息",
+            )
             return
 
         if message.msgtype != "text" or self._handoff_pattern.search(message.content):
@@ -386,8 +395,12 @@ class ConversationService:
     async def process_recorded_message(self, message: IncomingMessage) -> None:
         """处理已完成入站提交的消息，供后台最终回复任务调用。"""
         conversation = await self._conversations.get_or_create(message)
-        # 员工接管后，旧的延迟任务必须直接丢弃，不能重新唤醒机器人。
-        if conversation.mode is ConversationMode.HUMAN_ACTIVE:
+        # 人工接管期间只丢弃当前高风险事项；房态、旅游等独立问题仍应回复，
+        # 同时保留人工模式，让正在处理的客诉继续由管家跟进。
+        if (
+            conversation.mode is ConversationMode.HUMAN_ACTIVE
+            and determine_handoff_reason(message.content) is not None
+        ):
             return
         if await self._messages.has_newer_guest_message(
             conversation.id,
@@ -441,16 +454,17 @@ class ConversationService:
         conversation: Conversation,
         message: IncomingMessage,
     ) -> None:
-        """登记模型快速安抚和最终处理任务，再提交让发送 worker 立即可见。"""
+        """按需发送快速安抚并登记最终处理任务，再提交让 worker 立即可见。"""
         jobs = self._jobs
         if jobs is None:
             return
-        ack = await self._assistant.respond_ack(
-            guest_identifier=message.external_userid,
-            language=conversation.language,
-            question=message.content,
-        )
-        await self._send_guest_reply(conversation, ack, message_type="ack")
+        if self._should_send_fast_ack(message.content):
+            ack = await self._assistant.respond_ack(
+                guest_identifier=message.external_userid,
+                language=conversation.language,
+                question=message.content,
+            )
+            await self._send_guest_reply(conversation, ack, message_type="ack")
         await jobs.enqueue(
             "wecom_process_message",
             {
@@ -466,6 +480,17 @@ class ConversationService:
         )
         if self._commit_boundary is not None:
             await self._commit_boundary()
+
+    @staticmethod
+    def _should_send_fast_ack(question: str) -> bool:
+        """只为需要后台处理的服务请求发送安抚，普通查询直接等待最终答案。"""
+        return re.search(
+            r"补|加|送|安排|维修|保洁|收房|收垃圾|耗材|矿泉水|纸巾|"
+            r"被子|枕头|麻将|布置|提前入住|延迟退房|特殊服务|求婚|生日|"
+            r"help.*(water|towel|blanket|repair)|maintenance|housekeeping",
+            question,
+            re.IGNORECASE,
+        ) is not None
 
     async def _process_model_reply(
         self,
@@ -504,7 +529,8 @@ class ConversationService:
         ):
             return
         reply_text = self._warm_guest_reply(
-            self._limit_assistant_reply(decision.reply_text)
+            self._limit_assistant_reply(decision.reply_text),
+            question=message.content,
         )
         await self._send_guest_reply(conversation, reply_text)
         await self._track_frequent_faq(message, decision)
@@ -696,8 +722,8 @@ class ConversationService:
             )
 
     @staticmethod
-    def _warm_guest_reply(content: str) -> str:
-        """统一把内部确认术语改成温暖、诚实且客人易懂的表达。"""
+    def _warm_guest_reply(content: str, *, question: str = "") -> str:
+        """统一温暖文案，并删除模型对当前请求之外的服务承诺。"""
         replacements = {
             (
                 "该需求会提交给工作人员确认并安排，最终是否安排成功需以员工确认为准，"
@@ -745,7 +771,46 @@ class ConversationService:
             content,
         )
         content = content.replace("确认后会尽快给您回复", "有结果后马上告诉您")
-        return content
+        if question:
+            # 模型偶尔会把上一轮任务或客诉一起写进本轮回复；按当前问题
+            # 删除未被请求的服务句，避免退款、补水等承诺互相串线。
+            requested_topics = {
+                topic
+                for topic in (
+                    "退款",
+                    "退钱",
+                    "退费",
+                    "矿泉水",
+                    "补水",
+                    "纸巾",
+                    "被子",
+                    "床单",
+                    "枕头",
+                    "麻将",
+                    "维修",
+                    "保洁",
+                    "提前入住",
+                    "延迟退房",
+                )
+                if topic in question
+            }
+            if {"矿泉水", "补水"} & requested_topics:
+                # “补水”和“矿泉水”在客人表达中是同一项服务，避免清理时
+                # 把正常的补水确认句误删为空回复。
+                requested_topics.update({"矿泉水", "补水"})
+            removable_topics = (
+                "退款|退钱|退费|矿泉水|补水|纸巾|被子|床单|枕头|麻将|维修|"
+                "保洁|提前入住|延迟退房"
+            )
+            sentences = re.split(r"(?<=[。！？；;])", content)
+            filtered_sentences: list[str] = []
+            for sentence in sentences:
+                mentioned = set(re.findall(removable_topics, sentence))
+                if mentioned and not (mentioned & requested_topics):
+                    continue
+                filtered_sentences.append(sentence)
+            content = "".join(filtered_sentences).strip()
+        return content or "我已经帮您记下啦，会尽快为您安排，稍后给您反馈。"
 
     @staticmethod
     def _limit_assistant_reply(content: str) -> str:

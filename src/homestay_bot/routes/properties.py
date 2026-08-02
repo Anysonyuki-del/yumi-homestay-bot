@@ -1,3 +1,4 @@
+import logging
 import secrets
 from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
@@ -13,6 +14,7 @@ from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.property_admin_service import PropertyFields
 
 router = APIRouter(prefix="/employee/properties")
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(
     directory=Path(__file__).resolve().parent.parent / "templates"
 )
@@ -104,10 +106,26 @@ def _consume_csrf(request: Request, property_id: int, token: str) -> None:
 def _raise_page_error(error: Exception) -> None:
     """把房源服务领域异常转换为稳定 HTTP 状态。"""
     if isinstance(error, PermissionError):
-        raise HTTPException(status_code=403, detail=str(error)) from error
+        raise HTTPException(
+            status_code=403,
+            detail="没有权限执行房源操作",
+        ) from error
     if isinstance(error, LookupError):
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(
+            status_code=404,
+            detail="房源不存在或凭证不可用",
+        ) from error
+    # 未知异常只记录类型和内部追踪号，页面不得回显异常原文。
+    trace_id = secrets.token_hex(8)
+    logger.error(
+        "房源管理操作失败：error_type=%s trace_id=%s",
+        type(error).__name__,
+        trace_id,
+    )
+    raise HTTPException(
+        status_code=409,
+        detail="房源管理操作未完成",
+    ) from error
 
 
 @router.get("", response_class=HTMLResponse)
@@ -150,14 +168,14 @@ async def property_detail(request: Request, property_id: int) -> Response:
 async def update_property_profile(
     request: Request,
     property_id: int,
-    title: str = Form(),
-    room_number: str = Form(""),
-    room_type: str = Form(""),
-    district: str = Form(""),
-    address_hint: str = Form(""),
-    parking_instructions: str = Form(""),
+    title: str = Form(min_length=1, max_length=128),
+    room_number: str = Form("", max_length=64),
+    room_type: str = Form("", max_length=128),
+    district: str = Form("", max_length=64),
+    address_hint: str = Form("", max_length=1000),
+    parking_instructions: str = Form("", max_length=2000),
     is_active: bool = Form(False),
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """校验一次性令牌后更新房源公开运营资料。"""
     administrator = await _current_admin(request)
@@ -189,9 +207,9 @@ async def replace_property_credentials(
     request: Request,
     property_id: int,
     qr_image: Annotated[UploadFile, File()],
-    password: str = Form(),
-    guide: str = Form(),
-    csrf_token: str = Form(),
+    password: str = Form(min_length=1, max_length=256),
+    guide: str = Form(min_length=1, max_length=10_000),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """保存用途隔离加密的密码、指南和私有二维码。"""
     administrator = await _current_admin(request)

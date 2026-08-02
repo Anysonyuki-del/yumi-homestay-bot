@@ -9,6 +9,7 @@ from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.deepseek_client import (
     AssistantUnavailableError,
     DeepSeekGuestAssistant,
+    HostexReadOnlyToolExecutor,
 )
 from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.faq_candidate_context import (
@@ -135,6 +136,24 @@ class ChatClientStub:
         self.chat = SimpleNamespace(completions=CompletionsStub(contents))
 
 
+def test_minimize_personal_data_redacts_identity_in_booking_context() -> None:
+    """预订语境也必须遮盖姓名和手机号，不能因关键词放宽隐私边界。"""
+    minimized = DeepSeekGuestAssistant._minimize_personal_data(
+        [
+            {
+                "role": "user",
+                "content": "我叫张三，手机号13800138000，想预订本周五的房间。",
+            }
+        ]
+    )
+
+    content = minimized[0]["content"]
+    assert "张三" not in content
+    assert "13800138000" not in content
+    assert "[姓名已隐藏]" in content
+    assert "[手机号已隐藏]" in content
+
+
 @pytest.mark.asyncio
 async def test_fast_ack_uses_warm_no_tool_model_prompt() -> None:
     """快速安抚应使用固定温暖提示并返回客人可见短句。"""
@@ -155,7 +174,8 @@ async def test_fast_ack_uses_warm_no_tool_model_prompt() -> None:
         question="可以帮我补两瓶矿泉水吗？",
     )
 
-    assert reply == "收到啦，我来帮您看看。"
+    assert "管家" in reply
+    assert "稍作等待" in reply
     request = client.chat.completions.requests[0]
     assert "温暖管家" in request["messages"][0]["content"]
     assert "内部任务" in request["messages"][0]["content"]
@@ -290,6 +310,141 @@ class ToolExecutorStub:
         """返回固定房态。"""
         self.calls.append((name, arguments))
         return {"available": True, "rooms": 1}
+
+
+class PropertyCatalogCompletionsStub:
+    """模拟房间介绍先调用百居易房源目录，再生成结构化回复。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.requests: list[dict[str, object]] = []
+
+    async def create(self, **kwargs):
+        """首轮返回房源目录工具调用，第二轮返回房间名称回复。"""
+        self.requests.append(kwargs)
+        if len(self.requests) == 1:
+            function = SimpleNamespace(name="list_properties", arguments="{}")
+            call = SimpleNamespace(
+                id="call-properties",
+                type="function",
+                function=function,
+            )
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[call],
+                model_dump=lambda **kwargs: {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call-properties",
+                            "type": "function",
+                            "function": {
+                                "name": "list_properties",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+            )
+        else:
+            payload = decision_payload()
+            payload.update(
+                {
+                    "reply_text": "百居易房间名称是江景大床房。",
+                    "intent": "property_information",
+                }
+            )
+            message = SimpleNamespace(
+                content=json.dumps(payload, ensure_ascii=False),
+                tool_calls=None,
+            )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class PropertyCatalogClientStub:
+    """暴露房源目录工具调用客户端。"""
+
+    def __init__(self) -> None:
+        """注入房源目录补全器。"""
+        self.chat = SimpleNamespace(completions=PropertyCatalogCompletionsStub())
+
+
+class HostexCatalogStub:
+    """提供房源名称和房态，验证工具结果携带可读名称。"""
+
+    async def list_properties(self):
+        """返回一个百居易物理房源。"""
+        return [
+            SimpleNamespace(
+                id=12743051,
+                title="江景大床房",
+                model_dump=lambda mode: {
+                    "id": 12743051,
+                    "title": "江景大床房",
+                },
+            )
+        ]
+
+    async def list_availabilities(self, property_ids, start_date, end_date):
+        """返回同一房源的日期房态。"""
+        return [
+            SimpleNamespace(
+                property_id=12743051,
+                days=[],
+                model_dump=lambda mode: {
+                    "property_id": 12743051,
+                    "days": [],
+                },
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_availability_result_includes_hostex_property_title() -> None:
+    """房态工具结果必须同时提供百居易房间名称和编号。"""
+    executor = HostexReadOnlyToolExecutor(HostexCatalogStub())
+
+    result = await executor.execute(
+        "search_availability",
+        {"check_in_date": "2026-08-02", "check_out_date": "2026-08-03"},
+    )
+
+    assert result == [
+        {
+            "property_id": 12743051,
+            "property_title": "江景大床房",
+            "days": [],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_room_introduction_forces_hostex_property_catalog_tool() -> None:
+    """房间介绍必须调用百居易房源目录，不能只依赖审核知识或模型猜测。"""
+    client = PropertyCatalogClientStub()
+    executor = ToolExecutorStub()
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=executor,
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "介绍一下这间房"}],
+    )
+
+    request = client.chat.completions.requests[0]
+    assert request["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "list_properties"},
+    }
+    assert executor.calls == [("list_properties", {})]
+    assert decision.reply_text == "百居易房间名称是江景大床房。"
 
 
 @pytest.mark.asyncio
@@ -1157,6 +1312,19 @@ async def test_previous_assistant_failure_reply_is_excluded_from_model_context()
     )
 
 
+def test_unrelated_property_question_drops_previous_complaint_context() -> None:
+    """新的房间问题不得继承上一轮退款或投诉内容。"""
+    minimized = DeepSeekGuestAssistant._minimize_personal_data(
+        [
+            {"role": "user", "content": "我已经预定了，我要退钱"},
+            {"role": "assistant", "content": "退款需要进一步核实。"},
+            {"role": "user", "content": "介绍一下收藏家套房"},
+        ]
+    )
+
+    assert minimized == [{"role": "user", "content": "介绍一下收藏家套房"}]
+
+
 @pytest.mark.asyncio
 async def test_deepseek_context_keeps_only_three_latest_valid_messages() -> None:
     """DeepSeek 结构化对话只携带上一轮问答和当前问题。"""
@@ -1220,3 +1388,62 @@ async def test_ungrounded_property_claim_is_forced_to_knowledge_gap() -> None:
 
     assert decision.knowledge_gap is True
     assert decision.knowledge_gap_topic == "property_information"
+
+
+@pytest.mark.asyncio
+async def test_operational_task_reply_is_not_overridden_by_property_gap() -> None:
+    """已识别为服务任务时，房源知识缺口不得覆盖客人可见回复。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "reply_text": "我已收到您的补水需求，马上为您安排。",
+            "intent": "room_service",
+            "task_suggestion": {
+                "task_type": "supplies",
+                "description": "补两瓶矿泉水",
+            },
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "房间没水了，补点矿泉水"}],
+    )
+
+    assert decision.reply_text == "我已收到您的补水需求，马上为您安排。"
+    assert decision.knowledge_gap is False
+    assert decision.task_suggestion is not None
+
+
+@pytest.mark.asyncio
+async def test_fast_ack_uses_standard_warm_host_wording_and_short_timeout() -> None:
+    """快速安抚应包含统一管家话术，并限制模型等待时间。"""
+    client = ChatClientStub(
+        [json.dumps({"reply_text": "我已收到您的诉求，请稍作等待。"}, ensure_ascii=False)]
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    reply = await assistant.respond_ack(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        question="房间没水了，补点矿泉水",
+    )
+
+    assert "管家" in reply
+    assert "稍作等待" in reply
+    assert client.chat.completions.requests[0]["timeout"] <= 1.5

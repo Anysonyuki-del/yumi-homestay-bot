@@ -22,6 +22,10 @@ _EVENT_PATTERN = re.compile(
     r"show|event|exhibition|concert|musical|opera|festival",
     re.IGNORECASE,
 )
+_DISTANCE_PATTERN = re.compile(
+    r"距离|多远|公里|路程|怎么到|how far|distance|kilometer|km",
+    re.IGNORECASE,
+)
 _YEAR_PATTERN = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
 _CHINESE_DATE_PATTERN = re.compile(
     r"(?P<year>20\d{2})年"
@@ -286,7 +290,14 @@ class DeepSeekTourismSearcher:
             "每项活动日期必须注明完整年份。"
             "简单推荐要精简选优，优先选出最值得推荐的3项，正文控制在"
             "700至900字；规划问题给出半日或一日路线。"
-            "不要在正文中输出网址或 Markdown 链接。"
+            + (
+                "距离问题必须直接回答起点和终点、约距离及可行交通方式；"
+                "如果房源名称无法从可靠来源确认位置，要明确说明正在核实，"
+                "不得改写成泛泛的旅行规划。"
+                if _DISTANCE_PATTERN.search(question)
+                else ""
+            )
+            + "不要在正文中输出网址或 Markdown 链接。"
             if language is Language.ZH
             else (
                 "You are a Wuhan homestay travel assistant. Use Web Search "

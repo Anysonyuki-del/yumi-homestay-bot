@@ -2,7 +2,7 @@ import secrets
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from fastapi import APIRouter, Form, HTTPException, Request, status
+from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -23,8 +23,10 @@ class ApprovalPageServicePort(Protocol):
     async def get_detail(self, approval_id: int) -> dict[str, Any]:
         """返回审批详情及可选房间、参考价和收入方式。"""
 
-    async def list_pending(self) -> list[BookingApproval]:
-        """返回员工需要处理的审批单。"""
+    async def list_pending(
+        self, *, offset: int, limit: int
+    ) -> list[BookingApproval]:
+        """分页返回员工需要处理的审批单。"""
 
     async def confirm(
         self,
@@ -47,7 +49,10 @@ def _get_page_service(request: Request) -> ApprovalPageServicePort:
 
 
 @router.get("", response_class=HTMLResponse)
-async def approval_index(request: Request) -> Response:
+async def approval_index(
+    request: Request,
+    page: int = Query(1, ge=1, le=10_000),
+) -> Response:
     """只向管理员展示待处理审批列表。"""
     try:
         _, role = await require_employee_session(request)
@@ -58,11 +63,18 @@ async def approval_index(request: Request) -> Response:
         )
     if role is not EmployeeRole.ADMIN:
         raise HTTPException(status_code=403, detail="只有管理员可以查看预订审批")
-    approvals = await _get_page_service(request).list_pending()
+    approvals = await _get_page_service(request).list_pending(
+        offset=(page - 1) * 50,
+        limit=51,
+    )
     return templates.TemplateResponse(
         request=request,
         name="approvals/index.html",
-        context={"approvals": approvals},
+        context={
+            "approvals": approvals[:50],
+            "previous_page": page - 1 if page > 1 else None,
+            "next_page": page + 1 if len(approvals) > 50 else None,
+        },
     )
 
 
@@ -100,7 +112,7 @@ async def confirm_approval(
     received_amount: int = Form(),
     income_method_id: int = Form(),
     payment_confirmed: bool = Form(),
-    confirmation_nonce: str = Form(),
+    confirmation_nonce: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """校验角色和一次性令牌后，调用安全下单状态机。"""
     employee_id, role = await require_employee_session(request)

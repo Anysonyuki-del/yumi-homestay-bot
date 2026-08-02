@@ -1,12 +1,26 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from weakref import WeakKeyDictionary
 
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from homestay_bot.domain.enums import JobStatus
-from homestay_bot.domain.models import Job
+from homestay_bot.domain.enums import ComplaintReviewStatus, JobStatus
+from homestay_bot.domain.models import ComplaintReview, Job
+
+_SQLITE_CLAIM_LOCKS: WeakKeyDictionary[AsyncEngine, asyncio.Lock] = WeakKeyDictionary()
+_SENSITIVE_PAYLOAD_JOB_TYPES = frozenset(
+    {
+        "wecom_sync",
+        "wecom_process_message",
+        "wecom_send_text",
+        "wecom_send_internal_text",
+        "wecom_send_internal_card",
+    }
+)
 
 
 class SQLAlchemyJobRepository:
@@ -23,6 +37,7 @@ class SQLAlchemyJobRepository:
         self._session = session
         self._included_job_types = included_job_types
         self._excluded_job_types = excluded_job_types or set()
+        self._claim_lock: asyncio.Lock | None = None
 
     async def exists_dedupe_key(self, dedupe_key: str) -> bool:
         """判断幂等键是否已有任务，供分阶段出站避免重复写入。"""
@@ -39,8 +54,11 @@ class SQLAlchemyJobRepository:
     ) -> Job:
         """创建待执行任务并立即刷新主键。"""
         if dedupe_key is not None:
-            existing = await self._session.scalar(
-                select(Job).where(Job.dedupe_key == dedupe_key)
+            existing = cast(
+                Job | None,
+                await self._session.scalar(
+                    select(Job).where(Job.dedupe_key == dedupe_key)
+                ),
             )
             if existing is not None:
                 return existing
@@ -52,13 +70,36 @@ class SQLAlchemyJobRepository:
             attempts=0,
             available_at=available_at or datetime.now(UTC),
         )
-        self._session.add(job)
+        # begin_nested 的隐式预刷新必须在捕获范围外完成，避免误吞外层事务错误。
         await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                # 只把候选任务放进保存点，唯一键竞争不得回滚外层业务写入。
+                self._session.add(job)
+                await self._session.flush()
+        except IntegrityError:
+            if dedupe_key is None:
+                raise
+            existing = cast(
+                Job | None,
+                await self._session.scalar(
+                    select(Job).where(Job.dedupe_key == dedupe_key)
+                ),
+            )
+            if existing is None:
+                raise
+            return existing
         return job
 
     async def claim_next(self, *, now: datetime | None = None) -> Job | None:
-        """使用 FOR UPDATE SKIP LOCKED 领取一项到期任务。"""
+        """使用行锁领取任务；SQLite 下持锁到 RUNNING 状态提交完成。"""
         claim_time = now or datetime.now(UTC)
+        claim_lock = self._sqlite_claim_lock()
+        if claim_lock is not None:
+            # SQLite 不支持 FOR UPDATE，进程锁必须覆盖读取 PENDING 到提交 RUNNING；
+            # handler 执行阶段无需持锁，不同任务可由两个 worker 并发处理。
+            await claim_lock.acquire()
+            self._claim_lock = claim_lock
         conditions = [
             Job.status == JobStatus.PENDING,
             Job.available_at <= claim_time,
@@ -74,17 +115,56 @@ class SQLAlchemyJobRepository:
             .with_for_update(skip_locked=True)
             .limit(1)
         )
-        job = await self._session.scalar(statement)
-        if job is None:
-            return None
-        job.status = JobStatus.RUNNING
-        job.attempts += 1
-        job.locked_at = claim_time
-        await self._session.flush()
-        return job
+        try:
+            job = await self._session.scalar(statement)
+            if job is None:
+                await self.release_claim_lock()
+                return None
+            job.status = JobStatus.RUNNING
+            job.attempts += 1
+            job.locked_at = claim_time
+            await self._session.flush()
+            return job
+        except BaseException:
+            await self.release_claim_lock()
+            raise
 
-    async def recover_stale(self, *, before: datetime) -> int:
-        """恢复安全任务；外部发送和下单任务超时后转人工，不自动重放。"""
+    def _sqlite_claim_lock(self) -> asyncio.Lock | None:
+        """返回当前 SQLite 引擎的进程内领取锁，PostgreSQL 不需要该锁。"""
+        bind = self._session.bind
+        if bind is None or bind.dialect.name != "sqlite":
+            return None
+        engine = cast(AsyncEngine, bind)
+        lock = _SQLITE_CLAIM_LOCKS.get(engine)
+        if lock is None:
+            lock = asyncio.Lock()
+            _SQLITE_CLAIM_LOCKS[engine] = lock
+        return lock
+
+    async def release_claim_lock(self) -> None:
+        """释放 SQLite 领取锁；由 worker 在领取提交后或异常退出时调用。"""
+        if self._claim_lock is None:
+            return
+        lock, self._claim_lock = self._claim_lock, None
+        if lock.locked():
+            lock.release()
+
+    def _job_type_conditions(self) -> list[Any]:
+        """构造当前 worker 的任务类型过滤条件，供领取和恢复共用。"""
+        conditions: list[Any] = []
+        if self._included_job_types is not None:
+            conditions.append(Job.job_type.in_(self._included_job_types))
+        if self._excluded_job_types:
+            conditions.append(Job.job_type.not_in(self._excluded_job_types))
+        return conditions
+
+    async def recover_stale(
+        self,
+        *,
+        before: datetime,
+        max_attempts: int = 3,
+    ) -> int:
+        """按 worker 类型恢复遗留任务，并在达到上限时终止重试。"""
         non_replayable_types = {
             "credential_send_part",
             "wecom_send_text",
@@ -99,11 +179,30 @@ class SQLAlchemyJobRepository:
                 Job.status == JobStatus.RUNNING,
                 Job.locked_at < before,
                 Job.job_type.in_(non_replayable_types),
+                *self._job_type_conditions(),
             )
             .values(
                 status=JobStatus.FAILED,
                 locked_at=None,
                 last_error_code="stale_non_replayable",
+                payload={},
+            )
+        )
+        normalized_max_attempts = max(1, max_attempts)
+        maxed_out_statement = (
+            update(Job)
+            .where(
+                Job.status == JobStatus.RUNNING,
+                Job.locked_at < before,
+                Job.job_type.not_in(non_replayable_types),
+                Job.attempts >= normalized_max_attempts,
+                *self._job_type_conditions(),
+            )
+            .values(
+                status=JobStatus.FAILED,
+                locked_at=None,
+                last_error_code="stale_retry_limit",
+                payload={},
             )
         )
         retry_statement = (
@@ -112,6 +211,8 @@ class SQLAlchemyJobRepository:
                 Job.status == JobStatus.RUNNING,
                 Job.locked_at < before,
                 Job.job_type.not_in(non_replayable_types),
+                Job.attempts < normalized_max_attempts,
+                *self._job_type_conditions(),
             )
             .values(
                 status=JobStatus.PENDING,
@@ -119,22 +220,60 @@ class SQLAlchemyJobRepository:
                 last_error_code="stale_lock_recovered",
             )
         )
+        await self._mark_stale_complaint_deliveries(before)
         failed = cast(
             CursorResult[Any], await self._session.execute(failed_statement)
+        )
+        maxed_out = cast(
+            CursorResult[Any], await self._session.execute(maxed_out_statement)
         )
         retried = cast(
             CursorResult[Any], await self._session.execute(retry_statement)
         )
         await self._session.flush()
-        return int(failed.rowcount) + int(retried.rowcount)
+        return (
+            int(failed.rowcount)
+            + int(maxed_out.rowcount)
+            + int(retried.rowcount)
+        )
+
+    async def _mark_stale_complaint_deliveries(self, before: datetime) -> None:
+        """把遗留客诉发送任务同步回写为投递失败，避免状态永久排队。"""
+        jobs = list(
+            (
+                await self._session.scalars(
+                    select(Job).where(
+                        Job.status == JobStatus.RUNNING,
+                        Job.locked_at < before,
+                        Job.job_type == "wecom_send_text",
+                        *self._job_type_conditions(),
+                    )
+                )
+            ).all()
+        )
+        for job in jobs:
+            outbox_id = job.payload.get("outbox_id")
+            if not isinstance(outbox_id, str) or not outbox_id:
+                continue
+            review = await self._session.scalar(
+                select(ComplaintReview).where(
+                    ComplaintReview.delivery_outbox_id == outbox_id
+                )
+            )
+            if review is None or review.status is not ComplaintReviewStatus.SEND_QUEUED:
+                continue
+            review.status = ComplaintReviewStatus.DELIVERY_FAILED
+            review.sent_at = None
+            review.delivery_error_code = "stale_non_replayable"
+            review.version += 1
 
     async def mark_completed(self, job: Job) -> None:
         """标记任务完成并清除锁时间。"""
         job.status = JobStatus.COMPLETED
         job.locked_at = None
         job.last_error_code = None
-        if job.job_type in {"wecom_process_message", "wecom_send_text"}:
-            # 完成后不再需要原始客文，避免任务表绕过七天消息清理长期留存正文。
+        if job.job_type in _SENSITIVE_PAYLOAD_JOB_TYPES:
+            # 完成后不再需要客人或员工通知正文，避免任务表绕过保留策略。
             job.payload = {}
         await self._session.flush()
 
@@ -157,4 +296,7 @@ class SQLAlchemyJobRepository:
             )
         else:
             job.status = JobStatus.FAILED
+            if job.job_type in _SENSITIVE_PAYLOAD_JOB_TYPES:
+                # 失败终态只保留状态和错误码，避免任务表长期留存消息正文。
+                job.payload = {}
         await self._session.flush()

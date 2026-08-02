@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
@@ -301,13 +301,15 @@ class CredentialPartSender:
         *,
         today: Callable[[], date] | None = None,
         now: Callable[[], datetime] | None = None,
+        before_external: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """注入发送状态仓储、企业微信、加密服务、私有文件和时钟。"""
+        """注入发送状态仓储、企业微信、事务边界、加密服务和时钟。"""
         self._repository = repository
         self._wecom = wecom
         self._cipher = cipher
         self._storage = storage
         self._rules = CredentialSafetyRules(today=today, now=now)
+        self._before_external = before_external
 
     async def handle(self, payload: dict[str, Any]) -> None:
         """重新验证安全条件并发送一个仍处于待发送状态的部件。"""
@@ -325,6 +327,9 @@ class CredentialPartSender:
         if reason is not None:
             await self._repository.mark_part_needs_review(part_id, reason)
             return
+        if self._before_external is not None:
+            # 凭证部件已完成安全快照，网络发送前提交以释放数据库行锁。
+            await self._before_external()
         try:
             external_message_id = await self._send(item)
         except Exception as error:

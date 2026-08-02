@@ -76,11 +76,12 @@ class SQLAlchemyComplaintRepository:
             reason=reason[:64],
             risk_level=risk_level[:32],
         )
-        self._session.add(review)
         try:
-            await self._session.flush()
+            # 唯一键竞争只回滚当前保存点，不能破坏调用方事务中的其他写入。
+            async with self._session.begin_nested():
+                self._session.add(review)
+                await self._session.flush()
         except IntegrityError:
-            await self._session.rollback()
             existing = await self._session.scalar(
                 select(ComplaintReview).where(
                     ComplaintReview.source_message_id == source_message_id
@@ -151,6 +152,126 @@ class SQLAlchemyComplaintRepository:
             raise ValueError("当前客诉状态不允许发送")
         review.status = ComplaintReviewStatus.SENT
         review.sent_at = sent_at
+        review.version += 1
+        await self._session.flush()
+        return review
+
+    async def mark_send_queued(
+        self,
+        review_id: int,
+        *,
+        expected_version: int,
+        outbox_id: str,
+    ) -> ComplaintReview:
+        """保存客诉出站任务已入队，等待 worker 回写真实投递结果。"""
+        review = await self._require(review_id)
+        self._check_version(review, expected_version)
+        if review.status not in {
+            ComplaintReviewStatus.READY_FOR_REVIEW,
+            ComplaintReviewStatus.EDITING,
+            ComplaintReviewStatus.DELIVERY_FAILED,
+        }:
+            raise ValueError("当前客诉状态不允许发送")
+        review.status = ComplaintReviewStatus.SEND_QUEUED
+        review.delivery_error_code = None
+        review.delivery_outbox_id = outbox_id[:128]
+        review.delivery_external_message_id = None
+        review.sent_at = None
+        review.version += 1
+        await self._session.flush()
+        return review
+
+    async def mark_delivery_failed(
+        self,
+        review_id: int,
+        *,
+        error_code: str,
+    ) -> ComplaintReview:
+        """记录企业微信实际投递失败，保留安全错误类型供后台重试。"""
+        review = await self._require(review_id)
+        if review.status not in {
+            ComplaintReviewStatus.SEND_QUEUED,
+            ComplaintReviewStatus.DELIVERY_FAILED,
+        }:
+            return review
+        review.status = ComplaintReviewStatus.DELIVERY_FAILED
+        review.delivery_error_code = error_code[:64]
+        review.sent_at = None
+        review.version += 1
+        await self._session.flush()
+        return review
+
+    async def mark_delivery_sent(
+        self,
+        review_id: int,
+        *,
+        sent_at: datetime,
+        external_message_id: str,
+    ) -> ComplaintReview:
+        """在企业微信返回真实消息编号后标记客诉已实际发送。"""
+        review = await self._require(review_id)
+        if review.status not in {
+            ComplaintReviewStatus.SEND_QUEUED,
+            ComplaintReviewStatus.DELIVERY_FAILED,
+        }:
+            return review
+        review.status = ComplaintReviewStatus.SENT
+        review.sent_at = sent_at
+        review.delivery_error_code = None
+        review.delivery_external_message_id = external_message_id[:128]
+        review.version += 1
+        await self._session.flush()
+        return review
+
+    async def mark_delivery_failed_by_external_message_id(
+        self,
+        external_message_id: str,
+        *,
+        error_code: str,
+    ) -> ComplaintReview | None:
+        """按企业微信真实消息编号回写异步投递失败。"""
+        review = await self._session.scalar(
+            select(ComplaintReview).where(
+                ComplaintReview.delivery_external_message_id == external_message_id
+            )
+        )
+        if review is None:
+            return None
+        if review.status not in {
+            ComplaintReviewStatus.SENT,
+            ComplaintReviewStatus.SEND_QUEUED,
+            ComplaintReviewStatus.DELIVERY_FAILED,
+        }:
+            return review
+        review.status = ComplaintReviewStatus.DELIVERY_FAILED
+        review.sent_at = None
+        review.delivery_error_code = error_code[:64]
+        review.version += 1
+        await self._session.flush()
+        return review
+
+    async def mark_delivery_failed_by_outbox_id(
+        self,
+        outbox_id: str,
+        *,
+        error_code: str,
+    ) -> ComplaintReview | None:
+        """按遗留出站任务编号回写 worker 崩溃导致的投递失败。"""
+        review = await self._session.scalar(
+            select(ComplaintReview).where(
+                ComplaintReview.delivery_outbox_id == outbox_id
+            )
+        )
+        if review is None:
+            return None
+        if review.status not in {
+            ComplaintReviewStatus.SEND_QUEUED,
+            ComplaintReviewStatus.DELIVERY_FAILED,
+        }:
+            return review
+        review.status = ComplaintReviewStatus.DELIVERY_FAILED
+        review.sent_at = None
+        review.delivery_error_code = error_code[:64]
         review.version += 1
         await self._session.flush()
         return review

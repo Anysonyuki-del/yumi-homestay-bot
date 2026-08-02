@@ -139,8 +139,16 @@ class WeComSyncJobHandler:
             ):
                 continue
             content = ""
+            metadata: dict[str, str] = {}
             if item.msgtype == "text" and item.text is not None:
                 content = str(item.text.get("content", ""))
+            elif item.msgtype in {"image", "voice", "video", "file", "location"}:
+                # 只保留平台不透明编号，禁止落库外部 URL、媒体正文或原始定位信息。
+                media_fields = getattr(item, item.msgtype, None)
+                if isinstance(media_fields, dict):
+                    media_id = media_fields.get("media_id")
+                    if isinstance(media_id, str) and media_id:
+                        metadata["media_id"] = media_id[:256]
             await self._handle_message(
                 IncomingMessage(
                     msgid=item.msgid,
@@ -149,6 +157,7 @@ class WeComSyncJobHandler:
                     origin=origin,
                     msgtype=item.msgtype or "unknown",
                     content=content,
+                    metadata=metadata,
                     sent_at=datetime.fromtimestamp(item.send_time, UTC),
                 )
             )
@@ -252,7 +261,6 @@ class Worker[JobType: WorkerJob]:
         "complaint_review_generate",
         "customer_tag_sync",
         "wecom_process_message",
-        "wecom_send_internal_card",
     }
 
     def __init__(
@@ -278,48 +286,65 @@ class Worker[JobType: WorkerJob]:
         job = await self._repository.claim_next()
         if job is None:
             return False
-        if self._checkpoint is not None:
-            # 先提交 RUNNING 状态，进程中断后才能由超时锁恢复。
-            await self._checkpoint()
+        try:
+            if self._checkpoint is not None:
+                # 先提交 RUNNING 状态，进程中断后才能由超时锁恢复。
+                await self._checkpoint()
+                # SQLite 只需串行化“读取 PENDING 并提交 RUNNING”的领取阶段；
+                # 提交后立即释放，避免慢模型任务阻塞另一个快速发送 worker。
+                await self._release_claim_lock()
 
-        handler = self._handlers.get(job.job_type)
-        if handler is None:
-            await self._repository.mark_failed(
-                job,
-                error_code="unknown_job_type",
-                retry_allowed=False,
-                max_attempts=1,
-            )
+            handler = self._handlers.get(job.job_type)
+            if handler is None:
+                await self._repository.mark_failed(
+                    job,
+                    error_code="unknown_job_type",
+                    retry_allowed=False,
+                    max_attempts=1,
+                )
+                if self._checkpoint is not None:
+                    await self._checkpoint()
+                return True
+
+            succeeded = False
+            try:
+                await handler(job.payload)
+            except Exception as error:
+                max_attempts = (
+                    10_000 if isinstance(error, DeferredRetryJobError) else 3
+                )
+                # 错误码只记录异常类型，避免把可能含客人信息的正文写进任务表。
+                await self._repository.mark_failed(
+                    job,
+                    error_code=type(error).__name__,
+                    retry_allowed=(
+                        job.job_type in self._retryable_job_types
+                        or isinstance(error, RetrySafeJobError)
+                    ),
+                    max_attempts=max_attempts,
+                )
+            else:
+                await self._repository.mark_completed(job)
+                succeeded = True
             if self._checkpoint is not None:
                 await self._checkpoint()
+            if succeeded and self._on_job_committed is not None:
+                # 只有业务结果和任务完成状态都提交成功后，才向应用报告成功。
+                self._on_job_committed(job)
             return True
+        finally:
+            # 领取提交失败、任务取消或无提交边界时，仍必须可靠释放进程锁。
+            await self._release_claim_lock()
 
-        succeeded = False
-        try:
-            await handler(job.payload)
-        except Exception as error:
-            max_attempts = (
-                10_000 if isinstance(error, DeferredRetryJobError) else 3
-            )
-            # 错误码只记录异常类型，避免把可能含客人信息的正文写进任务表。
-            await self._repository.mark_failed(
-                job,
-                error_code=type(error).__name__,
-                retry_allowed=(
-                    job.job_type in self._retryable_job_types
-                    or isinstance(error, RetrySafeJobError)
-                ),
-                max_attempts=max_attempts,
-            )
-        else:
-            await self._repository.mark_completed(job)
-            succeeded = True
-        if self._checkpoint is not None:
-            await self._checkpoint()
-        if succeeded and self._on_job_committed is not None:
-            # 只有业务结果和任务完成状态都提交成功后，才向应用报告成功。
-            self._on_job_committed(job)
-        return True
+    async def _release_claim_lock(self) -> None:
+        """按需释放具体仓储提供的 SQLite 领取锁。"""
+        release_claim_lock = getattr(
+            self._repository,
+            "release_claim_lock",
+            None,
+        )
+        if release_claim_lock is not None:
+            await release_claim_lock()
 
 
 async def run_forever(

@@ -220,6 +220,7 @@ async def test_reference_prices_prefer_booking_site_channel() -> None:
                                     "date": "2026-08-01",
                                     "price": 399,
                                     "inventory": 1,
+                                    "restrictions": None,
                                 }
                             ],
                         }
@@ -232,6 +233,7 @@ async def test_reference_prices_prefer_booking_site_channel() -> None:
     prices = await client.list_reference_prices("2026-08-01", "2026-08-02")
 
     assert prices[0].price == 399
+    assert prices[0].restrictions == {}
     assert requests[1].content.count(b"booking_site") == 1
     assert b"airbnb" not in requests[1].content
 
@@ -271,6 +273,173 @@ async def test_list_reservations_serializes_date_filters() -> None:
     )
 
     assert reservations[0].reservation_code == "R-1"
+
+
+@pytest.mark.asyncio
+async def test_list_reservations_fetches_all_pages() -> None:
+    """订单查询必须翻完 offset/limit 分页，避免对账窗口静默漏单。"""
+    requests: list[httpx.Request] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        offset = int(request.url.params["offset"])
+        pages = {
+            0: [
+                {
+                    "reservation_code": "R-1",
+                    "stay_code": "S-1",
+                    "property_id": 101,
+                    "check_in_date": "2026-08-01",
+                    "check_out_date": "2026-08-02",
+                    "status": "accepted",
+                    "created_at": "2026-07-29T00:00:00+00:00",
+                },
+                {
+                    "reservation_code": "R-2",
+                    "stay_code": "S-2",
+                    "property_id": 102,
+                    "check_in_date": "2026-08-02",
+                    "check_out_date": "2026-08-03",
+                    "status": "accepted",
+                    "created_at": "2026-07-29T00:00:00+00:00",
+                },
+            ],
+            2: [
+                {
+                    "reservation_code": "R-3",
+                    "stay_code": "S-3",
+                    "property_id": 103,
+                    "check_in_date": "2026-08-03",
+                    "check_out_date": "2026-08-04",
+                    "status": "accepted",
+                    "created_at": "2026-07-29T00:00:00+00:00",
+                }
+            ],
+        }
+        return httpx.Response(
+            200,
+            json={
+                "request_id": f"RT-{offset}",
+                "error_code": 0,
+                "error_msg": "",
+                "data": {"reservations": pages[offset]},
+            },
+        )
+
+    client = HostexClient("secret", transport=json_transport(responder))
+    reservations = await client.list_reservations(
+        ReservationQuery(limit=2)
+    )
+
+    assert [item.reservation_code for item in reservations] == ["R-1", "R-2", "R-3"]
+    assert [int(request.url.params["offset"]) for request in requests] == [0, 2]
+
+
+@pytest.mark.asyncio
+async def test_list_reservations_fetches_exactly_forty_five_records() -> None:
+    """默认每页二十条时，四十五条订单必须完整读取三页。"""
+    requested_offsets: list[int] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """按请求 offset 返回四十五条确定性订单切片。"""
+        offset = int(request.url.params["offset"])
+        limit = int(request.url.params["limit"])
+        requested_offsets.append(offset)
+        items = [
+            {
+                "reservation_code": f"R-{index}",
+                "stay_code": f"S-{index}",
+                "property_id": 100 + index,
+                "check_in_date": "2026-08-01",
+                "check_out_date": "2026-08-02",
+                "status": "accepted",
+                "created_at": "2026-07-29T00:00:00+00:00",
+            }
+            for index in range(offset, min(offset + limit, 45))
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "request_id": f"RT-{offset}",
+                "error_code": 0,
+                "error_msg": "",
+                "data": {"reservations": items},
+            },
+        )
+
+    client = HostexClient("secret", transport=json_transport(responder))
+    reservations = await client.list_reservations(ReservationQuery())
+
+    assert len(reservations) == 45
+    assert requested_offsets == [0, 20, 40]
+
+
+@pytest.mark.asyncio
+async def test_list_reservations_rejects_repeated_full_page() -> None:
+    """百居易重复返回同一满页时必须显式失败，不能无限翻页或静默漏单。"""
+    repeated = [
+        {
+            "reservation_code": "R-1",
+            "stay_code": "S-1",
+            "property_id": 101,
+            "check_in_date": "2026-08-01",
+            "check_out_date": "2026-08-02",
+            "status": "accepted",
+            "created_at": "2026-07-29T00:00:00+00:00",
+        }
+    ]
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """忽略 offset 并持续返回同一页。"""
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "RT-repeat",
+                "error_code": 0,
+                "error_msg": "",
+                "data": {"reservations": repeated},
+            },
+        )
+
+    client = HostexClient("secret", transport=json_transport(responder))
+
+    with pytest.raises(HostexTransportError, match="重复页面"):
+        await client.list_reservations(ReservationQuery(limit=1))
+
+
+@pytest.mark.asyncio
+async def test_list_reservations_rejects_more_than_one_hundred_pages() -> None:
+    """持续返回唯一满页超过安全上限时必须失败。"""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """每个 offset 返回不同订单，使测试只命中页数上限。"""
+        offset = int(request.url.params["offset"])
+        return httpx.Response(
+            200,
+            json={
+                "request_id": f"RT-{offset}",
+                "error_code": 0,
+                "error_msg": "",
+                "data": {
+                    "reservations": [
+                        {
+                            "reservation_code": f"R-{offset}",
+                            "stay_code": f"S-{offset}",
+                            "property_id": 101,
+                            "check_in_date": "2026-08-01",
+                            "check_out_date": "2026-08-02",
+                            "status": "accepted",
+                            "created_at": "2026-07-29T00:00:00+00:00",
+                        }
+                    ]
+                },
+            },
+        )
+
+    client = HostexClient("secret", transport=json_transport(responder))
+
+    with pytest.raises(HostexTransportError, match="安全上限"):
+        await client.list_reservations(ReservationQuery(limit=1))
 
 
 @pytest.mark.asyncio

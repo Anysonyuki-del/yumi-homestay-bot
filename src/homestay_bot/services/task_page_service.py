@@ -15,11 +15,19 @@ from homestay_bot.services.business_task_service import BusinessTaskService
 class TaskPageRepository(Protocol):
     """定义任务移动页所需的查询和分派操作。"""
 
-    async def list_all_open(self) -> list[BusinessTask]:
-        """返回全部未关闭任务。"""
+    async def list_all_open(
+        self, *, offset: int, limit: int
+    ) -> list[BusinessTask]:
+        """分页返回未关闭任务。"""
 
-    async def list_assigned_open(self, employee_id: int) -> list[BusinessTask]:
-        """返回分派给指定员工的未关闭任务。"""
+    async def list_assigned_open(
+        self,
+        employee_id: int,
+        *,
+        offset: int,
+        limit: int,
+    ) -> list[BusinessTask]:
+        """分页返回分派给指定员工的未关闭任务。"""
 
     async def get_task(self, task_id: int) -> BusinessTask | None:
         """按主键读取任务。"""
@@ -81,12 +89,22 @@ class TaskPageService:
         self._tasks = tasks
         self._task_state = task_state
 
-    async def list_for(self, employee: Employee) -> list[BusinessTask]:
-        """管理员看全部，普通员工只看分派给自己的任务。"""
+    async def list_for(
+        self,
+        employee: Employee,
+        *,
+        offset: int,
+        limit: int,
+    ) -> list[BusinessTask]:
+        """按分页边界返回管理员全部或普通员工自己的任务。"""
         self._require_active(employee)
         if employee.role is EmployeeRole.ADMIN:
-            return await self._tasks.list_all_open()
-        return await self._tasks.list_assigned_open(employee.id)
+            return await self._tasks.list_all_open(offset=offset, limit=limit)
+        return await self._tasks.list_assigned_open(
+            employee.id,
+            offset=offset,
+            limit=limit,
+        )
 
     async def detail_for(
         self,

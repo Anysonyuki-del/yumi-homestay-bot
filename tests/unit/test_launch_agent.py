@@ -19,12 +19,15 @@ def test_launch_agent_keeps_local_bot_running() -> None:
         runtime_root / "src"
     )
     assert config["ProgramArguments"] == [
-        str(runtime_root / ".venv" / "bin" / "python"),
-        "-m",
-        "uvicorn",
-        "homestay_bot.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8010",
+        str(runtime_root / "start.sh"),
     ]
+    start_script = project_root / "deploy" / "start.sh"
+    assert start_script.exists()
+    script = start_script.read_text()
+    config_position = script.index("get_settings().database_url")
+    backup_position = script.index('cp "$DATABASE_PATH"')
+    migration_position = script.index("alembic upgrade head")
+    assert config_position < backup_position < migration_position
+    assert 'cp -R "$PRIVATE_UPLOAD_DIR"' in script
+    assert "set -eu" in script
+    assert "exec \"$PYTHON_BIN\" -m uvicorn" in script

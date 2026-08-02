@@ -63,17 +63,20 @@ class TaskRepositoryStub:
             ),
         }
 
-    async def list_all_open(self):
+    async def list_all_open(self, *, offset: int, limit: int):
         """返回全部未完成任务。"""
-        return list(self.items.values())
+        return list(self.items.values())[offset : offset + limit]
 
-    async def list_assigned_open(self, employee_id: int):
+    async def list_assigned_open(
+        self, employee_id: int, *, offset: int, limit: int
+    ):
         """只返回分派给指定员工的未完成任务。"""
-        return [
+        items = [
             item
             for item in self.items.values()
             if item.assigned_employee_id == employee_id
         ]
+        return items[offset : offset + limit]
 
     async def get_task(self, task_id: int):
         """返回指定任务。"""
@@ -132,7 +135,11 @@ async def test_staff_only_sees_assigned_tasks() -> None:
     repository = TaskRepositoryStub()
     service = TaskPageService(repository, TaskStateStub())
 
-    items = await service.list_for(employee(2, EmployeeRole.STAFF))
+    items = await service.list_for(
+        employee(2, EmployeeRole.STAFF),
+        offset=0,
+        limit=51,
+    )
 
     assert [item.id for item in items] == [1]
 
@@ -143,7 +150,11 @@ async def test_admin_sees_all_open_tasks() -> None:
     repository = TaskRepositoryStub()
     service = TaskPageService(repository, TaskStateStub())
 
-    items = await service.list_for(employee(1, EmployeeRole.ADMIN))
+    items = await service.list_for(
+        employee(1, EmployeeRole.ADMIN),
+        offset=0,
+        limit=51,
+    )
 
     assert [item.id for item in items] == [1, 2]
 

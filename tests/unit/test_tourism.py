@@ -12,6 +12,9 @@ def test_tourism_query_is_gated_without_stealing_booking_queries() -> None:
     """旅游问题应联网，但房态问题必须继续交给百居易工具。"""
     assert is_tourism_query([{"role": "user", "content": "武汉有哪些地方好玩？"}])
     assert is_tourism_query([{"role": "user", "content": "黄鹤楼门票多少钱？"}])
+    assert is_tourism_query(
+        [{"role": "user", "content": "黄鹤楼离春和景明多少公里？"}]
+    )
     assert not is_tourism_query([{"role": "user", "content": "8月1日还有房吗？"}])
     assert not is_tourism_query([{"role": "user", "content": "房间价格是多少？"}])
 

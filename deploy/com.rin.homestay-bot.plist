@@ -8,14 +8,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/rin/Library/Application Support/HomestayBot/.venv/bin/python</string>
-    <string>-m</string>
-    <string>uvicorn</string>
-    <string>homestay_bot.main:app</string>
-    <string>--host</string>
-    <string>127.0.0.1</string>
-    <string>--port</string>
-    <string>8010</string>
+    <string>/Users/rin/Library/Application Support/HomestayBot/start.sh</string>
   </array>
 
   <key>WorkingDirectory</key>

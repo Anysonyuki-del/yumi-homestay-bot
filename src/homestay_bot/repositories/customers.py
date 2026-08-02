@@ -184,8 +184,14 @@ class SQLAlchemyCustomerRepository:
         await self._session.flush()
         return suggestion.id
 
-    async def list_customers(self, query: str | None) -> list[Customer]:
-        """按姓名或备注搜索尚未合并的客户。"""
+    async def list_customers(
+        self,
+        query: str | None,
+        *,
+        offset: int,
+        limit: int,
+    ) -> list[Customer]:
+        """按姓名或备注稳定分页搜索尚未合并的客户。"""
         statement = select(Customer).where(
             Customer.merged_into_customer_id.is_(None)
         )
@@ -209,7 +215,9 @@ class SQLAlchemyCustomerRepository:
                     statement.order_by(
                         Customer.updated_at.desc(),
                         Customer.id,
-                    ).limit(50)
+                    )
+                    .offset(offset)
+                    .limit(limit)
                 )
             ).all()
         )

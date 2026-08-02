@@ -32,9 +32,9 @@ class CustomerAdminRepositoryStub:
         self.manual_merge_calls: list[tuple[int, int, int]] = []
         self.sync_completed: list[int] = []
 
-    async def list_customers(self, query):
+    async def list_customers(self, query, *, offset: int, limit: int):
         """返回固定客户列表。"""
-        return [self.customer]
+        return [self.customer][offset : offset + limit]
 
     async def customer_detail(self, customer_id):
         """返回客户、标签和摘要详情。"""

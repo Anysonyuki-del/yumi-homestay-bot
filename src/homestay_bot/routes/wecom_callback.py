@@ -1,6 +1,7 @@
 from typing import Annotated, Protocol
-from xml.etree import ElementTree
 
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from homestay_bot.integrations.wecom.callback_crypto import (
@@ -10,6 +11,36 @@ from homestay_bot.integrations.wecom.callback_crypto import (
 )
 
 router = APIRouter()
+
+# 企业微信回调只包含一层加密 XML，设置明确上限避免认证前读取无限请求体。
+WECOM_CALLBACK_MAX_BODY_BYTES = 256 * 1024
+
+
+async def _read_limited_body(request: Request, max_bytes: int) -> bytes:
+    """以流式方式读取请求体，超过上限时立即终止，避免无界缓冲。"""
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="企业微信回调请求体过大",
+            )
+
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="企业微信回调请求体过大",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class CallbackSyncQueue(Protocol):
@@ -67,7 +98,7 @@ class WeComCallbackService:
         try:
             outer_root = ElementTree.fromstring(encrypted_body)
             encrypted = outer_root.findtext("Encrypt")
-        except ElementTree.ParseError as error:
+        except (ElementTree.ParseError, DefusedXmlException) as error:
             raise InvalidCallbackPayload("企业微信外层 XML 无法解析") from error
         if not encrypted:
             raise InvalidCallbackPayload("企业微信回调缺少 Encrypt")
@@ -75,7 +106,7 @@ class WeComCallbackService:
         plaintext = self._crypto.decrypt(encrypted, signature, timestamp, nonce)
         try:
             inner_root = ElementTree.fromstring(plaintext)
-        except ElementTree.ParseError as error:
+        except (ElementTree.ParseError, DefusedXmlException) as error:
             raise InvalidCallbackPayload("企业微信内层 XML 无法解析") from error
 
         event = inner_root.findtext("Event")
@@ -83,6 +114,8 @@ class WeComCallbackService:
         open_kfid = inner_root.findtext("OpenKfId")
         if event != "kf_msg_or_event" or not sync_token or not open_kfid:
             raise InvalidCallbackPayload("企业微信回调不是可同步的客服事件")
+        if len(sync_token) > 4096 or len(open_kfid) > 128:
+            raise InvalidCallbackPayload("企业微信回调字段过长")
         await self._queue.enqueue_wecom_sync(sync_token, open_kfid)
 
 
@@ -100,15 +133,15 @@ def get_callback_service(request: Request) -> WeComCallbackService:
 CallbackServiceDependency = Annotated[
     WeComCallbackService, Depends(get_callback_service)
 ]
-RequiredQuery = Annotated[str, Query()]
+RequiredQuery = Annotated[str, Query(min_length=1, max_length=256)]
 
 
 @router.get("/callbacks/wecom")
 async def verify_wecom_callback_url(
-    msg_signature: str,
-    timestamp: str,
-    nonce: str,
-    echostr: str,
+    msg_signature: RequiredQuery,
+    timestamp: RequiredQuery,
+    nonce: RequiredQuery,
+    echostr: RequiredQuery,
     service: CallbackServiceDependency,
 ) -> Response:
     """响应企业微信首次保存回调 URL 时的校验请求。"""
@@ -130,7 +163,10 @@ async def receive_wecom_callback(
     """验签、解密并持久化回调任务，随后立即响应企业微信。"""
     try:
         await service.verify_and_enqueue(
-            await request.body(), msg_signature, timestamp, nonce
+            await _read_limited_body(request, WECOM_CALLBACK_MAX_BODY_BYTES),
+            msg_signature,
+            timestamp,
+            nonce,
         )
     except (InvalidCallbackSignature, InvalidCallbackPayload) as error:
         raise HTTPException(status_code=401, detail=str(error)) from error

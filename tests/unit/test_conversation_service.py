@@ -141,6 +141,7 @@ class AssistantStub:
         decision: AssistantDecision | None = None,
     ) -> None:
         self.calls = 0
+        self.ack_calls = 0
         self.handoff_reason = handoff_reason
         self.decision = decision
         self.last_kwargs = None
@@ -161,6 +162,7 @@ class AssistantStub:
 
     async def respond_ack(self, **kwargs) -> str:
         """返回固定温暖安抚。"""
+        self.ack_calls += 1
         return "收到啦，我来帮您看看。"
 
 
@@ -423,9 +425,35 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
     await service.handle_message(incoming(content="请补两瓶矿泉水吗？"))
 
     assert assistant.calls == 0
+    assert assistant.ack_calls == 1
     assert wecom.guest_messages == ["收到啦，我来帮您看看。"]
     assert jobs.jobs[0][0] == "wecom_process_message"
     assert jobs.jobs[0][2] == "final:msg-1"
+    assert commits == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_room_information_skips_unnecessary_ack() -> None:
+    """房间介绍等信息问题应直接排最终回复，不发送泛化安抚。"""
+    jobs = DeferredJobStub()
+    commits = 0
+
+    async def commit() -> None:
+        nonlocal commits
+        commits += 1
+
+    service, _, assistant, wecom = build_service(
+        jobs=jobs,
+        defer_model=True,
+        commit_boundary=commit,
+    )
+
+    await service.handle_message(incoming(content="介绍一下这间房"))
+
+    assert assistant.calls == 0
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == []
+    assert jobs.jobs[0][0] == "wecom_process_message"
     assert commits == 1
 
 
@@ -554,6 +582,37 @@ async def test_human_reply_does_not_trigger_bot() -> None:
 
     assert assistant.calls == 0
     assert wecom.guest_messages == []
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_unrelated_low_risk_question_gets_bot_reply_during_human_takeover() -> None:
+    """人工处理客诉期间，新的低风险房态问题仍应由机器人及时回答。"""
+    service, conversations, assistant, wecom = build_service()
+    conversations.conversation.mode = ConversationMode.HUMAN_ACTIVE
+
+    await service.handle_message(
+        incoming(content="现在有几间房可用，今天入住明天退房")
+    )
+
+    assert assistant.calls == 1
+    assert wecom.guest_messages == ["下午三点后可以入住。"]
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_deferred_low_risk_reply_runs_during_human_takeover() -> None:
+    """人工接管期间，已入库的低风险延迟任务仍应生成最终回复。"""
+    message = incoming(content="现在有几间房可用，今天入住明天退房")
+    messages = MessageServiceStub()
+    messages.recorded.append(message)
+    service, conversations, assistant, wecom = build_service(messages=messages)
+    conversations.conversation.mode = ConversationMode.HUMAN_ACTIVE
+
+    await service.process_recorded_message(message)
+
+    assert assistant.calls == 1
+    assert wecom.guest_messages == ["下午三点后可以入住。"]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 
@@ -707,6 +766,31 @@ async def test_guest_task_reply_hides_natural_staff_confirmation_wording() -> No
     assert "有结果后马上告诉您" in reply
     assert "员工" not in reply
     assert "工作人员" not in reply
+
+
+@pytest.mark.asyncio
+async def test_guest_task_reply_does_not_invent_unrequested_services() -> None:
+    """补被子时不得把历史退款、纸巾或矿泉水承诺带给客人。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text=(
+                "床单被子我这就安排更换。矿泉水和纸巾也一并给您补上，"
+                "退款的事我会和店长核对后告诉您。"
+            ),
+            language=Language.ZH,
+            intent="room_service",
+            confidence=0.96,
+        )
+    )
+    service, _, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="床单、被子脏了，帮我换一床被子"))
+
+    reply = wecom.guest_messages[0]
+    assert "被子" in reply
+    assert "退款" not in reply
+    assert "矿泉水" not in reply
+    assert "纸巾" not in reply
 
 
 @pytest.mark.asyncio

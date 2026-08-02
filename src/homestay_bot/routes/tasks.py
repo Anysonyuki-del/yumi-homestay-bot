@@ -1,9 +1,19 @@
+import logging
 import secrets
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -12,6 +22,7 @@ from homestay_bot.domain.models import BusinessTask, Employee
 from homestay_bot.routes.employee_auth import require_employee_session
 
 router = APIRouter(prefix="/employee/tasks")
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(
     directory=Path(__file__).resolve().parent.parent / "templates"
 )
@@ -20,8 +31,14 @@ templates = Jinja2Templates(
 class TaskPageServicePort(Protocol):
     """定义任务路由所需的页面服务。"""
 
-    async def list_for(self, employee: Employee) -> list[BusinessTask]:
-        """返回当前员工可见任务。"""
+    async def list_for(
+        self,
+        employee: Employee,
+        *,
+        offset: int,
+        limit: int,
+    ) -> list[BusinessTask]:
+        """分页返回当前员工可见任务。"""
 
     async def detail_for(
         self,
@@ -120,14 +137,33 @@ def _consume_csrf(request: Request, task_id: int, token: str) -> None:
 def _raise_page_error(error: Exception) -> None:
     """把页面服务领域异常转换为稳定 HTTP 状态。"""
     if isinstance(error, PermissionError):
-        raise HTTPException(status_code=403, detail=str(error)) from error
+        raise HTTPException(
+            status_code=403,
+            detail="没有权限执行任务操作",
+        ) from error
     if isinstance(error, LookupError):
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(
+            status_code=404,
+            detail="任务不存在或不可见",
+        ) from error
+    # 未知异常只记录类型和内部追踪号，页面不得回显异常原文。
+    trace_id = secrets.token_hex(8)
+    logger.error(
+        "任务页面操作失败：error_type=%s trace_id=%s",
+        type(error).__name__,
+        trace_id,
+    )
+    raise HTTPException(
+        status_code=409,
+        detail="任务操作未完成",
+    ) from error
 
 
 @router.get("", response_class=HTMLResponse)
-async def task_index(request: Request) -> Response:
+async def task_index(
+    request: Request,
+    page: int = Query(1, ge=1, le=10_000),
+) -> Response:
     """展示管理员全部待办或员工自己的任务。"""
     try:
         employee = await _current_employee(request)
@@ -136,13 +172,22 @@ async def task_index(request: Request) -> Response:
             "/employee/login?next=/employee/tasks",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-    items = await _get_service(request).list_for(employee)
+    try:
+        items = await _get_service(request).list_for(
+            employee,
+            offset=(page - 1) * 50,
+            limit=51,
+        )
+    except Exception as error:
+        _raise_page_error(error)
     return templates.TemplateResponse(
         request=request,
         name="tasks/index.html",
         context={
-            "tasks": items,
+            "tasks": items[:50],
             "is_admin": employee.role is EmployeeRole.ADMIN,
+            "previous_page": page - 1 if page > 1 else None,
+            "next_page": page + 1 if len(items) > 50 else None,
         },
     )
 
@@ -162,7 +207,10 @@ async def task_detail(request: Request, task_id: int) -> Response:
         "properties": [],
     }
     if employee.role is EmployeeRole.ADMIN:
-        options = await _get_service(request).assignment_options()
+        try:
+            options = await _get_service(request).assignment_options()
+        except Exception as error:
+            _raise_page_error(error)
     return templates.TemplateResponse(
         request=request,
         name="tasks/detail.html",
@@ -179,8 +227,8 @@ async def task_detail(request: Request, task_id: int) -> Response:
 async def transition_task(
     request: Request,
     task_id: int,
-    target: str = Form(),
-    csrf_token: str = Form(),
+    target: str = Form(min_length=1, max_length=32),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """校验一次性令牌并推进当前员工可操作的任务。"""
     employee = await _current_employee(request)
@@ -201,8 +249,12 @@ async def assign_task(
     task_id: int,
     assigned_employee_id: int = Form(),
     property_id: int = Form(),
-    service_date_value: str = Form(alias="service_date"),
-    csrf_token: str = Form(),
+    service_date_value: str = Form(
+        min_length=10,
+        max_length=10,
+        alias="service_date",
+    ),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """只允许管理员补齐执行信息并分派任务。"""
     employee = await _current_employee(request)
@@ -230,7 +282,7 @@ async def update_task_checklist(
     clean: bool = Form(False),
     supplies: bool = Form(False),
     damage: bool = Form(False),
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """校验执行权限后保存三项房间检查结果。"""
     employee = await _current_employee(request)
@@ -258,7 +310,7 @@ async def upload_task_photo(
     request: Request,
     task_id: int,
     photo: Annotated[UploadFile, File()],
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """校验执行权限后把现场照片存入私有目录。"""
     employee = await _current_employee(request)
@@ -284,7 +336,7 @@ async def upload_task_photo(
 async def mark_room_ready(
     request: Request,
     task_id: int,
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """允许任务执行员工在证据完整后标记房间可入住。"""
     employee = await _current_employee(request)
@@ -303,7 +355,7 @@ async def mark_room_ready(
 async def revoke_room_ready(
     request: Request,
     task_id: int,
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """允许管理员把任务关联房间撤回待检查。"""
     employee = await _current_employee(request)

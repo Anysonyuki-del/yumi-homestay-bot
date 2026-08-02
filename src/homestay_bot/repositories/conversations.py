@@ -1,4 +1,5 @@
 from sqlalchemy import exists, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import MessageOrigin
@@ -27,8 +28,17 @@ class SQLAlchemyConversationRepository:
             open_kfid=message.open_kfid,
             external_userid=message.external_userid,
         )
-        self._session.add(conversation)
+        # begin_nested 会隐式刷新 pending 对象；先在捕获范围外暴露外层事务错误。
         await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(conversation)
+                await self._session.flush()
+        except IntegrityError:
+            # 并发补拉可能同时创建会话；保存点回滚后只重新读取竞争结果。
+            conversation = await self._session.scalar(statement)
+            if conversation is None:
+                raise
         return conversation
 
     async def save(self, conversation: Conversation) -> None:
@@ -51,10 +61,20 @@ class SQLAlchemyMessageRepository:
         )
         return await self._session.scalar(statement) is not None
 
-    async def add(self, message: Message) -> None:
-        """保存消息并刷新主键，提交由调用方负责。"""
-        self._session.add(message)
+    async def add(self, message: Message) -> bool:
+        """保存消息并刷新主键；唯一键竞争返回 False 且不污染外层事务。"""
+        # 只允许保存点内部的消息唯一键错误按重复处理，不能吞掉外层约束错误。
         await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(message)
+                await self._session.flush()
+        except IntegrityError:
+            # 只有外部消息编号已存在才属于幂等重复；外键、非空等错误必须上抛。
+            if await self.exists(message.external_message_id):
+                return False
+            raise
+        return True
 
     async def list_recent(
         self,
@@ -111,3 +131,31 @@ class SQLAlchemyMessageRepository:
             .values(external_message_id=external_message_id)
         )
         await self._session.flush()
+
+    async def mark_delivery_failed(
+        self,
+        external_message_id: str,
+        *,
+        error_code: str,
+    ) -> Message | None:
+        """记录企业微信异步投递失败，供重试编排和上下文过滤使用。"""
+        message = await self._session.scalar(
+            select(Message).where(Message.external_message_id == external_message_id)
+        )
+        if message is None or message.origin is not MessageOrigin.BOT:
+            return message
+        metadata = dict(message.message_metadata or {})
+        try:
+            retry_count = int(metadata.get("delivery_retry_count", 0))
+        except (TypeError, ValueError):
+            retry_count = 0
+        metadata.update(
+            {
+                "delivery_status": "failed",
+                "delivery_error_code": error_code[:64],
+                "delivery_retry_count": max(retry_count, 0),
+            }
+        )
+        message.message_metadata = metadata
+        await self._session.flush()
+        return message

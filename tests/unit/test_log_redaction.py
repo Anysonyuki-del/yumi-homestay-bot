@@ -1,6 +1,11 @@
 import logging
+from io import StringIO
 
-from homestay_bot.logging import SensitiveDataFilter, redact_log_fields
+from homestay_bot.logging import (
+    SensitiveDataFilter,
+    configure_logging_redaction,
+    redact_log_fields,
+)
 
 
 def test_log_filter_redacts_tokens_and_mobile_numbers() -> None:
@@ -54,3 +59,43 @@ def test_access_log_filter_redacts_oauth_and_callback_query_values() -> None:
 
     assert "secret-code" not in rendered
     assert "secret-state" not in rendered
+
+
+def test_configure_logging_redaction_protects_child_logger_records() -> None:
+    """子 logger 传播到父 handler 时也必须经过脱敏过滤器。"""
+    parent = logging.getLogger("homestay_bot")
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    parent.addHandler(handler)
+    original_propagate = parent.propagate
+    parent.propagate = False
+    try:
+        configure_logging_redaction()
+        child = logging.getLogger("homestay_bot.security_test")
+        child.warning("Hostex-Access-Token: %s", "secret-token")
+        assert "secret-token" not in stream.getvalue()
+    finally:
+        parent.removeHandler(handler)
+        handler.close()
+        parent.propagate = original_propagate
+
+
+def test_log_filter_redacts_mapping_message_and_extra_fields() -> None:
+    """字典消息和 logger.extra 中的敏感字段也不得绕过过滤器。"""
+    record = logging.LogRecord(
+        "homestay_bot.test",
+        logging.INFO,
+        __file__,
+        1,
+        {"token": "token-value", "nested": {"phone": "13800138000"}},
+        (),
+        None,
+    )
+    record.secret = "secret-value"
+    record.guest_phone = "13900139000"
+
+    assert SensitiveDataFilter().filter(record) is True
+    assert record.msg["token"] == "[REDACTED]"
+    assert record.msg["nested"]["phone"] == "138****8000"
+    assert record.secret == "[REDACTED]"
+    assert record.guest_phone == "139****9000"

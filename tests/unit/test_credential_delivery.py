@@ -326,6 +326,43 @@ async def test_text_part_marks_sent_only_after_explicit_message_id(
 
 
 @pytest.mark.asyncio
+async def test_credential_send_commits_part_snapshot_before_network(tmp_path) -> None:
+    """凭证部件锁定后应在外部发送前释放数据库事务。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    item = part_context(cipher, "guide")
+    repository = PartRepositoryStub(item)
+    wecom = WeComSendStub()
+    sequence: list[str] = []
+
+    async def commit_before_external() -> None:
+        """记录外部发送前提交。"""
+        sequence.append("committed")
+
+    class RecordingWeCom(WeComSendStub):
+        """记录企业微信发送顺序。"""
+
+        async def send_text(self, open_kfid, external_userid, content):
+            """确认发送发生在提交之后。"""
+            sequence.append("network")
+            return await super().send_text(open_kfid, external_userid, content)
+
+    wecom = RecordingWeCom()
+    sender = CredentialPartSender(
+        repository,
+        wecom,
+        cipher,
+        PrivateFileStorage(tmp_path),
+        today=lambda: date(2026, 8, 2),
+        now=lambda: datetime(2026, 8, 2, 9, tzinfo=UTC),
+        before_external=commit_before_external,
+    )
+
+    await sender.handle({"part_id": 51})
+
+    assert sequence == ["committed", "network"]
+
+
+@pytest.mark.asyncio
 async def test_uncertain_image_result_is_not_replayed(tmp_path) -> None:
     """图片上传后发送结果不明确时转人工，重复处理也不得重放。"""
     cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))

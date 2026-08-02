@@ -15,13 +15,13 @@ from fastapi import FastAPI
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.config import Settings
 from homestay_bot.db import create_engine, create_session_factory
-from homestay_bot.domain.enums import MessageOrigin
-from homestay_bot.domain.models import BookingApproval, Conversation, Employee
+from homestay_bot.domain.enums import ComplaintReviewStatus, MessageOrigin
+from homestay_bot.domain.models import BookingApproval, Conversation, Employee, Message
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
@@ -64,6 +64,7 @@ from homestay_bot.repositories.lifecycle_reminders import (
     SQLAlchemyLifecycleReminderRepository,
 )
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
+from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
 from homestay_bot.routes.employee_auth import EmployeeAuthService
 from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.hostex_webhook import HostexWebhookService
@@ -209,6 +210,8 @@ class TransactionalOutboxWeCom:
         content: str,
         *,
         message_type: str = "text",
+        delivery_retry_count: int = 0,
+        retry_of_message_id: str | None = None,
     ) -> str | None:
         """事务内登记客人回复，真实发送由 worker 在提交后执行。"""
         outbox_id = self._outbox_id("guest")
@@ -218,10 +221,13 @@ class TransactionalOutboxWeCom:
             "wecom_send_text",
             {
                 "outbox_id": outbox_id,
+                "source_message_id": self._source_message_id,
                 "open_kfid": open_kfid,
                 "external_userid": external_userid,
                 "content": content,
                 "message_type": message_type,
+                "delivery_retry_count": delivery_retry_count,
+                "retry_of_message_id": retry_of_message_id,
             },
             dedupe_key=outbox_id,
         )
@@ -270,6 +276,133 @@ class TransactionalOutboxWeCom:
             },
             dedupe_key=outbox_id,
         )
+
+
+async def _record_complaint_delivery(
+    session: AsyncSession,
+    source_message_id: str,
+    *,
+    delivered: bool,
+    error_code: str | None = None,
+    external_message_id: str | None = None,
+) -> None:
+    """按事务型 outbox 来源回写客诉真实投递结果。"""
+    if not source_message_id.startswith("complaint:"):
+        return
+    # 客诉重试会在编号后追加阶段（例如 complaint:17:retry-2），
+    # 回写时只取稳定的数字主键，不能因为阶段后缀丢失状态更新。
+    review_token = source_message_id.removeprefix("complaint:").split(":", 1)[0]
+    if not review_token.isdecimal():
+        return
+    review_id = int(review_token)
+    repository = SQLAlchemyComplaintRepository(session)
+    if delivered:
+        if not external_message_id:
+            return
+        await repository.mark_delivery_sent(
+            review_id,
+            sent_at=datetime.now(UTC),
+            external_message_id=external_message_id,
+        )
+    else:
+        await repository.mark_delivery_failed(
+            review_id,
+            error_code=error_code or "unknown_delivery_error",
+        )
+
+
+async def _handle_guest_delivery_failure(
+    session: AsyncSession,
+    external_message_id: str,
+    *,
+    fail_type: int,
+) -> bool:
+    """记录普通机器人消息失败，并为其登记一次去重重试。"""
+    repository = SQLAlchemyMessageRepository(session)
+    message = await repository.mark_delivery_failed(
+        external_message_id,
+        error_code=f"wecom_async_{fail_type}",
+    )
+    if message is None or message.origin is not MessageOrigin.BOT or not message.content:
+        return False
+    metadata = dict(message.message_metadata or {})
+    try:
+        retry_count = int(metadata.get("delivery_retry_count", 0))
+    except (TypeError, ValueError):
+        retry_count = 0
+    if retry_count >= 1:
+        metadata["delivery_retry_pending"] = False
+        message.message_metadata = metadata
+        await session.flush()
+        return False
+    conversation = await session.get(Conversation, message.conversation_id)
+    if conversation is None:
+        return False
+    # 企业微信的安全限制通常针对正文内容；原文再次发送只会重复失败，
+    # 因此改发不含外链、地址和敏感细节的短消息，先保证客人收到回应。
+    retry_content = (
+        "我已收到您的问题，正在为您核实相关信息，请稍等片刻。"
+        if fail_type == 13
+        else message.content
+    )
+    outbox = TransactionalOutboxWeCom(
+        session,
+        source_message_id=f"delivery-retry:{message.id}",
+        delivery_phase="guest",
+    )
+    outbox_id = await outbox.send_text(
+        conversation.open_kfid,
+        conversation.external_userid,
+        retry_content,
+        delivery_retry_count=retry_count + 1,
+        retry_of_message_id=str(message.id),
+    )
+    if outbox_id is None:
+        return False
+    metadata["delivery_retry_count"] = retry_count + 1
+    metadata["delivery_retry_outbox_id"] = outbox_id
+    metadata["delivery_retry_pending"] = True
+    if fail_type == 13:
+        metadata["delivery_fallback_used"] = True
+    message.message_metadata = metadata
+    await session.flush()
+    return True
+
+
+async def _notify_guest_delivery_failure(
+    session: AsyncSession,
+    external_message_id: str,
+    *,
+    agent_id: int,
+    employee_userids: list[str],
+) -> bool:
+    """重试仍失败时登记一次脱敏人工跟进通知。"""
+    if not employee_userids:
+        return False
+    message = await session.scalar(
+        select(Message).where(Message.external_message_id == external_message_id)
+    )
+    if message is None or message.origin is not MessageOrigin.BOT:
+        return False
+    metadata = dict(message.message_metadata or {})
+    if metadata.get("delivery_retry_pending") or metadata.get(
+        "delivery_failure_notified"
+    ):
+        return False
+    outbox = TransactionalOutboxWeCom(
+        session,
+        source_message_id=f"delivery-alert:{message.id}",
+        delivery_phase="guest",
+    )
+    await outbox.send_internal_text(
+        agent_id=agent_id,
+        employee_userids=employee_userids,
+        content="有一条客人消息未成功送达，请管家人工跟进。",
+    )
+    metadata["delivery_failure_notified"] = True
+    message.message_metadata = metadata
+    await session.flush()
+    return True
 
 
 class SessionKnowledgeRepository:
@@ -392,10 +525,15 @@ class SessionApprovalPageService:
         async with self._factory() as session:
             return await self._service(session).get_detail(approval_id)
 
-    async def list_pending(self) -> list[BookingApproval]:
-        """在短会话中读取待处理审批列表。"""
+    async def list_pending(
+        self, *, offset: int, limit: int
+    ) -> list[BookingApproval]:
+        """在短会话中按分页边界读取待处理审批。"""
         async with self._factory() as session:
-            return await self._service(session).list_pending()
+            return await self._service(session).list_pending(
+                offset=offset,
+                limit=limit,
+            )
 
     async def confirm(
         self,
@@ -433,10 +571,20 @@ class SessionTaskPageService:
             BusinessTaskService(repository),
         )
 
-    async def list_for(self, employee: Employee) -> list[Any]:
-        """返回当前员工可见的未关闭任务。"""
+    async def list_for(
+        self,
+        employee: Employee,
+        *,
+        offset: int,
+        limit: int,
+    ) -> list[Any]:
+        """按分页边界返回当前员工可见的未关闭任务。"""
         async with self._factory() as session:
-            return await self._service(session).list_for(employee)
+            return await self._service(session).list_for(
+                employee,
+                offset=offset,
+                limit=limit,
+            )
 
     async def detail_for(
         self,
@@ -714,12 +862,17 @@ class SessionCustomerAdminService:
         self,
         query: str | None,
         administrator: Employee,
+        *,
+        offset: int,
+        limit: int,
     ) -> list[Any]:
-        """返回脱敏客户卡片。"""
+        """按分页边界返回脱敏客户卡片。"""
         async with self._factory() as session:
             return await self._service(session).list_customers(
                 query,
                 administrator,
+                offset=offset,
+                limit=limit,
             )
 
     async def get_detail(
@@ -849,10 +1002,13 @@ class SessionKnowledgeAdminService:
         """保存数据库会话工厂。"""
         self._factory = factory
 
-    async def list_all(self) -> list[Any]:
-        """返回全部知识条目。"""
+    async def list_all(self, *, offset: int, limit: int) -> list[Any]:
+        """按分页边界返回知识条目。"""
         async with self._factory() as session:
-            return await KnowledgeAdminService(session).list_all()
+            return await KnowledgeAdminService(session).list_all(
+                offset=offset,
+                limit=limit,
+            )
 
     async def create(self, employee_id: int, **fields: Any) -> Any:
         """创建知识并由底层服务提交审计。"""
@@ -869,10 +1025,13 @@ class SessionKnowledgeAdminService:
         async with self._factory() as session:
             await KnowledgeAdminService(session).set_enabled(entry_id, employee_id, enabled)
 
-    async def list_candidates(self) -> list[Any]:
-        """返回管理员可审核的高频 FAQ 候选。"""
+    async def list_candidates(self, *, offset: int, limit: int) -> list[Any]:
+        """按分页边界返回管理员可审核的高频 FAQ 候选。"""
         async with self._factory() as session:
-            return await KnowledgeAdminService(session).list_candidates()
+            return await KnowledgeAdminService(session).list_candidates(
+                offset=offset,
+                limit=limit,
+            )
 
     async def convert_candidate(
         self,
@@ -928,9 +1087,20 @@ class SessionComplaintAdminService:
     async def send(self, review_id: int, version: int, draft: str, employee_id: int) -> None:
         """登记客人回复、状态和审计。"""
         async with self._factory() as session:
+            review = await SQLAlchemyComplaintRepository(session).get(review_id)
+            delivery_phase = (
+                f"retry-{review.version}"
+                if review is not None
+                and review.status is ComplaintReviewStatus.DELIVERY_FAILED
+                else None
+            )
             await ComplaintAdminService(
                 session,
-                TransactionalOutboxWeCom(session, source_message_id=f"complaint:{review_id}"),
+                TransactionalOutboxWeCom(
+                    session,
+                    source_message_id=f"complaint:{review_id}",
+                    delivery_phase=delivery_phase,
+                ),
             ).send(review_id, version, draft, employee_id)
             await session.commit()
 
@@ -1044,8 +1214,9 @@ async def _run_worker_loop(
     deferred_message_handler: JobHandler | None = None,
     included_job_types: set[str] | None = None,
     excluded_job_types: set[str] | None = None,
+    recover_stale: bool = True,
 ) -> None:
-    """持续处理持久化任务，并周期恢复五分钟前的遗留锁。"""
+    """持续处理持久化任务；仅 recovery leader 负责恢复遗留锁。"""
     while True:
         try:
             async with factory() as session:
@@ -1054,26 +1225,46 @@ async def _run_worker_loop(
                     included_job_types=included_job_types,
                     excluded_job_types=excluded_job_types,
                 )
-                await SQLAlchemyApprovalRepository(session).recover_stale_creating(
-                    before=datetime.now(UTC) - timedelta(minutes=5)
-                )
-                await repository.recover_stale(before=datetime.now(UTC) - timedelta(minutes=5))
+                if recover_stale:
+                    # 预订审批没有任务类型分片，只由通用 worker 负责恢复。
+                    if included_job_types is None:
+                        await SQLAlchemyApprovalRepository(
+                            session
+                        ).recover_stale_creating(
+                            before=datetime.now(UTC) - timedelta(minutes=5)
+                        )
+                    await repository.recover_stale(
+                        before=datetime.now(UTC) - timedelta(minutes=5)
+                    )
                 await session.commit()
 
                 async def send_guest(payload: dict[str, Any]) -> None:
-                    """发送客人回复并回写真实 msgid；只重试确定未发送的错误。"""
+                    """发送客人回复并回写真实 msgid，同时更新客诉投递状态。"""
+                    source_message_id = str(payload.get("source_message_id", ""))
                     try:
                         real_message_id = await wecom.send_text(
                             str(payload["open_kfid"]),
                             str(payload["external_userid"]),
                             str(payload["content"]),
                         )
-                    except httpx.ConnectError as error:
-                        raise RetrySafeJobError("企业微信连接尚未建立") from error
-                    except WeComApiError as error:
-                        if error.error_code == 45009:
+                    except Exception as error:
+                        await _record_complaint_delivery(
+                            session,
+                            source_message_id,
+                            delivered=False,
+                            error_code=type(error).__name__,
+                        )
+                        if isinstance(error, httpx.ConnectError):
+                            raise RetrySafeJobError("企业微信连接尚未建立") from error
+                        if isinstance(error, WeComApiError) and error.error_code == 45009:
                             raise RetrySafeJobError("企业微信明确限流") from error
                         raise
+                    await _record_complaint_delivery(
+                        session,
+                        source_message_id,
+                        delivered=True,
+                        external_message_id=real_message_id,
+                    )
                     await SQLAlchemyMessageRepository(session).replace_external_message_id(
                         str(payload["outbox_id"]),
                         real_message_id,
@@ -1086,6 +1277,15 @@ async def _run_worker_loop(
                         )
                     )
                     if conversation is not None:
+                        metadata: dict[str, Any] = {
+                            "delivery_status": "accepted",
+                            "delivery_retry_count": int(
+                                payload.get("delivery_retry_count", 0) or 0
+                            ),
+                        }
+                        retry_of_message_id = payload.get("retry_of_message_id")
+                        if retry_of_message_id:
+                            metadata["retry_of_message_id"] = str(retry_of_message_id)
                         await MessageService(
                             SQLAlchemyMessageRepository(session)
                         ).record_bot(
@@ -1093,6 +1293,7 @@ async def _run_worker_loop(
                             real_message_id,
                             str(payload["content"]),
                             message_type=str(payload.get("message_type", "text")),
+                            metadata=metadata,
                         )
 
                 async def send_internal(payload: dict[str, Any]) -> None:
@@ -1174,11 +1375,18 @@ async def _run_worker_loop(
                     ),
                 )
                 handled = await worker.run_once()
-        except OperationalError as error:
-            if "database is locked" not in str(error).lower():
-                raise
-            # SQLite 本地测试发生瞬时写锁时保活 worker，稍后继续处理队列。
-            logger.warning("后台任务遇到 SQLite 写锁，1 秒后重试")
+        except SQLAlchemyError as error:
+            # 数据库提交或连接故障不得永久终止 worker；只记录异常类型并有限退避。
+            if (
+                isinstance(error, OperationalError)
+                and "database is locked" in str(error).lower()
+            ):
+                logger.warning("后台任务遇到 SQLite 写锁，1 秒后重试")
+            else:
+                logger.warning(
+                    "后台任务遇到数据库运行故障，1 秒后重试：error_type=%s",
+                    type(error).__name__,
+                )
             await asyncio.sleep(1)
             continue
         if not handled:
@@ -1210,6 +1418,33 @@ async def _run_faq_maintenance_loop(
         await asyncio.sleep(3600)
 
 
+async def _run_retention_loop(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """每天在独立事务清理过期终态历史，失败时保活并等待下一轮。"""
+    while True:
+        try:
+            async with factory() as session:
+                deleted = await SQLAlchemyRetentionRepository(session).purge()
+                await session.commit()
+                logger.info(
+                    "历史记录清理完成：jobs=%s external_requests=%s "
+                    "hostex_events=%s audit_logs=%s",
+                    deleted.get("jobs", 0),
+                    deleted.get("external_requests", 0),
+                    deleted.get("hostex_webhook_events", 0),
+                    deleted.get("audit_logs", 0),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "历史记录清理失败，下一轮继续：error_type=%s",
+                type(error).__name__,
+            )
+        await asyncio.sleep(86_400)
+
+
 async def _run_context_maintenance_loop(
     *,
     factory: async_sessionmaker[AsyncSession],
@@ -1223,16 +1458,31 @@ async def _run_context_maintenance_loop(
     completed_time = heartbeat_now or (lambda: datetime.now(UTC))
     while True:
         try:
-            async with factory() as session:
-                repository = SQLAlchemyContextRepository(session)
+            async with factory() as discovery_session:
+                repository = SQLAlchemyContextRepository(discovery_session)
                 customer_ids = await repository.list_customer_ids_with_messages()
-                service = ContextRetentionService(repository, summarizer)
-                cycle_now = current_time()
-                for customer_id in customer_ids:
-                    await service.maintain_customer(customer_id, cycle_now)
-                await session.commit()
-                if heartbeat is not None:
-                    heartbeat(completed_time())
+            cycle_now = current_time()
+            for customer_id in customer_ids:
+                try:
+                    # 每个客户独立会话和事务，模型超时或数据库异常不得污染其他客户。
+                    async with factory() as customer_session:
+                        service = ContextRetentionService(
+                            SQLAlchemyContextRepository(customer_session),
+                            summarizer,
+                            before_external=customer_session.commit,
+                        )
+                        await service.maintain_customer(customer_id, cycle_now)
+                        await customer_session.commit()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    logger.warning(
+                        "单客户上下文维护失败：customer_id=%s error_type=%s",
+                        customer_id,
+                        type(error).__name__,
+                    )
+            if heartbeat is not None:
+                heartbeat(completed_time())
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -1483,6 +1733,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 SQLAlchemyOperationsRepository(session)
             ),
             weather=reminder_weather,
+            before_external=session.commit,
         )
 
     async def handle_send_failure(
@@ -1491,6 +1742,26 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     ) -> None:
         """在独立事务消费企业微信异步发送失败事件。"""
         async with factory() as session:
+            complaint = await SQLAlchemyComplaintRepository(
+                session
+            ).mark_delivery_failed_by_external_message_id(
+                external_message_id,
+                error_code=f"wecom_async_{fail_type}",
+            )
+            if complaint is None:
+                # 普通机器人消息失败时自动重试一次；客诉消息仍走人工重发流程。
+                retry_queued = await _handle_guest_delivery_failure(
+                    session,
+                    external_message_id,
+                    fail_type=fail_type,
+                )
+                if not retry_queued:
+                    await _notify_guest_delivery_failure(
+                        session,
+                        external_message_id,
+                        agent_id=settings.wecom_agent_id,
+                        employee_userids=duty_userids,
+                    )
             await build_lifecycle_service(session).handle_send_failure(
                 external_message_id,
                 fail_type,
@@ -1569,6 +1840,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             hostex,
             SQLAlchemyOperationsRepository(session),
             lifecycle=build_lifecycle_service(session),
+            before_external=session.commit,
         )
 
         async def handle_hostex_event(payload: dict[str, Any]) -> None:
@@ -1594,6 +1866,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             wecom,
             sensitive_data,
             private_file_storage,
+            before_external=session.commit,
         )
         return sender.handle
 
@@ -1717,6 +1990,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             lifecycle_handler_factory=build_lifecycle_handler,
             deferred_message_handler=handle_deferred_message,
             excluded_job_types={"wecom_process_message"},
+            recover_stale=True,
         )
     )
     deferred_worker_task = asyncio.create_task(
@@ -1737,6 +2011,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             lifecycle_handler_factory=build_lifecycle_handler,
             deferred_message_handler=handle_deferred_message,
             included_job_types={"wecom_process_message"},
+            recover_stale=True,
         )
     )
     poll_task = asyncio.create_task(
@@ -1749,6 +2024,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     faq_maintenance_task = asyncio.create_task(
         _run_faq_maintenance_loop(factory=factory)
     )
+    retention_task = asyncio.create_task(_run_retention_loop(factory))
     context_maintenance_task = asyncio.create_task(
         _run_context_maintenance_loop(
             factory=factory,
@@ -1787,6 +2063,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             deferred_worker_task,
             poll_task,
             faq_maintenance_task,
+            retention_task,
             context_maintenance_task,
             hostex_reconcile_task,
         )

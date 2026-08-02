@@ -8,7 +8,7 @@ WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
 _TOURISM_PATTERN = re.compile(
     r"景点|好玩|游玩|旅游|一日游|半日游|攻略|美食|小吃|餐厅|"
     r"展览|演出|活动|门票|票价|开放时间|营业时间|怎么去|路线|"
-    r"地铁|公交|打车|天气.*(?:玩|游)|"
+    r"地铁|公交|打车|距离|多远|公里|路程|怎么到|天气.*(?:玩|游)|"
     r"attraction|sightseeing|itinerary|food|restaurant|exhibition|"
     r"show|event|ticket|opening hours|how to get",
     re.IGNORECASE,

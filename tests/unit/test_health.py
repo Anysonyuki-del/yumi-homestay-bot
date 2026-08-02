@@ -2,9 +2,13 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from fastapi import FastAPI, Request
+from starlette.middleware.sessions import SessionMiddleware
 
+from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.main import app
 from homestay_bot.routes.health import OperationalHealthService
+from homestay_bot.routes.health import router as health_router
 
 
 @pytest.mark.asyncio
@@ -15,17 +19,57 @@ async def test_health_endpoint_returns_ok() -> None:
         response = await client.get("/health")
 
     assert response.status_code == 503
-    assert response.json() == {
+    assert response.json() == {"status": "degraded"}
+
+
+@pytest.mark.asyncio
+async def test_health_details_require_admin_and_return_component_statuses() -> None:
+    """内部组件状态只能向已登录管理员展示。"""
+
+    class HealthServiceStub:
+        """返回固定详细诊断。"""
+
+        async def check(self) -> dict[str, str]:
+            """模拟数据库异常的详细状态。"""
+            return {
+                "status": "degraded",
+                "database": "error",
+                "worker_heartbeat": "ok",
+            }
+
+    test_app = FastAPI()
+    test_app.add_middleware(
+        SessionMiddleware,
+        secret_key="health-test-session-secret-at-least-32",
+    )
+    test_app.include_router(health_router)
+    test_app.state.health_service = HealthServiceStub()
+
+    @test_app.get("/test/session/{role}")
+    async def seed_session(request: Request, role: EmployeeRole) -> dict[str, str]:
+        """仅供测试写入签名员工会话。"""
+        request.session["employee_id"] = 1
+        request.session["employee_role"] = role.value
+        return {"status": "seeded"}
+
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        public_response = await client.get("/employee/health")
+        await client.get("/test/session/staff")
+        staff_response = await client.get("/employee/health")
+        await client.get("/test/session/admin")
+        admin_response = await client.get("/employee/health")
+
+    assert public_response.status_code == 401
+    assert staff_response.status_code == 403
+    assert admin_response.status_code == 503
+    assert admin_response.json() == {
         "status": "degraded",
-        "database": "not_configured",
-        "worker_heartbeat": "not_configured",
-        "wecom_polling": "not_configured",
-        "hostex_webhook_sync": "not_configured",
-        "context_maintenance": "not_configured",
-        "lifecycle_scheduler": "not_configured",
-        "configuration": "incomplete",
-        "web_search": "not_configured",
-        "wecom_contact_sync": "not_configured",
+        "database": "error",
+        "worker_heartbeat": "ok",
     }
 
 

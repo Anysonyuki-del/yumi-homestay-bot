@@ -1,8 +1,8 @@
 import secrets
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Annotated, Any, Protocol, cast
 
-from fastapi import APIRouter, Form, HTTPException, Request, status
+from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -16,7 +16,12 @@ templates = Jinja2Templates(directory=Path(__file__).resolve().parent.parent / "
 class ComplaintAdminServicePort(Protocol):
     """定义客诉编辑页面所需业务接口。"""
 
-    async def get_detail(self, review_id: int) -> dict[str, Any]: ...
+    async def get_detail(
+        self,
+        review_id: int,
+        *,
+        before_message_id: int | None = None,
+    ) -> dict[str, Any]: ...
     async def update_draft(self, review_id: int, version: int, draft: str) -> None: ...
     async def send(self, review_id: int, version: int, draft: str, employee_id: int) -> None: ...
     async def return_for_analysis(self, review_id: int, version: int, employee_id: int) -> None: ...
@@ -50,8 +55,12 @@ def _consume_csrf(request: Request, review_id: int, token: str) -> None:
 
 
 @router.get("/{review_id}", response_class=HTMLResponse)
-async def complaint_detail(request: Request, review_id: int) -> Response:
-    """展示客诉完整对话、分析和可编辑回复草稿。"""
+async def complaint_detail(
+    request: Request,
+    review_id: int,
+    before_message_id: Annotated[int | None, Query(gt=0)] = None,
+) -> Response:
+    """展示客诉分页对话、分析和可编辑回复草稿。"""
     try:
         employee_id, role = await require_employee_session(request)
     except HTTPException:
@@ -59,7 +68,10 @@ async def complaint_detail(request: Request, review_id: int) -> Response:
             f"/employee/login?next=/employee/complaints/{review_id}",
             status_code=303,
         )
-    detail = await _service(request).get_detail(review_id)
+    detail = await _service(request).get_detail(
+        review_id,
+        before_message_id=before_message_id,
+    )
     return templates.TemplateResponse(
         request=request,
         name="complaints/edit.html",
@@ -100,9 +112,9 @@ async def _action(
 async def complaint_save(
     request: Request,
     review_id: int,
-    version: int = Form(),
-    draft: str = Form(),
-    csrf_token: str = Form(),
+    version: int = Form(ge=0),
+    draft: str = Form(max_length=4000),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """保存员工编辑草稿。"""
     return await _action(request, review_id, version, csrf_token, "save", draft)
@@ -112,9 +124,9 @@ async def complaint_save(
 async def complaint_send(
     request: Request,
     review_id: int,
-    version: int = Form(),
-    draft: str = Form(),
-    csrf_token: str = Form(),
+    version: int = Form(ge=0),
+    draft: str = Form(max_length=4000),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """发送人工确认后的回复。"""
     return await _action(request, review_id, version, csrf_token, "send", draft)
@@ -124,8 +136,8 @@ async def complaint_send(
 async def complaint_return(
     request: Request,
     review_id: int,
-    version: int = Form(),
-    csrf_token: str = Form(),
+    version: int = Form(ge=0),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """退回客诉重新生成分析。"""
     return await _action(request, review_id, version, csrf_token, "return")
@@ -135,8 +147,8 @@ async def complaint_return(
 async def complaint_cancel(
     request: Request,
     review_id: int,
-    version: int = Form(),
-    csrf_token: str = Form(),
+    version: int = Form(ge=0),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """关闭当前客诉。"""
     return await _action(request, review_id, version, csrf_token, "cancel")

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from fastapi import APIRouter, Form, HTTPException, Request, Response, status
+from fastapi import APIRouter, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -24,8 +24,8 @@ templates = Jinja2Templates(
 class KnowledgeAdminServicePort(Protocol):
     """定义知识管理路由所需接口。"""
 
-    async def list_all(self) -> list[Any]:
-        """返回包括停用项在内的全部知识。"""
+    async def list_all(self, *, offset: int, limit: int) -> list[Any]:
+        """分页返回包括停用项在内的知识。"""
 
     async def create(self, employee_id: int, **fields: Any) -> Any:
         """创建一条双语知识。"""
@@ -40,8 +40,8 @@ class KnowledgeAdminServicePort(Protocol):
     ) -> None:
         """启用或停用知识。"""
 
-    async def list_candidates(self) -> list[Any]:
-        """返回管理员待归纳候选。"""
+    async def list_candidates(self, *, offset: int, limit: int) -> list[Any]:
+        """分页返回管理员待归纳候选。"""
 
     async def convert_candidate(
         self,
@@ -72,10 +72,15 @@ class KnowledgeAdminService:
         self._session = session
         self._now = now or (lambda: datetime.now(UTC))
 
-    async def list_all(self) -> list[KnowledgeEntry]:
-        """按主键返回全部知识，供员工审核。"""
+    async def list_all(
+        self, *, offset: int, limit: int
+    ) -> list[KnowledgeEntry]:
+        """按主键分页返回知识，供员工审核。"""
         result = await self._session.scalars(
-            select(KnowledgeEntry).order_by(KnowledgeEntry.id)
+            select(KnowledgeEntry)
+            .order_by(KnowledgeEntry.id)
+            .offset(offset)
+            .limit(limit)
         )
         return list(result.all())
 
@@ -120,12 +125,16 @@ class KnowledgeAdminService:
         self._add_audit(employee_id, action, entry.id)
         await self._session.commit()
 
-    async def list_candidates(self) -> list[KnowledgeCandidate]:
-        """返回仍开放的候选，正文仅交给管理员页面。"""
+    async def list_candidates(
+        self, *, offset: int, limit: int
+    ) -> list[KnowledgeCandidate]:
+        """分页返回仍开放的候选，正文仅交给管理员页面。"""
         result = await self._session.scalars(
             select(KnowledgeCandidate)
             .where(KnowledgeCandidate.status == KnowledgeCandidateStatus.OPEN)
             .order_by(KnowledgeCandidate.last_seen_at.desc(), KnowledgeCandidate.id.desc())
+            .offset(offset)
+            .limit(limit)
         )
         return list(result.all())
 
@@ -273,13 +282,20 @@ def _fields(
 
 
 @router.get("", response_class=HTMLResponse)
-async def knowledge_index(request: Request) -> Response:
+async def knowledge_index(
+    request: Request,
+    page: int = Query(1, ge=1, le=10_000),
+    candidate_page: int = Query(1, ge=1, le=10_000),
+) -> Response:
     """允许全部已登录员工查看知识及启停状态。"""
     _, role = await require_employee_session(request)
     service = _get_service(request)
-    entries = await service.list_all()
+    entries = await service.list_all(offset=(page - 1) * 50, limit=51)
     candidates = (
-        await service.list_candidates()
+        await service.list_candidates(
+            offset=(candidate_page - 1) * 50,
+            limit=51,
+        )
         if role is EmployeeRole.ADMIN
         else []
     )
@@ -289,10 +305,20 @@ async def knowledge_index(request: Request) -> Response:
         request=request,
         name="knowledge/index.html",
         context={
-            "entries": entries,
-            "candidates": candidates,
+            "entries": entries[:50],
+            "candidates": candidates[:50],
             "can_edit": role is EmployeeRole.ADMIN,
             "csrf_token": csrf_token,
+            "page": page,
+            "candidate_page": candidate_page,
+            "previous_page": page - 1 if page > 1 else None,
+            "next_page": page + 1 if len(entries) > 50 else None,
+            "previous_candidate_page": (
+                candidate_page - 1 if candidate_page > 1 else None
+            ),
+            "next_candidate_page": (
+                candidate_page + 1 if len(candidates) > 50 else None
+            ),
         },
     )
 
@@ -300,13 +326,13 @@ async def knowledge_index(request: Request) -> Response:
 @router.post("")
 async def create_knowledge(
     request: Request,
-    category: str = Form(min_length=1),
-    question_zh: str = Form(min_length=1),
-    answer_zh: str = Form(min_length=1),
-    question_en: str = Form(min_length=1),
-    answer_en: str = Form(min_length=1),
-    keywords: str = Form(""),
-    csrf_token: str = Form(),
+    category: str = Form(min_length=1, max_length=64),
+    question_zh: str = Form(min_length=1, max_length=500),
+    answer_zh: str = Form(min_length=1, max_length=10_000),
+    question_en: str = Form(min_length=1, max_length=500),
+    answer_en: str = Form(min_length=1, max_length=10_000),
+    keywords: str = Form("", max_length=1000),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """管理员新增一条同时包含中英文内容的审核知识。"""
     employee_id = await _require_admin(request)
@@ -331,13 +357,13 @@ async def create_knowledge(
 async def convert_candidate(
     request: Request,
     candidate_id: int,
-    category: str = Form(min_length=1),
-    question_zh: str = Form(min_length=1),
-    answer_zh: str = Form(min_length=1),
-    question_en: str = Form(min_length=1),
-    answer_en: str = Form(min_length=1),
-    keywords: str = Form(""),
-    csrf_token: str = Form(),
+    category: str = Form(min_length=1, max_length=64),
+    question_zh: str = Form(min_length=1, max_length=500),
+    answer_zh: str = Form(min_length=1, max_length=10_000),
+    question_en: str = Form(min_length=1, max_length=500),
+    answer_en: str = Form(min_length=1, max_length=10_000),
+    keywords: str = Form("", max_length=1000),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """管理员修改候选草稿后创建并启用正式双语知识。"""
     employee_id = await _require_admin(request)
@@ -363,7 +389,7 @@ async def convert_candidate(
 async def snooze_candidate(
     request: Request,
     candidate_id: int,
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """管理员暂不收录候选，并关闭该主题三十天。"""
     employee_id = await _require_admin(request)
@@ -378,13 +404,13 @@ async def snooze_candidate(
 async def update_knowledge(
     request: Request,
     entry_id: int,
-    category: str = Form(min_length=1),
-    question_zh: str = Form(min_length=1),
-    answer_zh: str = Form(min_length=1),
-    question_en: str = Form(min_length=1),
-    answer_en: str = Form(min_length=1),
-    keywords: str = Form(""),
-    csrf_token: str = Form(),
+    category: str = Form(min_length=1, max_length=64),
+    question_zh: str = Form(min_length=1, max_length=500),
+    answer_zh: str = Form(min_length=1, max_length=10_000),
+    question_en: str = Form(min_length=1, max_length=500),
+    answer_en: str = Form(min_length=1, max_length=10_000),
+    keywords: str = Form("", max_length=1000),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """管理员编辑指定双语知识。"""
     employee_id = await _require_admin(request)
@@ -411,7 +437,7 @@ async def toggle_knowledge(
     request: Request,
     entry_id: int,
     action: str,
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> Response:
     """管理员启用或停用知识，成功后不返回正文。"""
     if action not in {"enable", "disable"}:

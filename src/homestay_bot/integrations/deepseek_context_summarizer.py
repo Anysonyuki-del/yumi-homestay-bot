@@ -21,6 +21,11 @@ class _SummaryPayload(BaseModel):
 class DeepSeekContextSummarizer:
     """先本地脱敏，再使用 DeepSeek 合并客户分层摘要。"""
 
+    # 限制单条和总消息输入，避免高频会话耗尽模型上下文或请求预算。
+    _MAX_MESSAGE_CHARS = 2_000
+    _MAX_MESSAGES_CHARS = 12_000
+    _MAX_EXISTING_SUMMARY_CHARS = 4_000
+
     _SENSITIVE_PATTERNS = (
         re.compile(r"(?<!\d)(?:\+?86[\s-]?)?1[3-9]\d{9}(?!\d)"),
         re.compile(r"(?<!\d)\d{17}[\dXx](?!\w)"),
@@ -47,8 +52,10 @@ class DeepSeekContextSummarizer:
         messages: list[str],
     ) -> ContextSummaryResult:
         """合并脱敏消息，并拒绝任何重新出现敏感特征的输出。"""
-        safe_existing = self._redact(existing_summary)
-        safe_messages = [self._redact(item) for item in messages]
+        safe_existing = self._redact(existing_summary)[
+            : self._MAX_EXISTING_SUMMARY_CHARS
+        ]
+        safe_messages = self._bound_messages(messages)
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -93,6 +100,25 @@ class DeepSeekContextSummarizer:
         for pattern in cls._SENSITIVE_PATTERNS:
             cleaned = pattern.sub("[已脱敏]", cleaned)
         return cleaned
+
+    @classmethod
+    def _bound_messages(cls, messages: list[str]) -> list[str]:
+        """脱敏后按单条和总字符数限制消息，优先保留最近一批。"""
+        cleaned = [
+            cls._redact(item)[: cls._MAX_MESSAGE_CHARS]
+            for item in messages
+            if item
+        ]
+        total = 0
+        bounded: list[str] = []
+        # 从最新消息向前保留，确保当前偏好和待处理事项不会被旧记录挤掉。
+        for item in reversed(cleaned):
+            if total + len(item) > cls._MAX_MESSAGES_CHARS:
+                break
+            bounded.append(item)
+            total += len(item)
+        bounded.reverse()
+        return bounded
 
     @classmethod
     def _contains_sensitive(cls, text: str) -> bool:

@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime
 from typing import cast
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import (
@@ -97,8 +98,16 @@ class SQLAlchemyLifecycleReminderRepository:
             scheduled_at=scheduled_at,
             status=ReminderStatus.SCHEDULED,
         )
-        self._session.add(reminder)
-        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(reminder)
+                await self._session.flush()
+        except IntegrityError:
+            # 同一订单的对账和生命周期调度可能并发到达，冲突时读取已存在提醒。
+            existing = await self._session.scalar(statement)
+            if existing is None:
+                raise
+            return cast(LifecycleReminder, existing)
         return reminder
 
     async def require_send_context(

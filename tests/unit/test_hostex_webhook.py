@@ -78,3 +78,70 @@ async def test_hostex_webhook_rejects_wrong_secret() -> None:
 
     assert response.status_code == 401
     assert recorder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_hostex_webhook_rejects_body_over_limit_before_json_parse() -> None:
+    """超过上限的百居易请求必须在 JSON 解析前拒绝。"""
+    recorder = EventRecorderStub()
+    service = HostexWebhookService("valid", recorder)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_hostex_webhook_service] = lambda: service
+    transport = httpx.ASGITransport(app=app)
+    body = b"x" * (1024 * 1024 + 1)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/hostex",
+            headers={"Hostex-Webhook-Secret-Token": "valid"},
+            content=body,
+        )
+
+    assert response.status_code == 413
+    assert recorder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_hostex_webhook_rejects_excessive_json_depth() -> None:
+    """合法大小但嵌套过深的 JSON 必须在业务落库前拒绝。"""
+    recorder = EventRecorderStub()
+    service = HostexWebhookService("valid", recorder)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_hostex_webhook_service] = lambda: service
+    transport = httpx.ASGITransport(app=app)
+    nested: dict[str, object] = {"value": "leaf"}
+    for _ in range(20):
+        nested = {"child": nested}
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/hostex",
+            headers={"Hostex-Webhook-Secret-Token": "valid"},
+            json={"event": "reservation_updated", "data": nested},
+        )
+
+    assert response.status_code == 422
+    assert recorder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_hostex_webhook_rejects_oversized_event_fields() -> None:
+    """事件类型和业务编号必须在数据库字段上限内提前拒绝。"""
+    recorder = EventRecorderStub()
+    service = HostexWebhookService("valid", recorder)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_hostex_webhook_service] = lambda: service
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/hostex",
+            headers={"Hostex-Webhook-Secret-Token": "valid"},
+            json={"event": "x" * 65, "reservation_code": "R-1"},
+        )
+
+    assert response.status_code == 422
+    assert recorder.calls == []

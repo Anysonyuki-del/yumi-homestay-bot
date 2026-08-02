@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from homestay_bot import application
 from homestay_bot.domain.enums import BusinessTaskStatus, EmployeeRole
@@ -27,6 +27,137 @@ class StopContextMaintenance(RuntimeError):
 
 class StopHostexReconcile(RuntimeError):
     """表示测试已观察到一次百居易对账。"""
+
+
+class StopRetentionLoop(RuntimeError):
+    """表示测试已观察到一次历史记录清理。"""
+
+
+@pytest.mark.asyncio
+async def test_retention_loop_purges_and_commits_daily(monkeypatch) -> None:
+    """历史记录维护应每天清理一次，并在独立事务提交。"""
+    calls: list[object] = []
+    session = SimpleNamespace()
+
+    async def commit() -> None:
+        """记录清理事务提交。"""
+        calls.append("commit")
+
+    session.commit = commit
+
+    class SessionContext:
+        """返回固定清理会话。"""
+
+        async def __aenter__(self):
+            """进入测试会话。"""
+            return session
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出测试会话。"""
+
+    class RetentionRepositoryStub:
+        """记录清理仓储调用。"""
+
+        def __init__(self, selected_session) -> None:
+            """验证仓储绑定当前短会话。"""
+            assert selected_session is session
+
+        async def purge(self):
+            """返回固定删除计数。"""
+            calls.append("purge")
+            return {"jobs": 2}
+
+    async def stop_after_cycle(delay: float) -> None:
+        """观察到一天调度间隔后终止无限循环。"""
+        assert delay == 86_400
+        raise StopRetentionLoop
+
+    monkeypatch.setattr(
+        application,
+        "SQLAlchemyRetentionRepository",
+        RetentionRepositoryStub,
+        raising=False,
+    )
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
+
+    with pytest.raises(StopRetentionLoop):
+        await application._run_retention_loop(
+            cast(Any, lambda: SessionContext())
+        )
+
+    assert calls == ["purge", "commit"]
+
+
+@pytest.mark.asyncio
+async def test_complaint_delivery_callback_ignores_non_complaint_sources(monkeypatch) -> None:
+    """普通客人回复不得误更新客诉投递状态。"""
+    calls: list[object] = []
+
+    class RepositoryStub:
+        """记录客诉状态仓储是否被调用。"""
+
+        def __init__(self, session) -> None:
+            """保留注入会话。"""
+            calls.append(session)
+
+    monkeypatch.setattr(application, "SQLAlchemyComplaintRepository", RepositoryStub)
+
+    await application._record_complaint_delivery(
+        object(),
+        "guest-message-1",
+        delivered=True,
+    )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_complaint_delivery_callback_updates_real_result(monkeypatch) -> None:
+    """客诉出站任务成功和失败都应通过来源编号回写状态。"""
+    calls: list[tuple[str, int, str | None]] = []
+
+    class RepositoryStub:
+        """捕获客诉实际投递状态更新。"""
+
+        def __init__(self, session) -> None:
+            """接受当前 worker 事务。"""
+
+        async def mark_delivery_sent(
+            self, review_id: int, *, sent_at, external_message_id: str
+        ) -> None:
+            """记录成功投递。"""
+            calls.append(("sent", review_id, external_message_id))
+
+        async def mark_delivery_failed(self, review_id: int, *, error_code: str) -> None:
+            """记录失败投递。"""
+            calls.append(("failed", review_id, error_code))
+
+    monkeypatch.setattr(application, "SQLAlchemyComplaintRepository", RepositoryStub)
+
+    await application._record_complaint_delivery(
+        object(),
+        "complaint:17",
+        delivered=False,
+        error_code="WeComApiError",
+    )
+    await application._record_complaint_delivery(
+        object(),
+        "complaint:17",
+        delivered=True,
+        external_message_id="wecom-17",
+    )
+    await application._record_complaint_delivery(
+        object(),
+        "complaint:17:retry-2",
+        delivered=False,
+        error_code="RetryableDeliveryError",
+    )
+
+    assert calls == [
+        ("failed", 17, "WeComApiError"),
+        ("sent", 17, "wecom-17"),
+        ("failed", 17, "RetryableDeliveryError"),
+    ]
 
 
 def test_committed_hostex_job_updates_sync_heartbeats() -> None:
@@ -80,10 +211,11 @@ async def test_context_maintenance_processes_customers_hourly(monkeypatch) -> No
     class ServiceStub:
         """记录上下文维护调用。"""
 
-        def __init__(self, repository, summarizer) -> None:
+        def __init__(self, repository, summarizer, *, before_external=None) -> None:
             """验证依赖已经装配。"""
             assert isinstance(repository, RepositoryStub)
             assert summarizer == "summarizer"
+            assert before_external == session.commit
 
         async def maintain_customer(self, customer_id: int, now: datetime) -> None:
             """记录客户与统一维护时间。"""
@@ -113,6 +245,79 @@ async def test_context_maintenance_processes_customers_hourly(monkeypatch) -> No
     assert maintained == [(7, now)]
     assert session.committed is True
     assert heartbeats == [completed_at]
+
+
+@pytest.mark.asyncio
+async def test_context_maintenance_isolates_customer_failures(monkeypatch) -> None:
+    """单个客户摘要失败不得阻断后续客户或成功心跳。"""
+    sessions: list[SimpleNamespace] = []
+    maintained: list[int] = []
+    commits: list[int] = []
+
+    class SessionContext:
+        """为发现和每个客户维护返回独立会话。"""
+
+        async def __aenter__(self):
+            """创建可记录提交的独立会话。"""
+            session = SimpleNamespace(index=len(sessions))
+
+            async def commit() -> None:
+                """记录当前客户会话提交。"""
+                commits.append(session.index)
+
+            session.commit = commit
+            sessions.append(session)
+            return session
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """关闭本轮维护会话。"""
+
+    class RepositoryStub:
+        """首个会话返回两个需要维护的客户。"""
+
+        def __init__(self, session) -> None:
+            """绑定当前会话。"""
+            self.session = session
+
+        async def list_customer_ids_with_messages(self):
+            """返回两个客户。"""
+            return [1, 2]
+
+    class ServiceStub:
+        """让第一个客户失败，验证第二个客户仍继续。"""
+
+        def __init__(self, repository, summarizer, *, before_external=None) -> None:
+            """接受每客户独立仓储，并验证事务边界来自当前会话。"""
+            assert before_external == repository.session.commit
+
+        async def maintain_customer(self, customer_id: int, now: datetime) -> None:
+            """记录客户并对第一个客户模拟模型失败。"""
+            maintained.append(customer_id)
+            if customer_id == 1:
+                raise RuntimeError("summary failed")
+
+    async def stop_after_cycle(delay: float) -> None:
+        """验证周期仍按一小时运行。"""
+        assert delay == 3600
+        raise StopContextMaintenance
+
+    monkeypatch.setattr(application, "SQLAlchemyContextRepository", RepositoryStub)
+    monkeypatch.setattr(application, "ContextRetentionService", ServiceStub)
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
+    heartbeats: list[datetime] = []
+
+    with pytest.raises(StopContextMaintenance):
+        await application._run_context_maintenance_loop(
+            factory=cast(Any, lambda: SessionContext()),
+            summarizer="summarizer",
+            now_provider=lambda: datetime(2026, 7, 31, 8, tzinfo=UTC),
+            heartbeat_now=lambda: datetime(2026, 7, 31, 8, 5, tzinfo=UTC),
+            heartbeat=heartbeats.append,
+        )
+
+    assert maintained == [1, 2]
+    assert commits == [2]
+    assert heartbeats == [datetime(2026, 7, 31, 8, 5, tzinfo=UTC)]
 
 
 @pytest.mark.asyncio
@@ -258,9 +463,9 @@ async def test_session_knowledge_admin_service_delegates_candidate_actions(
             """验证服务绑定当前短会话。"""
             assert selected_session is session
 
-        async def list_candidates(self):
+        async def list_candidates(self, *, offset: int, limit: int):
             """返回固定候选。"""
-            calls.append(("list", (), {}))
+            calls.append(("list", (), {"offset": offset, "limit": limit}))
             return ["candidate"]
 
         async def convert_candidate(
@@ -292,7 +497,7 @@ async def test_session_knowledge_admin_service_delegates_candidate_actions(
         cast(Any, lambda: SessionContext())
     )
 
-    assert await service.list_candidates() == ["candidate"]
+    assert await service.list_candidates(offset=0, limit=51) == ["candidate"]
     assert (
         await service.convert_candidate(
             7,
@@ -304,7 +509,7 @@ async def test_session_knowledge_admin_service_delegates_candidate_actions(
     await service.snooze_candidate(7, 11)
 
     assert calls == [
-        ("list", (), {}),
+        ("list", (), {"offset": 0, "limit": 51}),
         ("convert", (7, 11), {"category": "停车"}),
         ("snooze", (7, 11), {}),
     ]
@@ -446,6 +651,40 @@ async def test_worker_loop_survives_transient_sqlite_lock(monkeypatch) -> None:
         await application._run_worker_loop(
             SimpleNamespace(state=SimpleNamespace()),
             factory=cast(Any, locked_factory),
+            handler=cast(Any, object()),
+            wecom=cast(Any, object()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_survives_non_lock_database_failure(monkeypatch) -> None:
+    """数据库提交类故障不得永久终止后台 worker。"""
+
+    class FailedSessionContext:
+        """模拟数据库连接在 worker 周期开始时中断。"""
+
+        async def __aenter__(self):
+            """抛出非连接型数据库完整性错误。"""
+            raise IntegrityError(
+                "COMMIT",
+                {},
+                sqlite3.IntegrityError("constraint failed"),
+            )
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """上下文进入失败时无需额外清理。"""
+
+    async def stop_after_retry(delay: float) -> None:
+        """观察到有限退避即终止无限循环测试。"""
+        assert delay == 1
+        raise StopWorkerRetry
+
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_retry)
+
+    with pytest.raises(StopWorkerRetry):
+        await application._run_worker_loop(
+            SimpleNamespace(state=SimpleNamespace()),
+            factory=cast(Any, lambda: FailedSessionContext()),
             handler=cast(Any, object()),
             wecom=cast(Any, object()),
         )

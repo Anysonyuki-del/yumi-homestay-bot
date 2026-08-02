@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from datetime import date
 from typing import Protocol
 
@@ -40,8 +41,8 @@ class OperationsSyncPort(Protocol):
     async def upsert_reservation(self, reservation: Reservation) -> StayOrder:
         """幂等写入订单。"""
 
-    async def mark_event_completed(self, event: HostexWebhookEvent) -> None:
-        """标记事件完成。"""
+    async def mark_event_completed(self, event: HostexWebhookEvent) -> bool:
+        """仅在事件状态未变化时标记处理完成。"""
 
     async def create_turnover(
         self,
@@ -74,15 +75,20 @@ class HostexSyncService:
         operations: OperationsSyncPort,
         *,
         lifecycle: LifecycleSchedulePort | None = None,
+        before_external: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """注入百居易客户端、运营仓储和可选生命周期调度器。"""
+        """注入百居易客户端、运营仓储、事务边界和生命周期调度器。"""
         self._hostex = hostex
         self._operations = operations
         self._lifecycle = lifecycle
+        self._before_external = before_external
 
     async def handle_event(self, event_key: str) -> None:
         """精确查询事件订单并完成幂等 upsert。"""
         event = await self._operations.require_pending_event(event_key)
+        if self._before_external is not None:
+            # 事件读取可能持有行锁；提交快照后再访问百居易，缩短锁和连接占用。
+            await self._before_external()
         matches = await self._hostex.list_reservations(
             ReservationQuery(reservation_code=event.reservation_code)
         )

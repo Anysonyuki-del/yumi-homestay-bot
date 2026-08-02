@@ -2,8 +2,11 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, cast
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+
+from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.routes.employee_auth import require_employee_session
 
 router = APIRouter()
 
@@ -142,17 +145,42 @@ class OperationalHealthService:
         return result
 
 
-@router.get("/health")
-async def health(request: Request) -> JSONResponse:
-    """返回分层健康状态，降级时使用 503 便于监控识别。"""
-    service = cast(
+def _health_service(request: Request) -> HealthServicePort:
+    """读取当前健康服务；应用未装配时返回明确降级实现。"""
+    return cast(
         HealthServicePort,
         getattr(request.app.state, "health_service", UnconfiguredHealthService()),
     )
-    result = await service.check()
-    response_status = (
+
+
+def _health_status_code(result: dict[str, str]) -> int:
+    """把总体健康状态转换为监控可识别的 HTTP 状态码。"""
+    return (
         status.HTTP_200_OK
-        if result["status"] == "ok"
+        if result.get("status") == "ok"
         else status.HTTP_503_SERVICE_UNAVAILABLE
     )
-    return JSONResponse(result, status_code=response_status)
+
+
+@router.get("/health")
+async def health(request: Request) -> JSONResponse:
+    """公网只返回总体健康状态，避免暴露内部组件和配置。"""
+    result = await _health_service(request).check()
+    public_result = {"status": result.get("status", "degraded")}
+    return JSONResponse(
+        public_result,
+        status_code=_health_status_code(result),
+    )
+
+
+@router.get("/employee/health")
+async def health_details(request: Request) -> JSONResponse:
+    """只向已登录管理员返回内部组件详细诊断。"""
+    _, role = await require_employee_session(request)
+    if role is not EmployeeRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有管理员可以查看详细健康状态",
+        )
+    result = await _health_service(request).check()
+    return JSONResponse(result, status_code=_health_status_code(result))

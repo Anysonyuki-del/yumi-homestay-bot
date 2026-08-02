@@ -37,6 +37,7 @@ class ApprovalPageStub:
 
     def __init__(self) -> None:
         self.confirm_calls = 0
+        self.list_calls: list[tuple[int, int]] = []
         self.approval = BookingApproval(
             id=1,
             approval_code="APP-1",
@@ -50,6 +51,11 @@ class ApprovalPageStub:
             room_type_preference="江景房",
             special_requests="高楼层",
         )
+
+    async def list_pending(self, *, offset: int, limit: int):
+        """记录审批分页边界并返回足够判断下一页的数据。"""
+        self.list_calls.append((offset, limit))
+        return [self.approval] * limit
 
     async def get_detail(self, approval_id: int):
         """返回页面展示所需的审批、房间、价格和收入方式。"""
@@ -134,6 +140,19 @@ def test_staff_cannot_view_or_confirm_booking() -> None:
     assert detail.status_code == 403
     assert response.status_code == 403
     assert approvals.confirm_calls == 0
+
+
+def test_approval_list_uses_bounded_pagination() -> None:
+    """审批列表第二页必须有查询上限和稳定导航。"""
+    client, approvals = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/approvals?page=2")
+
+    assert response.status_code == 200
+    assert approvals.list_calls == [(50, 51)]
+    assert 'href="/employee/approvals?page=1"' in response.text
+    assert 'href="/employee/approvals?page=3"' in response.text
 
 
 def test_admin_confirm_nonce_is_single_use_and_mobile_is_masked() -> None:

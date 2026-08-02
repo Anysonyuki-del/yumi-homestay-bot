@@ -1,5 +1,5 @@
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Protocol
@@ -211,14 +211,16 @@ class LifecycleReminderService:
         *,
         weather: ReminderWeatherProvider | None = None,
         now_provider: Callable[[], datetime] | None = None,
+        before_external: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """注入持久化仓储、任务队列、发送器和安全时钟。"""
+        """注入持久化仓储、任务队列、发送器、事务边界和安全时钟。"""
         self._reminders = reminders
         self._jobs = jobs
         self._sender = sender
         self._tasks = tasks
         self._weather = weather
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
+        self._before_external = before_external
 
     async def schedule_for_order(self, order_id: int) -> list[Any]:
         """按订单入住退房日期幂等登记四个生命周期提醒。"""
@@ -291,6 +293,9 @@ class LifecycleReminderService:
         if context.sent_count >= 5:
             await self._manual(context.reminder, "send_count_limit")
             return
+        if self._before_external is not None:
+            # 读取上下文可能持有提醒行锁；网络调用前提交快照并释放锁。
+            await self._before_external()
         content = await self._build_content(context)
         try:
             message_id = await self._sender.send_text(

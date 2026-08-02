@@ -21,6 +21,9 @@ from homestay_bot.services.context_retention import (
 class SQLAlchemyContextRepository:
     """按客户隔离读取摘要候选并原子保存分层摘要。"""
 
+    # 摘要任务按批处理，避免单个高频客户一次性载入全部历史正文。
+    SUMMARY_BATCH_LIMIT = 50
+
     def __init__(self, session: AsyncSession) -> None:
         """绑定当前维护事务。"""
         self._session = session
@@ -57,7 +60,8 @@ class SQLAlchemyContextRepository:
         raw_limit: int,
     ) -> list[Message]:
         """返回七天内未摘要消息，并保留处理顺序最新的原文窗口。"""
-        messages = list(
+        # 先按倒序跳过最近原文窗口，再限制本轮摘要批量；后续周期会继续处理剩余记录。
+        candidates = list(
             (
                 await self._session.scalars(
                     select(Message)
@@ -70,10 +74,11 @@ class SQLAlchemyContextRepository:
                         Message.message_type == "text",
                     )
                     .order_by(Message.id.desc())
+                    .offset(max(raw_limit, 0))
+                    .limit(self.SUMMARY_BATCH_LIMIT)
                 )
             ).all()
         )
-        candidates = messages[raw_limit:]
         candidates.reverse()
         return candidates
 
@@ -96,6 +101,7 @@ class SQLAlchemyContextRepository:
                         Message.message_type == "text",
                     )
                     .order_by(Message.id)
+                    .limit(self.SUMMARY_BATCH_LIMIT)
                 )
             ).all()
         )

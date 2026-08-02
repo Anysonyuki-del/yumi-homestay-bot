@@ -6,6 +6,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    BusinessTaskType,
     CredentialDeliveryStatus,
     CustomerIdentityProvider,
     EmployeeRole,
@@ -15,6 +17,7 @@ from homestay_bot.domain.enums import (
 from homestay_bot.domain.models import (
     AuditLog,
     Base,
+    BusinessTask,
     Conversation,
     CredentialDelivery,
     CredentialDeliveryPart,
@@ -34,6 +37,73 @@ from homestay_bot.repositories.credentials import (
 from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
 from homestay_bot.services.credential_delivery import CredentialDeliveryService
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
+
+
+@pytest.mark.asyncio
+async def test_credential_exception_unique_race_preserves_outer_transaction(
+    monkeypatch,
+) -> None:
+    """凭证异常任务唯一键竞争不能破坏 worker 的外层事务。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=901, title="并发测试房间"))
+        existing = BusinessTask(
+            dedupe_key="credential-exception:77:send_result_uncertain",
+            task_type=BusinessTaskType.MANUAL_CONTACT,
+            status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            property_id=901,
+            description="竞争方异常任务",
+        )
+        session.add(existing)
+        await session.commit()
+
+    async with factory() as session:
+        session.add(
+            AuditLog(
+                actor_employee_id=None,
+                action="credential_outer_marker",
+                target_type="test",
+                target_id="credential-race",
+                details={},
+            )
+        )
+        original_scalar = session.scalar
+        scalar_calls = 0
+
+        async def scalar_after_race(statement, *args, **kwargs):
+            """第一次查询模拟未命中，冲突后读取竞争方已提交的任务。"""
+            nonlocal scalar_calls
+            scalar_calls += 1
+            if scalar_calls == 1:
+                return None
+            return await original_scalar(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "scalar", scalar_after_race)
+        await SQLAlchemyCredentialDeliveryRepository(session).record_exception(
+            order_id=None,
+            property_id=901,
+            source_task_id=77,
+            reason="send_result_uncertain",
+        )
+        await session.commit()
+
+        assert await session.scalar(
+            select(AuditLog.id).where(
+                AuditLog.action == "credential_outer_marker"
+            )
+        ) is not None
+        assert await session.scalar(
+            select(func.count(BusinessTask.id)).where(
+                BusinessTask.dedupe_key
+                == "credential-exception:77:send_result_uncertain"
+            )
+        ) == 1
+
+    await engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -152,6 +152,34 @@ async def test_recent_raw_messages_are_excluded_from_short_summary() -> None:
     assert all(item.short_summarized_at == NOW for item in repository.short_candidates)
 
 
+@pytest.mark.asyncio
+async def test_summary_commits_message_snapshot_before_model_call() -> None:
+    """摘要模型调用前应先提交消息快照，释放数据库事务连接。"""
+    repository = ContextRepositoryStub()
+    repository.expired = []
+    repository.short_candidates = [message(2, "客人偏好安静", 2)]
+    sequence: list[str] = []
+
+    class RecordingSummarizer(SummarizerStub):
+        """记录模型调用发生在事务提交之后。"""
+
+        async def summarize(self, **kwargs):
+            sequence.append("model")
+            return await super().summarize(**kwargs)
+
+    async def commit_before_model() -> None:
+        """记录外部调用前提交。"""
+        sequence.append("committed")
+
+    await ContextRetentionService(
+        repository,
+        RecordingSummarizer(),
+        before_external=commit_before_model,
+    ).maintain_customer(1, NOW)
+
+    assert sequence == ["committed", "model"]
+
+
 class SummaryClientStub:
     """记录摘要请求并返回固定 JSON。"""
 
@@ -200,3 +228,20 @@ async def test_context_summarizer_rejects_sensitive_output() -> None:
             existing_summary="",
             messages=["普通内容"],
         )
+
+
+@pytest.mark.asyncio
+async def test_context_summarizer_bounds_message_input() -> None:
+    """大量历史消息进入摘要模型前必须限制总输入长度。"""
+    client = SummaryClientStub({"summary": "客人偏好安静", "unresolved_items": []})
+    summarizer = DeepSeekContextSummarizer(client, "deepseek-v4-flash")
+
+    await summarizer.summarize(
+        tier="long",
+        existing_summary="既有摘要",
+        messages=[f"消息 {index}: " + "偏好安静。" * 500 for index in range(30)],
+    )
+
+    request_payload = json.loads(client.requests[0]["messages"][1]["content"])
+    assert sum(len(item) for item in request_payload["messages"]) <= 12_000
+    assert len(request_payload["messages"]) < 30

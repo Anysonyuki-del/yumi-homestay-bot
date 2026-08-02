@@ -1,4 +1,5 @@
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import (
@@ -108,11 +109,8 @@ class SQLAlchemyCredentialDeliveryRepository:
         dedupe_key = (
             f"credential-exception:{source_task_id}:{reason[:48]}"
         )
-        existing = await self._session.scalar(
-            select(BusinessTask).where(
-                BusinessTask.dedupe_key == dedupe_key
-            )
-        )
+        lookup = select(BusinessTask).where(BusinessTask.dedupe_key == dedupe_key)
+        existing = await self._session.scalar(lookup)
         if existing is not None:
             return
         customer_id = None
@@ -132,8 +130,17 @@ class SQLAlchemyCredentialDeliveryRepository:
             service_date=service_date,
             description=f"入住凭证自动发送需人工处理：{reason[:48]}",
         )
-        self._session.add(task)
+        # 在保存点捕获范围外刷新外层状态，只把候选异常任务冲突视为幂等。
         await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                # 候选异常任务必须在保存点内加入，唯一键竞争不能污染 worker 事务。
+                self._session.add(task)
+                await self._session.flush()
+        except IntegrityError:
+            if await self._session.scalar(lookup) is None:
+                raise
+            return
         self._add_audit(
             action="credential_delivery_blocked",
             target_type="business_task",

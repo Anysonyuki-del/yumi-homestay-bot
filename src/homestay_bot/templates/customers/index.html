@@ -36,6 +36,10 @@
         <li class="empty-state">没有找到客户。</li>
         {% endfor %}
       </ul>
+      <nav aria-label="客户分页">
+        {% if previous_url %}<a href="{{ previous_url }}">上一页</a>{% endif %}
+        {% if next_url %}<a href="{{ next_url }}">下一页</a>{% endif %}
+      </nav>
     </main>
   </body>
 </html>

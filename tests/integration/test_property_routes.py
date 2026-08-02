@@ -1,3 +1,4 @@
+import logging
 import re
 from types import SimpleNamespace
 
@@ -75,6 +76,7 @@ class PropertyAdminStub:
         self.credential = SimpleNamespace(version=3, is_active=True)
         self.profile_calls: list[dict[str, object]] = []
         self.credential_calls: list[dict[str, object]] = []
+        self.detail_error: Exception | None = None
         qr_path = tmp_path / ("a" * 32 + ".png")
         qr_path.write_bytes(PNG_BYTES)
         self.qr = StoredPrivateFile(
@@ -98,6 +100,8 @@ class PropertyAdminStub:
     async def detail_for(self, property_id, employee):
         """返回不含凭证明文的房源详情。"""
         self._require_admin(employee)
+        if self.detail_error is not None:
+            raise self.detail_error
         assert property_id == 101
         return {
             "property": self.property,
@@ -193,6 +197,28 @@ def test_staff_cannot_access_property_admin(tmp_path) -> None:
     assert response.status_code == 403
 
 
+def test_property_unknown_error_uses_stable_detail_and_safe_log(
+    tmp_path,
+    caplog,
+) -> None:
+    """房源未知异常不得把内部异常原文返回给页面。"""
+    client, service = build_client(EmployeeRole.ADMIN, tmp_path)
+    service.detail_error = RuntimeError("secret SQL value")
+    login(client)
+
+    with caplog.at_level(logging.ERROR):
+        response = client.get("/employee/properties/101")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "房源管理操作未完成"
+    assert "secret SQL value" not in response.text
+    assert any(
+        record.getMessage().startswith("房源管理操作失败")
+        and "RuntimeError" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_admin_page_never_echoes_room_password(tmp_path) -> None:
     """管理员详情只显示凭证版本，不回显密码或指南明文。"""
     client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
@@ -250,6 +276,31 @@ def test_admin_updates_profile_and_replaces_credentials(tmp_path) -> None:
     assert credential.status_code == 303
     assert service.profile_calls[0]["property_id"] == 101
     assert service.credential_calls[0]["content"] == PNG_BYTES
+
+
+def test_property_route_rejects_oversized_profile_field(tmp_path) -> None:
+    """超长房源标题必须在业务服务前返回 422。"""
+    client, service = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+    csrf_token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/properties/101/profile",
+        data={
+            "title": "房" * 129,
+            "room_number": "101",
+            "room_type": "大床房",
+            "district": "武昌区",
+            "address_hint": "地铁站附近",
+            "parking_instructions": "提前联系",
+            "is_active": "true",
+            "csrf_token": csrf_token,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 422
+    assert service.profile_calls == []
 
 
 def test_private_qr_requires_admin_session(tmp_path) -> None:

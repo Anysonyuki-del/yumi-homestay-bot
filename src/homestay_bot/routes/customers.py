@@ -1,6 +1,7 @@
 import secrets
 from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -28,8 +29,11 @@ class CustomerAdminServicePort(Protocol):
         self,
         query: str | None,
         administrator: Employee,
+        *,
+        offset: int,
+        limit: int,
     ) -> list[Any]:
-        """返回脱敏客户卡片。"""
+        """按分页边界返回脱敏客户卡片。"""
 
     async def get_detail(
         self,
@@ -170,6 +174,7 @@ def _raise_page_error(error: Exception) -> None:
 async def customer_index(
     request: Request,
     query: Annotated[str | None, Query(max_length=100)] = None,
+    page: Annotated[int, Query(ge=1, le=10_000)] = 1,
 ) -> Response:
     """展示管理员可搜索的脱敏客户列表。"""
     administrator = await _current_admin(request)
@@ -177,13 +182,30 @@ async def customer_index(
         customers = await _get_service(request).list_customers(
             query,
             administrator,
+            offset=(page - 1) * 50,
+            limit=51,
         )
     except Exception as error:
         _raise_page_error(error)
     return templates.TemplateResponse(
         request=request,
         name="customers/index.html",
-        context={"customers": customers, "query": query or ""},
+        context={
+            "customers": customers[:50],
+            "query": query or "",
+            "previous_url": (
+                "/employee/customers?"
+                + urlencode({"query": query or "", "page": page - 1})
+                if page > 1
+                else None
+            ),
+            "next_url": (
+                "/employee/customers?"
+                + urlencode({"query": query or "", "page": page + 1})
+                if len(customers) > 50
+                else None
+            ),
+        },
     )
 
 
@@ -220,7 +242,7 @@ async def review_customer_merge(
     request: Request,
     suggestion_id: int,
     decision: str,
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """校验管理员和一次性令牌后确认或拒绝客户合并。"""
     administrator = await _current_admin(request)
@@ -266,6 +288,8 @@ async def customer_detail(
                 for customer in await service.list_customers(
                     merge_query,
                     administrator,
+                    offset=0,
+                    limit=50,
                 )
                 if customer.id != customer_id
             ]
@@ -345,8 +369,8 @@ async def create_manual_customer_merge(
 async def update_customer_tags(
     request: Request,
     customer_id: int,
-    tag_ids: Annotated[list[int] | None, Form()] = None,
-    csrf_token: str = Form(),
+    tag_ids: Annotated[list[int] | None, Form(max_length=100)] = None,
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """保存客户多选标签，本地提交不依赖外部同步。"""
     administrator, service = await _customer_form_context(
@@ -369,8 +393,8 @@ async def update_customer_tags(
 async def update_customer_note(
     request: Request,
     customer_id: int,
-    note: str = Form(""),
-    csrf_token: str = Form(),
+    note: str = Form("", max_length=2000),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """更新客户员工备注。"""
     administrator, service = await _customer_form_context(
@@ -389,10 +413,10 @@ async def update_customer_note(
 async def update_customer_summary(
     request: Request,
     customer_id: int,
-    short_summary: str = Form(""),
-    long_summary: str = Form(""),
-    unresolved_items: str = Form(""),
-    csrf_token: str = Form(),
+    short_summary: str = Form("", max_length=4000),
+    long_summary: str = Form("", max_length=4000),
+    unresolved_items: str = Form("", max_length=4000),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """更正客户短期、长期摘要和待确认事项。"""
     administrator, service = await _customer_form_context(
@@ -417,7 +441,7 @@ async def update_customer_summary(
 async def delete_customer_summary(
     request: Request,
     customer_id: int,
-    csrf_token: str = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """删除客户 AI 摘要但保留最小审计记录。"""
     administrator, service = await _customer_form_context(

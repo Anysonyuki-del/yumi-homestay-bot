@@ -19,9 +19,10 @@ class MessageRepositoryStub:
         """本测试不模拟重复消息。"""
         return False
 
-    async def add(self, message: Message) -> None:
+    async def add(self, message: Message) -> bool:
         """保存待断言的消息对象。"""
         self.messages.append(message)
+        return True
 
     async def list_recent(
         self, conversation_id: int, limit: int

@@ -30,8 +30,18 @@ def upgrade() -> None:
         sa.Column("draft", sa.Text(), nullable=True),
         sa.Column("version", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.UniqueConstraint("source_message_id", name="uq_complaint_review_source_message"),
     )
     op.create_index(

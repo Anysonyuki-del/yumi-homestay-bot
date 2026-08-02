@@ -4,7 +4,7 @@ from datetime import date
 from typing import Any, Self
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 HOSTEX_BASE_URL = "https://api.myhostex.com/v3"
 HOSTEX_SUCCESS_CODES = {0, 200}
@@ -96,6 +96,12 @@ class ListingCalendarDay(HostexModel):
     inventory: int
     restrictions: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("restrictions", mode="before")
+    @classmethod
+    def normalize_optional_restrictions(cls, value: Any) -> Any:
+        """把文档允许省略且真实接口可能返回的 null 统一为空字典。"""
+        return {} if value is None else value
+
 
 class Reservation(HostexModel):
     """表示用于订单查询和不确定写入核验的关键字段。"""
@@ -123,6 +129,7 @@ class ReservationQuery(HostexModel):
     start_check_out_date: date | None = None
     end_check_out_date: date | None = None
     order_by: str = "created_at"
+    offset: int = Field(default=0, ge=0)
     limit: int = Field(default=20, ge=1, le=100)
 
 
@@ -318,10 +325,32 @@ class HostexClient:
         return result
 
     async def list_reservations(self, query: ReservationQuery) -> list[Reservation]:
-        """按房间和日期查询订单，用于展示与不确定写入后的核验。"""
+        """按房间和日期查询订单，并自动读取完整 offset/limit 分页。"""
         params = query.model_dump(mode="json", exclude_none=True)
-        envelope = await self._request("GET", "/reservations", params=params)
-        return [Reservation.model_validate(item) for item in envelope["data"]["reservations"]]
+        page_size = int(params["limit"])
+        offset = int(params.get("offset", 0))
+        reservations: list[Reservation] = []
+        seen_stays: set[tuple[str, str]] = set()
+        # 7 间房的正常窗口远低于该上限；异常情况下显式失败，禁止静默漏单。
+        for _page_number in range(100):
+            params["offset"] = offset
+            envelope = await self._request("GET", "/reservations", params=params)
+            raw_items = envelope["data"].get("reservations", [])
+            page = [Reservation.model_validate(item) for item in raw_items]
+            new_items = [
+                item
+                for item in page
+                if (item.reservation_code, item.stay_code) not in seen_stays
+            ]
+            if page and not new_items and len(page) >= page_size:
+                raise HostexTransportError("百居易订单分页返回重复页面")
+            for item in new_items:
+                seen_stays.add((item.reservation_code, item.stay_code))
+            reservations.extend(new_items)
+            if len(page) < page_size:
+                return reservations
+            offset += len(page)
+        raise HostexTransportError("百居易订单分页超过安全上限")
 
     async def list_income_methods(self) -> list[IncomeMethod]:
         """读取员工审批订单时可选的百居易收款方式。"""

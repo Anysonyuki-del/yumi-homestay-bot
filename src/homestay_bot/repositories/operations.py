@@ -1,8 +1,11 @@
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 
 from homestay_bot.domain.enums import (
     BusinessTaskStatus,
@@ -34,6 +37,26 @@ class SQLAlchemyOperationsRepository:
         """绑定当前运营事务。"""
         self._session = session
 
+    async def _add_business_task_once(
+        self,
+        task: BusinessTask,
+        lookup: Select[tuple[BusinessTask]],
+    ) -> tuple[BusinessTask, bool]:
+        """在保存点内创建唯一任务；竞争时返回已存在任务和 False。"""
+        # 先刷新外层 pending 状态，后续只捕获候选任务自身的唯一键竞争。
+        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                # 候选任务必须在保存点建立后才加入 session，避免冲突回滚外层写入。
+                self._session.add(task)
+                await self._session.flush()
+        except IntegrityError:
+            existing = await self._session.scalar(lookup)
+            if existing is None:
+                raise
+            return existing, False
+        return task, True
+
     async def create_turnover(
         self,
         *,
@@ -43,9 +66,8 @@ class SQLAlchemyOperationsRepository:
     ) -> BusinessTask:
         """按房间和服务日幂等创建周转保洁任务。"""
         dedupe_key = f"turnover:{property_id}:{service_date.isoformat()}"
-        existing = await self._session.scalar(
-            select(BusinessTask).where(BusinessTask.dedupe_key == dedupe_key)
-        )
+        lookup = select(BusinessTask).where(BusinessTask.dedupe_key == dedupe_key)
+        existing = await self._session.scalar(lookup)
         if existing is not None:
             return existing
         task = BusinessTask(
@@ -57,9 +79,8 @@ class SQLAlchemyOperationsRepository:
             service_date=service_date,
             description="退房后周转保洁",
         )
-        self._session.add(task)
-        await self._session.flush()
-        return task
+        saved, _ = await self._add_business_task_once(task, lookup)
+        return saved
 
     async def create_manual_contact_for_reminder(
         self,
@@ -68,11 +89,8 @@ class SQLAlchemyOperationsRepository:
     ) -> BusinessTask:
         """按提醒编号幂等创建不含客户正文的人工联系任务。"""
         dedupe_key = f"lifecycle-manual:{reminder.id}"
-        existing = await self._session.scalar(
-            select(BusinessTask).where(
-                BusinessTask.dedupe_key == dedupe_key
-            )
-        )
+        lookup = select(BusinessTask).where(BusinessTask.dedupe_key == dedupe_key)
+        existing = await self._session.scalar(lookup)
         if existing is not None:
             return existing
         order = await self._session.get(StayOrder, reminder.order_id)
@@ -104,8 +122,9 @@ class SQLAlchemyOperationsRepository:
                 "请人工联系客户。"
             ),
         )
-        self._session.add(task)
-        await self._session.flush()
+        task, created = await self._add_business_task_once(task, lookup)
+        if not created:
+            return task
         self._session.add(
             AuditLog(
                 actor_employee_id=None,
@@ -121,8 +140,10 @@ class SQLAlchemyOperationsRepository:
         await self._session.flush()
         return task
 
-    async def list_all_open(self) -> list[BusinessTask]:
-        """按服务日和主键返回全部未关闭任务。"""
+    async def list_all_open(
+        self, *, offset: int, limit: int
+    ) -> list[BusinessTask]:
+        """按稳定顺序分页返回未关闭任务。"""
         return list(
             (
                 await self._session.scalars(
@@ -139,12 +160,20 @@ class SQLAlchemyOperationsRepository:
                         BusinessTask.service_date.asc().nullsfirst(),
                         BusinessTask.id,
                     )
+                    .offset(offset)
+                    .limit(limit)
                 )
             ).all()
         )
 
-    async def list_assigned_open(self, employee_id: int) -> list[BusinessTask]:
-        """只返回分派给指定员工的未关闭任务。"""
+    async def list_assigned_open(
+        self,
+        employee_id: int,
+        *,
+        offset: int,
+        limit: int,
+    ) -> list[BusinessTask]:
+        """分页返回分派给指定员工的未关闭任务。"""
         return list(
             (
                 await self._session.scalars(
@@ -162,6 +191,8 @@ class SQLAlchemyOperationsRepository:
                         BusinessTask.service_date.asc().nullsfirst(),
                         BusinessTask.id,
                     )
+                    .offset(offset)
+                    .limit(limit)
                 )
             ).all()
         )
@@ -450,11 +481,10 @@ class SQLAlchemyOperationsRepository:
         service_date: date | None = None,
     ) -> BusinessTask:
         """按来源消息幂等保存一条 AI 待确认建议。"""
-        existing = await self._session.scalar(
-            select(BusinessTask).where(
-                BusinessTask.source_message_id == source_message_id
-            )
+        lookup = select(BusinessTask).where(
+            BusinessTask.source_message_id == source_message_id
         )
+        existing = await self._session.scalar(lookup)
         if existing is not None:
             return existing
         task = BusinessTask(
@@ -466,8 +496,9 @@ class SQLAlchemyOperationsRepository:
             service_date=service_date,
             description=description,
         )
-        self._session.add(task)
-        await self._session.flush()
+        task, created = await self._add_business_task_once(task, lookup)
+        if not created:
+            return task
         self._session.add(
             AuditLog(
                 actor_employee_id=None,
@@ -563,16 +594,23 @@ class SQLAlchemyOperationsRepository:
             reservation_code=reservation_code,
             payload=payload,
         )
-        self._session.add(event)
-        self._session.add(
-            Job(
-                job_type="hostex_event",
-                dedupe_key=f"hostex-event:{event_key}",
-                payload={"event_key": event_key},
-                available_at=datetime.now(UTC),
-            )
-        )
+        # 事件与 job 尚未加入 session，先让外层 pending 约束错误直接暴露。
         await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(event)
+                self._session.add(
+                    Job(
+                        job_type="hostex_event",
+                        dedupe_key=f"hostex-event:{event_key}",
+                        payload={"event_key": event_key},
+                        available_at=datetime.now(UTC),
+                    )
+                )
+                await self._session.flush()
+        except IntegrityError:
+            # 另一 worker 已写入同一事件时，保存点回滚并按幂等语义返回 False。
+            return False
         return True
 
     async def require_pending_event(self, event_key: str) -> HostexWebhookEvent:
@@ -648,11 +686,21 @@ class SQLAlchemyOperationsRepository:
         await self._session.flush()
         return order
 
-    async def mark_event_completed(self, event: HostexWebhookEvent) -> None:
-        """标记事件处理完成。"""
-        event.status = "completed"
-        event.last_error_code = None
-        await self._session.flush()
+    async def mark_event_completed(self, event: HostexWebhookEvent) -> bool:
+        """仅把仍待处理的事件标记完成，拒绝覆盖更新后的状态。"""
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                update(HostexWebhookEvent)
+                .where(
+                    HostexWebhookEvent.id == event.id,
+                    HostexWebhookEvent.status == "pending",
+                )
+                .values(status="completed", last_error_code=None)
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        return result.rowcount == 1
 
     async def reconcile_reservations(
         self,
