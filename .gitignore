@@ -1,5 +1,7 @@
 .env
 *.db
+*.sqlite
+*.sqlite3
 .venv/
 .worktrees/
 __pycache__/
@@ -10,3 +12,11 @@ __pycache__/
 .coverage
 htmlcov/
 data/private_uploads/
+.backups/
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.egg-info/
+build/
+dist/
