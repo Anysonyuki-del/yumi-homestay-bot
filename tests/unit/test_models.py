@@ -11,6 +11,7 @@ from homestay_bot.domain.enums import (
     RoomOperationalStatus,
 )
 from homestay_bot.domain.models import (
+    AdminCredential,
     BookingApproval,
     BusinessTask,
     CredentialDeliveryPart,
@@ -19,6 +20,7 @@ from homestay_bot.domain.models import (
     HostexWebhookEvent,
     Message,
     RoomOperationalState,
+    RuntimeConfigState,
     StayOrder,
 )
 
@@ -93,3 +95,21 @@ def test_operations_models_define_required_unique_keys() -> None:
         if isinstance(constraint, UniqueConstraint)
     }
     assert ("delivery_id", "part_type") in part_unique_columns
+
+
+def test_admin_and_runtime_config_models_enforce_singletons() -> None:
+    """管理员凭证和运行配置指针必须由数据库约束固定为唯一一行。"""
+    admin_checks = {
+        constraint.name
+        for constraint in AdminCredential.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    state_checks = {
+        constraint.name
+        for constraint in RuntimeConfigState.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert "ck_admin_credentials_singleton" in admin_checks
+    assert "ck_runtime_config_state_singleton" in state_checks
+    assert AdminCredential.__table__.c.employee_id.unique is True

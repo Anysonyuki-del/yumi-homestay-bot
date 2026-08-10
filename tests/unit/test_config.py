@@ -23,6 +23,9 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
         "WECOM_DUTY_USERIDS": "staff-1",
         "SESSION_SECRET": "local-test-session-secret-at-least-32",
         "DATA_ENCRYPTION_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        "CONFIG_ENCRYPTION_KEY": "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=",
+        "ADMIN_BOOTSTRAP_USERNAME": "admin",
+        "ADMIN_BOOTSTRAP_PASSWORD_HASH": "$argon2id$v=19$m=65536,t=3,p=4$YWJj$ZGVm",
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
@@ -32,6 +35,9 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
     assert settings.deepseek_api_key == "test-deepseek-key"
     assert settings.deepseek_model == "deepseek-v4-flash"
     assert settings.data_encryption_key.startswith("MDAw")
+    assert settings.config_encryption_key.startswith("MTEx")
+    assert settings.admin_bootstrap_username == "admin"
+    assert settings.admin_bootstrap_password_hash.startswith("$argon2id$")
     assert settings.deepseek_anthropic_base_url == (
         "https://api.deepseek.test/anthropic"
     )
@@ -117,3 +123,28 @@ def test_settings_require_independent_data_encryption_key(monkeypatch) -> None:
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_settings_reject_plaintext_bootstrap_password(monkeypatch) -> None:
+    """引导密码配置必须是预生成 Argon2id 哈希，不能接收明文。"""
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD_HASH", "plaintext-password")
+
+    with pytest.raises(ValidationError):
+        Settings(
+            database_url="sqlite+aiosqlite:///test.db",
+            public_base_url="https://local.example",
+            deepseek_api_key="key",
+            hostex_access_token="token",
+            hostex_webhook_secret_token="webhook-secret",
+            wecom_corp_id="corp",
+            wecom_kf_secret="kf",
+            wecom_callback_token="callback",
+            wecom_encoding_aes_key="A" * 43,
+            wecom_agent_id=1,
+            wecom_agent_secret="agent",
+            wecom_duty_userids="staff",
+            session_secret="s" * 32,
+            data_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+            _env_file=None,
+        )

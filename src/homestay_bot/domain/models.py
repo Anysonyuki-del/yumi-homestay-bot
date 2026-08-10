@@ -75,6 +75,69 @@ class Employee(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class AdminCredential(TimestampMixin, Base):
+    """保存唯一后台管理员的 Argon2id 凭证和会话失效版本。"""
+
+    __tablename__ = "admin_credentials"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_admin_credentials_singleton"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    employee_id: Mapped[int] = mapped_column(
+        ForeignKey("employees.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    username: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    session_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    last_authenticated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class RuntimeConfigVersion(Base):
+    """保存不可变的加密运行配置快照及不含秘密的掩码摘要。"""
+
+    __tablename__ = "runtime_config_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    masked_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class RuntimeConfigState(TimestampMixin, Base):
+    """以单例指针保存当前、上一配置版本和乐观锁修订号。"""
+
+    __tablename__ = "runtime_config_state"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_runtime_config_state_singleton"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    active_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runtime_config_versions.id"), nullable=True
+    )
+    previous_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runtime_config_versions.id"), nullable=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class Customer(TimestampMixin, Base):
     """保存跨渠道共享的客户主档和加密联系方式。"""
 

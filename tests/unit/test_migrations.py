@@ -21,4 +21,7 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "0014_query_indexes" in result.stdout
+    assert "0015_admin_runtime_config" in result.stdout
+    assert "admin_credentials" in result.stdout
+    assert "runtime_config_versions" in result.stdout
+    assert "runtime_config_state" in result.stdout
