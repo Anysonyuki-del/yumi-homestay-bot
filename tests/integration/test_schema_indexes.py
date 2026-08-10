@@ -34,6 +34,8 @@ async def test_high_frequency_queries_have_composite_indexes() -> None:
 
     assert ("conversation_id", "message_type", "id") in indexes["messages"]
     assert ("customer_id", "status", "check_in_date") in indexes["stay_orders"]
+    assert ("check_in_date", "status") in indexes["stay_orders"]
+    assert ("check_out_date", "status") in indexes["stay_orders"]
     assert ("status", "assigned_employee_id", "service_date") in indexes["business_tasks"]
     assert (
         "source_customer_id",

@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import CancelledError as FutureCancelledError
 from datetime import UTC, date, datetime
+from html.parser import HTMLParser
 from types import SimpleNamespace
 
 import pytest
@@ -56,6 +57,35 @@ class HealthStub:
         }
 
 
+class FailingHealthStub:
+    """模拟健康服务异常且正文含敏感内容。"""
+
+    async def check(self) -> dict[str, str]:
+        """稳定抛出测试异常。"""
+        raise RuntimeError("health-secret-detail")
+
+
+class ShellParser(HTMLParser):
+    """从真实渲染 HTML 收集外壳结构和属性。"""
+
+    def __init__(self) -> None:
+        """初始化标签记录。"""
+        super().__init__()
+        self.tags: list[tuple[str, dict[str, str | None]]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """记录开始标签及属性。"""
+        self.tags.append((tag, dict(attrs)))
+
+    def matching(self, tag: str, **attrs: str) -> list[dict[str, str | None]]:
+        """返回具备全部指定属性的标签。"""
+        return [
+            found
+            for found_tag, found in self.tags
+            if found_tag == tag and all(found.get(key) == value for key, value in attrs.items())
+        ]
+
+
 class MustChangeVerifier:
     """模拟仍处于首次改密阶段的活动管理员。"""
 
@@ -109,10 +139,15 @@ def test_dashboard_renders_unified_safe_shell_for_empty_data() -> None:
     login_admin(client, next_path="/employee/admin")
 
     response = client.get("/employee/admin")
+    parser = ShellParser()
+    parser.feed(response.text)
 
     assert response.status_code == 200
-    assert '<meta name="viewport"' in response.text
-    assert 'aria-current="page"' in response.text
+    assert parser.matching("html", lang="zh-CN")
+    assert parser.matching("meta", name="viewport")
+    assert parser.matching("aside", id="admin-drawer", **{"data-drawer": None})
+    assert parser.matching("script", src="/static/admin.js")
+    assert parser.matching("a", href="/employee/admin", **{"aria-current": "page"})
     assert "总览" in response.text
     assert "任务中心" in response.text
     assert "今日暂无入住" in response.text
@@ -128,8 +163,17 @@ def test_diagnostics_keeps_http_200_when_health_is_degraded() -> None:
     login_admin(client, next_path="/employee/admin/diagnostics")
 
     response = client.get("/employee/admin/diagnostics")
+    parser = ShellParser()
+    parser.feed(response.text)
 
     assert response.status_code == 200
+    assert parser.matching("aside", id="admin-drawer", **{"data-drawer": None})
+    assert parser.matching("script", src="/static/admin.js")
+    assert parser.matching(
+        "a",
+        href="/employee/admin/diagnostics",
+        **{"aria-current": "page"},
+    )
     assert "系统诊断" in response.text
     assert "需要关注" in response.text
     assert "{&quot;status&quot;" not in response.text
@@ -179,3 +223,21 @@ def test_dashboard_does_not_swallow_request_cancellation() -> None:
     # TestClient 的跨线程 portal 会把 asyncio 取消转换成 concurrent.futures 取消。
     with pytest.raises(FutureCancelledError):
         client.get("/employee/admin")
+
+
+def test_health_failure_logs_only_type_and_returns_degraded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """健康检查异常应安全记录类型，并继续渲染降级页面。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+    client.app.state.health_service = FailingHealthStub()
+
+    with caplog.at_level("WARNING", logger="homestay_bot.routes.admin"):
+        response = client.get("/employee/admin/diagnostics")
+
+    assert response.status_code == 200
+    assert "系统当前处于降级状态" in response.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "health-secret-detail" not in caplog.text
+    assert "health-secret-detail" not in response.text

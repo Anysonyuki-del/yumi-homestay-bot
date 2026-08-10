@@ -609,6 +609,8 @@ class StayOrder(TimestampMixin, Base):
             "status",
             "check_in_date",
         ),
+        Index("ix_stay_orders_check_in_status", "check_in_date", "status"),
+        Index("ix_stay_orders_check_out_status", "check_out_date", "status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -19,14 +19,15 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html { min-width: 320px; scroll-behavior: smooth; }
-body { min-height: 100vh; margin: 0; overflow-x: clip; background: var(--page); line-height: 1.55; }
+body { min-height: 100vh; margin: 0; background: var(--page); line-height: 1.55; }
 a { color: var(--navy); text-underline-offset: 3px; }
 button, input, select, textarea { max-width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; }
 button, .button { cursor: pointer; }
 textarea { min-height: 112px; resize: vertical; }
 form, label { display: grid; gap: 8px; }
 form { gap: 18px; }
-:focus-visible { outline: 3px solid rgb(202 138 4 / 65%); outline-offset: 3px; }
+:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 3px; }
+pre, code { max-width: 100%; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
 .skip-link { position: fixed; z-index: 100; top: 8px; left: 8px; padding: 10px 14px; transform: translateY(-160%); border-radius: 8px; color: #fff; background: var(--navy-dark); }
 .skip-link:focus { transform: translateY(0); }
 .icon { flex: 0 0 auto; }
@@ -66,8 +67,9 @@ button, .button { border: 0; color: #fff; background: var(--navy); }
 
 /* 移动优先的统一后台外壳。 */
 .admin-shell { min-height: 100vh; }
-.admin-workspace, .metric-card, .panel { min-width: 0; }
-.admin-sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; display: flex; width: min(86vw, 292px); flex-direction: column; padding: 20px 14px; transform: translateX(-105%); color: #fff; background: var(--navy-dark); box-shadow: 12px 0 30px rgb(15 23 42 / 25%); transition: transform 200ms ease; }
+.admin-workspace, .metric-card, .panel, .clean-list li, .diagnostics-list dd { min-width: 0; overflow-wrap: anywhere; }
+.drawer-is-open { overflow: hidden; overscroll-behavior: none; }
+.admin-sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; display: flex; width: min(86vw, 292px); flex-direction: column; padding: 20px 14px; overflow-y: auto; overscroll-behavior: contain; transform: translateX(-105%); color: #fff; background: var(--navy-dark); box-shadow: 12px 0 30px rgb(15 23 42 / 25%); transition: transform 200ms ease; }
 .admin-sidebar.is-open { transform: translateX(0); }
 .drawer-backdrop { position: fixed; z-index: 30; inset: 0; background: rgb(15 23 42 / 55%); }
 .brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 24px; font-size: 1.06rem; font-weight: 800; line-height: 1.15; }

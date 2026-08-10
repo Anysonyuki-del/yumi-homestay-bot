@@ -88,7 +88,8 @@ async def _safe_health(request: Request) -> dict[str, str]:
     """把健康探针异常收敛为降级状态，诊断页面自身保持可用。"""
     try:
         return await _health_service(request).check()
-    except Exception:
+    except Exception as error:
+        logger.warning("管理员健康检查失败：error_type=%s", type(error).__name__)
         return {"status": "degraded"}
 
 

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -27,6 +28,7 @@ from homestay_bot.domain.models import (
     RoomOperationalState,
     StayOrder,
 )
+from homestay_bot.repositories.admin_dashboard import SQLAlchemyAdminDashboardRepository
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 TERMINAL_STAY_STATUSES = ("canceled", "cancelled", "declined", "expired", "deleted")
@@ -80,12 +82,25 @@ class Snapshot:
         )
 
 
+class ConsistentReadPort(Protocol):
+    """定义总览多查询前的一致读准备接口。"""
+
+    async def prepare_consistent_read(self) -> None:
+        """在第一项业务查询前固定数据库读快照。"""
+
+
 class AdminDashboardService:
     """通过单个只读数据库会话聚合小型民宿关键运营事实。"""
 
-    def __init__(self, session: AsyncSession) -> None:
-        """保存请求期数据库会话。"""
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        consistent_read: ConsistentReadPort | None = None,
+    ) -> None:
+        """保存请求期数据库会话与一致读准备器。"""
         self._session = session
+        self._consistent_read = consistent_read or SQLAlchemyAdminDashboardRepository(session)
 
     async def _stays_for(self, local_date: date, *, arrival: bool) -> tuple[StaySummary, ...]:
         """读取今日入住或退房，仅投影房源标题。"""
@@ -187,6 +202,7 @@ class AdminDashboardService:
 
     async def snapshot(self, now: datetime | None = None) -> Snapshot:
         """按 Asia/Shanghai 当日边界生成只读快照。"""
+        await self._consistent_read.prepare_consistent_read()
         observed_at = now or datetime.now(UTC)
         if observed_at.tzinfo is None:
             observed_at = observed_at.replace(tzinfo=UTC)

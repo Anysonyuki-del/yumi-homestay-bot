@@ -5,6 +5,26 @@ from homestay_bot import web
 ASSET_ROOT = Path(web.__file__).resolve().parent
 
 
+def _relative_luminance(hex_color: str) -> float:
+    """按 WCAG 2.1 把不透明十六进制颜色转换为相对亮度。"""
+    channels = [int(hex_color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [
+        channel / 12.92
+        if channel <= 0.04045
+        else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(first: str, second: str) -> float:
+    """计算两个不透明颜色的 WCAG 对比度。"""
+    lighter, darker = sorted(
+        (_relative_luminance(first), _relative_luminance(second)), reverse=True
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def test_no_javascript_navigation_reaches_every_core_admin_page() -> None:
     """脚本加载失败时，小屏导航仍须覆盖全部核心页面。"""
     layout = (ASSET_ROOT / "templates/layouts/admin.html").read_text()
@@ -37,6 +57,13 @@ def test_admin_javascript_contract_covers_accessible_progressive_enhancements() 
     assert "hasUnsavedChanges" in script
     assert 'form.dataset.submitting === "true"' in script
     assert "event.preventDefault()" in script
+    assert 'workspace.setAttribute("aria-hidden", "true")' in script
+    assert "workspace.inert = true" in script
+    assert 'document.body.classList.add("drawer-is-open")' in script
+    assert 'workspace.removeAttribute("aria-hidden")' in script
+    assert "workspace.inert = false" in script
+    assert 'document.body.classList.remove("drawer-is-open")' in script
+    assert 'window.matchMedia("(min-width: 1024px)")' in script
 
 
 def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() -> None:
@@ -46,6 +73,13 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     assert "transform: translateX(-105%)" in css
     for width in (375, 768, 1024, 1440):
         assert f"@media (min-width: {width}px)" in css
-    assert ":focus-visible" in css
+    assert ":focus-visible { outline: 3px solid #1d4ed8" in css
     assert "@media (prefers-reduced-motion: reduce)" in css
-    assert "overflow-x: clip" in css or "overflow-x: hidden" in css
+    assert "body {" in css and "overflow-x: clip" not in css and "overflow-x: hidden" not in css
+    assert "overflow-wrap: anywhere" in css
+    assert "pre, code" in css
+    assert "overflow: auto" in css
+    assert "white-space: pre-wrap" in css
+    assert "overscroll-behavior" in css
+    assert _contrast_ratio("#1d4ed8", "#f8fafc") >= 3
+    assert _contrast_ratio("#1d4ed8", "#ffffff") >= 3

@@ -6,29 +6,40 @@ const drawer = document.querySelector("[data-drawer]");
 const drawerTrigger = document.querySelector("[data-drawer-open]");
 const drawerClosers = document.querySelectorAll("[data-drawer-close]");
 const drawerBackdrop = document.querySelector(".drawer-backdrop");
+const workspace = document.querySelector(".admin-workspace");
 let focusBeforeDrawer = null;
 
 /** 打开移动导航并把键盘焦点移到关闭按钮。 */
 function openDrawer() {
-  if (!drawer || !drawerTrigger || !drawerBackdrop) return;
+  if (!drawer || !drawerTrigger || !drawerBackdrop || !workspace) return;
   focusBeforeDrawer = document.activeElement;
   drawer.classList.add("is-open");
   drawerTrigger.setAttribute("aria-expanded", "true");
   drawerBackdrop.hidden = false;
+  workspace.inert = true;
+  workspace.setAttribute("aria-hidden", "true");
+  document.body.classList.add("drawer-is-open");
   drawer.querySelector("[data-drawer-close]")?.focus();
 }
 
 /** 关闭移动导航并恢复触发前焦点。 */
 function closeDrawer() {
-  if (!drawer || !drawerTrigger || !drawerBackdrop) return;
+  if (!drawer || !drawerTrigger || !drawerBackdrop || !workspace) return;
   drawer.classList.remove("is-open");
   drawerTrigger.setAttribute("aria-expanded", "false");
   drawerBackdrop.hidden = true;
+  workspace.inert = false;
+  workspace.removeAttribute("aria-hidden");
+  document.body.classList.remove("drawer-is-open");
   if (focusBeforeDrawer instanceof HTMLElement) focusBeforeDrawer.focus();
 }
 
 drawerTrigger?.addEventListener("click", openDrawer);
 drawerClosers.forEach((element) => element.addEventListener("click", closeDrawer));
+const desktopBreakpoint = window.matchMedia("(min-width: 1024px)");
+desktopBreakpoint.addEventListener("change", (event) => {
+  if (event.matches && drawer?.classList.contains("is-open")) closeDrawer();
+});
 document.addEventListener("keydown", (event) => {
   if (!drawer?.classList.contains("is-open")) return;
   if (event.key === "Escape") {
