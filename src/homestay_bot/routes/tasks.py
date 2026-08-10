@@ -165,13 +165,7 @@ async def task_index(
     page: int = Query(1, ge=1, le=10_000),
 ) -> Response:
     """展示管理员全部待办或员工自己的任务。"""
-    try:
-        employee = await _current_employee(request)
-    except HTTPException:
-        return RedirectResponse(
-            "/employee/login?next=/employee/tasks",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+    employee = await _current_employee(request)
     try:
         items = await _get_service(request).list_for(
             employee,

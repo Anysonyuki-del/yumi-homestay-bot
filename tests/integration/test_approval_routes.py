@@ -86,10 +86,14 @@ def valid_form(nonce: str) -> dict[str, str]:
 
 
 def test_unauthenticated_employee_is_redirected_to_login() -> None:
-    """未登录访问审批详情时应跳转企业微信授权入口。"""
+    """浏览器未登录访问审批详情时应跳转独立管理员登录页。"""
     client, _ = build_client(EmployeeRole.ADMIN)
 
-    response = client.get("/employee/approvals/1", follow_redirects=False)
+    response = client.get(
+        "/employee/approvals/1",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
 
     assert response.status_code == 303
     assert response.headers["location"].startswith("/employee/login")

@@ -61,13 +61,7 @@ async def complaint_detail(
     before_message_id: Annotated[int | None, Query(gt=0)] = None,
 ) -> Response:
     """展示客诉分页对话、分析和可编辑回复草稿。"""
-    try:
-        employee_id, role = await require_employee_session(request)
-    except HTTPException:
-        return RedirectResponse(
-            f"/employee/login?next=/employee/complaints/{review_id}",
-            status_code=303,
-        )
+    employee_id, role = await require_employee_session(request)
     detail = await _service(request).get_detail(
         review_id,
         before_message_id=before_message_id,

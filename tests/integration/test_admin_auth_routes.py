@@ -3,17 +3,21 @@ import re
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.routes.approvals import router as approvals_router
+from homestay_bot.routes.complaints import router as complaints_router
 from homestay_bot.routes.employee_auth import (
     require_employee_session,
 )
 from homestay_bot.routes.employee_auth import (
     router as employee_auth_router,
 )
+from homestay_bot.routes.tasks import router as tasks_router
 from homestay_bot.services.admin_auth_service import (
     AdminSession,
     AuthenticationError,
@@ -103,6 +107,9 @@ def build_client(*, must_change_password: bool = False) -> tuple[TestClient, Adm
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key="admin-auth-test-secret")
     app.include_router(employee_auth_router)
+    app.include_router(tasks_router)
+    app.include_router(approvals_router)
+    app.include_router(complaints_router)
     app.state.admin_auth_service = auth
     app.state.employee_access_verifier = AdminAccessVerifierStub(auth)
     app.state.admin_auth_clock = lambda: NOW
@@ -118,6 +125,14 @@ def build_client(*, must_change_password: bool = False) -> tuple[TestClient, Adm
         }
 
     return TestClient(app), auth
+
+
+REAL_PROTECTED_GET_PATHS = [
+    "/employee/tasks",
+    "/employee/approvals",
+    "/employee/approvals/1",
+    "/employee/complaints/1",
+]
 
 
 def csrf_from(response_text: str) -> str:
@@ -182,6 +197,52 @@ def test_unauthenticated_html_redirects_but_api_boundary_stays_401() -> None:
         "/employee/login?next=%2Femployee%2Fprotected"
     )
     assert api.status_code == 401
+
+
+@pytest.mark.parametrize("path", REAL_PROTECTED_GET_PATHS)
+def test_real_routes_preserve_html_redirect_and_api_401(path: str) -> None:
+    """真实后台 GET 路由不得把 API 未登录错误改写成 HTML 登录跳转。"""
+    client, _ = build_client()
+
+    html = client.get(path, headers={"Accept": "text/html"}, follow_redirects=False)
+    api = client.get(
+        path,
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+
+    assert html.status_code == 303
+    assert html.headers["location"].startswith("/employee/login?next=")
+    assert api.status_code == 401
+
+
+@pytest.mark.parametrize("path", REAL_PROTECTED_GET_PATHS)
+def test_real_routes_preserve_first_password_change_redirect(path: str) -> None:
+    """首次改密会话访问真实后台页时必须跳账号页，不能被改写到登录页。"""
+    client, auth = build_client()
+    login(client)
+    auth.must_change_password = True
+
+    response = client.get(
+        path,
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/account"
+
+
+@pytest.mark.parametrize("path", REAL_PROTECTED_GET_PATHS)
+def test_real_routes_do_not_swallow_session_verifier_503(path: str) -> None:
+    """复核服务故障属于 503，真实路由不得误报为未登录。"""
+    client, _ = build_client()
+    login(client)
+    delattr(client.app.state, "employee_access_verifier")
+
+    response = client.get(path, follow_redirects=False)
+
+    assert response.status_code == 503
 
 
 def test_login_requires_one_time_csrf() -> None:

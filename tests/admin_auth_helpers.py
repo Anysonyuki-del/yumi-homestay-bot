@@ -40,9 +40,11 @@ class RouteAdminVerifierStub:
     def __init__(self, role: EmployeeRole) -> None:
         """保存当前业务角色。"""
         self.role = role
+        self.calls: list[tuple[int, int]] = []
 
     async def get_active_admin(self, admin_id: int, employee_id: int):
         """返回测试专用的活动会话投影。"""
+        self.calls.append((admin_id, employee_id))
         assert admin_id == 1
         assert employee_id == (1 if self.role is EmployeeRole.ADMIN else 2)
         return SimpleNamespace(
@@ -56,11 +58,16 @@ class RouteAdminVerifierStub:
         )
 
 
-def configure_admin_auth(app: FastAPI, role: EmployeeRole) -> None:
+def configure_admin_auth(
+    app: FastAPI,
+    role: EmployeeRole,
+) -> RouteAdminVerifierStub:
     """给既有路由测试应用装配密码认证与请求期复核器。"""
     app.state.admin_auth_service = RouteAdminAuthStub(role)
-    app.state.employee_access_verifier = RouteAdminVerifierStub(role)
+    verifier = RouteAdminVerifierStub(role)
+    app.state.employee_access_verifier = verifier
     app.state.admin_auth_clock = lambda: datetime.now(UTC)
+    return verifier
 
 
 def login_admin(

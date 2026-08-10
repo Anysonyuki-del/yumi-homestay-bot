@@ -54,13 +54,7 @@ async def approval_index(
     page: int = Query(1, ge=1, le=10_000),
 ) -> Response:
     """只向管理员展示待处理审批列表。"""
-    try:
-        _, role = await require_employee_session(request)
-    except HTTPException:
-        return RedirectResponse(
-            "/employee/login?next=/employee/approvals",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+    _, role = await require_employee_session(request)
     if role is not EmployeeRole.ADMIN:
         raise HTTPException(status_code=403, detail="只有管理员可以查看预订审批")
     approvals = await _get_page_service(request).list_pending(
@@ -81,13 +75,7 @@ async def approval_index(
 @router.get("/{approval_id}", response_class=HTMLResponse)
 async def approval_detail(request: Request, approval_id: int) -> Response:
     """展示脱敏审批详情，并签发一次性确认令牌。"""
-    try:
-        _, role = await require_employee_session(request)
-    except HTTPException:
-        return RedirectResponse(
-            f"/employee/login?next=/employee/approvals/{approval_id}",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+    _, role = await require_employee_session(request)
     if role is not EmployeeRole.ADMIN:
         raise HTTPException(status_code=403, detail="只有管理员可以查看预订审批")
 

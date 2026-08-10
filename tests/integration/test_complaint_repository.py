@@ -1,13 +1,18 @@
 from datetime import UTC, datetime
 
 import pytest
+from admin_auth_helpers import RouteAdminVerifierStub, configure_admin_auth
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.sessions import SessionMiddleware
 
-from homestay_bot.domain.enums import ComplaintReviewStatus, MessageOrigin
+from homestay_bot.domain.enums import (
+    ComplaintReviewStatus,
+    EmployeeRole,
+    MessageOrigin,
+)
 from homestay_bot.domain.models import (
     Base,
     ComplaintReview,
@@ -22,6 +27,26 @@ from homestay_bot.repositories.complaints import (
 )
 from homestay_bot.routes.complaints import router as complaint_router
 from homestay_bot.services.complaint_admin_service import ComplaintAdminService
+
+
+def _install_versioned_admin_session(
+    app: FastAPI,
+) -> RouteAdminVerifierStub:
+    """为客诉路由测试装配完整管理员会话与真实复核器。"""
+    verifier = configure_admin_auth(app, EmployeeRole.ADMIN)
+
+    @app.get("/test/session")
+    async def seed_session(request: Request) -> dict[str, str]:
+        """写入生产认证所需的全部版本化会话字段。"""
+        request.session["employee_id"] = 1
+        request.session["employee_role"] = "admin"
+        request.session["admin_id"] = 1
+        request.session["admin_session_version"] = 1
+        request.session["last_activity_at"] = datetime.now(UTC).isoformat()
+        request.session["complaint_csrf"] = {"7": "valid-token"}
+        return {"status": "seeded"}
+
+    return verifier
 
 
 @pytest.fixture
@@ -394,14 +419,7 @@ def test_complaint_route_rejects_oversized_draft_before_service() -> None:
     app.include_router(complaint_router)
     service = ServiceStub()
     app.state.complaint_admin_service = service
-
-    @app.get("/test/session")
-    async def seed_session(request: Request) -> dict[str, str]:
-        """写入管理员身份和客诉一次性令牌。"""
-        request.session["employee_id"] = 1
-        request.session["employee_role"] = "admin"
-        request.session["complaint_csrf"] = {"7": "valid-token"}
-        return {"status": "seeded"}
+    verifier = _install_versioned_admin_session(app)
 
     with TestClient(app) as client:
         client.get("/test/session")
@@ -417,6 +435,48 @@ def test_complaint_route_rejects_oversized_draft_before_service() -> None:
 
     assert response.status_code == 422
     assert service.called is False
+    assert verifier.calls == []
+
+
+def test_complaint_route_valid_form_reaches_service_after_admin_reverification() -> None:
+    """有效表单必须真正经过版本化管理员会话复核，不能只靠 422 假通过。"""
+
+    class ServiceStub:
+        """记录通过认证后的有效草稿更新。"""
+
+        def __init__(self) -> None:
+            """初始化调用状态。"""
+            self.called = False
+
+        async def update_draft(self, *args, **kwargs) -> None:
+            """记录路由已进入业务服务。"""
+            self.called = True
+
+    app = FastAPI()
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key="complaint-valid-form-test-secret-at-least-32",
+    )
+    app.include_router(complaint_router)
+    service = ServiceStub()
+    app.state.complaint_admin_service = service
+    verifier = _install_versioned_admin_session(app)
+
+    with TestClient(app) as client:
+        client.get("/test/session")
+        response = client.post(
+            "/employee/complaints/7/save",
+            data={
+                "version": "1",
+                "draft": "请继续核实",
+                "csrf_token": "valid-token",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert service.called is True
+    assert verifier.calls == [(1, 1)]
 
 
 @pytest.mark.asyncio
