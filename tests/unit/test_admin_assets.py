@@ -74,6 +74,7 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     for width in (375, 768, 1024, 1440):
         assert f"@media (min-width: {width}px)" in css
     assert ":focus-visible { outline: 3px solid #1d4ed8" in css
+    assert ".admin-sidebar :focus-visible { outline-color: var(--gold)" in css
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert "body {" in css and "overflow-x: clip" not in css and "overflow-x: hidden" not in css
     assert "overflow-wrap: anywhere" in css
@@ -83,3 +84,5 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     assert "overscroll-behavior" in css
     assert _contrast_ratio("#1d4ed8", "#f8fafc") >= 3
     assert _contrast_ratio("#1d4ed8", "#ffffff") >= 3
+    # 侧栏链接和关闭按钮位于深海军蓝背景，必须使用独立不透明焦点色。
+    assert _contrast_ratio("#ca8a04", "#172554") >= 3

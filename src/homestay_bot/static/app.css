@@ -27,6 +27,7 @@ textarea { min-height: 112px; resize: vertical; }
 form, label { display: grid; gap: 8px; }
 form { gap: 18px; }
 :focus-visible { outline: 3px solid #1d4ed8; outline-offset: 3px; }
+.admin-sidebar :focus-visible { outline-color: var(--gold); }
 pre, code { max-width: 100%; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
 .skip-link { position: fixed; z-index: 100; top: 8px; left: 8px; padding: 10px 14px; transform: translateY(-160%); border-radius: 8px; color: #fff; background: var(--navy-dark); }
 .skip-link:focus { transform: translateY(0); }
