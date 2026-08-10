@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.routes.employee_auth import AdminLoginRateLimiter
 from homestay_bot.services.admin_auth_service import AdminSession
 
 
@@ -97,6 +98,7 @@ def configure_admin_auth(
     app.state.employee_access_verifier = verifier
     app.state.admin_auth_clock = lambda: datetime.now(UTC)
     app.state.admin_csrf_service = MemoryAdminCsrfService()
+    app.state.admin_login_rate_limiter = AdminLoginRateLimiter()
     return verifier
 
 

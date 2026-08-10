@@ -77,6 +77,12 @@ def upgrade() -> None:
         ["token_hash"],
         unique=True,
     )
+    op.create_index(
+        "ix_admin_csrf_nonces_expires_at",
+        "admin_csrf_nonces",
+        ["expires_at"],
+        unique=False,
+    )
     op.create_table(
         "runtime_config_versions",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -112,6 +118,10 @@ def downgrade() -> None:
     """按外键依赖逆序删除管理员和运行配置数据结构。"""
     op.drop_table("runtime_config_state")
     op.drop_table("runtime_config_versions")
+    op.drop_index(
+        "ix_admin_csrf_nonces_expires_at",
+        table_name="admin_csrf_nonces",
+    )
     op.drop_index(
         "ix_admin_csrf_nonces_token_hash",
         table_name="admin_csrf_nonces",

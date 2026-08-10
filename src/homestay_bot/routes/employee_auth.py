@@ -14,8 +14,10 @@ from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.services.admin_auth_service import (
     AUTHENTICATION_ERROR_MESSAGE,
     AdminSession,
+    Argon2CapacityError,
     AuthenticationError,
 )
+from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 
 router = APIRouter(prefix="/employee")
 templates = Jinja2Templates(directory=Path(__file__).resolve().parent.parent / "templates")
@@ -28,20 +30,35 @@ FIRST_LOGIN_ALLOWED_PATHS = {
 }
 LOGIN_RATE_WINDOW = timedelta(minutes=1)
 LOGIN_RATE_PER_IP = 10
-LOGIN_RATE_GLOBAL = 500
+LOGIN_RATE_GLOBAL = 60
+CSRF_SESSION_KEY = "admin_csrf_tokens"
 
 
 class AdminLoginRateLimiter:
     """提供单进程、内存有界且不记录登录正文的登录限速。"""
 
-    def __init__(self, *, max_clients: int = 1024) -> None:
+    def __init__(
+        self,
+        *,
+        max_clients: int = 1024,
+        per_ip_limit: int = LOGIN_RATE_GLOBAL,
+        global_limit: int = LOGIN_RATE_GLOBAL,
+    ) -> None:
         """初始化按 IP 与全局时间队列。"""
         self._max_clients = max_clients
+        self._per_ip_limit = per_ip_limit
+        self._global_limit = global_limit
         self._by_ip: dict[str, deque[datetime]] = {}
         self._global: deque[datetime] = deque()
         self._lock = asyncio.Lock()
 
-    async def allow(self, client_ip: str, now: datetime) -> bool:
+    async def allow(
+        self,
+        client_ip: str,
+        now: datetime,
+        *,
+        per_ip_limit: int | None = None,
+    ) -> bool:
         """原子清理过期记录并判断本次尝试是否仍在固定上限内。"""
         cutoff = now - LOGIN_RATE_WINDOW
         async with self._lock:
@@ -53,7 +70,8 @@ class AdminLoginRateLimiter:
             attempts = self._by_ip.setdefault(client_ip, deque())
             while attempts and attempts[0] <= cutoff:
                 attempts.popleft()
-            if len(attempts) >= LOGIN_RATE_PER_IP or len(self._global) >= LOGIN_RATE_GLOBAL:
+            effective_limit = per_ip_limit or self._per_ip_limit
+            if len(attempts) >= effective_limit or len(self._global) >= self._global_limit:
                 return False
             attempts.append(now)
             self._global.append(now)
@@ -181,6 +199,53 @@ def _get_csrf_service(request: Request) -> AdminCsrfServicePort:
     return cast(AdminCsrfServicePort, service)
 
 
+def _get_rate_limiter(request: Request) -> AdminLoginRateLimiter:
+    """读取应用生命周期共享的限速器，拒绝请求期竞态懒初始化。"""
+    limiter = getattr(request.app.state, "admin_login_rate_limiter", None)
+    if limiter is None:
+        raise HTTPException(status_code=503, detail="管理员登录限速服务尚未配置")
+    return cast(AdminLoginRateLimiter, limiter)
+
+
+def _csrf_session_slot(purpose: str, admin_id: int | None) -> str:
+    """生成用途与管理员绑定的浏览器会话槽位。"""
+    return f"{purpose}:{admin_id if admin_id is not None else 'anonymous'}"
+
+
+async def _issue_csrf(
+    request: Request,
+    purpose: str,
+    *,
+    admin_id: int | None,
+) -> str:
+    """复用浏览器未消费 nonce；过期后才向服务端申请新记录。"""
+    now = _as_utc(_clock(request)())
+    slot = _csrf_session_slot(purpose, admin_id)
+    stored_tokens = request.session.get(CSRF_SESSION_KEY)
+    if isinstance(stored_tokens, dict):
+        stored = stored_tokens.get(slot)
+        if isinstance(stored, dict):
+            token = stored.get("token")
+            expires_at = stored.get("expires_at")
+            if isinstance(token, str) and isinstance(expires_at, str):
+                try:
+                    if _as_utc(datetime.fromisoformat(expires_at)) > now:
+                        return token
+                except ValueError:
+                    pass
+    try:
+        token = await _get_csrf_service(request).issue(purpose, admin_id=admin_id)
+    except AdminCsrfCapacityError as error:
+        raise HTTPException(status_code=429, detail="认证表单请求过于频繁") from error
+    tokens = dict(stored_tokens) if isinstance(stored_tokens, dict) else {}
+    tokens[slot] = {
+        "token": token,
+        "expires_at": (now + timedelta(minutes=15)).isoformat(),
+    }
+    request.session[CSRF_SESSION_KEY] = tokens
+    return token
+
+
 async def _consume_csrf(
     request: Request,
     token: str,
@@ -189,11 +254,20 @@ async def _consume_csrf(
     admin_id: int | None,
 ) -> None:
     """原子消费服务端 nonce，拒绝缺失、伪造、过期和重放。"""
-    if not await _get_csrf_service(request).consume(
+    consumed = await _get_csrf_service(request).consume(
         token,
         purpose,
         admin_id=admin_id,
-    ):
+    )
+    stored_tokens = request.session.get(CSRF_SESSION_KEY)
+    slot = _csrf_session_slot(purpose, admin_id)
+    if isinstance(stored_tokens, dict):
+        stored = stored_tokens.get(slot)
+        if isinstance(stored, dict) and stored.get("token") == token:
+            tokens = dict(stored_tokens)
+            tokens.pop(slot, None)
+            request.session[CSRF_SESSION_KEY] = tokens
+    if not consumed:
         raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
 
 
@@ -298,7 +372,7 @@ async def _login_page(
     status_code: int = 200,
 ) -> Response:
     """渲染不回填密码的登录页并重新签发令牌。"""
-    csrf_token = await _get_csrf_service(request).issue("login", admin_id=None)
+    csrf_token = await _issue_csrf(request, "login", admin_id=None)
     return templates.TemplateResponse(
         request=request,
         name="auth/login.html",
@@ -317,6 +391,11 @@ async def employee_login(
     next_path: str = Query(DEFAULT_NEXT_PATH, alias="next"),
 ) -> Response:
     """展示独立管理员账号密码登录页。"""
+    client_ip = request.client.host if request.client is not None else "unknown"
+    if not await _get_rate_limiter(request).allow(
+        f"page:{client_ip}", _as_utc(_clock(request)())
+    ):
+        raise HTTPException(status_code=429, detail="登录页请求过于频繁")
     return await _login_page(request, next_path=next_path)
 
 
@@ -335,13 +414,11 @@ async def employee_login_submit(
         "login",
         admin_id=None,
     )
-    limiter = getattr(request.app.state, "admin_login_rate_limiter", None)
-    if limiter is None:
-        limiter = AdminLoginRateLimiter()
-        request.app.state.admin_login_rate_limiter = limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     now = _as_utc(_clock(request)())
-    if not await cast(AdminLoginRateLimiter, limiter).allow(client_ip, now):
+    if not await _get_rate_limiter(request).allow(
+        f"login:{client_ip}", now, per_ip_limit=LOGIN_RATE_PER_IP
+    ):
         return await _login_page(
             request,
             next_path=next_path,
@@ -360,6 +437,13 @@ async def employee_login_submit(
             username,
             password,
             now,
+        )
+    except Argon2CapacityError:
+        return await _login_page(
+            request,
+            next_path=next_path,
+            error="认证服务繁忙，请稍后再试",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         )
     except AuthenticationError:
         return await _login_page(
@@ -395,10 +479,9 @@ async def _account_page(
     """渲染账号安全页，页面上下文不包含密码或哈希。"""
     template_name = "auth/change_password.html" if must_change_password else "account/detail.html"
     admin_id = cast(int, request.session["admin_id"])
-    csrf_service = _get_csrf_service(request)
-    password_csrf = await csrf_service.issue("password", admin_id=admin_id)
-    logout_csrf = await csrf_service.issue("logout", admin_id=admin_id)
-    revoke_csrf = await csrf_service.issue("revoke-sessions", admin_id=admin_id)
+    password_csrf = await _issue_csrf(request, "password", admin_id=admin_id)
+    logout_csrf = await _issue_csrf(request, "logout", admin_id=admin_id)
+    revoke_csrf = await _issue_csrf(request, "revoke-sessions", admin_id=admin_id)
     return templates.TemplateResponse(
         request=request,
         name=template_name,
@@ -454,6 +537,13 @@ async def employee_change_password(
             current_password,
             new_password,
         )
+    except Argon2CapacityError:
+        return await _account_page(
+            request,
+            must_change_password=before_change.must_change_password,
+            error="认证服务繁忙，请稍后再试",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
     except AuthenticationError:
         return await _account_page(
             request,
@@ -502,6 +592,13 @@ async def employee_revoke_sessions(
             admin_id,
             password,
             cast(int, request.session["admin_session_version"]),
+        )
+    except Argon2CapacityError:
+        return await _account_page(
+            request,
+            must_change_password=False,
+            error="认证服务繁忙，请稍后再试",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         )
     except AuthenticationError:
         return await _account_page(

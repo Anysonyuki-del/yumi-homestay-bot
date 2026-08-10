@@ -28,6 +28,16 @@ class AdminCsrfRepository(Protocol):
     ) -> bool:
         """原子消费匹配的有效 nonce。"""
 
+    async def purge_expired(self, *, now: datetime, limit: int) -> int:
+        """有界清理过期 nonce。"""
+
+    async def count_active(self, *, now: datetime) -> int:
+        """统计仍活动的 nonce 数量。"""
+
+
+class AdminCsrfCapacityError(RuntimeError):
+    """表示活动 nonce 已达到应用硬上限。"""
+
 
 class AdminCsrfService:
     """签发随机明文 nonce，并仅以 SHA-256 摘要持久化。"""
@@ -38,16 +48,23 @@ class AdminCsrfService:
         *,
         clock: Callable[[], datetime] | None = None,
         ttl: timedelta = timedelta(minutes=15),
+        max_active: int = 1000,
+        purge_limit: int = 100,
     ) -> None:
         """注入仓储、UTC 时钟和短有效期。"""
         self._repository = repository
         self._clock = clock or (lambda: datetime.now(UTC))
         self._ttl = ttl
+        self._max_active = max_active
+        self._purge_limit = purge_limit
 
     async def issue(self, purpose: str, *, admin_id: int | None) -> str:
         """返回浏览器所需随机明文，同时只保存摘要。"""
         token = secrets.token_urlsafe(32)
         now = self._clock()
+        await self._repository.purge_expired(now=now, limit=self._purge_limit)
+        if await self._repository.count_active(now=now) >= self._max_active:
+            raise AdminCsrfCapacityError("认证表单容量已满")
         await self._repository.create(
             token_hash=_hash_token(token),
             purpose=purpose,

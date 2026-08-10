@@ -14,6 +14,7 @@ from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.routes.approvals import router as approvals_router
 from homestay_bot.routes.complaints import router as complaints_router
 from homestay_bot.routes.employee_auth import (
+    AdminLoginRateLimiter,
     require_employee_session,
 )
 from homestay_bot.routes.employee_auth import (
@@ -24,6 +25,7 @@ from homestay_bot.services.admin_auth_service import (
     AdminSession,
     AuthenticationError,
 )
+from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 
 NOW = datetime(2026, 8, 11, 9, tzinfo=UTC)
 
@@ -127,6 +129,7 @@ def build_client(*, must_change_password: bool = False) -> tuple[TestClient, Adm
     app.state.admin_csrf_service = MemoryAdminCsrfService()
     app.state.employee_access_verifier = AdminAccessVerifierStub(auth)
     app.state.admin_auth_clock = lambda: NOW
+    app.state.admin_login_rate_limiter = AdminLoginRateLimiter()
 
     @app.get("/employee/protected")
     async def protected(request: Request) -> dict[str, object]:
@@ -201,6 +204,54 @@ def test_get_login_renders_html_and_only_keeps_internal_next() -> None:
     assert 'value="/employee/account"' in normal.text
     assert "https://evil.test" not in external.text
     assert "//evil.test" not in protocol_relative.text
+
+
+def test_login_page_refresh_reuses_unconsumed_nonce() -> None:
+    """同一浏览器刷新登录页应复用未消费 nonce，避免数据库持续插入。"""
+    client, _ = build_client()
+
+    first = client.get("/employee/login")
+    second = client.get("/employee/login")
+
+    assert csrf_from(first.text) == csrf_from(second.text)
+    assert client.app.state.admin_csrf_service.sequence == 1
+
+
+def test_anonymous_login_get_is_rate_limited_by_real_client_ip() -> None:
+    """匿名 GET 也受共享限速，伪造 XFF 不能绕过真实来源 IP 上限。"""
+    client, _ = build_client()
+    client.app.state.admin_login_rate_limiter = AdminLoginRateLimiter(
+        per_ip_limit=2,
+        global_limit=3,
+    )
+
+    statuses = [
+        client.get(
+            "/employee/login",
+            headers={"X-Forwarded-For": f"198.51.100.{index}"},
+        ).status_code
+        for index in range(3)
+    ]
+
+    assert statuses == [200, 200, 429]
+
+
+def test_anonymous_login_get_returns_429_when_nonce_capacity_is_full() -> None:
+    """服务端活动 nonce 达到硬上限时匿名登录页必须返回 429。"""
+
+    class FullCsrfService(MemoryAdminCsrfService):
+        """模拟全局 nonce 容量已满。"""
+
+        async def issue(self, purpose: str, *, admin_id: int | None) -> str:
+            """稳定抛出生产容量异常。"""
+            raise AdminCsrfCapacityError("full")
+
+    client, _ = build_client()
+    client.app.state.admin_csrf_service = FullCsrfService()
+
+    response = client.get("/employee/login")
+
+    assert response.status_code == 429
 
 
 def test_login_reports_503_when_admin_auth_is_degraded() -> None:

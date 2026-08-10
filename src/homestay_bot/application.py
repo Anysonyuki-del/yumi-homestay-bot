@@ -14,7 +14,9 @@ from fastapi import FastAPI
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.config import Settings
@@ -74,6 +76,7 @@ from homestay_bot.repositories.lifecycle_reminders import (
 )
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
+from homestay_bot.routes.employee_auth import AdminLoginRateLimiter
 from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.hostex_webhook import HostexWebhookService
 from homestay_bot.routes.knowledge import KnowledgeAdminService
@@ -85,7 +88,10 @@ from homestay_bot.services.admin_auth_service import (
     PasswordHasherPort,
 )
 from homestay_bot.services.admin_csrf import AdminCsrfService
-from homestay_bot.services.admin_passwords import ADMIN_PASSWORD_HASHER
+from homestay_bot.services.admin_passwords import (
+    ADMIN_PASSWORD_HASHER,
+    validate_admin_password_hash,
+)
 from homestay_bot.services.approval_page_service import ApprovalPageService
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
@@ -456,11 +462,13 @@ class SessionAdminAuthService:
         *,
         password_hasher: PasswordHasherPort,
         dummy_hash: str,
+        argon2_semaphore: asyncio.Semaphore,
     ) -> None:
         """保存会话工厂及应用生命周期共享的 Argon2 组件。"""
         self._factory = factory
         self._password_hasher = password_hasher
         self._dummy_hash = dummy_hash
+        self._argon2_semaphore = argon2_semaphore
 
     def _service(self, session: AsyncSession) -> AdminAuthService:
         """为当前事务组装唯一管理员认证服务。"""
@@ -468,6 +476,7 @@ class SessionAdminAuthService:
             SQLAlchemyAdminCredentialRepository(session),
             password_hasher=self._password_hasher,
             dummy_hash=self._dummy_hash,
+            argon2_semaphore=self._argon2_semaphore,
         )
 
     async def authenticate(
@@ -544,13 +553,15 @@ class SessionAdminCsrfService:
     def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
         """保存数据库会话工厂。"""
         self._factory = factory
+        self._issue_lock = asyncio.Lock()
 
     async def issue(self, purpose: str, *, admin_id: int | None) -> str:
         """持久化 nonce 摘要并提交后返回随机明文。"""
-        async with self._factory() as session:
-            token = await AdminCsrfService(SQLAlchemyAdminCsrfRepository(session)).issue(
-                purpose, admin_id=admin_id
-            )
+        # 同一应用实例串行执行清理、计数和插入，保证活动容量硬上限。
+        async with self._issue_lock, self._factory() as session:
+            token = await AdminCsrfService(
+                SQLAlchemyAdminCsrfRepository(session)
+            ).issue(purpose, admin_id=admin_id)
             await session.commit()
             return token
 
@@ -1644,6 +1655,60 @@ async def _run_wecom_poll_loop(
 LOCAL_ADMIN_WECOM_USERID = "local-admin-console"
 
 
+async def _has_valid_existing_admin(session: AsyncSession) -> bool:
+    """联合验证既有凭证、Argon2 基线和保留本地员工身份。"""
+    row = (
+        await session.execute(
+            select(AdminCredential, Employee)
+            .join(Employee, Employee.id == AdminCredential.employee_id)
+            .limit(1)
+        )
+    ).one_or_none()
+    if row is None:
+        return False
+    credential, employee = row
+    try:
+        validate_admin_password_hash(credential.password_hash)
+    except ValueError:
+        return False
+    return (
+        employee.wecom_userid == LOCAL_ADMIN_WECOM_USERID
+        and employee.is_active
+        and employee.role is EmployeeRole.ADMIN
+    )
+
+
+async def _upsert_local_admin_employee(session: AsyncSession) -> int:
+    """按保留 userid 原子创建或修复本地管理员员工，并返回主键。"""
+    values = {
+        "wecom_userid": LOCAL_ADMIN_WECOM_USERID,
+        "name": "本地后台管理员",
+        "role": EmployeeRole.ADMIN,
+        "is_active": True,
+    }
+    dialect_name = session.get_bind().dialect.name
+    statement: Any
+    if dialect_name == "sqlite":
+        statement = sqlite_insert(Employee).values(**values)
+    elif dialect_name == "postgresql":
+        statement = postgresql_insert(Employee).values(**values)
+    else:
+        raise RuntimeError(f"不支持的管理员引导数据库方言: {dialect_name}")
+    employee_id = await session.scalar(
+        statement.on_conflict_do_update(
+            index_elements=[Employee.wecom_userid],
+            set_={
+                "name": values["name"],
+                "role": values["role"],
+                "is_active": values["is_active"],
+            },
+        ).returning(Employee.id)
+    )
+    if employee_id is None:
+        raise RuntimeError("本地后台管理员员工引导后无法读取")
+    return int(employee_id)
+
+
 async def _bootstrap_admin_auth(
     factory: async_sessionmaker[AsyncSession],
     *,
@@ -1654,33 +1719,21 @@ async def _bootstrap_admin_auth(
     async with factory() as session:
         existing = await session.scalar(select(AdminCredential).limit(1))
         if existing is not None:
-            return True
+            return await _has_valid_existing_admin(session)
         if username is None or password_hash is None:
             return False
-        employee = await session.scalar(
-            select(Employee).where(Employee.wecom_userid == LOCAL_ADMIN_WECOM_USERID)
-        )
-        if employee is None:
-            employee = Employee(
-                wecom_userid=LOCAL_ADMIN_WECOM_USERID,
-                name="本地后台管理员",
-                role=EmployeeRole.ADMIN,
-                is_active=True,
+        try:
+            employee_id = await _upsert_local_admin_employee(session)
+            await SQLAlchemyAdminCredentialRepository(session).bootstrap(
+                employee_id=employee_id,
+                username=username,
+                password_hash=password_hash,
             )
-            session.add(employee)
-            await session.flush()
-        else:
-            # 明确的保留 userid 是本地后台身份，重启时恢复其后台授权状态。
-            employee.name = "本地后台管理员"
-            employee.role = EmployeeRole.ADMIN
-            employee.is_active = True
-        await SQLAlchemyAdminCredentialRepository(session).bootstrap(
-            employee_id=employee.id,
-            username=username,
-            password_hash=password_hash,
-        )
-        await session.commit()
-        return True
+            await session.commit()
+        except IntegrityError:
+            # 多实例唯一键竞争后回滚本事务，再以获胜实例提交的状态为准。
+            await session.rollback()
+        return await _has_valid_existing_admin(session)
 
 
 @asynccontextmanager
@@ -1981,16 +2034,21 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             return False
 
     app.state.admin_auth_available = admin_auth_available
+    app.state.admin_login_rate_limiter = AdminLoginRateLimiter()
     if admin_auth_available:
         # 虚拟哈希在应用生命周期仅生成一次，登录请求只在线程中复用校验。
-        dummy_hash = await asyncio.to_thread(
-            ADMIN_PASSWORD_HASHER.hash,
-            "admin-auth-dummy-password",
-        )
+        argon2_semaphore = asyncio.Semaphore(2)
+        async with argon2_semaphore:
+            dummy_hash = await asyncio.to_thread(
+                ADMIN_PASSWORD_HASHER.hash,
+                "admin-auth-dummy-password",
+            )
+        app.state.admin_argon2_semaphore = argon2_semaphore
         app.state.admin_auth_service = SessionAdminAuthService(
             factory,
             password_hasher=ADMIN_PASSWORD_HASHER,
             dummy_hash=dummy_hash,
+            argon2_semaphore=argon2_semaphore,
         )
         app.state.admin_csrf_service = SessionAdminCsrfService(factory)
         app.state.employee_access_verifier = SessionEmployeeAccessVerifier(factory)
@@ -2162,6 +2220,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         for state_name in (
             "admin_auth_service",
             "admin_auth_available",
+            "admin_login_rate_limiter",
+            "admin_argon2_semaphore",
             "admin_csrf_service",
             "employee_access_verifier",
             "approval_page_service",

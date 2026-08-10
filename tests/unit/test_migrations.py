@@ -29,6 +29,7 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "ck_runtime_config_state_singleton" in result.stdout
     assert "CREATE UNIQUE INDEX ix_admin_credentials_username" in result.stdout
     assert "CREATE UNIQUE INDEX ix_admin_csrf_nonces_token_hash" in result.stdout
+    assert "CREATE INDEX ix_admin_csrf_nonces_expires_at" in result.stdout
     assert "FOREIGN KEY(employee_id) REFERENCES employees (id) ON DELETE CASCADE" in (result.stdout)
 
 
@@ -89,6 +90,7 @@ def test_sqlite_admin_runtime_config_migration_replays(
     assert "ck_runtime_config_state_singleton" in state_ddl
     assert any(row[1] == "ix_admin_credentials_username" and row[2] for row in admin_indexes)
     assert any(row[1] == "ix_admin_csrf_nonces_token_hash" and row[2] for row in csrf_indexes)
+    assert any(row[1] == "ix_admin_csrf_nonces_expires_at" for row in csrf_indexes)
     assert any(row[2] == "employees" and row[3] == "employee_id" for row in admin_foreign_keys)
     assert any(row[2] == "admin_credentials" and row[3] == "admin_id" for row in csrf_foreign_keys)
     assert sum(row[2] == "runtime_config_versions" for row in state_foreign_keys) == 2

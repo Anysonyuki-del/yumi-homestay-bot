@@ -8,6 +8,7 @@ from argon2 import PasswordHasher, Type
 from homestay_bot.domain.models import AdminCredential
 from homestay_bot.services.admin_auth_service import (
     AdminAuthService,
+    Argon2CapacityError,
     AuthenticationError,
 )
 
@@ -375,3 +376,50 @@ async def test_argon2_verification_runs_outside_event_loop() -> None:
     )
 
     assert heartbeat_elapsed < 0.05
+
+
+@pytest.mark.asyncio
+async def test_argon2_capacity_saturation_fails_fast() -> None:
+    """共享 Argon2 容量被占满时后续认证应短等待后稳定快速失败。"""
+
+    class BlockingHasher:
+        """用线程事件模拟尚未完成的昂贵 Argon2 校验。"""
+
+        def verify(self, password_hash: str, password: str) -> bool:
+            """阻塞足够久，使第二个认证触发容量超时。"""
+            time.sleep(0.1)
+            return True
+
+        def check_needs_rehash(self, password_hash: str) -> bool:
+            """避免测试进入额外哈希阶段。"""
+            return False
+
+        def hash(self, password: str) -> str:
+            """返回固定测试哈希。"""
+            return "blocking-hash"
+
+    credential = _credential()
+    semaphore = asyncio.Semaphore(1)
+    service = AdminAuthService(
+        MemoryAdminCredentialRepository(credential),
+        password_hasher=BlockingHasher(),
+        dummy_hash="dummy-hash",
+        argon2_semaphore=semaphore,
+        argon2_wait_timeout=0.01,
+    )
+    first = asyncio.create_task(
+        service.authenticate(
+            "admin",
+            "initial-password",
+            datetime(2026, 8, 11, 8, tzinfo=UTC),
+        )
+    )
+    await asyncio.sleep(0.01)
+
+    with pytest.raises(Argon2CapacityError):
+        await service.authenticate(
+            "admin",
+            "initial-password",
+            datetime(2026, 8, 11, 8, tzinfo=UTC),
+        )
+    await first

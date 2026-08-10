@@ -43,5 +43,6 @@ async def test_high_frequency_queries_have_composite_indexes() -> None:
     assert ("status", "job_type", "available_at") in indexes["jobs"]
     assert ("username",) in indexes["admin_credentials"]
     assert ("token_hash",) in indexes["admin_csrf_nonces"]
+    assert ("expires_at",) in indexes["admin_csrf_nonces"]
 
     await engine.dispose()

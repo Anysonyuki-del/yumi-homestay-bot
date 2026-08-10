@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.models import AdminCsrfNonce, Base
 from homestay_bot.repositories.admin_csrf import SQLAlchemyAdminCsrfRepository
-from homestay_bot.services.admin_csrf import AdminCsrfService
+from homestay_bot.services.admin_csrf import AdminCsrfCapacityError, AdminCsrfService
 
 
 @pytest.mark.asyncio
@@ -90,4 +90,58 @@ async def test_two_transactions_can_only_consume_nonce_once(tmp_path) -> None:
             return consumed
 
     assert sorted(await asyncio.gather(consume_once(), consume_once())) == [False, True]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_issue_purges_expired_nonces_before_enforcing_capacity() -> None:
+    """签发前应有界清理过期 nonce，并只按仍活动记录执行硬上限。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 11, 12, tzinfo=UTC)
+    async with factory() as session:
+        session.add_all(
+            [
+                AdminCsrfNonce(
+                    token_hash=f"{index:064x}",
+                    purpose="login",
+                    expires_at=now - timedelta(seconds=index + 1),
+                )
+                for index in range(2)
+            ]
+        )
+        await session.commit()
+        service = AdminCsrfService(
+            SQLAlchemyAdminCsrfRepository(session),
+            clock=lambda: now,
+            max_active=1,
+            purge_limit=2,
+        )
+
+        await service.issue("login", admin_id=None)
+        await session.commit()
+
+        assert await session.scalar(select(func.count(AdminCsrfNonce.id))) == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_issue_rejects_when_active_nonce_capacity_is_full() -> None:
+    """活动 nonce 达到硬上限时必须稳定拒绝继续扩张表。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 11, 12, tzinfo=UTC)
+    async with factory() as session:
+        service = AdminCsrfService(
+            SQLAlchemyAdminCsrfRepository(session),
+            clock=lambda: now,
+            max_active=1,
+        )
+        await service.issue("login", admin_id=None)
+        with pytest.raises(AdminCsrfCapacityError):
+            await service.issue("login", admin_id=None)
     await engine.dispose()

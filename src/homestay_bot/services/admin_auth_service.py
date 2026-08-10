@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
@@ -14,10 +14,16 @@ from homestay_bot.services.admin_passwords import (
 
 LOCK_DURATION = timedelta(minutes=15)
 AUTHENTICATION_ERROR_MESSAGE = "用户名或密码错误"
+ARGON2_WAIT_TIMEOUT_SECONDS = 0.05
+Argon2Result = TypeVar("Argon2Result")
 
 
 class AuthenticationError(PermissionError):
     """表示不披露具体原因的统一管理员认证失败。"""
+
+
+class Argon2CapacityError(RuntimeError):
+    """表示共享 Argon2 工作容量暂时饱和。"""
 
 
 class PasswordHasherPort(Protocol):
@@ -106,12 +112,16 @@ class AdminAuthService:
         clock: Callable[[], datetime] | None = None,
         password_hasher: PasswordHasherPort = ADMIN_PASSWORD_HASHER,
         dummy_hash: str | None = None,
+        argon2_semaphore: asyncio.Semaphore | None = None,
+        argon2_wait_timeout: float = ARGON2_WAIT_TIMEOUT_SECONDS,
     ) -> None:
         """注入仓储、UTC 时钟、共享 hasher 与共享虚拟哈希。"""
         self._repository = repository
         self._clock = clock or _utc_now
         self._password_hasher = password_hasher
         self._dummy_hash = dummy_hash or password_hasher.hash("admin-auth-dummy-password")
+        self._argon2_semaphore = argon2_semaphore or asyncio.Semaphore(2)
+        self._argon2_wait_timeout = argon2_wait_timeout
 
     async def authenticate(
         self,
@@ -133,11 +143,11 @@ class AdminAuthService:
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
 
         replacement_hash = None
-        if await asyncio.to_thread(
+        if await self._run_argon2(
             self._password_hasher.check_needs_rehash,
             credential.password_hash,
         ):
-            replacement_hash = await asyncio.to_thread(
+            replacement_hash = await self._run_argon2(
                 self._password_hasher.hash,
                 password,
             )
@@ -169,7 +179,7 @@ class AdminAuthService:
         version = await self._repository.change_password_atomic(
             admin_id,
             expected_password_hash=credential.password_hash,
-            new_password_hash=await asyncio.to_thread(
+            new_password_hash=await self._run_argon2(
                 self._password_hasher.hash,
                 new,
             ),
@@ -230,13 +240,31 @@ class AdminAuthService:
     async def _verify(self, password_hash: str, password: str) -> bool:
         """在线程中执行 Argon2，并把非法哈希或不匹配统一折叠为失败。"""
         try:
-            return await asyncio.to_thread(
+            return await self._run_argon2(
                 self._password_hasher.verify,
                 password_hash,
                 password,
             )
         except (InvalidHashError, VerificationError, VerifyMismatchError):
             return False
+
+    async def _run_argon2(
+        self,
+        operation: Callable[..., Argon2Result],
+        *args: str,
+    ) -> Argon2Result:
+        """短等待获取共享容量，并在线程中执行一个昂贵 Argon2 操作。"""
+        try:
+            await asyncio.wait_for(
+                self._argon2_semaphore.acquire(),
+                timeout=self._argon2_wait_timeout,
+            )
+        except TimeoutError as error:
+            raise Argon2CapacityError("管理员认证容量暂时饱和") from error
+        try:
+            return await asyncio.to_thread(operation, *args)
+        finally:
+            self._argon2_semaphore.release()
 
     async def _require_admin(self, admin_id: int) -> AdminCredential:
         """读取管理员凭证，缺失时继续使用统一认证错误。"""
