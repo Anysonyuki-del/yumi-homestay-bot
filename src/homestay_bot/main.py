@@ -10,6 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from homestay_bot.application import application_lifespan
 from homestay_bot.config import Settings
 from homestay_bot.logging import configure_logging_redaction
+from homestay_bot.routes.admin import router as admin_router
 from homestay_bot.routes.approvals import router as approvals_router
 from homestay_bot.routes.complaints import router as complaints_router
 from homestay_bot.routes.customers import router as customers_router
@@ -56,6 +57,7 @@ app.add_middleware(
 app.include_router(wecom_callback_router)
 app.include_router(hostex_webhook_router)
 app.include_router(employee_auth_router)
+app.include_router(admin_router)
 app.include_router(approvals_router)
 app.include_router(knowledge_router)
 app.include_router(tasks_router)

@@ -1,0 +1,52 @@
+{% import "components/icons.html" as icons %}
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <meta name="color-scheme" content="light">
+    <title>{% block title %}{{ page_title }} · {{ app_name }}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/admin.js" defer></script>
+  </head>
+  <body class="admin-body">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <div class="admin-shell">
+      <aside class="admin-sidebar" id="admin-drawer" aria-label="后台导航" data-drawer>
+        <div class="brand"><span class="brand__mark">Y</span><span>YuMi<br><small>民宿运营台</small></span></div>
+        <button class="icon-button drawer-close" type="button" aria-label="关闭导航" data-drawer-close>{{ icons.icon("close") }}</button>
+        <nav class="side-nav">
+          <a href="/employee/admin" {% if active_nav == "dashboard" %}aria-current="page"{% endif %}>{{ icons.icon("home") }}<span>总览</span></a>
+          <a href="/employee/tasks" {% if active_nav == "tasks" %}aria-current="page"{% endif %}>{{ icons.icon("tasks") }}<span>任务中心</span></a>
+          <a href="/employee/approvals" {% if active_nav == "approvals" %}aria-current="page"{% endif %}>{{ icons.icon("calendar") }}<span>预订审批</span></a>
+          <a href="/employee/properties" {% if active_nav == "properties" %}aria-current="page"{% endif %}>{{ icons.icon("rooms") }}<span>房源管理</span></a>
+          <a href="/employee/customers" {% if active_nav == "customers" %}aria-current="page"{% endif %}>{{ icons.icon("people") }}<span>客户管理</span></a>
+          <a href="/employee/knowledge" {% if active_nav == "knowledge" %}aria-current="page"{% endif %}>{{ icons.icon("book") }}<span>知识库</span></a>
+          <a href="/employee/admin/diagnostics" {% if active_nav == "diagnostics" %}aria-current="page"{% endif %}>{{ icons.icon("pulse") }}<span>系统诊断</span></a>
+        </nav>
+        <a class="account-link" href="/employee/account">{{ icons.icon("user") }}<span>账号安全</span></a>
+      </aside>
+      <div class="drawer-backdrop" data-drawer-close hidden></div>
+      <div class="admin-workspace">
+        <header class="topbar">
+          <button class="icon-button drawer-trigger" type="button" aria-controls="admin-drawer" aria-expanded="false" aria-label="打开导航" data-drawer-open>{{ icons.icon("menu") }}</button>
+          <div><p class="topbar__eyebrow">YuMi 民宿</p><strong>{{ page_title }}</strong></div>
+          <a class="topbar__account" href="/employee/account" aria-label="账号安全">{{ icons.icon("user") }}</a>
+        </header>
+        <details class="no-script-nav">
+          <summary>打开页面导航</summary>
+          <a href="/employee/admin">总览</a><a href="/employee/tasks">任务中心</a><a href="/employee/approvals">预订审批</a><a href="/employee/admin/diagnostics">系统诊断</a>
+        </details>
+        <main class="page-content" id="main-content" tabindex="-1">
+          {% if health_degraded %}<div class="alert alert--warning" role="alert">{{ icons.icon("warning") }}<span>系统当前处于降级状态，部分自动化能力可能不可用。请查看<a href="/employee/admin/diagnostics">系统诊断</a>。</span></div>{% endif %}
+          {% if error %}<div class="alert alert--danger" role="alert">{{ error }}</div>{% endif %}
+          {% if flash %}<div class="alert alert--success" role="status">{{ flash }}</div>{% endif %}
+          {% if notice %}<div class="alert alert--success" role="status">{{ notice }}</div>{% endif %}
+          {% block page_header %}<header class="content-header"><div><p class="eyebrow">运营工作台</p><h1>{{ page_title }}</h1></div>{% block page_actions %}{% endblock %}</header>{% endblock %}
+          {% block content %}{% endblock %}
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+{% macro badge(text, tone="neutral") -%}
+<span class="badge badge--{{ tone }}">{{ text }}</span>
+{%- endmacro %}
+
+{% macro empty(title, detail="") -%}
+<div class="empty-state">
+  <strong>{{ title }}</strong>
+  {% if detail %}<p>{{ detail }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro pagination(base_url, page, previous_page=None, next_page=None) -%}
+<nav class="pagination" aria-label="分页">
+  {% if previous_page %}<a class="button button--secondary" href="{{ base_url }}?page={{ previous_page }}">上一页</a>{% endif %}
+  <span>第 {{ page }} 页</span>
+  {% if next_page %}<a class="button button--secondary" href="{{ base_url }}?page={{ next_page }}">下一页</a>{% endif %}
+</nav>
+{%- endmacro %}
+
+{% macro field_error(field_id, text) -%}
+{% if text %}<p class="field-error" id="{{ field_id }}-error" role="alert">{{ text }}</p>{% endif %}
+{%- endmacro %}
+
+{% macro confirm(action, csrf_token, label, prompt="确定执行此操作吗？") -%}
+<form method="post" action="{{ action }}" data-confirm="{{ prompt }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {{ caller() if caller is defined else "" }}
+  <button class="button button--danger" type="submit">{{ label }}</button>
+</form>
+{%- endmacro %}

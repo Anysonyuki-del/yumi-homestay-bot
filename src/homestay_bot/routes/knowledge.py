@@ -1,12 +1,10 @@
 import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,11 +12,9 @@ from homestay_bot.domain.enums import EmployeeRole, KnowledgeCandidateStatus
 from homestay_bot.domain.models import AuditLog, KnowledgeCandidate, KnowledgeEntry
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/knowledge")
-templates = Jinja2Templates(
-    directory=Path(__file__).resolve().parent.parent / "templates"
-)
 
 
 class KnowledgeAdminServicePort(Protocol):

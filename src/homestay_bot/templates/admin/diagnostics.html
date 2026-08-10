@@ -1,0 +1,21 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+{% block title %}系统诊断 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="panel diagnostics-summary">
+  <div>
+    <p class="eyebrow">只读运行状态</p>
+    <h2>{{ "运行正常" if overall_ok else "需要关注" }}</h2>
+    <p>此页面仅展示受控状态，不包含配置内容、客户资料或外部服务响应。</p>
+  </div>
+  {{ ui.badge("正常" if overall_ok else "降级", "success" if overall_ok else "warning") }}
+</section>
+<section class="panel">
+  <div class="panel__header"><div><p class="eyebrow">基础组件</p><h2>检查结果</h2></div><small>服务启动于 {{ started_at|datetime_zh }}</small></div>
+  <dl class="diagnostics-list">
+    {% for item in checks %}
+    <div><dt>{{ item.label }}</dt><dd>{{ ui.badge(item.status_label, item.tone) }}</dd></div>
+    {% endfor %}
+  </dl>
+</section>
+{% endblock %}

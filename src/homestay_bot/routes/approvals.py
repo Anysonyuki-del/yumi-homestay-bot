@@ -1,20 +1,16 @@
 import secrets
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/approvals")
-templates = Jinja2Templates(
-    directory=Path(__file__).resolve().parent.parent / "templates"
-)
 
 
 class ApprovalPageServicePort(Protocol):

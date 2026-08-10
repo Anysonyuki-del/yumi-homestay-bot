@@ -1,11 +1,9 @@
 import secrets
-from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
@@ -15,11 +13,9 @@ from homestay_bot.services.customer_errors import (
     CustomerNotFoundError,
     CustomerPermissionError,
 )
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/customers")
-templates = Jinja2Templates(
-    directory=Path(__file__).resolve().parent.parent / "templates"
-)
 
 
 class CustomerAdminServicePort(Protocol):

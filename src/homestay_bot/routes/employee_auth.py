@@ -2,13 +2,11 @@ import asyncio
 from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import NoReturn, Protocol, cast
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.services.admin_auth_service import (
@@ -18,9 +16,9 @@ from homestay_bot.services.admin_auth_service import (
     AuthenticationError,
 )
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee")
-templates = Jinja2Templates(directory=Path(__file__).resolve().parent.parent / "templates")
 SESSION_IDLE_TIMEOUT = timedelta(hours=8)
 DEFAULT_NEXT_PATH = "/employee/tasks"
 FIRST_LOGIN_ALLOWED_PATHS = {

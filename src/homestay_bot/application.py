@@ -89,6 +89,7 @@ from homestay_bot.services.admin_auth_service import (
     PasswordHasherPort,
 )
 from homestay_bot.services.admin_csrf import AdminCsrfService
+from homestay_bot.services.admin_dashboard_service import AdminDashboardService, Snapshot
 from homestay_bot.services.admin_passwords import (
     ADMIN_PASSWORD_HASHER,
     validate_admin_password_hash,
@@ -651,6 +652,19 @@ class SessionApprovalPageService:
             result = await self._service(session).confirm(approval_id, employee_id, command)
             await session.commit()
             return result
+
+
+class SessionAdminDashboardService:
+    """为每次总览读取创建独立只读数据库会话。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def snapshot(self, now: datetime | None = None) -> Snapshot:
+        """在短会话中聚合运营快照，不提交任何数据。"""
+        async with self._factory() as session:
+            return await AdminDashboardService(session).snapshot(now)
 
 
 class SessionTaskPageService:
@@ -2067,6 +2081,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         factory=factory,
         hostex=hostex,
     )
+    app.state.admin_dashboard_service = SessionAdminDashboardService(factory)
     private_file_storage = PrivateFileStorage(settings.private_upload_dir)
     app.state.task_page_service = SessionTaskPageService(
         factory,
@@ -2098,6 +2113,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         SessionHostexEventRecorder(factory),
     )
     startup_time = datetime.now(UTC)
+    app.state.started_at = startup_time
     app.state.worker_last_heartbeat = startup_time
     # 启动宽限期避免首次补拉前被误报；一次成功后由真实心跳覆盖。
     app.state.wecom_poll_last_success = startup_time
@@ -2236,6 +2252,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "admin_csrf_service",
             "employee_access_verifier",
             "approval_page_service",
+            "admin_dashboard_service",
             "task_page_service",
             "private_file_service",
             "property_admin_service",
@@ -2244,6 +2261,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "wecom_callback_service",
             "hostex_webhook_service",
             "health_service",
+            "started_at",
             "worker_last_heartbeat",
             "wecom_poll_last_success",
             "hostex_sync_last_success",
