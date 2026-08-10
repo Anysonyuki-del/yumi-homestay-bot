@@ -1,6 +1,7 @@
 services:
   api:
     build: .
+    restart: unless-stopped
     command: >
       sh -c "alembic upgrade head &&
       uvicorn homestay_bot.main:app --host 0.0.0.0 --port 8000"
@@ -13,6 +14,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: homestay
       POSTGRES_USER: homestay
