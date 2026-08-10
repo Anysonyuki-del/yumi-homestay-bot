@@ -1,0 +1,25 @@
+{% extends "layouts/auth.html" %}
+{% block title %}账号安全 · YuMi{% endblock %}
+{% block heading %}账号安全{% endblock %}
+{% block content %}
+<h2>修改密码</h2>
+<form method="post" action="/employee/account/password">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label for="current_password">当前密码</label>
+  <input id="current_password" name="current_password" type="password" maxlength="128" autocomplete="current-password" required>
+  <label for="new_password">新密码</label>
+  <input id="new_password" name="new_password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required>
+  <button type="submit">修改密码</button>
+</form>
+<h2>会话管理</h2>
+<form method="post" action="/employee/account/revoke-sessions">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label for="revoke_password">当前密码</label>
+  <input id="revoke_password" name="password" type="password" maxlength="128" autocomplete="current-password" required>
+  <button type="submit">撤销其他会话</button>
+</form>
+<form method="post" action="/employee/logout">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit">退出登录</button>
+</form>
+{% endblock %}

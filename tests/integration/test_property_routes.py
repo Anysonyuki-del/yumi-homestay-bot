@@ -3,6 +3,7 @@ import re
 from types import SimpleNamespace
 
 import pytest
+from admin_auth_helpers import configure_admin_auth, login_admin
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -35,28 +36,6 @@ PNG_BYTES = (
     b"\x90wS\xde"
     b"\x00\x00\x00\x00IEND\xaeB`\x82"
 )
-
-
-class EmployeeAuthStub:
-    """返回指定角色的测试员工。"""
-
-    def __init__(self, role: EmployeeRole) -> None:
-        """保存登录角色。"""
-        self.role = role
-
-    def authorization_url(self, redirect_uri: str, state: str) -> str:
-        """返回包含 OAuth state 的测试地址。"""
-        return f"https://wecom.example/authorize?state={state}"
-
-    async def authenticate(self, code: str) -> Employee:
-        """返回启用员工。"""
-        return Employee(
-            id=1 if self.role is EmployeeRole.ADMIN else 2,
-            wecom_userid="property-user",
-            name="房源管理员",
-            role=self.role,
-            is_active=True,
-        )
 
 
 class PropertyAdminStub:
@@ -156,26 +135,15 @@ def build_client(role: EmployeeRole, tmp_path) -> tuple[TestClient, PropertyAdmi
     app.add_middleware(SessionMiddleware, secret_key="property-test-secret")
     app.include_router(employee_auth_router)
     app.include_router(properties_router)
-    app.state.employee_auth_service = EmployeeAuthStub(role)
+    configure_admin_auth(app, role)
     service = PropertyAdminStub(tmp_path)
     app.state.property_admin_service = service
     return TestClient(app), service
 
 
 def login(client: TestClient) -> None:
-    """走 OAuth state 流程建立员工会话。"""
-    response = client.get(
-        "/employee/login",
-        params={"next": "/employee/properties"},
-        follow_redirects=False,
-    )
-    state = re.search(r"state=([^&]+)", response.headers["location"]).group(1)
-    callback = client.get(
-        "/employee/oauth/callback",
-        params={"code": "code", "state": state},
-        follow_redirects=False,
-    )
-    assert callback.status_code == 303
+    """通过独立账号密码表单建立版本化员工会话。"""
+    login_admin(client, next_path="/employee/properties")
 
 
 def detail_csrf(client: TestClient) -> str:

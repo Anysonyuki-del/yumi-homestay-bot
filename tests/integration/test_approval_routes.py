@@ -1,35 +1,15 @@
 import re
 from datetime import date
 
+from admin_auth_helpers import configure_admin_auth, login_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.domain.enums import ApprovalStatus, EmployeeRole
-from homestay_bot.domain.models import BookingApproval, Employee
+from homestay_bot.domain.models import BookingApproval
 from homestay_bot.routes.approvals import router as approvals_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
-
-
-class EmployeeAuthStub:
-    """用 OAuth code 返回指定角色的本地员工。"""
-
-    def __init__(self, role: EmployeeRole) -> None:
-        self.role = role
-
-    def authorization_url(self, redirect_uri: str, state: str) -> str:
-        """返回测试授权地址。"""
-        return f"https://wecom.example/authorize?state={state}"
-
-    async def authenticate(self, code: str) -> Employee:
-        """返回与测试角色匹配的员工。"""
-        return Employee(
-            id=1,
-            wecom_userid="staff-1",
-            name="员工甲",
-            role=self.role,
-            is_active=True,
-        )
 
 
 class ApprovalPageStub:
@@ -82,26 +62,15 @@ def build_client(role: EmployeeRole) -> tuple[TestClient, ApprovalPageStub]:
     app.add_middleware(SessionMiddleware, secret_key="test-session-secret")
     app.include_router(employee_auth_router)
     app.include_router(approvals_router)
-    app.state.employee_auth_service = EmployeeAuthStub(role)
+    configure_admin_auth(app, role)
     approvals = ApprovalPageStub()
     app.state.approval_page_service = approvals
     return TestClient(app), approvals
 
 
 def login(client: TestClient) -> None:
-    """走完整 OAuth state 校验流程获得员工会话。"""
-    login_response = client.get(
-        "/employee/login",
-        params={"next": "/employee/approvals/1"},
-        follow_redirects=False,
-    )
-    state = re.search(r"state=([^&]+)", login_response.headers["location"]).group(1)
-    callback = client.get(
-        "/employee/oauth/callback",
-        params={"code": "oauth-code", "state": state},
-        follow_redirects=False,
-    )
-    assert callback.status_code == 303
+    """通过独立账号密码表单获得版本化会话。"""
+    login_admin(client, next_path="/employee/approvals/1")
 
 
 def valid_form(nonce: str) -> dict[str, str]:

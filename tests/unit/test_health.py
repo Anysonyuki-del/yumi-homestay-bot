@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from admin_auth_helpers import configure_admin_auth
 from fastapi import FastAPI, Request
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -48,8 +49,13 @@ async def test_health_details_require_admin_and_return_component_statuses() -> N
     @test_app.get("/test/session/{role}")
     async def seed_session(request: Request, role: EmployeeRole) -> dict[str, str]:
         """仅供测试写入签名员工会话。"""
-        request.session["employee_id"] = 1
+        request.session["employee_id"] = (
+            1 if role is EmployeeRole.ADMIN else 2
+        )
         request.session["employee_role"] = role.value
+        request.session["admin_id"] = 1
+        request.session["admin_session_version"] = 1
+        request.session["last_activity_at"] = datetime.now(UTC).isoformat()
         return {"status": "seeded"}
 
     transport = httpx.ASGITransport(app=test_app)
@@ -58,8 +64,10 @@ async def test_health_details_require_admin_and_return_component_statuses() -> N
         base_url="http://test",
     ) as client:
         public_response = await client.get("/employee/health")
+        configure_admin_auth(test_app, EmployeeRole.STAFF)
         await client.get("/test/session/staff")
         staff_response = await client.get("/employee/health")
+        configure_admin_auth(test_app, EmployeeRole.ADMIN)
         await client.get("/test/session/admin")
         admin_response = await client.get("/employee/health")
 

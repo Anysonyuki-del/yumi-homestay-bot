@@ -158,6 +158,8 @@ def test_configured_application_starts_worker_and_reports_healthy(
         ]
         assert app.state.private_file_service is app.state.task_page_service
         assert app.state.hostex_webhook_service is not None
+        assert app.state.admin_auth_service is not None
+        assert app.state.employee_access_verifier is not None
         assert chat_configuration == {
             "api_key": "test-deepseek-key",
             "base_url": "https://api.deepseek.test",
@@ -168,3 +170,4 @@ def test_configured_application_starts_worker_and_reports_healthy(
         }
     assert chat_configuration["closed"] is True
     assert tourism_configuration["closed"] is True
+    assert not hasattr(app.state, "admin_auth_service")

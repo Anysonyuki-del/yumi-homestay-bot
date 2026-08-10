@@ -11,6 +11,7 @@ from homestay_bot.domain.models import AdminCredential, Base, Employee
 from homestay_bot.repositories.admin_credentials import (
     SQLAlchemyAdminCredentialRepository,
 )
+from homestay_bot.repositories.employees import SQLAlchemyEmployeeRepository
 from homestay_bot.services.admin_auth_service import (
     AdminAuthService,
     AuthenticationError,
@@ -55,6 +56,53 @@ async def test_bootstrap_imports_only_precomputed_hash_once() -> None:
         assert repeated.password_hash == initial_hash
         assert "bootstrap-password" not in repeated.password_hash
         assert await session.scalar(select(func.count(AdminCredential.id))) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_employee_repository_returns_only_active_admin_credential_projection() -> None:
+    """请求期复核必须同时绑定唯一凭证、活动管理员角色与员工外键。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        employee = Employee(
+            wecom_userid="session-admin",
+            name="后台管理员",
+            role=EmployeeRole.ADMIN,
+            is_active=True,
+        )
+        session.add(employee)
+        await session.flush()
+        credential = await SQLAlchemyAdminCredentialRepository(session).bootstrap(
+            employee_id=employee.id,
+            username="admin",
+            password_hash=PasswordHasher(type=Type.ID).hash("bootstrap-password"),
+        )
+        await session.commit()
+
+        active = await SQLAlchemyEmployeeRepository(session).get_active_admin(
+            credential.id,
+            employee.id,
+        )
+        assert active is not None
+        assert active.employee_id == employee.id
+        assert active.role is EmployeeRole.ADMIN
+        assert active.session_version == 1
+        assert active.must_change_password is True
+
+        employee.is_active = False
+        await session.commit()
+        assert (
+            await SQLAlchemyEmployeeRepository(session).get_active_admin(
+                credential.id,
+                employee.id,
+            )
+            is None
+        )
 
     await engine.dispose()
 

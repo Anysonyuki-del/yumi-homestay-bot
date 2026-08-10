@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, BinaryIO, cast
-from urllib.parse import urlencode
 
 import httpx
 from anthropic import AsyncAnthropic
@@ -20,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.config import Settings
 from homestay_bot.db import create_engine, create_session_factory
-from homestay_bot.domain.enums import ComplaintReviewStatus, MessageOrigin
+from homestay_bot.domain.enums import ComplaintReviewStatus, EmployeeRole, MessageOrigin
 from homestay_bot.domain.models import BookingApproval, Conversation, Employee, Message
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.integrations.deepseek_client import (
@@ -40,6 +39,9 @@ from homestay_bot.integrations.wecom.api_client import (
     WeComApiError,
 )
 from homestay_bot.integrations.wecom.contact_client import WeComContactClient
+from homestay_bot.repositories.admin_credentials import (
+    SQLAlchemyAdminCredentialRepository,
+)
 from homestay_bot.repositories.approvals import (
     SQLAlchemyApprovalRepository,
     SQLAlchemyPermissionChecker,
@@ -65,11 +67,15 @@ from homestay_bot.repositories.lifecycle_reminders import (
 )
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
-from homestay_bot.routes.employee_auth import EmployeeAuthService
 from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.hostex_webhook import HostexWebhookService
 from homestay_bot.routes.knowledge import KnowledgeAdminService
 from homestay_bot.routes.wecom_callback import WeComCallbackService
+from homestay_bot.services.admin_auth_service import (
+    AdminAuthService,
+    AdminSession,
+    AuthenticationError,
+)
 from homestay_bot.services.approval_page_service import ApprovalPageService
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
@@ -439,59 +445,80 @@ class SessionFaqCandidateRepository:
             return candidates
 
 
-class SessionEmployeeAuthService:
-    """为每次 OAuth 回调创建独立员工查询会话。"""
+class SessionAdminAuthService:
+    """为每个管理员认证动作创建独立短事务。"""
 
-    def __init__(
-        self,
-        *,
-        corp_id: str,
-        public_base_url: str,
-        wecom: WeComApiClient,
-        factory: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """保存企业微信客户端和数据库会话工厂。"""
-        self._corp_id = corp_id
-        self._public_base_url = public_base_url.rstrip("/")
-        self._wecom = wecom
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂，不长期持有凭证实体。"""
         self._factory = factory
 
-    def authorization_url(self, redirect_uri: str, state: str) -> str:
-        """使用固定公网根地址构造授权链接，不信任请求 Host。"""
-        redirect_uri = f"{self._public_base_url}/employee/oauth/callback"
-        query = urlencode(
-            {
-                "appid": self._corp_id,
-                "redirect_uri": redirect_uri,
-                "response_type": "code",
-                "scope": "snsapi_base",
-                "state": state,
-            }
-        )
-        return f"https://open.weixin.qq.com/connect/oauth2/authorize?{query}#wechat_redirect"
+    @staticmethod
+    def _service(session: AsyncSession) -> AdminAuthService:
+        """为当前事务组装唯一管理员认证服务。"""
+        return AdminAuthService(SQLAlchemyAdminCredentialRepository(session))
 
-    async def authenticate(self, code: str) -> Employee:
-        """换取 userid，并在独立会话中验证本地启用角色。"""
+    async def authenticate(
+        self,
+        username: str,
+        password: str,
+        now: datetime,
+    ) -> AdminSession:
+        """认证并提交成功状态或失败计数，不记录敏感参数。"""
         async with self._factory() as session:
-            service = EmployeeAuthService(
-                corp_id=self._corp_id,
-                oauth=self._wecom,
-                employees=SQLAlchemyEmployeeRepository(session),
-            )
-            return await service.authenticate(code)
+            try:
+                authenticated = await self._service(session).authenticate(
+                    username,
+                    password,
+                    now,
+                )
+            except AuthenticationError:
+                await session.commit()
+                raise
+            await session.commit()
+            return authenticated
+
+    async def change_password(self, admin_id: int, current: str, new: str) -> None:
+        """在独立事务原子改密并提交会话版本。"""
+        async with self._factory() as session:
+            try:
+                await self._service(session).change_password(admin_id, current, new)
+            except (AuthenticationError, ValueError):
+                await session.commit()
+                raise
+            await session.commit()
+
+    async def reverify(self, admin_id: int, password: str) -> None:
+        """在独立事务复核高风险操作密码并提交失败计数。"""
+        async with self._factory() as session:
+            try:
+                await self._service(session).reverify(admin_id, password)
+            except AuthenticationError:
+                await session.commit()
+                raise
+            await session.commit()
+
+    async def revoke_other_sessions(self, admin_id: int) -> int:
+        """原子递增会话版本并提交，返回当前浏览器应采用的新版本。"""
+        async with self._factory() as session:
+            version = await self._service(session).revoke_other_sessions(admin_id)
+            await session.commit()
+            return version
 
 
 class SessionEmployeeAccessVerifier:
-    """每个员工页面请求都从数据库重新确认启用状态和角色。"""
+    """每个后台请求都联合复核唯一凭证与管理员员工身份。"""
 
     def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
         """保存数据库会话工厂。"""
         self._factory = factory
 
-    async def get_active(self, employee_id: int) -> Employee | None:
-        """在短会话中读取最新员工授权。"""
+    async def get_active_admin(self, admin_id: int, employee_id: int) -> Any:
+        """在短会话中读取不含密码哈希的最新管理员投影。"""
         async with self._factory() as session:
-            return await SQLAlchemyEmployeeRepository(session).get_active(employee_id)
+            return await SQLAlchemyEmployeeRepository(session).get_active_admin(
+                admin_id,
+                employee_id,
+            )
 
 
 class SessionApprovalPageService:
@@ -1599,6 +1626,29 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     engine = create_engine(settings.database_url)
     factory = create_session_factory(engine)
+    if (
+        settings.admin_bootstrap_username is not None
+        and settings.admin_bootstrap_password_hash is not None
+    ):
+        # 引导配置只含预生成哈希；凭证继续绑定现有 Employee 管理员身份。
+        async with factory() as session:
+            employee_id = await session.scalar(
+                select(Employee.id)
+                .where(
+                    Employee.role == EmployeeRole.ADMIN,
+                    Employee.is_active.is_(True),
+                )
+                .order_by(Employee.id)
+                .limit(1)
+            )
+            if employee_id is None:
+                raise RuntimeError("管理员凭证引导需要一个启用的管理员员工身份")
+            await SQLAlchemyAdminCredentialRepository(session).bootstrap(
+                employee_id=int(employee_id),
+                username=settings.admin_bootstrap_username,
+                password_hash=settings.admin_bootstrap_password_hash,
+            )
+            await session.commit()
     hostex = HostexClient(settings.hostex_access_token)
     wecom = WeComApiClient(
         settings.wecom_corp_id,
@@ -1889,12 +1939,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             return False
 
-    app.state.employee_auth_service = SessionEmployeeAuthService(
-        corp_id=settings.wecom_corp_id,
-        public_base_url=settings.public_base_url,
-        wecom=wecom,
-        factory=factory,
-    )
+    app.state.admin_auth_service = SessionAdminAuthService(factory)
     app.state.employee_access_verifier = SessionEmployeeAccessVerifier(factory)
     app.state.approval_page_service = SessionApprovalPageService(
         factory=factory,
@@ -2074,7 +2119,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await task
         # 测试重启或同进程重新装配时不得沿用已关闭的客户端与会话服务。
         for state_name in (
-            "employee_auth_service",
+            "admin_auth_service",
             "employee_access_verifier",
             "approval_page_service",
             "task_page_service",

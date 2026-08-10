@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from admin_auth_helpers import configure_admin_auth
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -153,14 +154,20 @@ def build_client(
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key="test-session-secret")
     app.include_router(knowledge_router)
+    configure_admin_auth(app, role)
     service = KnowledgeAdminStub()
     app.state.knowledge_admin_service = service
 
     @app.post("/test/login")
     async def test_login(request: Request) -> dict[str, bool]:
         """仅在测试应用中写入可信员工会话。"""
-        request.session["employee_id"] = 1
+        request.session["employee_id"] = (
+            1 if role is EmployeeRole.ADMIN else 2
+        )
         request.session["employee_role"] = role.value
+        request.session["admin_id"] = 1
+        request.session["admin_session_version"] = 1
+        request.session["last_activity_at"] = datetime.now(UTC).isoformat()
         return {"ok": True}
 
     client = TestClient(app)

@@ -3,6 +3,7 @@ import re
 from datetime import date
 from types import SimpleNamespace
 
+from admin_auth_helpers import configure_admin_auth, login_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
@@ -12,7 +13,6 @@ from homestay_bot.domain.enums import (
     BusinessTaskType,
     EmployeeRole,
 )
-from homestay_bot.domain.models import Employee
 from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.tasks import router as tasks_router
@@ -26,28 +26,6 @@ PNG_BYTES = (
     b"\x90wS\xde"
     b"\x00\x00\x00\x00IEND\xaeB`\x82"
 )
-
-
-class EmployeeAuthStub:
-    """返回指定两级角色的企业微信员工。"""
-
-    def __init__(self, role: EmployeeRole) -> None:
-        """保存登录后角色。"""
-        self.role = role
-
-    def authorization_url(self, redirect_uri: str, state: str) -> str:
-        """返回带 state 的测试授权地址。"""
-        return f"https://wecom.example/authorize?state={state}"
-
-    async def authenticate(self, code: str) -> Employee:
-        """返回启用员工。"""
-        return Employee(
-            id=1 if self.role is EmployeeRole.ADMIN else 2,
-            wecom_userid="test-user",
-            name="测试员工",
-            role=self.role,
-            is_active=True,
-        )
 
 
 class TaskPageStub:
@@ -177,7 +155,7 @@ def build_client(role: EmployeeRole) -> tuple[TestClient, TaskPageStub]:
     app.include_router(employee_auth_router)
     app.include_router(tasks_router)
     app.include_router(private_files_router)
-    app.state.employee_auth_service = EmployeeAuthStub(role)
+    configure_admin_auth(app, role)
     tasks = TaskPageStub()
     if role is EmployeeRole.ADMIN:
         tasks.item.status = BusinessTaskStatus.PENDING_ASSIGNMENT
@@ -186,19 +164,8 @@ def build_client(role: EmployeeRole) -> tuple[TestClient, TaskPageStub]:
 
 
 def login(client: TestClient) -> None:
-    """走 OAuth state 流程建立员工会话。"""
-    response = client.get(
-        "/employee/login",
-        params={"next": "/employee/tasks"},
-        follow_redirects=False,
-    )
-    state = re.search(r"state=([^&]+)", response.headers["location"]).group(1)
-    callback = client.get(
-        "/employee/oauth/callback",
-        params={"code": "code", "state": state},
-        follow_redirects=False,
-    )
-    assert callback.status_code == 303
+    """通过独立账号密码表单建立版本化员工会话。"""
+    login_admin(client)
 
 
 def detail_csrf(client: TestClient, task_id: int = 1) -> str:
@@ -211,18 +178,24 @@ def detail_csrf(client: TestClient, task_id: int = 1) -> str:
 
 
 def test_default_employee_login_returns_to_task_center() -> None:
-    """未指定目标页时，普通员工登录后应进入任务中心而不是管理员审批页。"""
+    """未指定目标页时，独立管理员登录后应进入任务中心。"""
     client, _ = build_client(EmployeeRole.STAFF)
-    response = client.get("/employee/login", follow_redirects=False)
-    state = re.search(r"state=([^&]+)", response.headers["location"]).group(1)
-
-    callback = client.get(
-        "/employee/oauth/callback",
-        params={"code": "code", "state": state},
+    page = client.get("/employee/login")
+    csrf = re.search(
+        r'name="csrf_token" value="([^"]+)"',
+        page.text,
+    ).group(1)
+    response = client.post(
+        "/employee/login",
+        data={
+            "username": "admin",
+            "password": "test-password",
+            "csrf_token": csrf,
+        },
         follow_redirects=False,
     )
 
-    assert callback.headers["location"] == "/employee/tasks"
+    assert response.headers["location"] == "/employee/tasks"
 
 
 def test_staff_task_page_only_labels_own_tasks() -> None:
