@@ -28,6 +28,7 @@ def _contrast_ratio(first: str, second: str) -> float:
 def test_no_javascript_navigation_reaches_every_core_admin_page() -> None:
     """脚本加载失败时，小屏导航仍须覆盖全部核心页面。"""
     layout = (ASSET_ROOT / "templates/layouts/admin.html").read_text()
+    assert 'data-drawer inert aria-hidden="true"' in layout
     fallback = layout.split('<details class="no-script-nav">', 1)[1].split("</details>", 1)[0]
 
     expected_links = {
@@ -50,6 +51,9 @@ def test_admin_javascript_contract_covers_accessible_progressive_enhancements() 
     script = (ASSET_ROOT / "static/admin.js").read_text()
 
     assert 'event.key === "Escape"' in script
+    assert 'classList.add("js-enabled")' in script
+    assert "syncDrawerAccessibility" in script
+    assert "drawer.inert = !shouldExpose" in script
     assert "focusBeforeDrawer" in script
     assert "focusBeforeDrawer.focus()" in script
     assert "window.confirm" in script

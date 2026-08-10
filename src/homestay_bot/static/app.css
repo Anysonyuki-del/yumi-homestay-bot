@@ -105,8 +105,9 @@ th { color: var(--muted); font-size: .84rem; }
 .admin-shell { min-height: 100vh; }
 .admin-workspace, .metric-card, .panel, .clean-list li, .diagnostics-list dd { min-width: 0; overflow-wrap: anywhere; }
 .drawer-is-open { overflow: hidden; overscroll-behavior: none; }
-.admin-sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; display: flex; width: min(86vw, 292px); flex-direction: column; padding: 20px 14px; overflow-y: auto; overscroll-behavior: contain; transform: translateX(-105%); color: #fff; background: var(--navy-dark); box-shadow: 12px 0 30px rgb(15 23 42 / 25%); transition: transform 200ms ease; }
-.admin-sidebar.is-open { transform: translateX(0); }
+.admin-sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; display: none; visibility: hidden; width: min(86vw, 292px); flex-direction: column; padding: 20px 14px; overflow-y: auto; overscroll-behavior: contain; transform: translateX(-105%); color: #fff; background: var(--navy-dark); box-shadow: 12px 0 30px rgb(15 23 42 / 25%); transition: transform 200ms ease; }
+.js-enabled .admin-sidebar { display: flex; }
+.admin-sidebar.is-open { visibility: visible; transform: translateX(0); }
 .drawer-backdrop { position: fixed; z-index: 30; inset: 0; background: rgb(15 23 42 / 55%); }
 .brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 24px; font-size: 1.06rem; font-weight: 800; line-height: 1.15; }
 .brand small { color: #cbd5e1; font-size: .72rem; font-weight: 500; }
@@ -118,12 +119,15 @@ th { color: var(--muted); font-size: .84rem; }
 .account-link { margin-top: auto; border-top: 1px solid rgb(255 255 255 / 14%); border-radius: 0; }
 .icon-button { display: inline-grid; width: 44px; min-width: 44px; height: 44px; padding: 0; place-items: center; border: 0; border-radius: 10px; color: var(--navy); background: transparent; }
 .drawer-close { position: absolute; top: 16px; right: 10px; color: #fff; }
+.drawer-trigger { display: none; }
+.js-enabled .drawer-trigger { display: inline-grid; }
 .topbar { position: sticky; z-index: 20; top: 0; display: grid; min-height: 68px; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: rgb(255 255 255 / 94%); backdrop-filter: blur(10px); }
+html:not(.js-enabled) .topbar { grid-template-columns: 1fr 44px; }
 .topbar__eyebrow { margin: 0; }
 .topbar__account { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 50%; background: #eff6ff; }
 .no-script-nav { margin: 12px 14px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .no-script-nav a { display: block; min-height: 44px; padding: 10px 4px; }
-.js .no-script-nav { display: none; }
+.js-enabled .no-script-nav { display: none; }
 .page-content { width: min(100%, 1480px); margin: 0 auto; padding: 18px 14px 40px; }
 .content-header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 6px 0 20px; }
 .alert { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 16px; padding: 13px 15px; border: 1px solid; border-radius: 11px; }
@@ -177,16 +181,16 @@ th { color: var(--muted); font-size: .84rem; }
 }
 
 @media (min-width: 1024px) {
-  .admin-sidebar { transform: none; width: 240px; box-shadow: none; }
-  .admin-workspace { margin-left: 240px; }
-  .drawer-trigger, .drawer-close, .drawer-backdrop, .no-script-nav { display: none !important; }
+  .js-enabled .admin-sidebar { visibility: visible; transform: none; width: 240px; box-shadow: none; }
+  .js-enabled .admin-workspace { margin-left: 240px; }
+  .js-enabled .drawer-trigger, .js-enabled .drawer-close, .js-enabled .drawer-backdrop { display: none !important; }
   .topbar { grid-template-columns: 1fr 44px; }
   .dashboard-grid { grid-template-columns: minmax(0, 1.55fr) minmax(300px, .75fr); }
 }
 
 @media (min-width: 1440px) {
   .admin-sidebar { width: 264px; padding-inline: 20px; }
-  .admin-workspace { margin-left: 264px; }
+  .js-enabled .admin-workspace { margin-left: 264px; }
   .page-content { padding: 34px 40px 64px; }
   .metric-card { min-height: 154px; padding: 21px; }
   .panel { padding: 24px; }

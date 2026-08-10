@@ -1,4 +1,3 @@
-import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, cast
@@ -11,10 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from homestay_bot.domain.enums import EmployeeRole, KnowledgeCandidateStatus
 from homestay_bot.domain.models import AuditLog, KnowledgeCandidate, KnowledgeEntry
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
-from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.routes.employee_auth import (
+    AdminCsrfServicePort,
+    require_employee_session,
+)
+from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/knowledge")
+_MAX_CSRF_TOKENS = 8
+_KNOWLEDGE_CSRF_PURPOSE = "knowledge-write"
 
 
 class KnowledgeAdminServicePort(Protocol):
@@ -252,20 +257,77 @@ async def _require_admin(request: Request) -> int:
     return employee_id
 
 
-def _consume_csrf(request: Request, csrf_token: str) -> None:
-    """校验并立即消耗知识管理一次性 CSRF 令牌。"""
-    expected = request.session.pop("knowledge_csrf", None)
-    if not isinstance(expected, str) or not secrets.compare_digest(
-        expected, csrf_token
-    ):
+def _get_csrf_service(request: Request) -> AdminCsrfServicePort:
+    """读取服务端 nonce 服务，避免把可覆盖的 Cookie 当作安全真值。"""
+    service = getattr(request.app.state, "admin_csrf_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="表单安全服务尚未配置")
+    return cast(AdminCsrfServicePort, service)
+
+
+def _csrf_admin_id(request: Request) -> int:
+    """读取已由员工会话复核过的管理员主体编号。"""
+    admin_id = request.session.get("admin_id")
+    if not isinstance(admin_id, int):
+        raise HTTPException(status_code=401, detail="管理员尚未登录")
+    return admin_id
+
+
+async def _consume_csrf(request: Request, csrf_token: str) -> None:
+    """按知识用途和管理员主体原子消费服务端一次性 nonce。"""
+    consumed = await _get_csrf_service(request).consume(
+        csrf_token,
+        _KNOWLEDGE_CSRF_PURPOSE,
+        admin_id=_csrf_admin_id(request),
+    )
+    # Cookie 集合只用于兼容旧页面和控制体积，绝不参与授权判断。
+    tokens = _csrf_tokens(request)
+    request.session["knowledge_csrf"] = [
+        token for token in tokens if token != csrf_token
+    ]
+    if not consumed:
         raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
 
 
-def _issue_csrf(request: Request) -> str:
-    """签发知识管理页面共享的一次性 CSRF 令牌。"""
-    token = secrets.token_urlsafe(24)
-    request.session["knowledge_csrf"] = token
+async def _issue_csrf(request: Request) -> str:
+    """签发服务端知识 nonce，并把 Cookie 兼容集合限制为最近八个。"""
+    service = _get_csrf_service(request)
+    admin_id = _csrf_admin_id(request)
+    try:
+        token = await service.issue(
+            _KNOWLEDGE_CSRF_PURPOSE,
+            admin_id=admin_id,
+        )
+    except AdminCsrfCapacityError as error:
+        raise HTTPException(status_code=429, detail="表单请求过于频繁") from error
+    tokens = _csrf_tokens(request)
+    tokens.append(token)
+    # 顺序浏览产生第九个 nonce 时同步撤销最旧项，服务端也保持同一有界窗口。
+    for expired_token in tokens[:-_MAX_CSRF_TOKENS]:
+        await service.consume(
+            expired_token,
+            _KNOWLEDGE_CSRF_PURPOSE,
+            admin_id=admin_id,
+        )
+    request.session["knowledge_csrf"] = tokens[-_MAX_CSRF_TOKENS:]
     return token
+
+
+def _csrf_tokens(request: Request) -> list[str]:
+    """安全归一化新旧会话中的知识令牌，并拒绝异常会话结构。"""
+    stored = request.session.get("knowledge_csrf", [])
+    # 兼容升级前仍存活的单值会话，避免部署后无故使已有表单失效。
+    if isinstance(stored, str):
+        raw_tokens: list[object] = [stored]
+    elif isinstance(stored, list):
+        raw_tokens = stored
+    else:
+        raw_tokens = []
+    return [
+        token
+        for token in raw_tokens
+        if isinstance(token, str) and 1 <= len(token) <= 128
+    ][-_MAX_CSRF_TOKENS:]
 
 
 def _fields(
@@ -309,7 +371,7 @@ async def knowledge_index(
         if role is EmployeeRole.ADMIN
         else []
     )
-    csrf_token = _issue_csrf(request)
+    csrf_token = await _issue_csrf(request) if role is EmployeeRole.ADMIN else ""
     return templates.TemplateResponse(
         request=request,
         name="knowledge/index.html",
@@ -348,7 +410,9 @@ async def knowledge_detail(request: Request, entry_id: int) -> Response:
         context={
             "entry": entry,
             "can_edit": role is EmployeeRole.ADMIN,
-            "csrf_token": _issue_csrf(request),
+            "csrf_token": (
+                await _issue_csrf(request) if role is EmployeeRole.ADMIN else ""
+            ),
             "page_title": f"知识条目 #{entry_id}",
             "active_nav": "knowledge",
         },
@@ -368,7 +432,7 @@ async def create_knowledge(
 ) -> RedirectResponse:
     """管理员新增一条同时包含中英文内容的审核知识。"""
     employee_id = await _require_admin(request)
-    _consume_csrf(request, csrf_token)
+    await _consume_csrf(request, csrf_token)
     await _get_service(request).create(
         employee_id,
         **_fields(
@@ -399,7 +463,7 @@ async def convert_candidate(
 ) -> RedirectResponse:
     """管理员修改候选草稿后创建并启用正式双语知识。"""
     employee_id = await _require_admin(request)
-    _consume_csrf(request, csrf_token)
+    await _consume_csrf(request, csrf_token)
     await _get_service(request).convert_candidate(
         candidate_id,
         employee_id,
@@ -425,7 +489,7 @@ async def snooze_candidate(
 ) -> RedirectResponse:
     """管理员暂不收录候选，并关闭该主题三十天。"""
     employee_id = await _require_admin(request)
-    _consume_csrf(request, csrf_token)
+    await _consume_csrf(request, csrf_token)
     await _get_service(request).snooze_candidate(candidate_id, employee_id)
     return RedirectResponse(
         "/employee/knowledge", status_code=status.HTTP_303_SEE_OTHER
@@ -446,7 +510,7 @@ async def update_knowledge(
 ) -> RedirectResponse:
     """管理员编辑指定双语知识。"""
     employee_id = await _require_admin(request)
-    _consume_csrf(request, csrf_token)
+    await _consume_csrf(request, csrf_token)
     await _get_service(request).update(
         entry_id,
         employee_id,
@@ -475,7 +539,7 @@ async def toggle_knowledge(
     if action not in {"enable", "disable"}:
         raise HTTPException(status_code=404, detail="未知知识操作")
     employee_id = await _require_admin(request)
-    _consume_csrf(request, csrf_token)
+    await _consume_csrf(request, csrf_token)
     await _get_service(request).set_enabled(
         entry_id, employee_id, enabled=action == "enable"
     )

@@ -1,19 +1,30 @@
 "use strict";
 
-document.documentElement.classList.add("js");
+document.documentElement.classList.add("js-enabled");
 
 const drawer = document.querySelector("[data-drawer]");
 const drawerTrigger = document.querySelector("[data-drawer-open]");
 const drawerClosers = document.querySelectorAll("[data-drawer-close]");
 const drawerBackdrop = document.querySelector(".drawer-backdrop");
 const workspace = document.querySelector(".admin-workspace");
+const desktopBreakpoint = window.matchMedia("(min-width: 1024px)");
 let focusBeforeDrawer = null;
+
+/** 根据断点和开关状态同步抽屉的可访问树状态。 */
+function syncDrawerAccessibility() {
+  if (!drawer) return;
+  const shouldExpose = desktopBreakpoint.matches || drawer.classList.contains("is-open");
+  drawer.inert = !shouldExpose;
+  if (shouldExpose) drawer.removeAttribute("aria-hidden");
+  else drawer.setAttribute("aria-hidden", "true");
+}
 
 /** 打开移动导航并把键盘焦点移到关闭按钮。 */
 function openDrawer() {
   if (!drawer || !drawerTrigger || !drawerBackdrop || !workspace) return;
   focusBeforeDrawer = document.activeElement;
   drawer.classList.add("is-open");
+  syncDrawerAccessibility();
   drawerTrigger.setAttribute("aria-expanded", "true");
   drawerBackdrop.hidden = false;
   workspace.inert = true;
@@ -23,7 +34,7 @@ function openDrawer() {
 }
 
 /** 关闭移动导航并恢复触发前焦点。 */
-function closeDrawer() {
+function closeDrawer(restoreFocus = true) {
   if (!drawer || !drawerTrigger || !drawerBackdrop || !workspace) return;
   drawer.classList.remove("is-open");
   drawerTrigger.setAttribute("aria-expanded", "false");
@@ -31,15 +42,17 @@ function closeDrawer() {
   workspace.inert = false;
   workspace.removeAttribute("aria-hidden");
   document.body.classList.remove("drawer-is-open");
-  if (focusBeforeDrawer instanceof HTMLElement) focusBeforeDrawer.focus();
+  syncDrawerAccessibility();
+  if (restoreFocus && focusBeforeDrawer instanceof HTMLElement) focusBeforeDrawer.focus();
 }
 
 drawerTrigger?.addEventListener("click", openDrawer);
 drawerClosers.forEach((element) => element.addEventListener("click", closeDrawer));
-const desktopBreakpoint = window.matchMedia("(min-width: 1024px)");
 desktopBreakpoint.addEventListener("change", (event) => {
-  if (event.matches && drawer?.classList.contains("is-open")) closeDrawer();
+  if (event.matches && drawer?.classList.contains("is-open")) closeDrawer(false);
+  else syncDrawerAccessibility();
 });
+syncDrawerAccessibility();
 document.addEventListener("keydown", (event) => {
   if (!drawer?.classList.contains("is-open")) return;
   if (event.key === "Escape") {
@@ -70,6 +83,22 @@ document.querySelectorAll("form[data-confirm]").forEach((form) => {
 });
 
 const dirtyForms = new Set();
+
+document.querySelectorAll("form").forEach((form) => {
+  form.addEventListener("submit", (event) => {
+    if (event.defaultPrevented) return;
+    // 提交一个表单前，必须明确处理同页其它表单尚未保存的内容。
+    const hasOtherDirtyForm = [...dirtyForms].some((dirtyForm) => dirtyForm !== form);
+    if (!hasOtherDirtyForm) return;
+    const discardConfirmed = window.confirm("当前页面还有其它未保存内容，继续提交将丢弃这些修改。确定继续吗？");
+    if (!discardConfirmed) {
+      event.preventDefault();
+      return;
+    }
+    dirtyForms.clear();
+  });
+});
+
 document.querySelectorAll("form[data-unsaved-warning]").forEach((form) => {
   form.addEventListener("input", () => { dirtyForms.add(form); });
   form.addEventListener("submit", (event) => {

@@ -177,6 +177,12 @@ def build_client(
         request.session["last_activity_at"] = datetime.now(UTC).isoformat()
         return {"ok": True}
 
+    @app.post("/test/clear-knowledge-csrf")
+    async def clear_knowledge_csrf(request: Request) -> dict[str, bool]:
+        """模拟浏览器删改兼容字段，验证授权只依赖服务端 nonce。"""
+        request.session.pop("knowledge_csrf", None)
+        return {"ok": True}
+
     client = TestClient(app)
     client.post("/test/login")
     return client, service
@@ -217,6 +223,189 @@ def test_knowledge_pages_use_admin_shell_and_detail_respects_role() -> None:
     assert 'action="/employee/knowledge/1/edit"' not in staff_detail.text
     assert "下午三点后" in staff_detail.text
     assert missing.status_code == 404
+
+
+def test_knowledge_csrf_tokens_survive_navigation_and_remain_single_use() -> None:
+    """列表和详情签发的令牌应并存，且各自仍只能成功使用一次。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    index = client.get("/employee/knowledge")
+    index_token = re.search(
+        r'name="csrf_token" value="([^"]+)"', index.text
+    ).group(1)
+    detail = client.get("/employee/knowledge/1")
+    detail_token = re.search(
+        r'name="csrf_token" value="([^"]+)"', detail.text
+    ).group(1)
+
+    created = client.post(
+        "/employee/knowledge",
+        data={
+            "category": "交通",
+            "question_zh": "怎么到民宿？",
+            "answer_zh": "请按导航前往。",
+            "question_en": "How can I get there?",
+            "answer_en": "Please follow the map.",
+            "keywords": "交通",
+            "csrf_token": index_token,
+        },
+        follow_redirects=False,
+    )
+    replayed = client.post(
+        "/employee/knowledge",
+        data={
+            "category": "重放",
+            "question_zh": "重放",
+            "answer_zh": "重放",
+            "question_en": "Replay",
+            "answer_en": "Replay",
+            "keywords": "",
+            "csrf_token": index_token,
+        },
+        follow_redirects=False,
+    )
+    edited = client.post(
+        "/employee/knowledge/1/edit",
+        data={
+            "category": "入住",
+            "question_zh": "几点可以入住？",
+            "answer_zh": "下午三点后。",
+            "question_en": "When is check-in?",
+            "answer_en": "After 3 PM.",
+            "keywords": "入住",
+            "csrf_token": detail_token,
+        },
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    assert replayed.status_code == 409
+    assert edited.status_code == 303
+    assert service.entries[0].question_zh == "几点可以入住？"
+
+
+def test_knowledge_csrf_token_collection_is_bounded() -> None:
+    """连续打开页面时只保留最近八个令牌，避免会话无限增长。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    tokens = []
+    for _ in range(9):
+        response = client.get("/employee/knowledge")
+        tokens.append(
+            re.search(
+                r'name="csrf_token" value="([^"]+)"', response.text
+            ).group(1)
+        )
+
+    oldest = client.post(
+        "/employee/knowledge/1/disable",
+        data={"csrf_token": tokens[0]},
+    )
+    newest = client.post(
+        "/employee/knowledge/1/disable",
+        data={"csrf_token": tokens[-1]},
+    )
+
+    assert oldest.status_code == 409
+    assert newest.status_code == 204
+
+
+def test_knowledge_csrf_survives_interleaved_get_cookie_updates() -> None:
+    """两个页面从同一旧 Cookie 签发时，先返回页面的 nonce 仍必须有效。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    original_cookies = dict(client.cookies)
+
+    client.cookies.clear()
+    client.cookies.update(original_cookies)
+    index = client.get("/employee/knowledge")
+    index_token = re.search(
+        r'name="csrf_token" value="([^"]+)"', index.text
+    ).group(1)
+
+    # 模拟详情 GET 与列表 GET 同时读取签发前的同一份 Cookie，且详情响应最后落盘。
+    client.cookies.clear()
+    client.cookies.update(original_cookies)
+    client.get("/employee/knowledge/1")
+    submitted = client.post(
+        "/employee/knowledge/1/disable",
+        data={"csrf_token": index_token},
+    )
+
+    assert submitted.status_code == 204
+
+
+def test_knowledge_csrf_is_atomically_consumed_across_same_cookie_posts() -> None:
+    """两个 POST 复用同一旧 Cookie 和 nonce 时，服务端只能接受其中一个。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    page = client.get("/employee/knowledge")
+    token = re.search(
+        r'name="csrf_token" value="([^"]+)"', page.text
+    ).group(1)
+    csrf_service = client.app.state.admin_csrf_service
+    assert csrf_service.pending[token] == ("knowledge-write", 1)
+    unconsumed_cookies = dict(client.cookies)
+    payload = {
+        "category": "交通",
+        "question_zh": "怎么到民宿？",
+        "answer_zh": "请按导航前往。",
+        "question_en": "How can I get there?",
+        "answer_en": "Please follow the map.",
+        "keywords": "交通",
+        "csrf_token": token,
+    }
+
+    first = client.post(
+        "/employee/knowledge", data=payload, follow_redirects=False
+    )
+    # 恢复未消费 Cookie，模拟另一个并发请求已经携带同一份请求头发出。
+    client.cookies.clear()
+    client.cookies.update(unconsumed_cookies)
+    second = client.post(
+        "/employee/knowledge", data=payload, follow_redirects=False
+    )
+
+    assert first.status_code == 303
+    assert second.status_code == 409
+    assert len(service.entries) == 2
+
+
+def test_knowledge_csrf_cookie_metadata_is_not_an_authorization_source() -> None:
+    """删除 Cookie 内兼容集合后，服务端 nonce 仍应成功一次且只能成功一次。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    page = client.get("/employee/knowledge")
+    token = re.search(
+        r'name="csrf_token" value="([^"]+)"', page.text
+    ).group(1)
+    client.post("/test/clear-knowledge-csrf")
+
+    first = client.post(
+        "/employee/knowledge/1/disable", data={"csrf_token": token}
+    )
+    replay = client.post(
+        "/employee/knowledge/1/disable", data={"csrf_token": token}
+    )
+
+    assert first.status_code == 204
+    assert replay.status_code == 409
+
+
+def test_admin_shell_navigation_is_trimmed_for_staff_role() -> None:
+    """员工两套导航只显示其真实可访问页面，管理员仍保留全部入口。"""
+    staff, _ = build_client(EmployeeRole.STAFF)
+    admin, _ = build_client(EmployeeRole.ADMIN)
+
+    staff_page = staff.get("/employee/knowledge")
+    admin_page = admin.get("/employee/knowledge")
+
+    for allowed in ("/employee/tasks", "/employee/knowledge", "/employee/account"):
+        assert allowed in staff_page.text
+    for forbidden in (
+        "/employee/admin",
+        "/employee/properties",
+        "/employee/customers",
+        "/employee/approvals",
+        "/employee/admin/diagnostics",
+    ):
+        assert forbidden not in staff_page.text
+        assert forbidden in admin_page.text
 
 
 def test_knowledge_index_orders_filters_candidates_and_entries() -> None:
