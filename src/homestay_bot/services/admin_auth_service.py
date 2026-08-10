@@ -106,6 +106,16 @@ class AdminCredentialRepository(Protocol):
     ) -> int | None:
         """按密码哈希和当前版本 CAS 原子撤销其他会话。"""
 
+    async def reverify_at_version(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        expected_session_version: int,
+        now: datetime,
+    ) -> bool:
+        """按密码哈希和页面会话版本 CAS 记录二次认证。"""
+
 
 class AdminAuthService:
     """实现唯一管理员的 Argon2id 校验、锁定、改密和会话撤销。"""
@@ -211,6 +221,29 @@ class AdminAuthService:
             replacement_password_hash=None,
         )
         if authenticated is None:
+            raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
+
+    async def reverify_at_version(
+        self,
+        admin_id: int,
+        password: str,
+        expected_session_version: int,
+    ) -> None:
+        """校验密码后再用会话版本 CAS，阻止改密并发穿越敏感操作。"""
+        now = _as_utc(self._clock())
+        credential = await self._require_admin(admin_id)
+        if _is_locked(credential, now):
+            raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
+        if not await self._verify(credential.password_hash, password):
+            await self._record_failure(admin_id, now)
+            raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
+        verified = await self._repository.reverify_at_version(
+            admin_id,
+            expected_password_hash=credential.password_hash,
+            expected_session_version=expected_session_version,
+            now=now,
+        )
+        if not verified:
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
 
     async def revoke_other_sessions(self, admin_id: int) -> int:

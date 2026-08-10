@@ -148,6 +148,33 @@ async def test_issue_rejects_when_active_nonce_capacity_is_full() -> None:
 
 
 @pytest.mark.asyncio
+async def test_csrf_limits_each_admin_purpose_to_eight_parallel_tabs() -> None:
+    """同一管理员同一动作最多保留八个 nonce，其他动作仍有独立容量。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 11, 12, tzinfo=UTC)
+    async with factory() as session:
+        service = AdminCsrfService(
+            SQLAlchemyAdminCsrfRepository(session),
+            clock=lambda: now,
+            max_active=100,
+            max_active_per_scope=8,
+        )
+        for _ in range(8):
+            await service.issue("runtime-config-activate", admin_id=1)
+        with pytest.raises(AdminCsrfCapacityError):
+            await service.issue("runtime-config-activate", admin_id=1)
+
+        other_purpose = await service.issue("runtime-config-rollback", admin_id=1)
+        other_admin = await service.issue("runtime-config-activate", admin_id=2)
+        assert other_purpose
+        assert other_admin
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_two_services_atomically_share_database_nonce_capacity(tmp_path) -> None:
     """两个独立服务在最后一个配额槽位并发签发时只能一个成功。"""
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'quota.db'}?timeout=30"

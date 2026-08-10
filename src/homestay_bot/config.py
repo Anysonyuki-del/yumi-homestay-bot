@@ -5,13 +5,31 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-    """集中加载外部服务密钥和运行参数。"""
+class BootstrapSettings(BaseSettings):
+    """加载禁止网页修改且足以启动登录和配置修复页的基础参数。"""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str
     public_base_url: str
+    session_secret: str = Field(min_length=32)
+    data_encryption_key: str = Field(min_length=44, max_length=44)
+    config_encryption_key: str | None = Field(default=None, min_length=44, max_length=44)
+    admin_bootstrap_username: str | None = Field(default=None, min_length=1, max_length=128)
+    admin_bootstrap_password_hash: str | None = None
+    private_upload_dir: Path = Path("data/private_uploads")
+    private_upload_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+        le=25 * 1024 * 1024,
+    )
+
+
+class RuntimeEnvironmentSettings(BaseSettings):
+    """加载可进入数据库加密快照的外部业务 API 参数。"""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     deepseek_api_key: str
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
@@ -27,22 +45,15 @@ class Settings(BaseSettings):
     wecom_contact_secret: str | None = None
     wecom_duty_userids: str
     wecom_poll_interval_seconds: float = Field(default=60, ge=5, le=300)
-    session_secret: str = Field(min_length=32)
-    data_encryption_key: str = Field(min_length=44, max_length=44)
-    config_encryption_key: str | None = Field(default=None, min_length=44, max_length=44)
-    admin_bootstrap_username: str | None = Field(default=None, min_length=1, max_length=128)
-    admin_bootstrap_password_hash: str | None = None
-    private_upload_dir: Path = Path("data/private_uploads")
-    private_upload_max_bytes: int = Field(
-        default=10 * 1024 * 1024,
-        ge=1024,
-        le=25 * 1024 * 1024,
-    )
 
     @property
     def deepseek_anthropic_base_url(self) -> str:
         """从唯一 DeepSeek 根地址派生 Anthropic 兼容地址。"""
         return f"{self.deepseek_base_url.rstrip('/')}/anthropic"
+
+
+class Settings(BootstrapSettings, RuntimeEnvironmentSettings):
+    """兼容既有完整启动路径的基础参数与外部运行参数联合模型。"""
 
 
 @lru_cache

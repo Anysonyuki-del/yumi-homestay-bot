@@ -38,10 +38,10 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "FOREIGN KEY(employee_id) REFERENCES employees (id) ON DELETE CASCADE" in (result.stdout)
 
 
-def test_sqlite_admin_migrations_replay_through_dashboard_indexes(
+def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     tmp_path: Path,
 ) -> None:
-    """真实 SQLite 必须支持升级、逐级降级 0016 后再次升级。"""
+    """真实 SQLite 必须支持升级、逐级降级 0017 后再次升级。"""
     project_root = Path(__file__).resolve().parents[2]
     database_path = tmp_path / "migration-replay.db"
     environment = dict(os.environ)
@@ -74,6 +74,14 @@ def test_sqlite_admin_migrations_replay_through_dashboard_indexes(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
             ("runtime_config_state",),
         ).fetchone()[0]
+        version_ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("runtime_config_versions",),
+        ).fetchone()[0]
+        state_row = connection.execute(
+            "SELECT active_version_id, previous_version_id, revision "
+            "FROM runtime_config_state WHERE id = 1"
+        ).fetchone()
         quota_ddl = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
             ("admin_csrf_quota",),
@@ -105,6 +113,10 @@ def test_sqlite_admin_migrations_replay_through_dashboard_indexes(
     assert "ck_admin_csrf_quota_nonnegative" in quota_ddl
     assert quota_count == 0
     assert "ck_runtime_config_state_singleton" in state_ddl
+    assert "ck_runtime_config_state_revision_nonnegative" in state_ddl
+    assert "ck_runtime_config_state_distinct_pointers" in state_ddl
+    assert "fk_runtime_config_versions_based_on" in version_ddl
+    assert state_row == (None, None, 0)
     assert any(row[1] == "ix_admin_credentials_username" and row[2] for row in admin_indexes)
     assert any(row[1] == "ix_admin_csrf_nonces_token_hash" and row[2] for row in csrf_indexes)
     assert any(row[1] == "ix_admin_csrf_nonces_expires_at" for row in csrf_indexes)
@@ -113,6 +125,18 @@ def test_sqlite_admin_migrations_replay_through_dashboard_indexes(
     assert any(row[2] == "employees" and row[3] == "employee_id" for row in admin_foreign_keys)
     assert any(row[2] == "admin_credentials" and row[3] == "admin_id" for row in csrf_foreign_keys)
     assert sum(row[2] == "runtime_config_versions" for row in state_foreign_keys) == 2
+
+    lifecycle_downgrade = run_alembic(
+        "downgrade",
+        "0016_admin_dashboard_indexes",
+    )
+    assert lifecycle_downgrade.returncode == 0, lifecycle_downgrade.stderr
+    with sqlite3.connect(database_path) as connection:
+        version_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info('runtime_config_versions')")
+        }
+    assert "status" not in version_columns
+    assert "based_on_revision" not in version_columns
 
     dashboard_downgrade = run_alembic("downgrade", "0015_admin_runtime_config")
     assert dashboard_downgrade.returncode == 0, dashboard_downgrade.stderr
@@ -142,4 +166,4 @@ def test_sqlite_admin_migrations_replay_through_dashboard_indexes(
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0016_admin_dashboard_indexes (head)" in current.stdout
+    assert "0017_runtime_config_lifecycle (head)" in current.stdout

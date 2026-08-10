@@ -125,6 +125,27 @@ class MemoryAdminCredentialRepository:
         credential.last_authenticated_at = now
         return credential.session_version
 
+    async def reverify_at_version(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        expected_session_version: int,
+        now: datetime,
+    ) -> bool:
+        """按密码哈希和页面会话版本模拟不递增版本的认证 CAS。"""
+        credential = await self.get_by_id(admin_id)
+        if (
+            credential is None
+            or credential.password_hash != expected_password_hash
+            or credential.session_version != expected_session_version
+        ):
+            return False
+        credential.failed_attempts = 0
+        credential.locked_until = None
+        credential.last_authenticated_at = now
+        return True
+
 
 def _credential(password: str = "initial-password") -> AdminCredential:
     """创建使用 Argon2id 的单例测试管理员。"""
@@ -265,6 +286,20 @@ async def test_revoke_other_sessions_increments_and_returns_session_version() ->
 
     assert version == 2
     assert credential.session_version == 2
+
+
+@pytest.mark.asyncio
+async def test_reverify_at_version_rejects_stale_session_without_mutating_version() -> None:
+    """敏感操作复核必须绑定页面会话版本，且成功不能自行撤销会话。"""
+    credential = _credential()
+    credential.session_version = 4
+    service = AdminAuthService(MemoryAdminCredentialRepository(credential))
+
+    await service.reverify_at_version(1, "initial-password", 4)
+    assert credential.session_version == 4
+
+    with pytest.raises(AuthenticationError):
+        await service.reverify_at_version(1, "initial-password", 3)
 
 
 @pytest.mark.asyncio

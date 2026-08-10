@@ -38,6 +38,7 @@ from homestay_bot.domain.enums import (
     ReminderStatus,
     ReminderType,
     RoomOperationalStatus,
+    RuntimeConfigVersionStatus,
 )
 
 
@@ -137,6 +138,18 @@ class RuntimeConfigVersion(Base):
     encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     masked_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    status: Mapped[RuntimeConfigVersionStatus] = mapped_column(
+        Enum(RuntimeConfigVersionStatus, native_enum=False, length=32),
+        default=RuntimeConfigVersionStatus.CANDIDATE,
+        nullable=False,
+    )
+    test_results: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    based_on_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runtime_config_versions.id"), nullable=True
+    )
+    based_on_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -146,7 +159,15 @@ class RuntimeConfigState(TimestampMixin, Base):
     """以单例指针保存当前、上一配置版本和乐观锁修订号。"""
 
     __tablename__ = "runtime_config_state"
-    __table_args__ = (CheckConstraint("id = 1", name="ck_runtime_config_state_singleton"),)
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_runtime_config_state_singleton"),
+        CheckConstraint("revision >= 0", name="ck_runtime_config_state_revision_nonnegative"),
+        CheckConstraint(
+            "active_version_id IS NULL OR previous_version_id IS NULL "
+            "OR active_version_id <> previous_version_id",
+            name="ck_runtime_config_state_distinct_pointers",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     active_version_id: Mapped[int | None] = mapped_column(

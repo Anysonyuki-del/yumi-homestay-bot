@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import case, delete, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,7 @@ class SQLAlchemyAdminCsrfRepository:
         now: datetime,
         purge_limit: int,
         max_active: int,
+        max_active_per_scope: int,
     ) -> bool:
         """同一事务清理、预占数据库配额并写入 nonce。"""
         await self._ensure_quota()
@@ -41,6 +42,21 @@ class SQLAlchemyAdminCsrfRepository:
             .returning(AdminCsrfQuota.active_count)
         )
         if reserved is None:
+            return False
+        admin_condition = (
+            AdminCsrfNonce.admin_id.is_(None)
+            if admin_id is None
+            else AdminCsrfNonce.admin_id == admin_id
+        )
+        scope_count = await self._session.scalar(
+            select(func.count(AdminCsrfNonce.id)).where(
+                AdminCsrfNonce.purpose == purpose,
+                admin_condition,
+                AdminCsrfNonce.expires_at > now,
+            )
+        )
+        if int(scope_count or 0) >= max_active_per_scope:
+            await self._decrement_quota(1)
             return False
         self._session.add(
             AdminCsrfNonce(

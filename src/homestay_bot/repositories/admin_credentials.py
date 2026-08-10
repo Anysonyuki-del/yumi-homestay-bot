@@ -182,6 +182,36 @@ class SQLAlchemyAdminCredentialRepository:
         version = await self._session.scalar(statement)
         return int(version) if version is not None else None
 
+    async def reverify_at_version(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        expected_session_version: int,
+        now: datetime,
+    ) -> bool:
+        """以密码哈希和会话版本为 CAS 条件原子记录二次认证成功。"""
+        statement = (
+            update(AdminCredential)
+            .where(
+                AdminCredential.id == admin_id,
+                AdminCredential.password_hash == expected_password_hash,
+                AdminCredential.session_version == expected_session_version,
+                or_(
+                    AdminCredential.locked_until.is_(None),
+                    AdminCredential.locked_until <= now,
+                ),
+            )
+            .values(
+                failed_attempts=0,
+                locked_until=None,
+                last_authenticated_at=now,
+                updated_at=func.now(),
+            )
+            .returning(AdminCredential.id)
+        )
+        return await self._session.scalar(statement) is not None
+
     async def bootstrap(
         self,
         *,

@@ -130,6 +130,15 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
+class RuntimeConfigVersionStatus(StrEnum):
+    """描述配置候选从待测试到测试或激活冲突的生命周期。"""
+
+    CANDIDATE = "candidate"
+    TEST_FAILED = "test_failed"
+    TEST_PASSED = "test_passed"
+    ACTIVATION_CONFLICT = "activation_conflict"
+
+
 class KnowledgeCandidateStatus(StrEnum):
     """表示高频 FAQ 候选是否继续统计或已结束处理。"""
 

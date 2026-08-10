@@ -18,6 +18,7 @@ class AdminCsrfRepository(Protocol):
         now: datetime,
         purge_limit: int,
         max_active: int,
+        max_active_per_scope: int,
     ) -> bool:
         """原子预占数据库配额并保存 nonce 摘要。"""
 
@@ -34,6 +35,7 @@ class AdminCsrfRepository(Protocol):
     async def purge_expired(self, *, now: datetime, limit: int) -> int:
         """有界清理过期 nonce。"""
 
+
 class AdminCsrfCapacityError(RuntimeError):
     """表示活动 nonce 已达到应用硬上限。"""
 
@@ -48,6 +50,7 @@ class AdminCsrfService:
         clock: Callable[[], datetime] | None = None,
         ttl: timedelta = timedelta(minutes=15),
         max_active: int = 1000,
+        max_active_per_scope: int = 8,
         purge_limit: int = 100,
     ) -> None:
         """注入仓储、UTC 时钟和短有效期。"""
@@ -55,6 +58,7 @@ class AdminCsrfService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._ttl = ttl
         self._max_active = max_active
+        self._max_active_per_scope = max_active_per_scope
         self._purge_limit = purge_limit
 
     async def issue(self, purpose: str, *, admin_id: int | None) -> str:
@@ -69,6 +73,7 @@ class AdminCsrfService:
             now=now,
             purge_limit=self._purge_limit,
             max_active=self._max_active,
+            max_active_per_scope=self._max_active_per_scope,
         )
         if not created:
             raise AdminCsrfCapacityError("认证表单容量已满")

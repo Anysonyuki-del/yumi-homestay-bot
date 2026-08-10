@@ -2,7 +2,7 @@ import pytest
 from argon2 import PasswordHasher, Type
 from pydantic import ValidationError
 
-from homestay_bot.config import Settings
+from homestay_bot.config import BootstrapSettings, RuntimeEnvironmentSettings, Settings
 
 
 def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
@@ -170,3 +170,46 @@ def test_settings_defers_forged_argon2id_prefix_to_bootstrap(monkeypatch) -> Non
         _env_file=None,
     )
     assert settings.admin_bootstrap_password_hash == "$argon2id$plaintext"
+
+
+def test_bootstrap_settings_do_not_require_external_api_credentials() -> None:
+    """数据库、会话和加密边界完整时，外部 API 缺失不能阻止后台启动。"""
+    settings = BootstrapSettings(
+        database_url="sqlite+aiosqlite:///test.db",
+        public_base_url="https://local.example",
+        session_secret="s" * 32,
+        data_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        config_encryption_key="MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=",
+        _env_file=None,
+    )
+
+    assert settings.database_url.endswith("test.db")
+    assert not hasattr(settings, "deepseek_api_key")
+
+
+def test_runtime_environment_settings_only_contain_web_editable_external_fields() -> None:
+    """运行环境投影不得包含数据库、域名、会话或任何主加密密钥。"""
+    runtime = RuntimeEnvironmentSettings(
+        deepseek_api_key="deepseek",
+        hostex_access_token="hostex",
+        hostex_webhook_secret_token="hostex-webhook",
+        wecom_corp_id="corp",
+        wecom_kf_secret="kf",
+        wecom_callback_token="callback",
+        wecom_encoding_aes_key="A" * 43,
+        wecom_agent_id=1,
+        wecom_agent_secret="agent",
+        wecom_duty_userids="owner",
+        _env_file=None,
+    )
+
+    dumped = runtime.model_dump()
+    assert "deepseek_api_key" in dumped
+    for immutable in (
+        "database_url",
+        "public_base_url",
+        "session_secret",
+        "data_encryption_key",
+        "config_encryption_key",
+    ):
+        assert immutable not in dumped
