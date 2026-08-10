@@ -201,6 +201,30 @@ def test_admin_page_never_echoes_room_password(tmp_path) -> None:
     assert 'name="password" value=' not in response.text
 
 
+def test_property_pages_use_admin_shell_and_protect_credential_replacement(
+    tmp_path,
+) -> None:
+    """房源页面应激活导航，并警告未保存资料和凭证替换风险。"""
+    client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+
+    index = client.get("/employee/properties")
+    detail = client.get("/employee/properties/101")
+
+    assert '/static/admin.js' in index.text
+    assert 'href="/employee/properties" aria-current="page"' in detail.text
+    assert 'class="property-grid"' in index.text
+    assert detail.text.count('data-unsaved-warning') >= 2
+    assert (
+        'action="/employee/properties/101/credentials" data-confirm='
+        in detail.text
+    )
+    assert 'name="password" value=' not in detail.text
+    assert 'name="guide">入住后' not in detail.text
+    assert 'name="password" maxlength="256"' in detail.text
+    assert 'name="room_number" value="" maxlength="64"' in detail.text
+
+
 def test_admin_updates_profile_and_replaces_credentials(tmp_path) -> None:
     """管理员可通过一次性令牌更新资料并上传新版私有凭证。"""
     client, service = build_client(EmployeeRole.ADMIN, tmp_path)

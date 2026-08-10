@@ -201,6 +201,8 @@ async def customer_index(
                 if len(customers) > 50
                 else None
             ),
+            "page_title": "客户管理",
+            "active_nav": "customers",
         },
     )
 
@@ -229,6 +231,8 @@ async def customer_merge_detail(
                 namespace="customer_merge_csrf",
                 object_id=suggestion_id,
             ),
+            "page_title": "复核客户合并",
+            "active_nav": "customers",
         },
     )
 
@@ -306,6 +310,8 @@ async def customer_detail(
                 namespace="customer_csrf",
                 object_id=customer_id,
             ),
+            "page_title": detail["customer"].display_name,
+            "active_nav": "customers",
         },
     )
 

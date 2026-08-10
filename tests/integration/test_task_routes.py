@@ -222,6 +222,26 @@ def test_admin_sees_all_tasks_and_assignment_form() -> None:
     assert 'name="assigned_employee_id"' in detail.text
 
 
+def test_task_pages_use_admin_shell_and_protect_risky_forms() -> None:
+    """任务列表和详情应进入统一后台，并明确保护编辑与破坏性操作。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    index = client.get("/employee/tasks")
+    detail = client.get("/employee/tasks/1")
+
+    assert '/static/admin.js' in index.text
+    assert 'href="/employee/tasks" aria-current="page"' in index.text
+    assert '<title>全部待办任务 · YuMi 管理后台</title>' in index.text
+    assert 'data-unsaved-warning' in detail.text
+    assert 'action="/employee/tasks/1/transition" data-confirm=' in detail.text
+
+    tasks.item.status = BusinessTaskStatus.COMPLETED
+    tasks.item.description = "安全长文本"
+    completed = client.get("/employee/tasks/1")
+    assert 'class="detail-section' in completed.text
+
+
 def test_task_list_uses_bounded_pagination() -> None:
     """任务第二页必须按固定边界查询并展示前后页入口。"""
     client, tasks = build_client(EmployeeRole.ADMIN)

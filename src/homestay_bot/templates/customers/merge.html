@@ -1,53 +1,8 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>复核客户合并</title>
-    <link rel="stylesheet" href="/static/app.css">
-  </head>
-  <body>
-    <main class="card">
-      <a class="back-link" href="/employee/customers">← 返回客户列表</a>
-      <header class="page-header">
-        <p class="eyebrow">合并建议 #{{ suggestion.id }}</p>
-        <h1>复核客户合并</h1>
-        <p>仅当确认是同一位客户时才合并。来源档案将停用，目标档案将保留。</p>
-      </header>
+{% extends "layouts/admin.html" %}
 
-      <div class="compare-grid">
-        <section class="action-panel">
-          <h2>来源档案将停用</h2>
-          <p><strong>{{ source.display_name }}（客户 #{{ source.id }}）</strong></p>
-          <p>
-            关联内容：身份 {{ source.identity_count }} 个，
-            会话 {{ source.conversation_count }} 个，
-            订单 {{ source.order_count }} 笔，
-            任务 {{ source.task_count }} 项
-          </p>
-        </section>
-        <section class="action-panel">
-          <h2>目标档案将保留</h2>
-          <p><strong>{{ target.display_name }}（客户 #{{ target.id }}）</strong></p>
-          <p>
-            当前关联：身份 {{ target.identity_count }} 个，
-            会话 {{ target.conversation_count }} 个，
-            订单 {{ target.order_count }} 笔，
-            任务 {{ target.task_count }} 项
-          </p>
-        </section>
-      </div>
-
-      <div class="decision-grid">
-        <form method="post" action="/employee/customers/merge/{{ suggestion.id }}/confirm">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button type="submit">确认是同一客户</button>
-        </form>
-        <form method="post" action="/employee/customers/merge/{{ suggestion.id }}/reject">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button class="button-danger" type="submit">拒绝合并</button>
-        </form>
-      </div>
-    </main>
-  </body>
-</html>
+{% block page_actions %}<a class="button button--secondary" href="/employee/customers">返回客户列表</a>{% endblock %}
+{% block content %}
+<div class="alert alert--warning" role="alert"><span>仅当确认是同一位客户时才合并。来源档案将停用，目标档案将保留。</span></div>
+<div class="compare-grid"><section class="panel panel--padded"><p class="eyebrow">来源档案将停用</p><h2>{{ source.display_name }}（客户 #{{ source.id }}）</h2><p>身份 {{ source.identity_count }} 个 · 会话 {{ source.conversation_count }} 个 · 订单 {{ source.order_count }} 笔 · 任务 {{ source.task_count }} 项</p></section><section class="panel panel--padded"><p class="eyebrow">目标档案将保留</p><h2>{{ target.display_name }}（客户 #{{ target.id }}）</h2><p>身份 {{ target.identity_count }} 个 · 会话 {{ target.conversation_count }} 个 · 订单 {{ target.order_count }} 笔 · 任务 {{ target.task_count }} 项</p></section></div>
+<section class="decision-panel panel panel--padded"><h2>最终决定</h2><div class="decision-grid"><form method="post" action="/employee/customers/merge/{{ suggestion.id }}/confirm" data-confirm="确定合并两份客户档案吗？来源档案将被停用。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">确认是同一客户并合并</button></form><form method="post" action="/employee/customers/merge/{{ suggestion.id }}/reject" data-confirm="确定拒绝这条合并建议吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">拒绝合并</button></form></div></section>
+{% endblock %}

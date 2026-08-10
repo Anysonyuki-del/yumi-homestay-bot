@@ -154,3 +154,19 @@ def test_admin_confirm_nonce_is_single_use_and_mobile_is_masked() -> None:
     assert first.status_code == 303
     assert second.status_code == 409
     assert approvals.confirm_calls == 1
+
+
+def test_approval_pages_use_shell_and_emphasize_money_confirmation() -> None:
+    """审批页应激活导航，并把关键金额与最终确认集中在醒目区域。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    index = client.get("/employee/approvals")
+    detail = client.get("/employee/approvals/1")
+
+    assert '/static/admin.js' in index.text
+    assert 'href="/employee/approvals" aria-current="page"' in detail.text
+    assert 'class="decision-panel' in detail.text
+    assert 'data-unsaved-warning' in detail.text
+    assert 'data-confirm=' in detail.text
+    assert "13800138000" not in detail.text

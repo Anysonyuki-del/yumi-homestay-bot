@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from admin_auth_helpers import RouteAdminVerifierStub, configure_admin_auth
@@ -477,6 +478,47 @@ def test_complaint_route_valid_form_reaches_service_after_admin_reverification()
     assert response.status_code == 303
     assert service.called is True
     assert verifier.calls == [(1, 1)]
+
+
+def test_complaint_page_uses_shell_and_safe_editing_controls() -> None:
+    """客诉复核页应安全换行长文本并保护保存、发送、退回和关闭。"""
+
+    class PageServiceStub:
+        """返回固定客诉详情供真实路由渲染。"""
+
+        async def get_detail(self, review_id: int, **kwargs):
+            """返回不含敏感身份的分页详情。"""
+            return {
+                "review": SimpleNamespace(
+                    id=review_id,
+                    version=2,
+                    status="ready_for_review",
+                    risk_level="high",
+                    analysis={"core_issue": "入住延迟"},
+                    draft="请允许我们继续核实。",
+                ),
+                "messages": [SimpleNamespace(origin="guest", content="很长的客诉内容")],
+                "has_older_messages": False,
+                "older_before_message_id": None,
+                "is_latest_message_page": True,
+            }
+
+    app = FastAPI()
+    app.add_middleware(SessionMiddleware, secret_key="complaint-page-test-secret-at-least-32")
+    app.include_router(complaint_router)
+    app.state.complaint_admin_service = PageServiceStub()
+    _install_versioned_admin_session(app)
+
+    with TestClient(app) as client:
+        client.get("/test/session")
+        response = client.get("/employee/complaints/7")
+
+    assert response.status_code == 200
+    assert '/static/admin.js' in response.text
+    assert 'data-safe-pre' in response.text
+    assert 'data-unsaved-warning' in response.text
+    for action in ("send", "return", "cancel"):
+        assert f'action="/employee/complaints/7/{action}" data-confirm=' in response.text
 
 
 @pytest.mark.asyncio

@@ -176,8 +176,15 @@ async def task_index(
         context={
             "tasks": items[:50],
             "is_admin": employee.role is EmployeeRole.ADMIN,
+            "page": page,
             "previous_page": page - 1 if page > 1 else None,
             "next_page": page + 1 if len(items) > 50 else None,
+            "page_title": (
+                "全部待办任务"
+                if employee.role is EmployeeRole.ADMIN
+                else "自己的任务"
+            ),
+            "active_nav": "tasks",
         },
     )
 
@@ -209,6 +216,8 @@ async def task_detail(request: Request, task_id: int) -> Response:
             **options,
             "is_admin": employee.role is EmployeeRole.ADMIN,
             "csrf_token": _issue_csrf(request, task_id),
+            "page_title": f"任务 #{task_id}",
+            "active_nav": "tasks",
         },
     )
 

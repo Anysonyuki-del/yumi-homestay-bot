@@ -23,6 +23,9 @@ class KnowledgeAdminServicePort(Protocol):
     async def list_all(self, *, offset: int, limit: int) -> list[Any]:
         """分页返回包括停用项在内的知识。"""
 
+    async def get_detail(self, entry_id: int) -> Any:
+        """按编号返回单条知识详情。"""
+
     async def create(self, employee_id: int, **fields: Any) -> Any:
         """创建一条双语知识。"""
 
@@ -79,6 +82,10 @@ class KnowledgeAdminService:
             .limit(limit)
         )
         return list(result.all())
+
+    async def get_detail(self, entry_id: int) -> KnowledgeEntry:
+        """按主键读取知识详情，模板不得自行访问数据库。"""
+        return await self._require_entry(entry_id)
 
     async def create(self, employee_id: int, **fields: Any) -> KnowledgeEntry:
         """创建默认启用的双语知识，并记录最小审计信息。"""
@@ -254,6 +261,13 @@ def _consume_csrf(request: Request, csrf_token: str) -> None:
         raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
 
 
+def _issue_csrf(request: Request) -> str:
+    """签发知识管理页面共享的一次性 CSRF 令牌。"""
+    token = secrets.token_urlsafe(24)
+    request.session["knowledge_csrf"] = token
+    return token
+
+
 def _fields(
     category: str,
     question_zh: str,
@@ -295,8 +309,7 @@ async def knowledge_index(
         if role is EmployeeRole.ADMIN
         else []
     )
-    csrf_token = secrets.token_urlsafe(24)
-    request.session["knowledge_csrf"] = csrf_token
+    csrf_token = _issue_csrf(request)
     return templates.TemplateResponse(
         request=request,
         name="knowledge/index.html",
@@ -315,6 +328,29 @@ async def knowledge_index(
             "next_candidate_page": (
                 candidate_page + 1 if len(candidates) > 50 else None
             ),
+            "page_title": "民宿知识库",
+            "active_nav": "knowledge",
+        },
+    )
+
+
+@router.get("/{entry_id}", response_class=HTMLResponse)
+async def knowledge_detail(request: Request, entry_id: int) -> Response:
+    """允许员工只读知识详情，并向管理员提供原有编辑表单。"""
+    _, role = await require_employee_session(request)
+    try:
+        entry = await _get_service(request).get_detail(entry_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="知识条目不存在") from error
+    return templates.TemplateResponse(
+        request=request,
+        name="knowledge/detail.html",
+        context={
+            "entry": entry,
+            "can_edit": role is EmployeeRole.ADMIN,
+            "csrf_token": _issue_csrf(request),
+            "page_title": f"知识条目 #{entry_id}",
+            "active_nav": "knowledge",
         },
     )
 

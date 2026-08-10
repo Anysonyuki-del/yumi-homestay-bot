@@ -69,13 +69,16 @@ document.querySelectorAll("form[data-confirm]").forEach((form) => {
   });
 });
 
-let hasUnsavedChanges = false;
+const dirtyForms = new Set();
 document.querySelectorAll("form[data-unsaved-warning]").forEach((form) => {
-  form.addEventListener("input", () => { hasUnsavedChanges = true; });
-  form.addEventListener("submit", () => { hasUnsavedChanges = false; });
+  form.addEventListener("input", () => { dirtyForms.add(form); });
+  form.addEventListener("submit", (event) => {
+    // 只清除当前成功提交的表单，其他表单的未保存内容仍需提醒。
+    if (!event.defaultPrevented) dirtyForms.delete(form);
+  });
 });
 window.addEventListener("beforeunload", (event) => {
-  if (!hasUnsavedChanges) return;
+  if (dirtyForms.size === 0) return;
   event.preventDefault();
   event.returnValue = "";
 });

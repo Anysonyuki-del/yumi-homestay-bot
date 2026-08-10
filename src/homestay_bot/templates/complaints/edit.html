@@ -1,27 +1,9 @@
-<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>客诉复核</title><link rel="stylesheet" href="/static/app.css"></head>
-<body>
-<main class="page-shell">
-  <h1>客诉复核</h1>
-  <p>状态：{{ review.status }}　风险：{{ review.risk_level }}</p>
-  <section>
-    <h2>AI 分析</h2>
-    <pre>{{ review.analysis | tojson(indent=2) }}</pre>
-  </section>
-  <section>
-    <h2>完整对话</h2>
-    {% if has_older_messages %}<p><a href="/employee/complaints/{{ review.id }}?before_message_id={{ older_before_message_id }}">查看更早消息</a></p>{% endif %}
-    {% if not is_latest_message_page %}<p><a href="/employee/complaints/{{ review.id }}">返回最新消息</a></p>{% endif %}
-    {% for message in messages %}<p><strong>{{ message.origin }}：</strong>{{ message.content }}</p>{% endfor %}
-  </section>
-  <form method="post" action="/employee/complaints/{{ review.id }}/save">
-    <input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>回复草稿<textarea name="draft" rows="8">{{ review.draft or '' }}</textarea></label><button type="submit">保存草稿</button>
-  </form>
-  <form method="post" action="/employee/complaints/{{ review.id }}/send"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="draft" value="{{ review.draft or '' }}"><button type="submit">发送给客人</button></form>
-  <form method="post" action="/employee/complaints/{{ review.id }}/return"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">退回重新分析</button></form>
-  <form method="post" action="/employee/complaints/{{ review.id }}/cancel"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">关闭客诉</button></form>
-</main>
-</body>
-</html>
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<section class="detail-section panel panel--padded"><div class="section-heading"><h2>风险概览</h2><div>{{ ui.badge(review.status | status_zh, "warning") }} {{ ui.badge(review.risk_level, "danger") }}</div></div><h3>AI 分析</h3><pre class="safe-pre" data-safe-pre>{{ review.analysis | tojson(indent=2) }}</pre></section>
+<section class="detail-section panel panel--padded"><div class="section-heading"><h2>完整对话</h2><div>{% if has_older_messages %}<a href="/employee/complaints/{{ review.id }}?before_message_id={{ older_before_message_id }}">查看更早消息</a>{% endif %}{% if not is_latest_message_page %}<a href="/employee/complaints/{{ review.id }}">返回最新消息</a>{% endif %}</div></div><div class="message-list">{% for message in messages %}<article class="message-item"><strong>{{ message.origin | status_zh }}：</strong><p class="long-text">{{ message.content }}</p></article>{% else %}<p>本页没有对话消息。</p>{% endfor %}</div></section>
+<section class="detail-section panel panel--padded"><h2>人工回复草稿</h2><form method="post" action="/employee/complaints/{{ review.id }}/save" data-unsaved-warning><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>回复草稿<textarea name="draft" rows="10" maxlength="4000">{{ review.draft or '' }}</textarea></label><button type="submit">保存草稿</button></form></section>
+<section class="decision-panel panel panel--padded"><h2>客诉处理</h2><div class="action-stack"><form method="post" action="/employee/complaints/{{ review.id }}/send" data-confirm="确定把当前已保存草稿发送给客人吗？"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="draft" value="{{ review.draft or '' }}"><button type="submit">发送给客人</button></form><form method="post" action="/employee/complaints/{{ review.id }}/return" data-confirm="确定退回并重新生成分析吗？"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">退回重新分析</button></form><form method="post" action="/employee/complaints/{{ review.id }}/cancel" data-confirm="确定关闭当前客诉吗？关闭后将停止本次复核流程。"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">关闭客诉</button></form></div></section>
+{% endblock %}

@@ -105,6 +105,13 @@ class KnowledgeAdminStub:
         """只返回启用条目供机器人使用。"""
         return [entry for entry in self.entries if entry.is_enabled]
 
+    async def get_detail(self, entry_id: int) -> EntryStub:
+        """按编号返回知识详情，不存在时保持 404 语义。"""
+        try:
+            return next(entry for entry in self.entries if entry.id == entry_id)
+        except StopIteration as error:
+            raise LookupError("知识条目不存在") from error
+
     async def create(self, employee_id: int, **fields) -> EntryStub:
         """新增双语条目。"""
         entry = EntryStub(id=len(self.entries) + 1, **fields)
@@ -189,6 +196,42 @@ def test_regular_customer_service_can_read_but_cannot_modify() -> None:
     assert "几点入住" in detail.text
     assert "是否提供停车位" not in detail.text
     assert disable.status_code == 403
+
+
+def test_knowledge_pages_use_admin_shell_and_detail_respects_role() -> None:
+    """知识详情复用现有编辑入口，员工只读、管理员可编辑。"""
+    admin, _ = build_client(EmployeeRole.ADMIN)
+    staff, _ = build_client(EmployeeRole.STAFF)
+
+    index = admin.get("/employee/knowledge")
+    detail = admin.get("/employee/knowledge/1")
+    staff_detail = staff.get("/employee/knowledge/1")
+    missing = admin.get("/employee/knowledge/404")
+
+    assert '/static/admin.js' in index.text
+    assert 'href="/employee/knowledge" aria-current="page"' in detail.text
+    assert 'action="/employee/knowledge/1/edit"' in detail.text
+    assert 'data-unsaved-warning' in detail.text
+    assert 'action="/employee/knowledge/1/disable"' not in detail.text
+    assert 'action="/employee/knowledge/1/disable"' in index.text
+    assert 'action="/employee/knowledge/1/edit"' not in staff_detail.text
+    assert "下午三点后" in staff_detail.text
+    assert missing.status_code == 404
+
+
+def test_knowledge_index_orders_filters_candidates_and_entries() -> None:
+    """列表页从上到下展示说明筛选、候选、新增与现有条目。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+
+    response = client.get("/employee/knowledge")
+
+    assert response.text.index("知识筛选") < response.text.index("待归纳问题")
+    assert response.text.index("待归纳问题") < response.text.index("新增知识")
+    assert response.text.index("新增知识") < response.text.index(
+        'id="knowledge-entries"'
+    )
+    assert 'data-unsaved-warning' in response.text
+    assert 'action="/employee/knowledge/1/disable" data-confirm=' in response.text
 
 
 def test_knowledge_lists_use_independent_bounded_pagination() -> None:

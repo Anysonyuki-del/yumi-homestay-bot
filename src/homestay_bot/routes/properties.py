@@ -135,7 +135,11 @@ async def property_index(request: Request) -> Response:
     return templates.TemplateResponse(
         request=request,
         name="properties/index.html",
-        context={"properties": properties},
+        context={
+            "properties": properties,
+            "page_title": "房源管理",
+            "active_nav": "properties",
+        },
     )
 
 
@@ -156,6 +160,12 @@ async def property_detail(request: Request, property_id: int) -> Response:
         context={
             **detail,
             "csrf_token": _issue_csrf(request, property_id),
+            "page_title": getattr(
+                detail["property"],
+                "title",
+                f"房源 #{property_id}",
+            ),
+            "active_nav": "properties",
         },
     )
 

@@ -1125,6 +1125,11 @@ class SessionKnowledgeAdminService:
                 limit=limit,
             )
 
+    async def get_detail(self, entry_id: int) -> Any:
+        """在独立只读会话中返回知识详情。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).get_detail(entry_id)
+
     async def create(self, employee_id: int, **fields: Any) -> Any:
         """创建知识并由底层服务提交审计。"""
         async with self._factory() as session:
@@ -1182,13 +1187,18 @@ class SessionComplaintAdminService:
         """保存数据库会话工厂。"""
         self._factory = factory
 
-    async def get_detail(self, review_id: int) -> dict[str, Any]:
+    async def get_detail(
+        self,
+        review_id: int,
+        *,
+        before_message_id: int | None = None,
+    ) -> dict[str, Any]:
         """读取客诉详情。"""
         async with self._factory() as session:
             return await ComplaintAdminService(
                 session,
                 TransactionalOutboxWeCom(session, source_message_id=f"complaint:{review_id}"),
-            ).get_detail(review_id)
+            ).get_detail(review_id, before_message_id=before_message_id)
 
     async def update_draft(self, review_id: int, version: int, draft: str) -> None:
         """保存客诉草稿并提交。"""

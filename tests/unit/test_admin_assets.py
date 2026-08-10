@@ -54,7 +54,10 @@ def test_admin_javascript_contract_covers_accessible_progressive_enhancements() 
     assert "focusBeforeDrawer.focus()" in script
     assert "window.confirm" in script
     assert 'addEventListener("beforeunload"' in script
-    assert "hasUnsavedChanges" in script
+    assert "const dirtyForms = new Set();" in script
+    assert "dirtyForms.add(form)" in script
+    assert "dirtyForms.delete(form)" in script
+    assert "dirtyForms.size === 0" in script
     assert 'form.dataset.submitting === "true"' in script
     assert "event.preventDefault()" in script
     assert 'workspace.setAttribute("aria-hidden", "true")' in script
@@ -64,6 +67,7 @@ def test_admin_javascript_contract_covers_accessible_progressive_enhancements() 
     assert "workspace.inert = false" in script
     assert 'document.body.classList.remove("drawer-is-open")' in script
     assert 'window.matchMedia("(min-width: 1024px)")' in script
+    assert "if (!event.defaultPrevented) dirtyForms.delete(form);" in script
 
 
 def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() -> None:
@@ -86,3 +90,34 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     assert _contrast_ratio("#1d4ed8", "#ffffff") >= 3
     # 侧栏链接和关闭按钮位于深海军蓝背景，必须使用独立不透明焦点色。
     assert _contrast_ratio("#ca8a04", "#172554") >= 3
+    assert ".page-content > .panel + .panel" in css
+    assert "detail-section + .detail-section" in css
+    assert " .panel + .panel" not in css.replace(
+        ".page-content > .panel + .panel", ""
+    )
+
+
+def test_business_templates_extend_one_admin_shell() -> None:
+    """真实业务页只能继承统一后台，不能重复 meta、样式或脚本标签。"""
+    template_root = ASSET_ROOT / "templates"
+    relative_paths = (
+        "tasks/index.html",
+        "tasks/detail.html",
+        "properties/index.html",
+        "properties/detail.html",
+        "knowledge/index.html",
+        "knowledge/detail.html",
+        "customers/index.html",
+        "customers/detail.html",
+        "customers/merge.html",
+        "approvals/index.html",
+        "approvals/detail.html",
+        "complaints/edit.html",
+    )
+
+    for relative_path in relative_paths:
+        source = (template_root / relative_path).read_text()
+        assert source.lstrip().startswith('{% extends "layouts/admin.html" %}')
+        assert "<html" not in source
+        assert '<script src="/static/admin.js"' not in source
+        assert '<link rel="stylesheet" href="/static/app.css">' not in source

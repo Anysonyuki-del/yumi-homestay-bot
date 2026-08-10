@@ -1,39 +1,27 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ "全部待办任务" if is_admin else "自己的任务" }}</title>
-    <link rel="stylesheet" href="/static/app.css">
-  </head>
-  <body>
-    <main class="card">
-      <header class="page-header">
-        <p class="eyebrow">YuMi 任务中心</p>
-        <h1>{{ "全部待办任务" if is_admin else "自己的任务" }}</h1>
-      </header>
-      <ul class="task-list">
-        {% for task in tasks %}
-        <li>
-          <a class="task-row" href="/employee/tasks/{{ task.id }}">
-            <span>
-              <strong>{{ task.task_type.value }}</strong>
-              <small>
-                {{ task.service_date or "日期待确认" }} ·
-                房间 {{ task.property_id or "待确认" }}
-              </small>
-            </span>
-            <span class="status-badge">{{ task.status.value }}</span>
-          </a>
-        </li>
-        {% else %}
-        <li class="empty-state">当前没有需要处理的任务。</li>
-        {% endfor %}
-      </ul>
-      <nav aria-label="任务分页">
-        {% if previous_page %}<a href="/employee/tasks?page={{ previous_page }}">上一页</a>{% endif %}
-        {% if next_page %}<a href="/employee/tasks?page={{ next_page }}">下一页</a>{% endif %}
-      </nav>
-    </main>
-  </body>
-</html>
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<section class="panel panel--padded">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">YuMi 任务中心</p>
+      <h2>{{ "全部待办" if is_admin else "分配给我的任务" }}</h2>
+    </div>
+    {{ ui.badge("管理员视图" if is_admin else "员工视图", "info") }}
+  </div>
+  <ul class="task-list clean-list">
+    {% for task in tasks %}
+    <li>
+      <a class="task-row" href="/employee/tasks/{{ task.id }}">
+        <span><strong>{{ task.task_type | status_zh }}</strong><small>{{ task.service_date | date_zh }} · 房间 {{ task.property_id or "待确认" }}</small></span>
+        {{ ui.badge(task.status | status_zh, "warning" if task.status.value in ["pending_confirmation", "pending_assignment", "pending_inspection"] else "neutral") }}
+      </a>
+    </li>
+    {% else %}
+    <li>{{ ui.empty("当前没有需要处理的任务", "新任务会在分派后出现在这里。") }}</li>
+    {% endfor %}
+  </ul>
+  {{ ui.pagination("/employee/tasks", page, previous_page, next_page) }}
+</section>
+{% endblock %}

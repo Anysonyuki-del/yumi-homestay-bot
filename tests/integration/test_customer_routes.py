@@ -272,6 +272,31 @@ def test_admin_sees_masked_customer_and_multi_select_tags() -> None:
     assert "/employee/customers/merge/9" in detail.text
 
 
+def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
+    """客户列表提供桌面表格与移动卡片，详情和合并页保护写操作。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    index = client.get("/employee/customers")
+    detail = client.get("/employee/customers/7")
+    merge = client.get("/employee/customers/merge/9")
+
+    assert '/static/admin.js' in index.text
+    assert 'href="/employee/customers" aria-current="page"' in detail.text
+    assert 'class="responsive-table"' in index.text
+    assert 'class="mobile-card-list clean-list"' in index.text
+    assert 'data-unsaved-warning' in detail.text
+    assert (
+        'action="/employee/customers/7/summary/delete" data-confirm='
+        in detail.text
+    )
+    assert (
+        'action="/employee/customers/merge/9/confirm" data-confirm='
+        in merge.text
+    )
+    assert "13800138000" not in index.text + detail.text + merge.text
+
+
 def test_admin_can_update_tags_note_and_summary_with_one_time_csrf() -> None:
     """客户写操作使用一次性令牌并向服务层传递清理前的表单值。"""
     client, customers = build_client(EmployeeRole.ADMIN)

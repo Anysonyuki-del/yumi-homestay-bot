@@ -67,7 +67,13 @@ async def complaint_detail(
     return templates.TemplateResponse(
         request=request,
         name="complaints/edit.html",
-        context={**detail, "employee_id": employee_id, "csrf_token": _csrf(request, review_id)},
+        context={
+            **detail,
+            "employee_id": employee_id,
+            "csrf_token": _csrf(request, review_id),
+            "page_title": f"客诉复核 #{review_id}",
+            "active_nav": None,
+        },
     )
 
 

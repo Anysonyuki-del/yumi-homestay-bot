@@ -62,8 +62,11 @@ async def approval_index(
         name="approvals/index.html",
         context={
             "approvals": approvals[:50],
+            "page": page,
             "previous_page": page - 1 if page > 1 else None,
             "next_page": page + 1 if len(approvals) > 50 else None,
+            "page_title": "待处理预订",
+            "active_nav": "approvals",
         },
     )
 
@@ -83,7 +86,13 @@ async def approval_detail(request: Request, approval_id: int) -> Response:
     return templates.TemplateResponse(
         request=request,
         name="approvals/detail.html",
-        context={**detail, "confirmation_nonce": nonce, "employee_role": role},
+        context={
+            **detail,
+            "confirmation_nonce": nonce,
+            "employee_role": role,
+            "page_title": f"预订审批 {detail['approval'].approval_code}",
+            "active_nav": "approvals",
+        },
     )
 
 
