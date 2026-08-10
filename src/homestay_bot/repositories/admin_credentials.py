@@ -1,13 +1,15 @@
+from datetime import datetime
 from typing import Any, cast
 
-from argon2 import Type, extract_parameters
-from argon2.exceptions import InvalidHashError
-from sqlalchemy import select
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.models import AdminCredential
+from homestay_bot.services.admin_passwords import validate_admin_password_hash
+
+MAX_FAILED_ATTEMPTS = 5
 
 
 class SQLAlchemyAdminCredentialRepository:
@@ -17,30 +19,137 @@ class SQLAlchemyAdminCredentialRepository:
         """绑定当前请求的数据库会话。"""
         self._session = session
 
-    async def get_by_username(
-        self, username: str, *, for_update: bool = False
-    ) -> AdminCredential | None:
-        """按精确用户名读取凭证，可选获取行锁保护认证计数。"""
-        statement = select(AdminCredential).where(
-            AdminCredential.username == username
-        )
-        if for_update:
-            statement = statement.with_for_update()
+    async def get_by_username(self, username: str) -> AdminCredential | None:
+        """按精确用户名读取凭证快照。"""
+        statement = select(AdminCredential).where(AdminCredential.username == username)
         return cast(AdminCredential | None, await self._session.scalar(statement))
 
-    async def get_by_id(
-        self, admin_id: int, *, for_update: bool = False
-    ) -> AdminCredential | None:
-        """按固定凭证主键读取管理员，可选锁定供改密或撤销会话。"""
+    async def get_by_id(self, admin_id: int) -> AdminCredential | None:
+        """按固定凭证主键读取管理员快照。"""
         statement = select(AdminCredential).where(AdminCredential.id == admin_id)
-        if for_update:
-            statement = statement.with_for_update()
         return cast(AdminCredential | None, await self._session.scalar(statement))
 
-    async def save(self, credential: AdminCredential) -> None:
-        """刷新凭证状态，事务提交由调用方统一负责。"""
-        self._session.add(credential)
-        await self._session.flush()
+    async def record_failed_attempt(
+        self,
+        admin_id: int,
+        *,
+        now: datetime,
+        lock_until: datetime,
+    ) -> AdminCredential | None:
+        """用单条 UPDATE 原子累计失败；锁到期后从一开启新周期。"""
+        expired_lock = and_(
+            AdminCredential.locked_until.is_not(None),
+            AdminCredential.locked_until <= now,
+        )
+        statement = (
+            update(AdminCredential)
+            .where(
+                AdminCredential.id == admin_id,
+                or_(
+                    AdminCredential.locked_until.is_(None),
+                    AdminCredential.locked_until <= now,
+                ),
+            )
+            .values(
+                failed_attempts=case(
+                    (expired_lock, 1),
+                    else_=AdminCredential.failed_attempts + 1,
+                ),
+                locked_until=case(
+                    (expired_lock, None),
+                    (
+                        AdminCredential.failed_attempts
+                        >= MAX_FAILED_ATTEMPTS - 1,
+                        lock_until,
+                    ),
+                    else_=AdminCredential.locked_until,
+                ),
+                updated_at=func.now(),
+            )
+            .returning(AdminCredential)
+            .execution_options(populate_existing=True)
+        )
+        return cast(AdminCredential | None, await self._session.scalar(statement))
+
+    async def record_auth_success(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        now: datetime,
+        replacement_password_hash: str | None,
+    ) -> AdminCredential | None:
+        """以密码哈希 CAS 原子清零失败状态并记录最近认证时间。"""
+        values: dict[str, Any] = {
+            "failed_attempts": 0,
+            "locked_until": None,
+            "last_authenticated_at": now,
+            "updated_at": func.now(),
+        }
+        if replacement_password_hash is not None:
+            values["password_hash"] = replacement_password_hash
+        statement = (
+            update(AdminCredential)
+            .where(
+                AdminCredential.id == admin_id,
+                AdminCredential.password_hash == expected_password_hash,
+                or_(
+                    AdminCredential.locked_until.is_(None),
+                    AdminCredential.locked_until <= now,
+                ),
+            )
+            .values(**values)
+            .returning(AdminCredential)
+            .execution_options(populate_existing=True)
+        )
+        return cast(AdminCredential | None, await self._session.scalar(statement))
+
+    async def change_password_atomic(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        new_password_hash: str,
+        now: datetime,
+    ) -> int | None:
+        """以旧哈希为 CAS 条件改密，并原子递增返回会话版本。"""
+        statement = (
+            update(AdminCredential)
+            .where(
+                AdminCredential.id == admin_id,
+                AdminCredential.password_hash == expected_password_hash,
+                or_(
+                    AdminCredential.locked_until.is_(None),
+                    AdminCredential.locked_until <= now,
+                ),
+            )
+            .values(
+                password_hash=new_password_hash,
+                must_change_password=False,
+                failed_attempts=0,
+                locked_until=None,
+                session_version=AdminCredential.session_version + 1,
+                last_authenticated_at=now,
+                updated_at=func.now(),
+            )
+            .returning(AdminCredential.session_version)
+        )
+        version = await self._session.scalar(statement)
+        return int(version) if version is not None else None
+
+    async def increment_session_version(self, admin_id: int) -> int | None:
+        """用单条 UPDATE 原子递增并返回会话版本。"""
+        statement = (
+            update(AdminCredential)
+            .where(AdminCredential.id == admin_id)
+            .values(
+                session_version=AdminCredential.session_version + 1,
+                updated_at=func.now(),
+            )
+            .returning(AdminCredential.session_version)
+        )
+        version = await self._session.scalar(statement)
+        return int(version) if version is not None else None
 
     async def bootstrap(
         self,
@@ -50,12 +159,7 @@ class SQLAlchemyAdminCredentialRepository:
         password_hash: str,
     ) -> AdminCredential:
         """仅在单例不存在时导入预生成 Argon2id 哈希，绝不接收明文。"""
-        try:
-            parameters = extract_parameters(password_hash)
-        except InvalidHashError as exc:
-            raise ValueError("管理员引导密码必须是合法 Argon2id 哈希") from exc
-        if parameters.type is not Type.ID:
-            raise ValueError("管理员引导密码必须使用 Argon2id")
+        validate_admin_password_hash(password_hash)
 
         values = {
             "id": 1,

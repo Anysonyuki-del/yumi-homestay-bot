@@ -1,10 +1,10 @@
 from functools import lru_cache
 from pathlib import Path
 
-from argon2 import Type, extract_parameters
-from argon2.exceptions import InvalidHashError
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from homestay_bot.services.admin_passwords import validate_admin_password_hash
 
 
 class Settings(BaseSettings):
@@ -59,12 +59,7 @@ class Settings(BaseSettings):
         if username_set != password_hash_set:
             raise ValueError("管理员引导用户名和密码哈希必须同时配置")
         if password_hash is not None:
-            try:
-                parameters = extract_parameters(password_hash)
-            except InvalidHashError as exc:
-                raise ValueError("管理员引导密码必须是合法 Argon2id 哈希") from exc
-            if parameters.type is not Type.ID:
-                raise ValueError("管理员引导密码必须使用 Argon2id")
+            validate_admin_password_hash(password_hash)
         return self
 
 

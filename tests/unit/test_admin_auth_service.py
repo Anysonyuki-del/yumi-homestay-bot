@@ -17,27 +17,86 @@ class MemoryAdminCredentialRepository:
         """保存唯一管理员凭证。"""
         self.credential = credential
 
-    async def get_by_username(
-        self, username: str, *, for_update: bool = False
-    ) -> AdminCredential | None:
+    async def get_by_username(self, username: str) -> AdminCredential | None:
         """按用户名返回唯一凭证。"""
-        del for_update
         if self.credential is not None and self.credential.username == username:
             return self.credential
         return None
 
-    async def get_by_id(
-        self, admin_id: int, *, for_update: bool = False
-    ) -> AdminCredential | None:
+    async def get_by_id(self, admin_id: int) -> AdminCredential | None:
         """按管理员凭证主键返回唯一凭证。"""
-        del for_update
         if self.credential is not None and self.credential.id == admin_id:
             return self.credential
         return None
 
-    async def save(self, credential: AdminCredential) -> None:
-        """内存仓储无需额外持久化动作。"""
-        self.credential = credential
+    async def record_failed_attempt(
+        self,
+        admin_id: int,
+        *,
+        now: datetime,
+        lock_until: datetime,
+    ) -> AdminCredential | None:
+        """按生产仓储规则原子模拟失败计数。"""
+        credential = await self.get_by_id(admin_id)
+        if credential is None:
+            return None
+        if credential.locked_until is not None:
+            if credential.locked_until > now:
+                return None
+            credential.failed_attempts = 1
+            credential.locked_until = None
+            return credential
+        credential.failed_attempts += 1
+        if credential.failed_attempts >= 5:
+            credential.locked_until = lock_until
+        return credential
+
+    async def record_auth_success(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        now: datetime,
+        replacement_password_hash: str | None,
+    ) -> AdminCredential | None:
+        """按旧哈希条件模拟成功认证状态转换。"""
+        credential = await self.get_by_id(admin_id)
+        if credential is None or credential.password_hash != expected_password_hash:
+            return None
+        credential.failed_attempts = 0
+        credential.locked_until = None
+        credential.last_authenticated_at = now
+        if replacement_password_hash is not None:
+            credential.password_hash = replacement_password_hash
+        return credential
+
+    async def change_password_atomic(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        new_password_hash: str,
+        now: datetime,
+    ) -> int | None:
+        """按旧哈希条件模拟原子改密和版本递增。"""
+        credential = await self.get_by_id(admin_id)
+        if credential is None or credential.password_hash != expected_password_hash:
+            return None
+        credential.password_hash = new_password_hash
+        credential.must_change_password = False
+        credential.failed_attempts = 0
+        credential.locked_until = None
+        credential.last_authenticated_at = now
+        credential.session_version += 1
+        return credential.session_version
+
+    async def increment_session_version(self, admin_id: int) -> int | None:
+        """模拟数据库原子版本递增。"""
+        credential = await self.get_by_id(admin_id)
+        if credential is None:
+            return None
+        credential.session_version += 1
+        return credential.session_version
 
 
 def _credential(password: str = "initial-password") -> AdminCredential:
@@ -181,3 +240,69 @@ async def test_revoke_other_sessions_increments_and_returns_session_version() ->
 
     assert version == 2
     assert credential.session_version == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "new_password",
+    ["", "   ", "short-pass", "x" * 129],
+)
+async def test_change_password_rejects_invalid_new_password(
+    new_password: str,
+) -> None:
+    """新密码必须非空白且长度保持在 12 到 128 个字符。"""
+    credential = _credential()
+    service = AdminAuthService(MemoryAdminCredentialRepository(credential))
+
+    with pytest.raises(ValueError):
+        await service.change_password(
+            credential.id,
+            "initial-password",
+            new_password,
+        )
+
+
+@pytest.mark.asyncio
+async def test_change_password_accepts_twelve_to_128_characters() -> None:
+    """符合长度边界且非空白的新密码应成功写入。"""
+    credential = _credential()
+    service = AdminAuthService(MemoryAdminCredentialRepository(credential))
+
+    await service.change_password(
+        credential.id,
+        "initial-password",
+        "x" * 12,
+    )
+    await service.change_password(
+        credential.id,
+        "x" * 12,
+        "y" * 128,
+    )
+
+    await service.reverify(credential.id, "y" * 128)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["reverify", "change_password"])
+async def test_current_password_failure_uses_persistent_lock_counter(
+    operation: str,
+) -> None:
+    """二次验证和改密的当前密码错误必须进入与登录相同的锁定计数。"""
+    now = datetime(2026, 8, 11, 9, tzinfo=UTC)
+    credential = _credential()
+    service = AdminAuthService(
+        MemoryAdminCredentialRepository(credential),
+        clock=lambda: now,
+    )
+
+    with pytest.raises(AuthenticationError):
+        if operation == "reverify":
+            await service.reverify(credential.id, "wrong-password")
+        else:
+            await service.change_password(
+                credential.id,
+                "wrong-password",
+                "new-secure-password",
+            )
+
+    assert credential.failed_attempts == 1

@@ -1,4 +1,5 @@
 import pytest
+from argon2 import PasswordHasher, Type
 from pydantic import ValidationError
 
 from homestay_bot.config import Settings
@@ -25,7 +26,9 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
         "DATA_ENCRYPTION_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "CONFIG_ENCRYPTION_KEY": "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=",
         "ADMIN_BOOTSTRAP_USERNAME": "admin",
-        "ADMIN_BOOTSTRAP_PASSWORD_HASH": "$argon2id$v=19$m=65536,t=3,p=4$YWJj$ZGVm",
+        "ADMIN_BOOTSTRAP_PASSWORD_HASH": PasswordHasher(type=Type.ID).hash(
+            "bootstrap-password"
+        ),
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)

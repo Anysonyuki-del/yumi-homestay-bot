@@ -26,6 +26,12 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "admin_credentials" in result.stdout
     assert "runtime_config_versions" in result.stdout
     assert "runtime_config_state" in result.stdout
+    assert "ck_admin_credentials_singleton" in result.stdout
+    assert "ck_runtime_config_state_singleton" in result.stdout
+    assert "CREATE UNIQUE INDEX ix_admin_credentials_username" in result.stdout
+    assert "FOREIGN KEY(employee_id) REFERENCES employees (id) ON DELETE CASCADE" in (
+        result.stdout
+    )
 
 
 def test_sqlite_admin_runtime_config_migration_replays(
@@ -58,11 +64,33 @@ def test_sqlite_admin_runtime_config_migration_replays(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
+        admin_ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("admin_credentials",),
+        ).fetchone()[0]
+        state_ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("runtime_config_state",),
+        ).fetchone()[0]
+        admin_indexes = connection.execute(
+            "PRAGMA index_list('admin_credentials')"
+        ).fetchall()
+        admin_foreign_keys = connection.execute(
+            "PRAGMA foreign_key_list('admin_credentials')"
+        ).fetchall()
+        state_foreign_keys = connection.execute(
+            "PRAGMA foreign_key_list('runtime_config_state')"
+        ).fetchall()
     assert {
         "admin_credentials",
         "runtime_config_versions",
         "runtime_config_state",
     } <= tables_after_upgrade
+    assert "ck_admin_credentials_singleton" in admin_ddl
+    assert "ck_runtime_config_state_singleton" in state_ddl
+    assert any(row[1] == "ix_admin_credentials_username" and row[2] for row in admin_indexes)
+    assert any(row[2] == "employees" and row[3] == "employee_id" for row in admin_foreign_keys)
+    assert sum(row[2] == "runtime_config_versions" for row in state_foreign_keys) == 2
 
     downgrade = run_alembic("downgrade", "0014_query_indexes")
     assert downgrade.returncode == 0, downgrade.stderr
