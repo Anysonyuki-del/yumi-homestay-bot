@@ -54,6 +54,17 @@ def upgrade() -> None:
         ["username"],
         unique=True,
     )
+    quota_table = op.create_table(
+        "admin_csrf_quota",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("active_count", sa.Integer(), nullable=False),
+        *_timestamps(),
+        sa.CheckConstraint("id = 1", name="ck_admin_csrf_quota_singleton"),
+        sa.CheckConstraint(
+            "active_count >= 0", name="ck_admin_csrf_quota_nonnegative"
+        ),
+    )
+    op.bulk_insert(quota_table, [{"id": 1, "active_count": 0}])
     op.create_table(
         "admin_csrf_nonces",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -127,5 +138,6 @@ def downgrade() -> None:
         table_name="admin_csrf_nonces",
     )
     op.drop_table("admin_csrf_nonces")
+    op.drop_table("admin_csrf_quota")
     op.drop_index("ix_admin_credentials_username", table_name="admin_credentials")
     op.drop_table("admin_credentials")

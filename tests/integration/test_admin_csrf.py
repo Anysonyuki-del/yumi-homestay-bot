@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from homestay_bot.domain.models import AdminCsrfNonce, Base
+from homestay_bot.domain.models import AdminCsrfNonce, AdminCsrfQuota, Base
 from homestay_bot.repositories.admin_csrf import SQLAlchemyAdminCsrfRepository
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError, AdminCsrfService
 
@@ -144,4 +144,80 @@ async def test_issue_rejects_when_active_nonce_capacity_is_full() -> None:
         await service.issue("login", admin_id=None)
         with pytest.raises(AdminCsrfCapacityError):
             await service.issue("login", admin_id=None)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_two_services_atomically_share_database_nonce_capacity(tmp_path) -> None:
+    """两个独立服务在最后一个配额槽位并发签发时只能一个成功。"""
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'quota.db'}?timeout=30"
+    first_engine = create_async_engine(database_url)
+    second_engine = create_async_engine(database_url)
+    async with first_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    first_factory = async_sessionmaker(first_engine, expire_on_commit=False)
+    second_factory = async_sessionmaker(second_engine, expire_on_commit=False)
+    now = datetime(2026, 8, 11, 12, tzinfo=UTC)
+
+    async def issue_once(factory) -> bool:
+        """在独立事务尝试预占唯一槽位并提交。"""
+        async with factory() as session:
+            try:
+                await AdminCsrfService(
+                    SQLAlchemyAdminCsrfRepository(session),
+                    clock=lambda: now,
+                    max_active=1,
+                ).issue("login", admin_id=None)
+            except AdminCsrfCapacityError:
+                await session.rollback()
+                return False
+            await session.commit()
+            return True
+
+    results = await asyncio.gather(
+        issue_once(first_factory),
+        issue_once(second_factory),
+    )
+
+    assert sorted(results) == [False, True]
+    async with first_factory() as session:
+        quota = await session.get(AdminCsrfQuota, 1)
+        assert quota is not None and quota.active_count == 1
+        assert await session.scalar(select(func.count(AdminCsrfNonce.id))) == 1
+    await first_engine.dispose()
+    await second_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_consume_and_expiry_purge_keep_quota_equal_to_nonce_count(tmp_path) -> None:
+    """成功消费和过期清理都必须在同一事务同步递减数据库配额。"""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'quota-sync.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 11, 12, tzinfo=UTC)
+    async with factory() as session:
+        service = AdminCsrfService(
+            SQLAlchemyAdminCsrfRepository(session),
+            clock=lambda: now,
+            ttl=timedelta(seconds=1),
+            max_active=3,
+        )
+        first = await service.issue("login", admin_id=None)
+        await service.issue("login", admin_id=None)
+        assert await service.consume(first, "login", admin_id=None)
+        await session.commit()
+
+    async with factory() as session:
+        later = AdminCsrfService(
+            SQLAlchemyAdminCsrfRepository(session),
+            clock=lambda: now + timedelta(seconds=2),
+            max_active=3,
+        )
+        await later.issue("login", admin_id=None)
+        await session.commit()
+        quota = await session.get(AdminCsrfQuota, 1)
+        nonce_count = await session.scalar(select(func.count(AdminCsrfNonce.id)))
+        assert quota is not None
+        assert quota.active_count == nonce_count == 1
     await engine.dispose()

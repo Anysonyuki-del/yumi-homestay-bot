@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, BinaryIO, cast
@@ -463,12 +464,14 @@ class SessionAdminAuthService:
         password_hasher: PasswordHasherPort,
         dummy_hash: str,
         argon2_semaphore: asyncio.Semaphore,
+        argon2_executor: ThreadPoolExecutor,
     ) -> None:
         """保存会话工厂及应用生命周期共享的 Argon2 组件。"""
         self._factory = factory
         self._password_hasher = password_hasher
         self._dummy_hash = dummy_hash
         self._argon2_semaphore = argon2_semaphore
+        self._argon2_executor = argon2_executor
 
     def _service(self, session: AsyncSession) -> AdminAuthService:
         """为当前事务组装唯一管理员认证服务。"""
@@ -477,6 +480,7 @@ class SessionAdminAuthService:
             password_hasher=self._password_hasher,
             dummy_hash=self._dummy_hash,
             argon2_semaphore=self._argon2_semaphore,
+            argon2_executor=self._argon2_executor,
         )
 
     async def authenticate(
@@ -2035,11 +2039,17 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.admin_auth_available = admin_auth_available
     app.state.admin_login_rate_limiter = AdminLoginRateLimiter()
+    argon2_executor: ThreadPoolExecutor | None = None
     if admin_auth_available:
         # 虚拟哈希在应用生命周期仅生成一次，登录请求只在线程中复用校验。
         argon2_semaphore = asyncio.Semaphore(2)
+        argon2_executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="admin-argon2",
+        )
         async with argon2_semaphore:
-            dummy_hash = await asyncio.to_thread(
+            dummy_hash = await asyncio.get_running_loop().run_in_executor(
+                argon2_executor,
                 ADMIN_PASSWORD_HASHER.hash,
                 "admin-auth-dummy-password",
             )
@@ -2049,6 +2059,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             password_hasher=ADMIN_PASSWORD_HASHER,
             dummy_hash=dummy_hash,
             argon2_semaphore=argon2_semaphore,
+            argon2_executor=argon2_executor,
         )
         app.state.admin_csrf_service = SessionAdminCsrfService(factory)
         app.state.employee_access_verifier = SessionEmployeeAccessVerifier(factory)
@@ -2247,4 +2258,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         await wecom.aclose()
         if contact_client is not None:
             await contact_client.aclose()
+        if argon2_executor is not None:
+            # 等待仍在执行的 Argon2 线程退出，并取消尚未开始的排队任务。
+            await asyncio.to_thread(
+                argon2_executor.shutdown,
+                wait=True,
+                cancel_futures=True,
+            )
         await engine.dispose()

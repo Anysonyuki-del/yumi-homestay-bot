@@ -1,5 +1,7 @@
 import asyncio
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -423,3 +425,63 @@ async def test_argon2_capacity_saturation_fails_fast() -> None:
             datetime(2026, 8, 11, 8, tzinfo=UTC),
         )
     await first
+
+
+@pytest.mark.asyncio
+async def test_cancelled_argon_waiter_cannot_exceed_physical_worker_limit() -> None:
+    """取消等待线程结果的请求后，新请求也不能令底层 Argon 并发超过线程池上限。"""
+    release = threading.Event()
+    two_started = threading.Event()
+    lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    class TrackingHasher:
+        """记录真实工作线程中的同时执行数量。"""
+
+        def verify(self, password_hash: str, password: str) -> bool:
+            """占住工作线程直到测试统一释放。"""
+            nonlocal active, maximum_active
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+                if active == 2:
+                    two_started.set()
+            release.wait(timeout=1)
+            with lock:
+                active -= 1
+            return True
+
+        def check_needs_rehash(self, password_hash: str) -> bool:
+            """避免认证成功后进入额外哈希任务。"""
+            return False
+
+        def hash(self, password: str) -> str:
+            """返回固定测试哈希。"""
+            return "tracking-hash"
+
+    credential = _credential()
+    executor = ThreadPoolExecutor(max_workers=2)
+    service = AdminAuthService(
+        MemoryAdminCredentialRepository(credential),
+        password_hasher=TrackingHasher(),
+        dummy_hash="dummy-hash",
+        argon2_semaphore=asyncio.Semaphore(2),
+        argon2_executor=executor,
+        argon2_wait_timeout=0.2,
+    )
+    now = datetime(2026, 8, 11, 8, tzinfo=UTC)
+    first = asyncio.create_task(service.authenticate("admin", "initial-password", now))
+    second = asyncio.create_task(service.authenticate("admin", "initial-password", now))
+    assert await asyncio.to_thread(two_started.wait, 0.5)
+
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    third = asyncio.create_task(service.authenticate("admin", "initial-password", now))
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.gather(second, third)
+    executor.shutdown(wait=True)
+
+    assert maximum_active <= 2

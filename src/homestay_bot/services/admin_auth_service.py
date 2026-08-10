@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable
+from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, TypeVar
@@ -16,6 +17,10 @@ LOCK_DURATION = timedelta(minutes=15)
 AUTHENTICATION_ERROR_MESSAGE = "用户名或密码错误"
 ARGON2_WAIT_TIMEOUT_SECONDS = 0.05
 Argon2Result = TypeVar("Argon2Result")
+DEFAULT_ADMIN_ARGON2_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="admin-argon2",
+)
 
 
 class AuthenticationError(PermissionError):
@@ -113,6 +118,7 @@ class AdminAuthService:
         password_hasher: PasswordHasherPort = ADMIN_PASSWORD_HASHER,
         dummy_hash: str | None = None,
         argon2_semaphore: asyncio.Semaphore | None = None,
+        argon2_executor: Executor = DEFAULT_ADMIN_ARGON2_EXECUTOR,
         argon2_wait_timeout: float = ARGON2_WAIT_TIMEOUT_SECONDS,
     ) -> None:
         """注入仓储、UTC 时钟、共享 hasher 与共享虚拟哈希。"""
@@ -121,6 +127,7 @@ class AdminAuthService:
         self._password_hasher = password_hasher
         self._dummy_hash = dummy_hash or password_hasher.hash("admin-auth-dummy-password")
         self._argon2_semaphore = argon2_semaphore or asyncio.Semaphore(2)
+        self._argon2_executor = argon2_executor
         self._argon2_wait_timeout = argon2_wait_timeout
 
     async def authenticate(
@@ -262,7 +269,8 @@ class AdminAuthService:
         except TimeoutError as error:
             raise Argon2CapacityError("管理员认证容量暂时饱和") from error
         try:
-            return await asyncio.to_thread(operation, *args)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(self._argon2_executor, operation, *args)
         finally:
             self._argon2_semaphore.release()
 

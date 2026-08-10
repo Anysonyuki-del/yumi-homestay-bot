@@ -8,15 +8,18 @@ from typing import Protocol
 class AdminCsrfRepository(Protocol):
     """定义服务端一次性 nonce 所需的持久化接口。"""
 
-    async def create(
+    async def reserve_and_create(
         self,
         *,
         token_hash: str,
         purpose: str,
         admin_id: int | None,
         expires_at: datetime,
-    ) -> None:
-        """保存 nonce 摘要及匹配边界。"""
+        now: datetime,
+        purge_limit: int,
+        max_active: int,
+    ) -> bool:
+        """原子预占数据库配额并保存 nonce 摘要。"""
 
     async def consume(
         self,
@@ -30,10 +33,6 @@ class AdminCsrfRepository(Protocol):
 
     async def purge_expired(self, *, now: datetime, limit: int) -> int:
         """有界清理过期 nonce。"""
-
-    async def count_active(self, *, now: datetime) -> int:
-        """统计仍活动的 nonce 数量。"""
-
 
 class AdminCsrfCapacityError(RuntimeError):
     """表示活动 nonce 已达到应用硬上限。"""
@@ -62,15 +61,17 @@ class AdminCsrfService:
         """返回浏览器所需随机明文，同时只保存摘要。"""
         token = secrets.token_urlsafe(32)
         now = self._clock()
-        await self._repository.purge_expired(now=now, limit=self._purge_limit)
-        if await self._repository.count_active(now=now) >= self._max_active:
-            raise AdminCsrfCapacityError("认证表单容量已满")
-        await self._repository.create(
+        created = await self._repository.reserve_and_create(
             token_hash=_hash_token(token),
             purpose=purpose,
             admin_id=admin_id,
             expires_at=now + self._ttl,
+            now=now,
+            purge_limit=self._purge_limit,
+            max_active=self._max_active,
         )
+        if not created:
+            raise AdminCsrfCapacityError("认证表单容量已满")
         return token
 
     async def consume(

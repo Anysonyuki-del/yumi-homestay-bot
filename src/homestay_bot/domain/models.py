@@ -115,6 +115,19 @@ class AdminCsrfNonce(Base):
     )
 
 
+class AdminCsrfQuota(TimestampMixin, Base):
+    """以数据库单例计数器约束跨实例活动 CSRF nonce 总量。"""
+
+    __tablename__ = "admin_csrf_quota"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_admin_csrf_quota_singleton"),
+        CheckConstraint("active_count >= 0", name="ck_admin_csrf_quota_nonnegative"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    active_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class RuntimeConfigVersion(Base):
     """保存不可变的加密运行配置快照及不含秘密的掩码摘要。"""
 

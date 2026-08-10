@@ -23,9 +23,12 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "0015_admin_runtime_config" in result.stdout
     assert "admin_credentials" in result.stdout
     assert "admin_csrf_nonces" in result.stdout
+    assert "admin_csrf_quota" in result.stdout
     assert "runtime_config_versions" in result.stdout
     assert "runtime_config_state" in result.stdout
     assert "ck_admin_credentials_singleton" in result.stdout
+    assert "ck_admin_csrf_quota_singleton" in result.stdout
+    assert "ck_admin_csrf_quota_nonnegative" in result.stdout
     assert "ck_runtime_config_state_singleton" in result.stdout
     assert "CREATE UNIQUE INDEX ix_admin_credentials_username" in result.stdout
     assert "CREATE UNIQUE INDEX ix_admin_csrf_nonces_token_hash" in result.stdout
@@ -69,6 +72,13 @@ def test_sqlite_admin_runtime_config_migration_replays(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
             ("runtime_config_state",),
         ).fetchone()[0]
+        quota_ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("admin_csrf_quota",),
+        ).fetchone()[0]
+        quota_count = connection.execute(
+            "SELECT active_count FROM admin_csrf_quota WHERE id = 1"
+        ).fetchone()[0]
         admin_indexes = connection.execute("PRAGMA index_list('admin_credentials')").fetchall()
         csrf_indexes = connection.execute("PRAGMA index_list('admin_csrf_nonces')").fetchall()
         csrf_foreign_keys = connection.execute(
@@ -83,10 +93,14 @@ def test_sqlite_admin_runtime_config_migration_replays(
     assert {
         "admin_credentials",
         "admin_csrf_nonces",
+        "admin_csrf_quota",
         "runtime_config_versions",
         "runtime_config_state",
     } <= tables_after_upgrade
     assert "ck_admin_credentials_singleton" in admin_ddl
+    assert "ck_admin_csrf_quota_singleton" in quota_ddl
+    assert "ck_admin_csrf_quota_nonnegative" in quota_ddl
+    assert quota_count == 0
     assert "ck_runtime_config_state_singleton" in state_ddl
     assert any(row[1] == "ix_admin_credentials_username" and row[2] for row in admin_indexes)
     assert any(row[1] == "ix_admin_csrf_nonces_token_hash" and row[2] for row in csrf_indexes)
@@ -104,6 +118,7 @@ def test_sqlite_admin_runtime_config_migration_replays(
         }
     assert "admin_credentials" not in tables_after_downgrade
     assert "admin_csrf_nonces" not in tables_after_downgrade
+    assert "admin_csrf_quota" not in tables_after_downgrade
     assert "runtime_config_versions" not in tables_after_downgrade
     assert "runtime_config_state" not in tables_after_downgrade
 
