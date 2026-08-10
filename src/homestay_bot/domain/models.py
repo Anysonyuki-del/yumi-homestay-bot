@@ -79,28 +79,37 @@ class AdminCredential(TimestampMixin, Base):
     """保存唯一后台管理员的 Argon2id 凭证和会话失效版本。"""
 
     __tablename__ = "admin_credentials"
-    __table_args__ = (
-        CheckConstraint("id = 1", name="ck_admin_credentials_singleton"),
-    )
+    __table_args__ = (CheckConstraint("id = 1", name="ck_admin_credentials_singleton"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     employee_id: Mapped[int] = mapped_column(
         ForeignKey("employees.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    username: Mapped[str] = mapped_column(
-        String(128), unique=True, index=True, nullable=False
-    )
+    username: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
-    must_change_password: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    locked_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     session_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     last_authenticated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class AdminCsrfNonce(Base):
+    """保存服务端一次性认证表单 nonce 的 SHA-256 摘要。"""
+
+    __tablename__ = "admin_csrf_nonces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False)
+    admin_id: Mapped[int | None] = mapped_column(
+        ForeignKey("admin_credentials.id", ondelete="CASCADE"), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
@@ -112,9 +121,7 @@ class RuntimeConfigVersion(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     masked_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_by: Mapped[int | None] = mapped_column(
-        ForeignKey("employees.id"), nullable=True
-    )
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -124,9 +131,7 @@ class RuntimeConfigState(TimestampMixin, Base):
     """以单例指针保存当前、上一配置版本和乐观锁修订号。"""
 
     __tablename__ = "runtime_config_state"
-    __table_args__ = (
-        CheckConstraint("id = 1", name="ck_runtime_config_state_singleton"),
-    )
+    __table_args__ = (CheckConstraint("id = 1", name="ck_runtime_config_state_singleton"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     active_version_id: Mapped[int | None] = mapped_column(
@@ -146,9 +151,7 @@ class Customer(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     phone_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    phone_fingerprint: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, index=True
-    )
+    phone_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     merged_into_customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers.id"), nullable=True
@@ -159,9 +162,7 @@ class Customer(TimestampMixin, Base):
     tag_links: Mapped[list["CustomerTagLink"]] = relationship(
         back_populates="customer", cascade="all, delete-orphan"
     )
-    conversations: Mapped[list["Conversation"]] = relationship(
-        back_populates="customer"
-    )
+    conversations: Mapped[list["Conversation"]] = relationship(back_populates="customer")
 
 
 class CustomerIdentity(TimestampMixin, Base):
@@ -196,9 +197,7 @@ class CustomerTag(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    wecom_tag_id: Mapped[str | None] = mapped_column(
-        String(128), unique=True, nullable=True
-    )
+    wecom_tag_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     customer_links: Mapped[list["CustomerTagLink"]] = relationship(
         back_populates="tag", cascade="all, delete-orphan"
@@ -217,9 +216,7 @@ class CustomerTagLink(TimestampMixin, Base):
         ForeignKey("customer_tags.id", ondelete="CASCADE"), primary_key=True
     )
     sync_pending: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    last_sync_error_code: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
+    last_sync_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     customer: Mapped[Customer] = relationship(back_populates="tag_links")
     tag: Mapped[CustomerTag] = relationship(back_populates="customer_links")
 
@@ -243,24 +240,16 @@ class CustomerMergeSuggestion(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    source_customer_id: Mapped[int] = mapped_column(
-        ForeignKey("customers.id"), nullable=False
-    )
-    target_customer_id: Mapped[int] = mapped_column(
-        ForeignKey("customers.id"), nullable=False
-    )
+    source_customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    target_customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
     reason: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[CustomerMergeStatus] = mapped_column(
         Enum(CustomerMergeStatus, native_enum=False, length=16),
         default=CustomerMergeStatus.PENDING,
         nullable=False,
     )
-    reviewed_by: Mapped[int | None] = mapped_column(
-        ForeignKey("employees.id"), nullable=True
-    )
-    reviewed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CustomerContextSummary(TimestampMixin, Base):
@@ -275,12 +264,8 @@ class CustomerContextSummary(TimestampMixin, Base):
     short_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     long_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     unresolved_items: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    short_cutoff_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    long_cutoff_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    short_cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    long_cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
@@ -348,9 +333,7 @@ class Message(Base):
     short_summarized_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    purged_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
@@ -372,9 +355,7 @@ class ComplaintReview(TimestampMixin, Base):
         nullable=False,
         index=True,
     )
-    source_message_id: Mapped[str] = mapped_column(
-        String(128), nullable=False
-    )
+    source_message_id: Mapped[str] = mapped_column(String(128), nullable=False)
     reason: Mapped[str] = mapped_column(String(64), nullable=False)
     risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[ComplaintReviewStatus] = mapped_column(
@@ -382,20 +363,12 @@ class ComplaintReview(TimestampMixin, Base):
         default=ComplaintReviewStatus.PENDING_ANALYSIS,
         nullable=False,
     )
-    analysis: Mapped[dict[str, Any]] = mapped_column(
-        JSON, default=dict, nullable=False
-    )
+    analysis: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     draft: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    delivery_error_code: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
-    delivery_outbox_id: Mapped[str | None] = mapped_column(
-        String(128), unique=True, nullable=True
-    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_outbox_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     delivery_external_message_id: Mapped[str | None] = mapped_column(
         String(128), unique=True, nullable=True
     )
@@ -462,9 +435,7 @@ class KnowledgeCandidate(TimestampMixin, Base):
     knowledge_entry_id: Mapped[int | None] = mapped_column(
         ForeignKey("knowledge_entries.id"), unique=True, nullable=True
     )
-    snoozed_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     occurrences: Mapped[list["KnowledgeCandidateOccurrence"]] = relationship(
         back_populates="candidate", cascade="all, delete-orphan"
     )
@@ -474,17 +445,13 @@ class KnowledgeCandidateOccurrence(Base):
     """保存候选的一次去重出现，不复制客人正文或身份。"""
 
     __tablename__ = "knowledge_candidate_occurrences"
-    __table_args__ = (
-        Index("ix_candidate_occurrence_window", "candidate_id", "occurred_at"),
-    )
+    __table_args__ = (Index("ix_candidate_occurrence_window", "candidate_id", "occurred_at"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     candidate_id: Mapped[int] = mapped_column(
         ForeignKey("knowledge_candidates.id", ondelete="CASCADE"), nullable=False
     )
-    source_message_id: Mapped[str] = mapped_column(
-        String(128), unique=True, nullable=False
-    )
+    source_message_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     candidate: Mapped[KnowledgeCandidate] = relationship(back_populates="occurrences")
 
@@ -501,9 +468,7 @@ class BookingApproval(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     approval_code: Mapped[str] = mapped_column(String(64), nullable=False)
-    source_message_id: Mapped[str | None] = mapped_column(
-        String(128), unique=True, nullable=True
-    )
+    source_message_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     conversation_id: Mapped[int] = mapped_column(
         ForeignKey("conversations.id"), nullable=False, index=True
     )
@@ -559,9 +524,7 @@ class Job(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    dedupe_key: Mapped[str | None] = mapped_column(
-        String(128), unique=True, nullable=True
-    )
+    dedupe_key: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, native_enum=False, length=16),
@@ -634,9 +597,7 @@ class StayOrder(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    hostex_reservation_code: Mapped[str] = mapped_column(
-        String(128), unique=True, nullable=False
-    )
+    hostex_reservation_code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     stay_code: Mapped[str] = mapped_column(String(128), nullable=False)
     customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers.id"), nullable=True, index=True
@@ -717,17 +678,13 @@ class RoomOperationalState(TimestampMixin, Base):
 
     __tablename__ = "room_operational_states"
 
-    property_id: Mapped[int] = mapped_column(
-        ForeignKey("property_profiles.id"), primary_key=True
-    )
+    property_id: Mapped[int] = mapped_column(ForeignKey("property_profiles.id"), primary_key=True)
     status: Mapped[RoomOperationalStatus] = mapped_column(
         Enum(RoomOperationalStatus, native_enum=False, length=32),
         default=RoomOperationalStatus.NOT_STARTED,
         nullable=False,
     )
-    changed_by: Mapped[int | None] = mapped_column(
-        ForeignKey("employees.id"), nullable=True
-    )
+    changed_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
@@ -752,12 +709,8 @@ class BusinessTask(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    dedupe_key: Mapped[str | None] = mapped_column(
-        String(160), unique=True, nullable=True
-    )
-    source_message_id: Mapped[str | None] = mapped_column(
-        String(128), unique=True, nullable=True
-    )
+    dedupe_key: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
+    source_message_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     task_type: Mapped[BusinessTaskType] = mapped_column(
         Enum(BusinessTaskType, native_enum=False, length=32), nullable=False
     )
@@ -792,9 +745,7 @@ class TaskAttachment(TimestampMixin, Base):
     )
     private_file_id: Mapped[str] = mapped_column(String(128), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    uploaded_by: Mapped[int | None] = mapped_column(
-        ForeignKey("employees.id"), nullable=True
-    )
+    uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
 
 
 class RoomCredential(TimestampMixin, Base):
@@ -806,9 +757,7 @@ class RoomCredential(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    property_id: Mapped[int] = mapped_column(
-        ForeignKey("property_profiles.id"), nullable=False
-    )
+    property_id: Mapped[int] = mapped_column(ForeignKey("property_profiles.id"), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     password_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     guide_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -820,15 +769,11 @@ class CredentialDelivery(TimestampMixin, Base):
     """保存一笔订单使用某版凭证的整体投递状态。"""
 
     __tablename__ = "credential_deliveries"
-    __table_args__ = (
-        UniqueConstraint("order_id", "credential_id", name="uq_credential_delivery"),
-    )
+    __table_args__ = (UniqueConstraint("order_id", "credential_id", name="uq_credential_delivery"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[int] = mapped_column(ForeignKey("stay_orders.id"), nullable=False)
-    credential_id: Mapped[int] = mapped_column(
-        ForeignKey("room_credentials.id"), nullable=False
-    )
+    credential_id: Mapped[int] = mapped_column(ForeignKey("room_credentials.id"), nullable=False)
     status: Mapped[CredentialDeliveryStatus] = mapped_column(
         Enum(CredentialDeliveryStatus, native_enum=False, length=32),
         default=CredentialDeliveryStatus.PENDING,
@@ -840,9 +785,7 @@ class CredentialDeliveryPart(TimestampMixin, Base):
     """保存指南、密码和二维码各自独立的幂等发送结果。"""
 
     __tablename__ = "credential_delivery_parts"
-    __table_args__ = (
-        UniqueConstraint("delivery_id", "part_type", name="uq_delivery_part_type"),
-    )
+    __table_args__ = (UniqueConstraint("delivery_id", "part_type", name="uq_delivery_part_type"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     delivery_id: Mapped[int] = mapped_column(
@@ -854,7 +797,5 @@ class CredentialDeliveryPart(TimestampMixin, Base):
         default=CredentialDeliveryStatus.PENDING,
         nullable=False,
     )
-    external_message_id: Mapped[str | None] = mapped_column(
-        String(128), nullable=True
-    )
+    external_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

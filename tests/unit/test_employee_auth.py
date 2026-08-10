@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from homestay_bot.domain.enums import EmployeeRole
-from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.routes.employee_auth import AdminLoginRateLimiter, require_employee_session
 
 
 class AccessVerifierStub:
@@ -25,6 +25,19 @@ class AccessVerifierStub:
             session_version=4,
             must_change_password=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limiter_keeps_client_map_bounded() -> None:
+    """轮换大量来源地址时按 IP 状态仍必须保持固定内存上限。"""
+    limiter = AdminLoginRateLimiter(max_clients=2)
+    now = datetime(2026, 8, 11, 9, tzinfo=UTC)
+
+    assert await limiter.allow("192.0.2.1", now)
+    assert await limiter.allow("192.0.2.2", now)
+    assert await limiter.allow("192.0.2.3", now)
+
+    assert len(limiter._by_ip) == 2
 
 
 def _request(

@@ -55,6 +55,29 @@ def upgrade() -> None:
         unique=True,
     )
     op.create_table(
+        "admin_csrf_nonces",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("token_hash", sa.String(length=64), nullable=False),
+        sa.Column("purpose", sa.String(length=64), nullable=False),
+        sa.Column("admin_id", sa.Integer(), nullable=True),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["admin_id"], ["admin_credentials.id"], ondelete="CASCADE"
+        ),
+    )
+    op.create_index(
+        "ix_admin_csrf_nonces_token_hash",
+        "admin_csrf_nonces",
+        ["token_hash"],
+        unique=True,
+    )
+    op.create_table(
         "runtime_config_versions",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("encrypted_payload", sa.LargeBinary(), nullable=False),
@@ -89,5 +112,10 @@ def downgrade() -> None:
     """按外键依赖逆序删除管理员和运行配置数据结构。"""
     op.drop_table("runtime_config_state")
     op.drop_table("runtime_config_versions")
+    op.drop_index(
+        "ix_admin_csrf_nonces_token_hash",
+        table_name="admin_csrf_nonces",
+    )
+    op.drop_table("admin_csrf_nonces")
     op.drop_index("ix_admin_credentials_username", table_name="admin_credentials")
     op.drop_table("admin_credentials")

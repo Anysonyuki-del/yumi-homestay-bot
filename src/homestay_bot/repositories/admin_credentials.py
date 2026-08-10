@@ -58,8 +58,7 @@ class SQLAlchemyAdminCredentialRepository:
                 locked_until=case(
                     (expired_lock, None),
                     (
-                        AdminCredential.failed_attempts
-                        >= MAX_FAILED_ATTEMPTS - 1,
+                        AdminCredential.failed_attempts >= MAX_FAILED_ATTEMPTS - 1,
                         lock_until,
                     ),
                     else_=AdminCredential.locked_until,
@@ -144,6 +143,38 @@ class SQLAlchemyAdminCredentialRepository:
             .where(AdminCredential.id == admin_id)
             .values(
                 session_version=AdminCredential.session_version + 1,
+                updated_at=func.now(),
+            )
+            .returning(AdminCredential.session_version)
+        )
+        version = await self._session.scalar(statement)
+        return int(version) if version is not None else None
+
+    async def reverify_and_revoke_sessions(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        expected_session_version: int,
+        now: datetime,
+    ) -> int | None:
+        """以密码哈希和当前版本为 CAS 条件原子撤销其他会话。"""
+        statement = (
+            update(AdminCredential)
+            .where(
+                AdminCredential.id == admin_id,
+                AdminCredential.password_hash == expected_password_hash,
+                AdminCredential.session_version == expected_session_version,
+                or_(
+                    AdminCredential.locked_until.is_(None),
+                    AdminCredential.locked_until <= now,
+                ),
+            )
+            .values(
+                failed_attempts=0,
+                locked_until=None,
+                session_version=AdminCredential.session_version + 1,
+                last_authenticated_at=now,
                 updated_at=func.now(),
             )
             .returning(AdminCredential.session_version)

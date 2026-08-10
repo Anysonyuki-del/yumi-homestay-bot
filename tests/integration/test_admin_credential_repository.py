@@ -206,9 +206,7 @@ async def _create_concurrent_admin_database(database_url: str) -> None:
 @pytest.mark.asyncio
 async def test_concurrent_failed_logins_increment_without_loss(tmp_path) -> None:
     """两个独立 SQLite 会话并发登录失败后计数必须精确为二。"""
-    database_url = (
-        f"sqlite+aiosqlite:///{tmp_path / 'failed-login.db'}?timeout=30"
-    )
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'failed-login.db'}?timeout=30"
     await _create_concurrent_admin_database(database_url)
     engine = create_async_engine(database_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -261,9 +259,7 @@ async def test_concurrent_session_revocation_never_loses_version(tmp_path) -> No
 @pytest.mark.asyncio
 async def test_concurrent_password_change_uses_hash_compare_and_swap(tmp_path) -> None:
     """同一旧密码并发改密只能成功一次，且版本与最终哈希保持一致。"""
-    database_url = (
-        f"sqlite+aiosqlite:///{tmp_path / 'change-password.db'}?timeout=30"
-    )
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'change-password.db'}?timeout=30"
     await _create_concurrent_admin_database(database_url)
     engine = create_async_engine(database_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -289,14 +285,51 @@ async def test_concurrent_password_change_uses_hash_compare_and_swap(tmp_path) -
         change_once("second-secure-password"),
     )
     assert sorted(result[0] for result in results) == ["changed", "rejected"]
-    successful_password = next(
-        password for status, password in results if status == "changed"
-    )
+    successful_password = next(password for status, password in results if status == "changed")
     async with factory() as session:
         repository = SQLAlchemyAdminCredentialRepository(session)
         credential = await repository.get_by_id(1)
         assert credential is not None
         assert credential.session_version == 2
         await AdminAuthService(repository).reverify(1, successful_password)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_password_change_wins_over_stale_reverify_and_revoke(tmp_path) -> None:
+    """A 复核旧密码期间 B 改密后，A 的 CAS 不得递增版本复活旧会话。"""
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'reverify-revoke.db'}?timeout=30"
+    await _create_concurrent_admin_database(database_url)
+    engine = create_async_engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 11, 12, tzinfo=UTC)
+
+    async with factory() as stale_session:
+        stale_repository = SQLAlchemyAdminCredentialRepository(stale_session)
+        stale = await stale_repository.get_by_id(1)
+        assert stale is not None
+        old_hash = stale.password_hash
+        old_version = stale.session_version
+
+        async with factory() as changing_session:
+            await AdminAuthService(
+                SQLAlchemyAdminCredentialRepository(changing_session)
+            ).change_password(1, "initial-password", "new-secure-password")
+            await changing_session.commit()
+
+        version = await stale_repository.reverify_and_revoke_sessions(
+            1,
+            expected_password_hash=old_hash,
+            expected_session_version=old_version,
+            now=now,
+        )
+        await stale_session.commit()
+
+    assert version is None
+    async with factory() as session:
+        current = await SQLAlchemyAdminCredentialRepository(session).get_by_id(1)
+        assert current is not None
+        assert current.session_version == old_version + 1
 
     await engine.dispose()

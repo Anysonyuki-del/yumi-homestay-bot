@@ -2,6 +2,7 @@ import asyncio
 import threading
 from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -9,10 +10,17 @@ from homestay_bot.domain.models import Base
 from homestay_bot.main import app
 
 
-def test_configured_application_starts_worker_and_reports_healthy(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("admin_username", "admin_password_hash"),
+    [(None, None), ("admin", "invalid-plaintext")],
+)
+def test_unavailable_admin_bootstrap_keeps_workers_running_and_reports_degraded(
+    tmp_path,
+    monkeypatch,
+    admin_username: str | None,
+    admin_password_hash: str | None,
 ) -> None:
-    """完整本地配置应装配数据库与 worker，并通过分层健康检查。"""
+    """后台引导缺失或失败时客服主链仍启动，但健康状态应明确降级。"""
     chat_configuration: dict[str, str | bool] = {}
     tourism_configuration: dict[str, str | bool] = {}
     started = {
@@ -79,6 +87,11 @@ def test_configured_application_starts_worker_and_reports_healthy(
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("ADMIN_BOOTSTRAP_USERNAME", raising=False)
+    monkeypatch.delenv("ADMIN_BOOTSTRAP_PASSWORD_HASH", raising=False)
+    if admin_username is not None and admin_password_hash is not None:
+        monkeypatch.setenv("ADMIN_BOOTSTRAP_USERNAME", admin_username)
+        monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD_HASH", admin_password_hash)
     monkeypatch.setattr("homestay_bot.application.AsyncOpenAI", FakeOpenAI)
     monkeypatch.setattr("homestay_bot.application.AsyncAnthropic", FakeAnthropic)
 
@@ -144,8 +157,8 @@ def test_configured_application_starts_worker_and_reports_healthy(
         assert all(event.wait(timeout=1) for event in started.values())
         response = client.get("/health")
 
-        assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        assert response.status_code == 503
+        assert response.json() == {"status": "degraded"}
         assert worker_wiring == {
             "faq_draft_handler_factory": True,
             "hostex_event_handler_factory": True,
@@ -158,8 +171,9 @@ def test_configured_application_starts_worker_and_reports_healthy(
         ]
         assert app.state.private_file_service is app.state.task_page_service
         assert app.state.hostex_webhook_service is not None
-        assert app.state.admin_auth_service is not None
-        assert app.state.employee_access_verifier is not None
+        assert app.state.admin_auth_available is False
+        assert not hasattr(app.state, "admin_auth_service")
+        assert not hasattr(app.state, "employee_access_verifier")
         assert chat_configuration == {
             "api_key": "test-deepseek-key",
             "base_url": "https://api.deepseek.test",

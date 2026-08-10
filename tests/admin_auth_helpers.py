@@ -9,6 +9,35 @@ from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.services.admin_auth_service import AdminSession
 
 
+class MemoryAdminCsrfService:
+    """以内存原子映射模拟服务端一次性认证 nonce。"""
+
+    def __init__(self) -> None:
+        """初始化 nonce 序号和未消费集合。"""
+        self.sequence = 0
+        self.pending: dict[str, tuple[str, int | None]] = {}
+
+    async def issue(self, purpose: str, *, admin_id: int | None) -> str:
+        """签发测试可识别且用途绑定的唯一 nonce。"""
+        self.sequence += 1
+        token = f"csrf-{self.sequence}-{purpose}"
+        self.pending[token] = (purpose, admin_id)
+        return token
+
+    async def consume(
+        self,
+        token: str,
+        purpose: str,
+        *,
+        admin_id: int | None,
+    ) -> bool:
+        """仅在用途和主体匹配时原子弹出 nonce。"""
+        if self.pending.get(token) != (purpose, admin_id):
+            return False
+        del self.pending[token]
+        return True
+
+
 class RouteAdminAuthStub:
     """为既有后台路由测试提供独立账号密码认证。"""
 
@@ -67,6 +96,7 @@ def configure_admin_auth(
     verifier = RouteAdminVerifierStub(role)
     app.state.employee_access_verifier = verifier
     app.state.admin_auth_clock = lambda: datetime.now(UTC)
+    app.state.admin_csrf_service = MemoryAdminCsrfService()
     return verifier
 
 

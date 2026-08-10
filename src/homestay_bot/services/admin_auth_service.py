@@ -1,14 +1,15 @@
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+
 from homestay_bot.domain.models import AdminCredential
 from homestay_bot.services.admin_passwords import (
     ADMIN_PASSWORD_HASHER,
-    hash_admin_password,
     validate_new_admin_password,
-    verify_admin_password,
 )
 
 LOCK_DURATION = timedelta(minutes=15)
@@ -17,6 +18,19 @@ AUTHENTICATION_ERROR_MESSAGE = "用户名或密码错误"
 
 class AuthenticationError(PermissionError):
     """表示不披露具体原因的统一管理员认证失败。"""
+
+
+class PasswordHasherPort(Protocol):
+    """定义可注入且在线程中执行的 Argon2 操作。"""
+
+    def verify(self, password_hash: str, password: str) -> bool:
+        """同步校验密码。"""
+
+    def check_needs_rehash(self, password_hash: str) -> bool:
+        """同步判断哈希参数是否需要升级。"""
+
+    def hash(self, password: str) -> str:
+        """同步生成密码哈希。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +85,16 @@ class AdminCredentialRepository(Protocol):
     async def increment_session_version(self, admin_id: int) -> int | None:
         """原子递增并返回会话版本。"""
 
+    async def reverify_and_revoke_sessions(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        expected_session_version: int,
+        now: datetime,
+    ) -> int | None:
+        """按密码哈希和当前版本 CAS 原子撤销其他会话。"""
+
 
 class AdminAuthService:
     """实现唯一管理员的 Argon2id 校验、锁定、改密和会话撤销。"""
@@ -80,11 +104,14 @@ class AdminAuthService:
         repository: AdminCredentialRepository,
         *,
         clock: Callable[[], datetime] | None = None,
+        password_hasher: PasswordHasherPort = ADMIN_PASSWORD_HASHER,
+        dummy_hash: str | None = None,
     ) -> None:
-        """注入凭证仓储和 UTC 时钟，并准备未知用户名的虚拟哈希。"""
+        """注入仓储、UTC 时钟、共享 hasher 与共享虚拟哈希。"""
         self._repository = repository
         self._clock = clock or _utc_now
-        self._dummy_hash = hash_admin_password("admin-auth-dummy-password")
+        self._password_hasher = password_hasher
+        self._dummy_hash = dummy_hash or password_hasher.hash("admin-auth-dummy-password")
 
     async def authenticate(
         self,
@@ -95,19 +122,25 @@ class AdminAuthService:
         """校验密码；五次失败锁十五分钟，成功后清零认证失败状态。"""
         credential = await self._repository.get_by_username(username)
         if credential is None:
-            verify_admin_password(self._dummy_hash, password)
+            await self._verify(self._dummy_hash, password)
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
 
         normalized_now = _as_utc(now)
         if _is_locked(credential, normalized_now):
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
-        if not verify_admin_password(credential.password_hash, password):
+        if not await self._verify(credential.password_hash, password):
             await self._record_failure(credential.id, normalized_now)
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
 
         replacement_hash = None
-        if ADMIN_PASSWORD_HASHER.check_needs_rehash(credential.password_hash):
-            replacement_hash = hash_admin_password(password)
+        if await asyncio.to_thread(
+            self._password_hasher.check_needs_rehash,
+            credential.password_hash,
+        ):
+            replacement_hash = await asyncio.to_thread(
+                self._password_hasher.hash,
+                password,
+            )
         authenticated = await self._repository.record_auth_success(
             credential.id,
             expected_password_hash=credential.password_hash,
@@ -129,14 +162,17 @@ class AdminAuthService:
         credential = await self._require_admin(admin_id)
         if _is_locked(credential, now):
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
-        if not verify_admin_password(credential.password_hash, current):
+        if not await self._verify(credential.password_hash, current):
             await self._record_failure(admin_id, now)
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
         validate_new_admin_password(new)
         version = await self._repository.change_password_atomic(
             admin_id,
             expected_password_hash=credential.password_hash,
-            new_password_hash=hash_admin_password(new),
+            new_password_hash=await asyncio.to_thread(
+                self._password_hasher.hash,
+                new,
+            ),
             now=now,
         )
         if version is None:
@@ -148,7 +184,7 @@ class AdminAuthService:
         credential = await self._require_admin(admin_id)
         if _is_locked(credential, now):
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
-        if not verify_admin_password(credential.password_hash, password):
+        if not await self._verify(credential.password_hash, password):
             await self._record_failure(admin_id, now)
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
         authenticated = await self._repository.record_auth_success(
@@ -166,6 +202,41 @@ class AdminAuthService:
         if version is None:
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
         return version
+
+    async def reverify_and_revoke_sessions(
+        self,
+        admin_id: int,
+        password: str,
+        expected_session_version: int,
+    ) -> int:
+        """复核密码后以同一事务 CAS 递增版本，拒绝并发改密竞态。"""
+        now = _as_utc(self._clock())
+        credential = await self._require_admin(admin_id)
+        if _is_locked(credential, now):
+            raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
+        if not await self._verify(credential.password_hash, password):
+            await self._record_failure(admin_id, now)
+            raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
+        version = await self._repository.reverify_and_revoke_sessions(
+            admin_id,
+            expected_password_hash=credential.password_hash,
+            expected_session_version=expected_session_version,
+            now=now,
+        )
+        if version is None:
+            raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
+        return version
+
+    async def _verify(self, password_hash: str, password: str) -> bool:
+        """在线程中执行 Argon2，并把非法哈希或不匹配统一折叠为失败。"""
+        try:
+            return await asyncio.to_thread(
+                self._password_hasher.verify,
+                password_hash,
+                password,
+            )
+        except (InvalidHashError, VerificationError, VerifyMismatchError):
+            return False
 
     async def _require_admin(self, admin_id: int) -> AdminCredential:
         """读取管理员凭证，缺失时继续使用统一认证错误。"""
@@ -197,10 +268,7 @@ def _utc_now() -> datetime:
 
 def _is_locked(credential: AdminCredential, now: datetime) -> bool:
     """判断凭证是否仍处于锁定期，过期状态交由原子 UPDATE 重置。"""
-    return (
-        credential.locked_until is not None
-        and _as_utc(credential.locked_until) > now
-    )
+    return credential.locked_until is not None and _as_utc(credential.locked_until) > now
 
 
 def _session_from(credential: AdminCredential) -> AdminSession:

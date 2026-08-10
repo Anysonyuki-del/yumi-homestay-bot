@@ -1,4 +1,5 @@
-import secrets
+import asyncio
+from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,9 +18,7 @@ from homestay_bot.services.admin_auth_service import (
 )
 
 router = APIRouter(prefix="/employee")
-templates = Jinja2Templates(
-    directory=Path(__file__).resolve().parent.parent / "templates"
-)
+templates = Jinja2Templates(directory=Path(__file__).resolve().parent.parent / "templates")
 SESSION_IDLE_TIMEOUT = timedelta(hours=8)
 DEFAULT_NEXT_PATH = "/employee/tasks"
 FIRST_LOGIN_ALLOWED_PATHS = {
@@ -27,6 +26,38 @@ FIRST_LOGIN_ALLOWED_PATHS = {
     "/employee/account/password",
     "/employee/logout",
 }
+LOGIN_RATE_WINDOW = timedelta(minutes=1)
+LOGIN_RATE_PER_IP = 10
+LOGIN_RATE_GLOBAL = 500
+
+
+class AdminLoginRateLimiter:
+    """提供单进程、内存有界且不记录登录正文的登录限速。"""
+
+    def __init__(self, *, max_clients: int = 1024) -> None:
+        """初始化按 IP 与全局时间队列。"""
+        self._max_clients = max_clients
+        self._by_ip: dict[str, deque[datetime]] = {}
+        self._global: deque[datetime] = deque()
+        self._lock = asyncio.Lock()
+
+    async def allow(self, client_ip: str, now: datetime) -> bool:
+        """原子清理过期记录并判断本次尝试是否仍在固定上限内。"""
+        cutoff = now - LOGIN_RATE_WINDOW
+        async with self._lock:
+            while self._global and self._global[0] <= cutoff:
+                self._global.popleft()
+            if client_ip not in self._by_ip and len(self._by_ip) >= self._max_clients:
+                # 全局限速仍覆盖被淘汰来源；强制淘汰最老键以确保内存严格有界。
+                del self._by_ip[next(iter(self._by_ip))]
+            attempts = self._by_ip.setdefault(client_ip, deque())
+            while attempts and attempts[0] <= cutoff:
+                attempts.popleft()
+            if len(attempts) >= LOGIN_RATE_PER_IP or len(self._global) >= LOGIN_RATE_GLOBAL:
+                return False
+            attempts.append(now)
+            self._global.append(now)
+            return True
 
 
 class AdminAuthServicePort(Protocol):
@@ -49,6 +80,14 @@ class AdminAuthServicePort(Protocol):
     async def revoke_other_sessions(self, admin_id: int) -> int:
         """撤销其他会话并返回当前最新版本。"""
 
+    async def reverify_and_revoke_sessions(
+        self,
+        admin_id: int,
+        password: str,
+        expected_session_version: int,
+    ) -> int:
+        """在一个事务中复核密码并撤销其他会话。"""
+
 
 class ActiveAdminState(Protocol):
     """定义请求期间只读的管理员与员工联合投影。"""
@@ -69,6 +108,22 @@ class EmployeeAccessVerifier(Protocol):
         employee_id: int,
     ) -> ActiveAdminState | None:
         """同时复核凭证、外键员工、角色与会话版本。"""
+
+
+class AdminCsrfServicePort(Protocol):
+    """定义认证路由所需的服务端一次性 nonce 接口。"""
+
+    async def issue(self, purpose: str, *, admin_id: int | None) -> str:
+        """签发按用途和管理员绑定的 nonce。"""
+
+    async def consume(
+        self,
+        token: str,
+        purpose: str,
+        *,
+        admin_id: int | None,
+    ) -> bool:
+        """原子消费匹配 nonce。"""
 
 
 def _clock(request: Request) -> Callable[[], datetime]:
@@ -93,17 +148,52 @@ def _safe_next(next_path: str) -> str:
     return DEFAULT_NEXT_PATH
 
 
-def _issue_csrf(request: Request) -> str:
-    """签发认证动作共用的一次性 CSRF 令牌。"""
-    token = secrets.token_urlsafe(24)
-    request.session["auth_csrf"] = token
-    return token
+def _prefers_html(accept: str) -> bool:
+    """按 q 值协商响应；只有明确偏好 HTML 时才执行浏览器跳转。"""
+    qualities: dict[str, float] = {}
+    for raw_item in accept.lower().split(","):
+        parts = [part.strip() for part in raw_item.split(";")]
+        media_type = parts[0]
+        if not media_type:
+            continue
+        quality = 1.0
+        for parameter in parts[1:]:
+            if parameter.startswith("q="):
+                try:
+                    quality = min(1.0, max(0.0, float(parameter[2:])))
+                except ValueError:
+                    quality = 0.0
+        qualities[media_type] = max(quality, qualities.get(media_type, 0.0))
+    html_quality = qualities.get("text/html", 0.0)
+    competing_quality = max(
+        qualities.get("application/json", 0.0),
+        qualities.get("application/*", 0.0),
+        qualities.get("*/*", 0.0),
+    )
+    return html_quality > 0 and html_quality > competing_quality
 
 
-def _consume_csrf(request: Request, token: str) -> None:
-    """比较并立即消耗认证动作令牌，拒绝缺失、伪造和重放。"""
-    expected = request.session.pop("auth_csrf", None)
-    if not isinstance(expected, str) or not secrets.compare_digest(expected, token):
+def _get_csrf_service(request: Request) -> AdminCsrfServicePort:
+    """读取服务端 nonce 服务，未装配时明确拒绝认证表单。"""
+    service = getattr(request.app.state, "admin_csrf_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="认证表单安全服务尚未配置")
+    return cast(AdminCsrfServicePort, service)
+
+
+async def _consume_csrf(
+    request: Request,
+    token: str,
+    purpose: str,
+    *,
+    admin_id: int | None,
+) -> None:
+    """原子消费服务端 nonce，拒绝缺失、伪造、过期和重放。"""
+    if not await _get_csrf_service(request).consume(
+        token,
+        purpose,
+        admin_id=admin_id,
+    ):
         raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
 
 
@@ -132,8 +222,10 @@ def _get_access_verifier(request: Request) -> EmployeeAccessVerifier:
 def _clear_and_reject(request: Request, detail: str) -> NoReturn:
     """清空会话；HTML 请求跳登录，API 请求保留 401 边界。"""
     request.session.clear()
-    if "text/html" in request.headers.get("accept", "").lower():
-        location = f"/employee/login?{urlencode({'next': request.url.path})}"
+    if _prefers_html(request.headers.get("accept", "")):
+        # POST 动作不能成为登录后的 next，统一回到安全的 GET 后台页。
+        next_path = request.url.path if request.method == "GET" else DEFAULT_NEXT_PATH
+        location = f"/employee/login?{urlencode({'next': next_path})}"
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER,
             detail=detail,
@@ -198,7 +290,7 @@ async def _current_admin_state(request: Request) -> ActiveAdminState:
     return state
 
 
-def _login_page(
+async def _login_page(
     request: Request,
     *,
     next_path: str,
@@ -206,11 +298,12 @@ def _login_page(
     status_code: int = 200,
 ) -> Response:
     """渲染不回填密码的登录页并重新签发令牌。"""
+    csrf_token = await _get_csrf_service(request).issue("login", admin_id=None)
     return templates.TemplateResponse(
         request=request,
         name="auth/login.html",
         context={
-            "csrf_token": _issue_csrf(request),
+            "csrf_token": csrf_token,
             "next_path": _safe_next(next_path),
             "error": error,
         },
@@ -224,7 +317,7 @@ async def employee_login(
     next_path: str = Query(DEFAULT_NEXT_PATH, alias="next"),
 ) -> Response:
     """展示独立管理员账号密码登录页。"""
-    return _login_page(request, next_path=next_path)
+    return await _login_page(request, next_path=next_path)
 
 
 @router.post("/login")
@@ -236,15 +329,32 @@ async def employee_login_submit(
     next_path: str = Form(DEFAULT_NEXT_PATH, alias="next"),
 ) -> Response:
     """校验一次性令牌和账号密码，并建立最小管理员会话。"""
-    _consume_csrf(request, csrf_token)
+    await _consume_csrf(
+        request,
+        csrf_token,
+        "login",
+        admin_id=None,
+    )
+    limiter = getattr(request.app.state, "admin_login_rate_limiter", None)
+    if limiter is None:
+        limiter = AdminLoginRateLimiter()
+        request.app.state.admin_login_rate_limiter = limiter
+    client_ip = request.client.host if request.client is not None else "unknown"
+    now = _as_utc(_clock(request)())
+    if not await cast(AdminLoginRateLimiter, limiter).allow(client_ip, now):
+        return await _login_page(
+            request,
+            next_path=next_path,
+            error="登录尝试过于频繁，请稍后再试",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
     if len(username) > 128 or len(password) > 128:
-        return _login_page(
+        return await _login_page(
             request,
             next_path=next_path,
             error=AUTHENTICATION_ERROR_MESSAGE,
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
-    now = _as_utc(_clock(request)())
     try:
         authenticated = await _get_auth_service(request).authenticate(
             username,
@@ -252,7 +362,7 @@ async def employee_login_submit(
             now,
         )
     except AuthenticationError:
-        return _login_page(
+        return await _login_page(
             request,
             next_path=next_path,
             error=AUTHENTICATION_ERROR_MESSAGE,
@@ -270,15 +380,11 @@ async def employee_login_submit(
             "last_activity_at": now.isoformat(),
         }
     )
-    location = (
-        "/employee/account"
-        if authenticated.must_change_password
-        else _safe_next(next_path)
-    )
+    location = "/employee/account" if authenticated.must_change_password else _safe_next(next_path)
     return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
 
 
-def _account_page(
+async def _account_page(
     request: Request,
     *,
     must_change_password: bool,
@@ -287,16 +393,19 @@ def _account_page(
     status_code: int = 200,
 ) -> Response:
     """渲染账号安全页，页面上下文不包含密码或哈希。"""
-    template_name = (
-        "auth/change_password.html"
-        if must_change_password
-        else "account/detail.html"
-    )
+    template_name = "auth/change_password.html" if must_change_password else "account/detail.html"
+    admin_id = cast(int, request.session["admin_id"])
+    csrf_service = _get_csrf_service(request)
+    password_csrf = await csrf_service.issue("password", admin_id=admin_id)
+    logout_csrf = await csrf_service.issue("logout", admin_id=admin_id)
+    revoke_csrf = await csrf_service.issue("revoke-sessions", admin_id=admin_id)
     return templates.TemplateResponse(
         request=request,
         name=template_name,
         context={
-            "csrf_token": _issue_csrf(request),
+            "password_csrf_token": password_csrf,
+            "logout_csrf_token": logout_csrf,
+            "revoke_csrf_token": revoke_csrf,
             "error": error,
             "notice": notice,
         },
@@ -309,7 +418,7 @@ async def employee_account(request: Request) -> Response:
     """展示当前唯一管理员的账号安全操作。"""
     await require_employee_session(request)
     state = await _current_admin_state(request)
-    return _account_page(
+    return await _account_page(
         request,
         must_change_password=state.must_change_password,
     )
@@ -324,11 +433,16 @@ async def employee_change_password(
 ) -> Response:
     """使用当前密码修改密码，并把本会话推进到原子更新后的版本。"""
     await require_employee_session(request)
-    _consume_csrf(request, csrf_token)
     admin_id = cast(int, request.session["admin_id"])
+    await _consume_csrf(
+        request,
+        csrf_token,
+        "password",
+        admin_id=admin_id,
+    )
     before_change = await _current_admin_state(request)
     if len(current_password) > 128:
-        return _account_page(
+        return await _account_page(
             request,
             must_change_password=before_change.must_change_password,
             error=AUTHENTICATION_ERROR_MESSAGE,
@@ -341,14 +455,14 @@ async def employee_change_password(
             new_password,
         )
     except AuthenticationError:
-        return _account_page(
+        return await _account_page(
             request,
             must_change_password=before_change.must_change_password,
             error=AUTHENTICATION_ERROR_MESSAGE,
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
     except ValueError as error:
-        return _account_page(
+        return await _account_page(
             request,
             must_change_password=before_change.must_change_password,
             error=str(error),
@@ -368,10 +482,15 @@ async def employee_revoke_sessions(
 ) -> Response:
     """复核当前密码后撤销其他会话，并保留当前浏览器会话。"""
     await require_employee_session(request)
-    _consume_csrf(request, csrf_token)
     admin_id = cast(int, request.session["admin_id"])
+    await _consume_csrf(
+        request,
+        csrf_token,
+        "revoke-sessions",
+        admin_id=admin_id,
+    )
     if len(password) > 128:
-        return _account_page(
+        return await _account_page(
             request,
             must_change_password=False,
             error=AUTHENTICATION_ERROR_MESSAGE,
@@ -379,10 +498,13 @@ async def employee_revoke_sessions(
         )
     try:
         service = _get_auth_service(request)
-        await service.reverify(admin_id, password)
-        version = await service.revoke_other_sessions(admin_id)
+        version = await service.reverify_and_revoke_sessions(
+            admin_id,
+            password,
+            cast(int, request.session["admin_session_version"]),
+        )
     except AuthenticationError:
-        return _account_page(
+        return await _account_page(
             request,
             must_change_password=False,
             error=AUTHENTICATION_ERROR_MESSAGE,
@@ -399,6 +521,11 @@ async def employee_logout(
 ) -> RedirectResponse:
     """校验令牌后清除完整会话并返回登录页。"""
     await require_employee_session(request)
-    _consume_csrf(request, csrf_token)
+    await _consume_csrf(
+        request,
+        csrf_token,
+        "logout",
+        admin_id=cast(int, request.session["admin_id"]),
+    )
     request.session.clear()
     return RedirectResponse("/employee/login", status_code=status.HTTP_303_SEE_OTHER)

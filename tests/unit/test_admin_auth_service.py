@@ -1,3 +1,5 @@
+import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -98,6 +100,28 @@ class MemoryAdminCredentialRepository:
         credential.session_version += 1
         return credential.session_version
 
+    async def reverify_and_revoke_sessions(
+        self,
+        admin_id: int,
+        *,
+        expected_password_hash: str,
+        expected_session_version: int,
+        now: datetime,
+    ) -> int | None:
+        """模拟密码哈希与会话版本双条件 CAS。"""
+        credential = await self.get_by_id(admin_id)
+        if (
+            credential is None
+            or credential.password_hash != expected_password_hash
+            or credential.session_version != expected_session_version
+        ):
+            return None
+        credential.session_version += 1
+        credential.failed_attempts = 0
+        credential.locked_until = None
+        credential.last_authenticated_at = now
+        return credential.session_version
+
 
 def _credential(password: str = "initial-password") -> AdminCredential:
     """创建使用 Argon2id 的单例测试管理员。"""
@@ -122,9 +146,7 @@ async def test_authenticate_verifies_argon2id_and_clears_failures() -> None:
     credential.failed_attempts = 3
     repository = MemoryAdminCredentialRepository(credential)
 
-    session = await AdminAuthService(repository).authenticate(
-        "admin", "initial-password", now
-    )
+    session = await AdminAuthService(repository).authenticate("admin", "initial-password", now)
 
     assert credential.password_hash.startswith("$argon2id$")
     assert credential.failed_attempts == 0
@@ -306,3 +328,50 @@ async def test_current_password_failure_uses_persistent_lock_counter(
             )
 
     assert credential.failed_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_argon2_verification_runs_outside_event_loop() -> None:
+    """耗时 Argon2 校验必须在线程执行，不能阻塞异步请求循环。"""
+
+    class SlowHasher:
+        """用阻塞睡眠模拟 Argon2 CPU 工作。"""
+
+        def verify(self, password_hash: str, password: str) -> bool:
+            """阻塞后返回密码匹配。"""
+            time.sleep(0.08)
+            return password == "initial-password"
+
+        def check_needs_rehash(self, password_hash: str) -> bool:
+            """测试哈希无需升级。"""
+            return False
+
+        def hash(self, password: str) -> str:
+            """返回固定测试哈希。"""
+            return "slow-hash"
+
+    credential = _credential()
+    service = AdminAuthService(
+        MemoryAdminCredentialRepository(credential),
+        password_hasher=SlowHasher(),
+        dummy_hash="dummy-hash",
+    )
+    heartbeat_elapsed = 0.0
+
+    async def heartbeat() -> None:
+        """测量认证执行期间事件循环是否仍能调度。"""
+        nonlocal heartbeat_elapsed
+        started = time.monotonic()
+        await asyncio.sleep(0.01)
+        heartbeat_elapsed = time.monotonic() - started
+
+    await asyncio.gather(
+        service.authenticate(
+            "admin",
+            "initial-password",
+            datetime(2026, 8, 11, 8, tzinfo=UTC),
+        ),
+        heartbeat(),
+    )
+
+    assert heartbeat_elapsed < 0.05

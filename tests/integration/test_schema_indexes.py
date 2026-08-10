@@ -22,6 +22,7 @@ async def test_high_frequency_queries_have_composite_indexes() -> None:
                 "customer_merge_suggestions",
                 "jobs",
                 "admin_credentials",
+                "admin_csrf_nonces",
             ):
                 result[table] = {
                     tuple(index["column_names"])
@@ -41,5 +42,6 @@ async def test_high_frequency_queries_have_composite_indexes() -> None:
     ) in indexes["customer_merge_suggestions"]
     assert ("status", "job_type", "available_at") in indexes["jobs"]
     assert ("username",) in indexes["admin_credentials"]
+    assert ("token_hash",) in indexes["admin_csrf_nonces"]
 
     await engine.dispose()

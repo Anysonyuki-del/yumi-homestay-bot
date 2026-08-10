@@ -20,7 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from homestay_bot.config import Settings
 from homestay_bot.db import create_engine, create_session_factory
 from homestay_bot.domain.enums import ComplaintReviewStatus, EmployeeRole, MessageOrigin
-from homestay_bot.domain.models import BookingApproval, Conversation, Employee, Message
+from homestay_bot.domain.models import (
+    AdminCredential,
+    BookingApproval,
+    Conversation,
+    Employee,
+    Message,
+)
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
@@ -42,6 +48,7 @@ from homestay_bot.integrations.wecom.contact_client import WeComContactClient
 from homestay_bot.repositories.admin_credentials import (
     SQLAlchemyAdminCredentialRepository,
 )
+from homestay_bot.repositories.admin_csrf import SQLAlchemyAdminCsrfRepository
 from homestay_bot.repositories.approvals import (
     SQLAlchemyApprovalRepository,
     SQLAlchemyPermissionChecker,
@@ -75,7 +82,10 @@ from homestay_bot.services.admin_auth_service import (
     AdminAuthService,
     AdminSession,
     AuthenticationError,
+    PasswordHasherPort,
 )
+from homestay_bot.services.admin_csrf import AdminCsrfService
+from homestay_bot.services.admin_passwords import ADMIN_PASSWORD_HASHER
 from homestay_bot.services.approval_page_service import ApprovalPageService
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
@@ -177,9 +187,7 @@ class SessionHostexEventRecorder:
     async def record_hostex_event(self, **fields: Any) -> bool:
         """在同一事务写入事件与唯一任务并立即提交。"""
         async with self._factory() as session:
-            created = await SQLAlchemyOperationsRepository(
-                session
-            ).record_hostex_event(**fields)
+            created = await SQLAlchemyOperationsRepository(session).record_hostex_event(**fields)
             await session.commit()
             return created
 
@@ -197,9 +205,7 @@ class TransactionalOutboxWeCom:
         """绑定来源消息及可选发送阶段，确保分阶段回复分别保持幂等。"""
         self._repository = SQLAlchemyJobRepository(session)
         self._source_message_id = (
-            f"{source_message_id}:{delivery_phase}"
-            if delivery_phase
-            else source_message_id
+            f"{source_message_id}:{delivery_phase}" if delivery_phase else source_message_id
         )
         self._sequence = 0
 
@@ -391,9 +397,7 @@ async def _notify_guest_delivery_failure(
     if message is None or message.origin is not MessageOrigin.BOT:
         return False
     metadata = dict(message.message_metadata or {})
-    if metadata.get("delivery_retry_pending") or metadata.get(
-        "delivery_failure_notified"
-    ):
+    if metadata.get("delivery_retry_pending") or metadata.get("delivery_failure_notified"):
         return False
     outbox = TransactionalOutboxWeCom(
         session,
@@ -438,9 +442,7 @@ class SessionFaqCandidateRepository:
     ) -> list[Any]:
         """读取最多五十条开放候选，并提交关闭期满的重开状态。"""
         async with self._factory() as session:
-            candidates = await SQLAlchemyFaqCandidateRepository(
-                session
-            ).list_context(now=now)
+            candidates = await SQLAlchemyFaqCandidateRepository(session).list_context(now=now)
             await session.commit()
             return candidates
 
@@ -448,14 +450,25 @@ class SessionFaqCandidateRepository:
 class SessionAdminAuthService:
     """为每个管理员认证动作创建独立短事务。"""
 
-    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
-        """保存数据库会话工厂，不长期持有凭证实体。"""
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        *,
+        password_hasher: PasswordHasherPort,
+        dummy_hash: str,
+    ) -> None:
+        """保存会话工厂及应用生命周期共享的 Argon2 组件。"""
         self._factory = factory
+        self._password_hasher = password_hasher
+        self._dummy_hash = dummy_hash
 
-    @staticmethod
-    def _service(session: AsyncSession) -> AdminAuthService:
+    def _service(self, session: AsyncSession) -> AdminAuthService:
         """为当前事务组装唯一管理员认证服务。"""
-        return AdminAuthService(SQLAlchemyAdminCredentialRepository(session))
+        return AdminAuthService(
+            SQLAlchemyAdminCredentialRepository(session),
+            password_hasher=self._password_hasher,
+            dummy_hash=self._dummy_hash,
+        )
 
     async def authenticate(
         self,
@@ -503,6 +516,58 @@ class SessionAdminAuthService:
             version = await self._service(session).revoke_other_sessions(admin_id)
             await session.commit()
             return version
+
+    async def reverify_and_revoke_sessions(
+        self,
+        admin_id: int,
+        password: str,
+        expected_session_version: int,
+    ) -> int:
+        """在单一数据库事务内复核密码并 CAS 撤销其他会话。"""
+        async with self._factory() as session:
+            try:
+                version = await self._service(session).reverify_and_revoke_sessions(
+                    admin_id,
+                    password,
+                    expected_session_version,
+                )
+            except AuthenticationError:
+                await session.commit()
+                raise
+            await session.commit()
+            return version
+
+
+class SessionAdminCsrfService:
+    """为每次 nonce 签发或消费创建独立短事务。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def issue(self, purpose: str, *, admin_id: int | None) -> str:
+        """持久化 nonce 摘要并提交后返回随机明文。"""
+        async with self._factory() as session:
+            token = await AdminCsrfService(SQLAlchemyAdminCsrfRepository(session)).issue(
+                purpose, admin_id=admin_id
+            )
+            await session.commit()
+            return token
+
+    async def consume(
+        self,
+        token: str,
+        purpose: str,
+        *,
+        admin_id: int | None,
+    ) -> bool:
+        """用独立事务原子消费 nonce 并立即提交结果。"""
+        async with self._factory() as session:
+            consumed = await AdminCsrfService(SQLAlchemyAdminCsrfRepository(session)).consume(
+                token, purpose, admin_id=admin_id
+            )
+            await session.commit()
+            return consumed
 
 
 class SessionEmployeeAccessVerifier:
@@ -552,9 +617,7 @@ class SessionApprovalPageService:
         async with self._factory() as session:
             return await self._service(session).get_detail(approval_id)
 
-    async def list_pending(
-        self, *, offset: int, limit: int
-    ) -> list[BookingApproval]:
+    async def list_pending(self, *, offset: int, limit: int) -> list[BookingApproval]:
         """在短会话中按分页边界读取待处理审批。"""
         async with self._factory() as session:
             return await self._service(session).list_pending(
@@ -715,9 +778,7 @@ class SessionTaskPageService:
         """在同一事务锁定任务和房态并标记可入住。"""
         async with self._factory() as session:
             repository = SQLAlchemyOperationsRepository(session)
-            credential_repository = SQLAlchemyCredentialDeliveryRepository(
-                session
-            )
+            credential_repository = SQLAlchemyCredentialDeliveryRepository(session)
             state = await RoomReadinessService(
                 repository,
                 repository,
@@ -831,9 +892,7 @@ class SessionPropertyAdminService:
                 self._upload_size_limit,
             )
             async with self._factory() as session:
-                credential = await self._service(
-                    session
-                ).replace_credentials(
+                credential = await self._service(session).replace_credentials(
                     property_id,
                     employee,
                     password=password,
@@ -1117,8 +1176,7 @@ class SessionComplaintAdminService:
             review = await SQLAlchemyComplaintRepository(session).get(review_id)
             delivery_phase = (
                 f"retry-{review.version}"
-                if review is not None
-                and review.status is ComplaintReviewStatus.DELIVERY_FAILED
+                if review is not None and review.status is ComplaintReviewStatus.DELIVERY_FAILED
                 else None
             )
             await ComplaintAdminService(
@@ -1220,24 +1278,12 @@ async def _run_worker_loop(
     factory: async_sessionmaker[AsyncSession],
     handler: WeComSyncJobHandler,
     wecom: WeComApiClient,
-    faq_draft_handler_factory: (
-        Callable[[AsyncSession], JobHandler] | None
-    ) = None,
-    complaint_review_handler_factory: (
-        Callable[[AsyncSession], JobHandler] | None
-    ) = None,
-    hostex_event_handler_factory: (
-        Callable[[AsyncSession], JobHandler] | None
-    ) = None,
-    credential_part_handler_factory: (
-        Callable[[AsyncSession], JobHandler] | None
-    ) = None,
-    customer_tag_handler_factory: (
-        Callable[[AsyncSession], JobHandler] | None
-    ) = None,
-    lifecycle_handler_factory: (
-        Callable[[AsyncSession], JobHandler] | None
-    ) = None,
+    faq_draft_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
+    complaint_review_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
+    hostex_event_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
+    credential_part_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
+    customer_tag_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
+    lifecycle_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
     deferred_message_handler: JobHandler | None = None,
     included_job_types: set[str] | None = None,
     excluded_job_types: set[str] | None = None,
@@ -1255,14 +1301,10 @@ async def _run_worker_loop(
                 if recover_stale:
                     # 预订审批没有任务类型分片，只由通用 worker 负责恢复。
                     if included_job_types is None:
-                        await SQLAlchemyApprovalRepository(
-                            session
-                        ).recover_stale_creating(
+                        await SQLAlchemyApprovalRepository(session).recover_stale_creating(
                             before=datetime.now(UTC) - timedelta(minutes=5)
                         )
-                    await repository.recover_stale(
-                        before=datetime.now(UTC) - timedelta(minutes=5)
-                    )
+                    await repository.recover_stale(before=datetime.now(UTC) - timedelta(minutes=5))
                 await session.commit()
 
                 async def send_guest(payload: dict[str, Any]) -> None:
@@ -1299,8 +1341,7 @@ async def _run_worker_loop(
                     conversation = await session.scalar(
                         select(Conversation).where(
                             Conversation.open_kfid == str(payload["open_kfid"]),
-                            Conversation.external_userid
-                            == str(payload["external_userid"]),
+                            Conversation.external_userid == str(payload["external_userid"]),
                         )
                     )
                     if conversation is not None:
@@ -1313,9 +1354,7 @@ async def _run_worker_loop(
                         retry_of_message_id = payload.get("retry_of_message_id")
                         if retry_of_message_id:
                             metadata["retry_of_message_id"] = str(retry_of_message_id)
-                        await MessageService(
-                            SQLAlchemyMessageRepository(session)
-                        ).record_bot(
+                        await MessageService(SQLAlchemyMessageRepository(session)).record_bot(
                             conversation.id,
                             real_message_id,
                             str(payload["content"]),
@@ -1369,8 +1408,8 @@ async def _run_worker_loop(
                     faq_draft_handler_factory,
                 )
                 if complaint_review_handler_factory is not None:
-                    handlers["complaint_review_generate"] = (
-                        complaint_review_handler_factory(session)
+                    handlers["complaint_review_generate"] = complaint_review_handler_factory(
+                        session
                     )
                 _register_hostex_event_handler(
                     handlers,
@@ -1397,17 +1436,12 @@ async def _run_worker_loop(
                     handlers=handlers,
                     heartbeat=lambda value: setattr(app.state, "worker_last_heartbeat", value),
                     checkpoint=session.commit,
-                    on_job_committed=lambda job: (
-                        _record_committed_job_heartbeat(app, job)
-                    ),
+                    on_job_committed=lambda job: _record_committed_job_heartbeat(app, job),
                 )
                 handled = await worker.run_once()
         except SQLAlchemyError as error:
             # 数据库提交或连接故障不得永久终止 worker；只记录异常类型并有限退避。
-            if (
-                isinstance(error, OperationalError)
-                and "database is locked" in str(error).lower()
-            ):
+            if isinstance(error, OperationalError) and "database is locked" in str(error).lower():
                 logger.warning("后台任务遇到 SQLite 写锁，1 秒后重试")
             else:
                 logger.warning(
@@ -1430,9 +1464,7 @@ async def _run_faq_maintenance_loop(
     while True:
         try:
             async with factory() as session:
-                await SQLAlchemyFaqCandidateRepository(session).maintain(
-                    now=current_time()
-                )
+                await SQLAlchemyFaqCandidateRepository(session).maintain(now=current_time())
                 await session.commit()
         except asyncio.CancelledError:
             raise
@@ -1455,8 +1487,7 @@ async def _run_retention_loop(
                 deleted = await SQLAlchemyRetentionRepository(session).purge()
                 await session.commit()
                 logger.info(
-                    "历史记录清理完成：jobs=%s external_requests=%s "
-                    "hostex_events=%s audit_logs=%s",
+                    "历史记录清理完成：jobs=%s external_requests=%s hostex_events=%s audit_logs=%s",
                     deleted.get("jobs", 0),
                     deleted.get("external_requests", 0),
                     deleted.get("hostex_webhook_events", 0),
@@ -1527,9 +1558,7 @@ async def _run_hostex_reconcile_loop(
     hostex: HostexClient,
     interval_seconds: float,
     today_provider: Callable[[], date] | None = None,
-    lifecycle_factory: (
-        Callable[[AsyncSession], LifecycleReminderService] | None
-    ) = None,
+    lifecycle_factory: (Callable[[AsyncSession], LifecycleReminderService] | None) = None,
     heartbeat_now: Callable[[], datetime] | None = None,
     sync_heartbeat: Callable[[datetime], None] | None = None,
     lifecycle_heartbeat: Callable[[datetime], None] | None = None,
@@ -1544,9 +1573,7 @@ async def _run_hostex_reconcile_loop(
                     hostex,
                     SQLAlchemyOperationsRepository(session),
                     lifecycle=(
-                        lifecycle_factory(session)
-                        if lifecycle_factory is not None
-                        else None
+                        lifecycle_factory(session) if lifecycle_factory is not None else None
                     ),
                 )
                 today = current_date()
@@ -1614,6 +1641,48 @@ async def _run_wecom_poll_loop(
             delay = interval_seconds
 
 
+LOCAL_ADMIN_WECOM_USERID = "local-admin-console"
+
+
+async def _bootstrap_admin_auth(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    username: str | None,
+    password_hash: str | None,
+) -> bool:
+    """优先复用既有凭证；首次引导只绑定明确的本地审计员工。"""
+    async with factory() as session:
+        existing = await session.scalar(select(AdminCredential).limit(1))
+        if existing is not None:
+            return True
+        if username is None or password_hash is None:
+            return False
+        employee = await session.scalar(
+            select(Employee).where(Employee.wecom_userid == LOCAL_ADMIN_WECOM_USERID)
+        )
+        if employee is None:
+            employee = Employee(
+                wecom_userid=LOCAL_ADMIN_WECOM_USERID,
+                name="本地后台管理员",
+                role=EmployeeRole.ADMIN,
+                is_active=True,
+            )
+            session.add(employee)
+            await session.flush()
+        else:
+            # 明确的保留 userid 是本地后台身份，重启时恢复其后台授权状态。
+            employee.name = "本地后台管理员"
+            employee.role = EmployeeRole.ADMIN
+            employee.is_active = True
+        await SQLAlchemyAdminCredentialRepository(session).bootstrap(
+            employee_id=employee.id,
+            username=username,
+            password_hash=password_hash,
+        )
+        await session.commit()
+        return True
+
+
 @asynccontextmanager
 async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     """在配置完整时装配外部客户端、数据库服务和后台 worker。"""
@@ -1626,29 +1695,16 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     engine = create_engine(settings.database_url)
     factory = create_session_factory(engine)
-    if (
-        settings.admin_bootstrap_username is not None
-        and settings.admin_bootstrap_password_hash is not None
-    ):
-        # 引导配置只含预生成哈希；凭证继续绑定现有 Employee 管理员身份。
-        async with factory() as session:
-            employee_id = await session.scalar(
-                select(Employee.id)
-                .where(
-                    Employee.role == EmployeeRole.ADMIN,
-                    Employee.is_active.is_(True),
-                )
-                .order_by(Employee.id)
-                .limit(1)
-            )
-            if employee_id is None:
-                raise RuntimeError("管理员凭证引导需要一个启用的管理员员工身份")
-            await SQLAlchemyAdminCredentialRepository(session).bootstrap(
-                employee_id=int(employee_id),
-                username=settings.admin_bootstrap_username,
-                password_hash=settings.admin_bootstrap_password_hash,
-            )
-            await session.commit()
+    try:
+        admin_auth_available = await _bootstrap_admin_auth(
+            factory,
+            username=settings.admin_bootstrap_username,
+            password_hash=settings.admin_bootstrap_password_hash,
+        )
+    except Exception as error:
+        # 后台引导失败不能阻断企业微信、客服和 worker 主链路，且日志不含秘密正文。
+        admin_auth_available = False
+        logger.warning("管理员后台引导不可用：%s", type(error).__name__)
     hostex = HostexClient(settings.hostex_access_token)
     wecom = WeComApiClient(
         settings.wecom_corp_id,
@@ -1673,9 +1729,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     queue = DurableJobQueue(factory)
     knowledge = KnowledgeService(SessionKnowledgeRepository(factory))
-    faq_candidate_context = FaqCandidateContextService(
-        SessionFaqCandidateRepository(factory)
-    )
+    faq_candidate_context = FaqCandidateContextService(SessionFaqCandidateRepository(factory))
     web_search_state = WebSearchState()
     tourism_searcher = DeepSeekTourismSearcher(
         client=deepseek_anthropic,
@@ -1741,9 +1795,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ),
                 customer_context=context_repository,
                 room_assignment=context_repository,
-                business_tasks=BusinessTaskService(
-                    SQLAlchemyOperationsRepository(session)
-                ),
+                business_tasks=BusinessTaskService(SQLAlchemyOperationsRepository(session)),
                 audit_events=SQLAlchemyOperationsRepository(session),
                 jobs=SQLAlchemyJobRepository(session),
                 identity_resolver=wecom,
@@ -1779,9 +1831,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             SQLAlchemyLifecycleReminderRepository(session),
             SQLAlchemyJobRepository(session),
             wecom,
-            BusinessTaskService(
-                SQLAlchemyOperationsRepository(session)
-            ),
+            BusinessTaskService(SQLAlchemyOperationsRepository(session)),
             weather=reminder_weather,
             before_external=session.commit,
         )
@@ -1845,15 +1895,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 administrators=SQLAlchemyEmployeeRepository(session),
                 notifications=TransactionalOutboxWeCom(
                     session,
-                    source_message_id=(
-                        f"faq-draft:{candidate_id}:{generation}"
-                    ),
+                    source_message_id=(f"faq-draft:{candidate_id}:{generation}"),
                 ),
                 agent_id=settings.wecom_agent_id,
-                knowledge_admin_url=(
-                    f"{settings.public_base_url.rstrip('/')}"
-                    "/employee/knowledge"
-                ),
+                knowledge_admin_url=(f"{settings.public_base_url.rstrip('/')}/employee/knowledge"),
             )
             await service.handle(payload)
 
@@ -1867,18 +1912,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             service = ComplaintReviewJobService(
                 reviews=SQLAlchemyComplaintRepository(session),
                 analyzer=complaint_analyzer,
-                messages=SQLAlchemyComplaintMessageContext(
-                    SQLAlchemyMessageRepository(session)
-                ),
+                messages=SQLAlchemyComplaintMessageContext(SQLAlchemyMessageRepository(session)),
                 notifications=TransactionalOutboxWeCom(
                     session,
                     source_message_id=f"complaint-review:{payload['review_id']}",
                 ),
                 employee_userids=duty_userids,
                 agent_id=settings.wecom_agent_id,
-                edit_url=(
-                    f"{settings.public_base_url.rstrip('/')}/employee/complaints"
-                ),
+                edit_url=(f"{settings.public_base_url.rstrip('/')}/employee/complaints"),
             )
             await service.handle(payload)
 
@@ -1939,8 +1980,20 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             return False
 
-    app.state.admin_auth_service = SessionAdminAuthService(factory)
-    app.state.employee_access_verifier = SessionEmployeeAccessVerifier(factory)
+    app.state.admin_auth_available = admin_auth_available
+    if admin_auth_available:
+        # 虚拟哈希在应用生命周期仅生成一次，登录请求只在线程中复用校验。
+        dummy_hash = await asyncio.to_thread(
+            ADMIN_PASSWORD_HASHER.hash,
+            "admin-auth-dummy-password",
+        )
+        app.state.admin_auth_service = SessionAdminAuthService(
+            factory,
+            password_hasher=ADMIN_PASSWORD_HASHER,
+            dummy_hash=dummy_hash,
+        )
+        app.state.admin_csrf_service = SessionAdminCsrfService(factory)
+        app.state.employee_access_verifier = SessionEmployeeAccessVerifier(factory)
     app.state.approval_page_service = SessionApprovalPageService(
         factory=factory,
         hostex=hostex,
@@ -1986,16 +2039,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         database_probe=database_probe,
         heartbeat_getter=lambda: app.state.worker_last_heartbeat,
         poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
-        hostex_heartbeat_getter=(
-            lambda: app.state.hostex_sync_last_success
-        ),
-        context_heartbeat_getter=(
-            lambda: app.state.context_maintenance_last_success
-        ),
-        lifecycle_heartbeat_getter=(
-            lambda: app.state.lifecycle_scheduler_last_success
-        ),
-        configuration_ok=bool(duty_userids),
+        hostex_heartbeat_getter=(lambda: app.state.hostex_sync_last_success),
+        context_heartbeat_getter=(lambda: app.state.context_maintenance_last_success),
+        lifecycle_heartbeat_getter=(lambda: app.state.lifecycle_scheduler_last_success),
+        configuration_ok=bool(duty_userids) and admin_auth_available,
         web_search_status_getter=web_search_state.get,
         contact_sync_configured=contact_client is not None,
         poll_max_age=timedelta(
@@ -2028,9 +2075,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             hostex_event_handler_factory=build_hostex_event_handler,
             credential_part_handler_factory=build_credential_part_handler,
             customer_tag_handler_factory=(
-                build_customer_tag_handler
-                if contact_client is not None
-                else None
+                build_customer_tag_handler if contact_client is not None else None
             ),
             lifecycle_handler_factory=build_lifecycle_handler,
             deferred_message_handler=handle_deferred_message,
@@ -2049,9 +2094,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             hostex_event_handler_factory=build_hostex_event_handler,
             credential_part_handler_factory=build_credential_part_handler,
             customer_tag_handler_factory=(
-                build_customer_tag_handler
-                if contact_client is not None
-                else None
+                build_customer_tag_handler if contact_client is not None else None
             ),
             lifecycle_handler_factory=build_lifecycle_handler,
             deferred_message_handler=handle_deferred_message,
@@ -2066,9 +2109,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             interval_seconds=settings.wecom_poll_interval_seconds,
         )
     )
-    faq_maintenance_task = asyncio.create_task(
-        _run_faq_maintenance_loop(factory=factory)
-    )
+    faq_maintenance_task = asyncio.create_task(_run_faq_maintenance_loop(factory=factory))
     retention_task = asyncio.create_task(_run_retention_loop(factory))
     context_maintenance_task = asyncio.create_task(
         _run_context_maintenance_loop(
@@ -2120,6 +2161,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 测试重启或同进程重新装配时不得沿用已关闭的客户端与会话服务。
         for state_name in (
             "admin_auth_service",
+            "admin_auth_available",
+            "admin_csrf_service",
             "employee_access_verifier",
             "approval_page_service",
             "task_page_service",

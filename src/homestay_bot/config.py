@@ -1,10 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from homestay_bot.services.admin_passwords import validate_admin_password_hash
 
 
 class Settings(BaseSettings):
@@ -31,12 +29,8 @@ class Settings(BaseSettings):
     wecom_poll_interval_seconds: float = Field(default=60, ge=5, le=300)
     session_secret: str = Field(min_length=32)
     data_encryption_key: str = Field(min_length=44, max_length=44)
-    config_encryption_key: str | None = Field(
-        default=None, min_length=44, max_length=44
-    )
-    admin_bootstrap_username: str | None = Field(
-        default=None, min_length=1, max_length=128
-    )
+    config_encryption_key: str | None = Field(default=None, min_length=44, max_length=44)
+    admin_bootstrap_username: str | None = Field(default=None, min_length=1, max_length=128)
     admin_bootstrap_password_hash: str | None = None
     private_upload_dir: Path = Path("data/private_uploads")
     private_upload_max_bytes: int = Field(
@@ -49,18 +43,6 @@ class Settings(BaseSettings):
     def deepseek_anthropic_base_url(self) -> str:
         """从唯一 DeepSeek 根地址派生 Anthropic 兼容地址。"""
         return f"{self.deepseek_base_url.rstrip('/')}/anthropic"
-
-    @model_validator(mode="after")
-    def validate_admin_bootstrap(self) -> "Settings":
-        """要求引导用户名与预生成 Argon2id 哈希成对出现，拒绝明文密码。"""
-        username_set = self.admin_bootstrap_username is not None
-        password_hash = self.admin_bootstrap_password_hash
-        password_hash_set = password_hash is not None
-        if username_set != password_hash_set:
-            raise ValueError("管理员引导用户名和密码哈希必须同时配置")
-        if password_hash is not None:
-            validate_admin_password_hash(password_hash)
-        return self
 
 
 @lru_cache

@@ -1,9 +1,11 @@
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from admin_auth_helpers import MemoryAdminCsrfService
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
@@ -76,6 +78,17 @@ class AdminAuthStub:
         self.version += 1
         return self.version
 
+    async def reverify_and_revoke_sessions(
+        self,
+        admin_id: int,
+        password: str,
+        expected_session_version: int,
+    ) -> int:
+        """模拟单事务密码复核与版本 CAS。"""
+        assert expected_session_version == self.version
+        await self.reverify(admin_id, password)
+        return await self.revoke_other_sessions(admin_id)
+
 
 class AdminAccessVerifierStub:
     """把认证服务当前状态返回给请求期复核逻辑。"""
@@ -111,6 +124,7 @@ def build_client(*, must_change_password: bool = False) -> tuple[TestClient, Adm
     app.include_router(approvals_router)
     app.include_router(complaints_router)
     app.state.admin_auth_service = auth
+    app.state.admin_csrf_service = MemoryAdminCsrfService()
     app.state.employee_access_verifier = AdminAccessVerifierStub(auth)
     app.state.admin_auth_clock = lambda: NOW
 
@@ -138,6 +152,18 @@ REAL_PROTECTED_GET_PATHS = [
 def csrf_from(response_text: str) -> str:
     """从基础认证表单提取一次性 CSRF 令牌。"""
     match = re.search(r'name="csrf_token" value="([^"]+)"', response_text)
+    assert match is not None
+    return match.group(1)
+
+
+def csrf_for_action(response_text: str, action: str) -> str:
+    """从指定认证表单提取其独立用途 nonce。"""
+    match = re.search(
+        rf'<form method="post" action="{re.escape(action)}">.*?'
+        r'name="csrf_token" value="([^"]+)"',
+        response_text,
+        re.DOTALL,
+    )
     assert match is not None
     return match.group(1)
 
@@ -177,6 +203,17 @@ def test_get_login_renders_html_and_only_keeps_internal_next() -> None:
     assert "//evil.test" not in protocol_relative.text
 
 
+def test_login_reports_503_when_admin_auth_is_degraded() -> None:
+    """后台引导不可用时登录页应明确 503，而不是影响应用其他路由启动。"""
+    app = FastAPI()
+    app.add_middleware(SessionMiddleware, secret_key="admin-auth-test-secret")
+    app.include_router(employee_auth_router)
+
+    response = TestClient(app).get("/employee/login")
+
+    assert response.status_code == 503
+
+
 def test_unauthenticated_html_redirects_but_api_boundary_stays_401() -> None:
     """浏览器页面统一跳登录，非 HTML 调用仍保留明确 401 安全边界。"""
     client, _ = build_client()
@@ -193,10 +230,76 @@ def test_unauthenticated_html_redirects_but_api_boundary_stays_401() -> None:
     )
 
     assert html.status_code == 303
-    assert html.headers["location"].startswith(
-        "/employee/login?next=%2Femployee%2Fprotected"
-    )
+    assert html.headers["location"].startswith("/employee/login?next=%2Femployee%2Fprotected")
     assert api.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("accept", "expected_status"),
+    [
+        ("*/*", 401),
+        ("text/html;q=0, application/json;q=0.5", 401),
+        ("text/html;q=0.4, application/json;q=0.9", 401),
+        ("application/json;q=0.4, text/html;q=0.9", 303),
+        ("text/html, */*;q=0.1", 303),
+    ],
+)
+def test_unauthenticated_response_honors_accept_quality(
+    accept: str,
+    expected_status: int,
+) -> None:
+    """认证边界必须按 q 值协商，通配 Accept 默认保持 API 401。"""
+    client, _ = build_client()
+
+    response = client.get(
+        "/employee/protected",
+        headers={"Accept": accept},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == expected_status
+
+
+def test_unauthenticated_post_redirect_uses_safe_get_next() -> None:
+    """未登录 POST 的跳转目标必须是安全 GET 页面，不能回到仅 POST 动作。"""
+    client, _ = build_client()
+
+    response = client.post(
+        "/employee/logout",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("next=%2Femployee%2Ftasks")
+
+
+def test_concurrent_login_posts_can_only_consume_same_nonce_once() -> None:
+    """两个相同旧 Cookie 与 token 的并发登录 POST 最多一个进入认证。"""
+    client, _ = build_client()
+    page = client.get("/employee/login")
+    token = csrf_from(page.text)
+    shared_cookie = "stale-browser-session"
+
+    def submit() -> int:
+        """使用独立客户端模拟同一旧浏览器状态的并发提交。"""
+        request_client = TestClient(client.app)
+        request_client.cookies.set("session", shared_cookie)
+        return request_client.post(
+            "/employee/login",
+            data={
+                "username": "admin",
+                "password": "correct-password",
+                "next": "/employee/protected",
+                "csrf_token": token,
+            },
+            follow_redirects=False,
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        statuses = sorted(executor.map(lambda _: submit(), range(2)))
+
+    assert statuses == [303, 409]
 
 
 @pytest.mark.parametrize("path", REAL_PROTECTED_GET_PATHS)
@@ -323,6 +426,17 @@ def test_oversized_password_is_never_copied_into_validation_response(caplog) -> 
     assert secret not in caplog.text
 
 
+def test_login_is_rate_limited_without_exposing_credentials() -> None:
+    """单 IP 短时重复登录必须被有界限速，响应不得复制凭据。"""
+    client, _ = build_client()
+    responses = [login(client, username="missing", password="wrong-password") for _ in range(11)]
+
+    assert [response.status_code for response in responses[:10]] == [401] * 10
+    assert responses[-1].status_code == 429
+    assert "missing" not in responses[-1].text
+    assert "wrong-password" not in responses[-1].text
+
+
 def test_login_clears_old_session_and_writes_complete_admin_identity() -> None:
     """成功登录前必须清空旧会话，并写入完整管理员版本与活动时间。"""
     client, auth = build_client()
@@ -354,7 +468,10 @@ def test_first_login_only_allows_password_change_then_updates_current_version() 
         data={
             "current_password": "correct-password",
             "new_password": "new-secure-password",
-            "csrf_token": csrf_from(account.text),
+            "csrf_token": csrf_for_action(
+                account.text,
+                "/employee/account/password",
+            ),
         },
         follow_redirects=False,
     )
@@ -375,14 +492,20 @@ def test_logout_and_revoke_sessions_require_csrf_and_revoke_keeps_current_sessio
     client, auth = build_client()
     login(client)
     account = client.get("/employee/account")
-    token = csrf_from(account.text)
+    token = csrf_for_action(
+        account.text,
+        "/employee/account/revoke-sessions",
+    )
 
     missing = client.post(
         "/employee/account/revoke-sessions",
         data={"password": "correct-password"},
     )
     account = client.get("/employee/account")
-    token = csrf_from(account.text)
+    token = csrf_for_action(
+        account.text,
+        "/employee/account/revoke-sessions",
+    )
     revoked = client.post(
         "/employee/account/revoke-sessions",
         data={"password": "correct-password", "csrf_token": token},
@@ -392,7 +515,12 @@ def test_logout_and_revoke_sessions_require_csrf_and_revoke_keeps_current_sessio
     account_again = client.get("/employee/account")
     logged_out = client.post(
         "/employee/logout",
-        data={"csrf_token": csrf_from(account_again.text)},
+        data={
+            "csrf_token": csrf_for_action(
+                account_again.text,
+                "/employee/logout",
+            )
+        },
         follow_redirects=False,
     )
     after_logout = client.get("/employee/protected", follow_redirects=False)
