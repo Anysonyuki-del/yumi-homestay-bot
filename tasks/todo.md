@@ -2371,3 +2371,257 @@ Expected: 只提交验收记录；工作区干净；不合并 `main`，不部署
 - `ruff check .` 额外发现既有迁移 `0008_complaint_reviews.py` 两处 E501；不影响运行，但说明当前 Ruff 验收范围没有覆盖迁移目录。
 - Alembic 单头为 `0013_complaint_delivery_links`；PostgreSQL 离线 SQL 生成在既有 `0003_customer_crm.py` 数据回填处失败，真实 PostgreSQL 在线迁移尚未验证。
 - 本轮仍处于 Spec 确认阶段；并行审计任务曾越过 HARD-GATE 产生候选代码，现已冻结，不计为完成项。最终 Spec 确认后逐项审查，只有符合方案并通过 TDD 与回归的部分才保留。
+
+## AKROS.ICU 可编辑数据库后台
+
+- [x] 核对现有员工后台、权限边界、模板结构和数据库模型
+- [x] 重新输出包含基础调试、精致 UI 和登录验证的现状分析 Spec，并等待确认
+- [x] 输出功能点 Spec 并等待确认
+- [x] 输出风险与决策 Spec 并等待确认
+- [x] 确认后编写实现计划
+- [ ] 按计划实现可编辑页面与权限保护
+- [ ] 完成自动化测试、云端部署和公网验收
+
+### 已确认实施边界
+
+- 后台采用现有 FastAPI + Jinja 架构，不引入 Vue、React、Tailwind 或第二套部署服务。
+- 仅一个独立管理员账号可登录；企业微信 OAuth 退出管理后台登录链路，但不影响微信客服渠道。
+- 外部凭据保存为数据库加密不可变快照；候选配置测试通过后自动激活，保留上一有效版本回滚。
+- 新请求使用新客户端快照，在途请求继续持有旧快照；旧客户端只在租约归零后关闭。
+- 数据库地址、会话密钥、数据加密密钥和配置加密主密钥禁止网页修改。
+- 后台只编辑业务对象，不提供任意 SQL、消息表、队列表、审计表或密文直接编辑。
+- AI 调试不发送企业微信消息、不写正式会话、不创建任务，只允许百居易只读查询。
+- UI 使用海军蓝、暖金色和浅灰白，系统中文字体；移动端优先，验收 375/768/1024/1440 四档。
+
+### 批次 0：隔离工作区与基线
+
+**范围：** 保留当前主工作区中用户未跟踪资料和本任务记录，在独立 worktree 开发。
+
+- [ ] 运行 `git status --short --branch`，确认只存在本任务的 `tasks/*.md` 改动和用户既有未跟踪资料；不得把敏感资料加入 Git。
+- [ ] 运行 `pytest -q`、`ruff check .`、`mypy src/homestay_bot`、`git diff --check`，保存修改前基线。
+- [ ] 使用 `using-git-worktrees` 建立 `yumi-admin-console` 功能 worktree；后续代码只在该 worktree 修改。
+
+### 批次 1：管理员凭证模型、迁移与密码服务
+
+**文件：**
+
+- 修改：`pyproject.toml`，增加 `argon2-cffi` 运行依赖。
+- 修改：`src/homestay_bot/domain/models.py`，新增 `AdminCredential`、`RuntimeConfigVersion`、`RuntimeConfigState`。
+- 修改：`src/homestay_bot/config.py::Settings`，增加不可网页修改的 `config_encryption_key`、`admin_bootstrap_username`、`admin_bootstrap_password_hash`。
+- 新建：`migrations/versions/0015_admin_runtime_config.py`，`down_revision = "0014_query_indexes"`。
+- 新建：`src/homestay_bot/repositories/admin_credentials.py`。
+- 新建：`src/homestay_bot/services/admin_auth_service.py`。
+- 新建测试：`tests/unit/test_admin_auth_service.py`、`tests/integration/test_admin_credential_repository.py`。
+- 修改测试：`tests/unit/test_models.py`、`tests/unit/test_config.py`、`tests/unit/test_migrations.py`、`tests/integration/test_schema_indexes.py`。
+
+**关键接口：**
+
+```python
+class AdminAuthService:
+    async def authenticate(self, username: str, password: str, now: datetime) -> AdminSession
+    async def change_password(self, admin_id: int, current: str, new: str) -> None
+    async def reverify(self, admin_id: int, password: str) -> None
+    async def revoke_other_sessions(self, admin_id: int) -> int
+```
+
+- [ ] 先写失败测试：Argon2id 校验、错误凭据统一失败、5 次失败锁 15 分钟、成功清零、首次改密、会话版本递增。
+- [ ] 运行定向测试，确认因模型/服务不存在而失败。
+- [ ] 实现单例管理员凭证；`password_hash` 只存哈希，审计不记录用户名密码正文。
+- [ ] 实现首次 bootstrap：只导入环境中的用户名和预生成 Argon2 哈希，不读取或保存明文初始密码。
+- [ ] 实现 `0015` 的 PostgreSQL/SQLite 兼容迁移、索引、外键和单例约束。
+- [ ] 运行迁移 upgrade/downgrade/upgrade、模型、配置和认证服务测试。
+- [ ] 提交 `feat: add secure single-admin credentials`。
+
+### 批次 2：独立登录、会话保护与账号安全页
+
+**文件：**
+
+- 修改：`src/homestay_bot/routes/employee_auth.py`。
+- 修改：`src/homestay_bot/repositories/employees.py`，保留 Employee 外键身份并增加管理员会话复核适配。
+- 修改：`src/homestay_bot/application.py::application_lifespan()`，装配管理员认证服务。
+- 新建：`src/homestay_bot/templates/layouts/auth.html`。
+- 新建：`src/homestay_bot/templates/auth/login.html`、`auth/change_password.html`、`account/detail.html`。
+- 新建测试：`tests/integration/test_admin_auth_routes.py`。
+- 修改测试：`tests/unit/test_employee_auth.py` 及现有 route 测试中的 OAuth 登录夹具。
+
+**路由：**
+
+```python
+GET  /employee/login
+POST /employee/login
+POST /employee/logout
+GET  /employee/account
+POST /employee/account/password
+POST /employee/account/revoke-sessions
+```
+
+- [ ] 先写失败测试：GET 登录页、CSRF、站内 next、相同错误文案、锁定、首次改密、退出、8 小时闲置、会话版本失效。
+- [ ] 登录成功前清空旧 session，再写 `employee_id`、管理员角色、`admin_session_version`、`last_activity_at`。
+- [ ] 改造 `require_employee_session()`：每次复核唯一管理员启用状态、版本和闲置时间；未登录的 HTML 页面统一跳登录。
+- [ ] 删除管理后台企业微信 OAuth 跳转入口；保留企业微信客服 API 和员工业务身份模型。
+- [ ] 所有改密、退出和撤销会话动作使用 POST + CSRF；敏感操作错误不进入日志。
+- [ ] 运行认证路由和全部现有后台 route 测试。
+- [ ] 提交 `feat: replace admin OAuth with password login`。
+
+### 批次 3：统一 UI Shell、总览与现有页面迁移
+
+**文件：**
+
+- 新建：`src/homestay_bot/web.py`，集中唯一 `Jinja2Templates` 和中文展示 filter。
+- 新建：`src/homestay_bot/templates/layouts/admin.html`。
+- 新建：`src/homestay_bot/templates/components/icons.html`、`components/ui.html`。
+- 新建：`src/homestay_bot/static/admin.js`。
+- 重构：`src/homestay_bot/static/app.css`，保留旧类兼容层。
+- 新建：`src/homestay_bot/routes/admin.py`、`services/admin_dashboard_service.py`。
+- 新建：`src/homestay_bot/templates/admin/dashboard.html`、`admin/diagnostics.html`。
+- 修改：`src/homestay_bot/main.py`、`application.py::application_lifespan()`。
+- 修改：`templates/tasks/*`、`properties/*`、`knowledge/*`、`customers/*`、`approvals/*`、`complaints/edit.html`，继承统一 shell。
+- 新建：`templates/knowledge/detail.html`，为既有 FAQ 提供真实编辑入口。
+- 新建测试：`tests/unit/test_admin_dashboard_service.py`、`tests/unit/test_template_helpers.py`、`tests/integration/test_admin_dashboard_routes.py`。
+
+**关键接口：**
+
+```python
+class AdminDashboardService:
+    async def get_snapshot(self, now: datetime) -> AdminDashboardSnapshot
+
+@router.get("/employee/admin")
+async def admin_dashboard(request: Request) -> HTMLResponse
+```
+
+- [ ] 先写模板 smoke 和 dashboard 失败测试：统一导航、active 状态、健康降级仍可打开、页面不含密钥/UID/门锁密码/消息正文。
+- [ ] 实现全局 shell、移动抽屉、SVG 图标、状态组件、flash 区、提交禁用和未保存离页提示；无 JS 时核心表单仍能提交。
+- [ ] 实现今日入住/退房、房态、待办和组件健康的只读聚合；按 `Asia/Shanghai` 计算今日边界。
+- [ ] 逐页迁移现有模板，不改变原 POST URL、权限、CSRF 和业务服务调用。
+- [ ] FAQ 列表新增明确的编辑详情入口；客诉列表未实现前不放失效导航。
+- [ ] 验证 focus-visible、44px 点击区域、reduced-motion 和小屏无横向溢出。
+- [ ] 运行全部后台路由、dashboard 和模板测试。
+- [ ] 提交 `feat: add responsive YuMi admin console`。
+
+### 批次 4：加密配置快照、版本仓储与设置页面
+
+**文件：**
+
+- 新建：`src/homestay_bot/domain/runtime_config.py`，定义完整不可变 `RuntimeConfigSnapshot` 和脱敏 view model。
+- 新建：`src/homestay_bot/services/runtime_config_cipher.py`。
+- 新建：`src/homestay_bot/repositories/runtime_config.py`。
+- 新建：`src/homestay_bot/services/runtime_config_service.py`。
+- 新建：`src/homestay_bot/routes/runtime_config.py`。
+- 新建：`src/homestay_bot/templates/admin/settings.html`、`admin/config_versions.html`。
+- 修改：`src/homestay_bot/main.py`、`application.py::application_lifespan()`。
+- 新建测试：`tests/unit/test_runtime_config_cipher.py`、`tests/unit/test_runtime_config_service.py`、`tests/integration/test_runtime_config_repository.py`、`tests/integration/test_runtime_config_routes.py`。
+
+**关键接口：**
+
+```python
+class RuntimeConfigService:
+    async def create_and_test(self, command: UpdateRuntimeConfig, actor_id: int, password: str) -> ActivationResult
+    async def rollback(self, actor_id: int, password: str) -> ActivationResult
+
+class RuntimeConfigRepository:
+    async def create_candidate(self, encrypted_payload: bytes, masked_summary: dict[str, object]) -> RuntimeConfigVersion
+    async def activate(self, version_id: int, expected_revision: int) -> RuntimeConfigState
+```
+
+- [ ] 先写失败测试：用途隔离、错误主密钥不可解密、响应/日志不泄密、失败不激活、乐观版本冲突、回滚指针正确。
+- [ ] 采用整份快照单密文而非逐字段写入；`RuntimeConfigState` 单例保存 active/previous/revision。
+- [ ] 页面空白密钥表示“保留旧值”，明确输入新值才替换；页面只返回是否配置和末尾掩码。
+- [ ] 二次密码验证成功后才能测试、激活或回滚；AuditLog 只存字段名、版本、错误码和结果。
+- [ ] 首次无数据库版本时使用环境快照；首次成功激活后数据库版本优先。
+- [ ] 运行配置 service、repository、route、retention 和泄密边界测试。
+- [ ] 提交 `feat: add encrypted runtime configuration`。
+
+### 批次 5：无副作用连接测试与外联地址防护
+
+**文件：**
+
+- 新建：`src/homestay_bot/services/runtime_config_tester.py`。
+- 新建：`src/homestay_bot/services/outbound_url_policy.py`。
+- 修改：`integrations/hostex_client.py::HostexClient`，补充只读 probe 和可测试关闭状态。
+- 修改：`integrations/wecom/api_client.py::WeComApiClient`，补充鉴权/客服列表 probe。
+- 新建测试：`tests/unit/test_runtime_config_tester.py`、`tests/unit/test_outbound_url_policy.py`。
+
+- [ ] 先写失败测试：DeepSeek/百居易/企业微信三项成功、单项失败、超时、可信 IP 错误映射、所有临时客户端关闭、结果无响应正文。
+- [ ] DeepSeek 只发送最短测试请求；百居易只调用 `list_properties()`；企业微信只获取 token 和 `list_kf_accounts()`。
+- [ ] 企业微信回调 Token/AESKey 只做本地长度与加解密格式检测，UI 明确“未验证真实回调投递”。
+- [ ] 企业微信和百居易根地址固定；DeepSeek 自定义地址只允许公网 HTTPS，拒绝 localhost、私网、链路本地、元数据和越权重定向。
+- [ ] 运行所有集成客户端与候选测试器测试，不启用真实 contract 环境变量。
+- [ ] 提交 `feat: validate runtime integrations before activation`。
+
+### 批次 6：客户端租约、原子热切换与后台循环动态化
+
+**文件：**
+
+- 新建：`src/homestay_bot/services/runtime_clients.py`。
+- 修改：`src/homestay_bot/application.py::application_lifespan()`、`handle_message()`、`_run_wecom_poll_loop()`、`_run_hostex_reconcile_loop()` 和各 handler factory。
+- 修改：`src/homestay_bot/routes/wecom_callback.py::get_callback_service()`。
+- 修改：`src/homestay_bot/routes/hostex_webhook.py` 的服务获取路径。
+- 修改：需要固定客户端的审批、凭证、标签同步服务装配，使其在执行入口获取当前租约。
+- 新建测试：`tests/unit/test_runtime_client_registry.py`。
+- 修改测试：`tests/integration/test_runtime_startup.py`、callback/webhook/worker 相关测试。
+
+**关键接口：**
+
+```python
+@dataclass(frozen=True)
+class RuntimeClientBundle:
+    revision: int
+    snapshot: RuntimeConfigSnapshot
+    hostex: HostexClient
+    wecom: WeComApiClient
+    assistant: DeepSeekGuestAssistant
+
+class RuntimeClientRegistry:
+    @asynccontextmanager
+    async def acquire(self) -> AsyncIterator[RuntimeClientBundle]
+    async def swap(self, candidate: RuntimeClientBundle) -> None
+```
+
+- [ ] 先写并发失败测试：swap 时旧租约不中断、旧 bundle 在最后租约释放后关闭、失败 candidate 不替换 active、关闭应用释放全部 bundle。
+- [ ] 所有新消息、新 job 和每轮 poll/reconcile 在入口 acquire 一次，单次业务处理中不跨 revision。
+- [ ] 数据库激活成功后 swap；若 swap 失败则恢复数据库指针并标记 activation_failed，旧 bundle 继续服务。
+- [ ] Worker 间隔在下一轮读取新快照；回调校验与 webhook 服务同样按当前 revision 获取依赖。
+- [ ] 扩展启动测试：数据库 active 优先、损坏密文回退环境并健康降级、应用退出无客户端泄漏。
+- [ ] 运行 runtime、worker、callback、webhook、消息流和完整 phase-one 测试。
+- [ ] 提交 `feat: hot-swap integration clients safely`。
+
+### 批次 7：AI 调试台、系统诊断与操作记录
+
+**文件：**
+
+- 新建：`src/homestay_bot/services/admin_debug_service.py`。
+- 新建：`src/homestay_bot/services/admin_diagnostics_service.py`。
+- 新建：`src/homestay_bot/routes/admin_debug.py`。
+- 新建：`src/homestay_bot/templates/admin/debug.html`、`admin/audit.html`。
+- 修改：`src/homestay_bot/templates/admin/diagnostics.html`、`main.py`、`application.py::application_lifespan()`。
+- 新建测试：`tests/unit/test_admin_debug_service.py`、`tests/unit/test_admin_diagnostics_service.py`、`tests/integration/test_admin_debug_routes.py`。
+
+**关键接口：**
+
+```python
+class AdminDebugService:
+    async def preview(self, command: DebugPreviewCommand) -> DebugPreviewResult
+
+class AdminDiagnosticsService:
+    async def snapshot(self) -> DiagnosticsSnapshot
+```
+
+- [ ] 先写失败测试：调试结果包含意图/FAQ/工具/房间/日期/最终回复，但不写会话、不发微信、不建任务、不执行百居易写操作。
+- [ ] 用只读测试仓储和 no-op 出站端口构造调试上下文；限制频率、输入长度和日期范围。
+- [ ] 诊断页只展示组件状态、心跳、数量、版本和脱敏错误码；不展示原始响应、Query、UID、消息正文或密钥。
+- [ ] 操作记录按时间倒序分页，只展示安全 details；配置审计展示字段名称和版本，不展示密文摘要之外的数据。
+- [ ] “复制诊断报告”由服务端返回已脱敏 view model，前端不得自行过滤原始对象。
+- [ ] 运行 debug、diagnostics、audit、health 和日志脱敏测试。
+- [ ] 提交 `feat: add safe admin debugging tools`。
+
+### 批次 8：全量验证、UI 验收与云端部署
+
+- [ ] 执行 `pytest -q`，要求全部非 live 测试通过；真实 DeepSeek/百居易/企业微信 contract 仍只在显式开启时运行。
+- [ ] 执行 `ruff check .`、`mypy src/homestay_bot`、`python -m compileall -q src tests migrations`、`pip check`、`git diff --check`。
+- [ ] 对临时 SQLite 执行 `alembic upgrade head`、允许的 downgrade、再次 upgrade；生成 PostgreSQL 离线 SQL并检查单头为 `0015_admin_runtime_config`。
+- [ ] 运行模板 smoke；使用浏览器验证 375/768/1024/1440、键盘焦点、抽屉 ESC、危险确认、无 JS 表单和无横向溢出，并保存截图证据但不提交含数据截图。
+- [ ] 使用 `requesting-code-review` 做 Spec 一致性和安全复审，修正后重复定向及全量验证。
+- [ ] 提交并推送功能分支，经确认无未合并分支和敏感文件后合并 `main`。
+- [ ] 云端先备份 PostgreSQL 和运行配置，再拉取主干、构建镜像、运行迁移、启动服务。
+- [ ] 公网验收：未登录跳转、错误密码拒绝、首次改密、总览、业务编辑、候选配置失败保旧值、成功热切换、回滚、AI 调试无副作用、HTTPS 和健康检查。
+- [ ] 在本节末尾添加 Review：提交号、测试数量、跳过项、云端容器状态、证书状态、残余风险和可回滚点。
