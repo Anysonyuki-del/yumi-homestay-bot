@@ -1,6 +1,9 @@
+import asyncio
+from concurrent.futures import CancelledError as FutureCancelledError
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
+import pytest
 from admin_auth_helpers import configure_admin_auth, login_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -18,6 +21,22 @@ class DashboardStub:
     async def snapshot(self, now: datetime | None = None) -> Snapshot:
         """构造空数据快照。"""
         return Snapshot.empty(date(2026, 8, 11))
+
+
+class FailingDashboardStub:
+    """模拟数据库读取失败且异常正文包含敏感文本。"""
+
+    async def snapshot(self, now: datetime | None = None) -> Snapshot:
+        """稳定抛出测试异常。"""
+        raise RuntimeError("database-secret-detail")
+
+
+class CancelledDashboardStub:
+    """模拟请求任务被上游取消。"""
+
+    async def snapshot(self, now: datetime | None = None) -> Snapshot:
+        """抛出取消信号，路由必须继续向上传播。"""
+        raise asyncio.CancelledError
 
 
 class HealthStub:
@@ -117,3 +136,46 @@ def test_diagnostics_keeps_http_200_when_health_is_degraded() -> None:
     assert "worker_heartbeat" not in response.text
     assert "incomplete" not in response.text
     assert "admin.js" in response.text
+
+
+def test_dashboard_query_failure_renders_safe_degraded_page(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """总览查询失败时应返回安全空态，不能让诊断入口一并失效。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+    client.app.state.admin_dashboard_service = FailingDashboardStub()
+
+    with caplog.at_level("WARNING", logger="homestay_bot.routes.admin"):
+        response = client.get("/employee/admin")
+
+    assert response.status_code == 200
+    assert "运营数据暂时不可用" in response.text
+    assert "今日暂无入住" in response.text
+    assert "系统当前处于降级状态" in response.text
+    assert "database-secret-detail" not in response.text
+    assert "database-secret-detail" not in caplog.text
+
+
+def test_staff_cannot_access_admin_dashboard_or_diagnostics() -> None:
+    """普通员工对两个老板页面均应得到 403。"""
+    client = build_client()
+    configure_admin_auth(client.app, EmployeeRole.STAFF)
+    login_admin(client, next_path="/employee/admin")
+
+    dashboard = client.get("/employee/admin")
+    diagnostics = client.get("/employee/admin/diagnostics")
+
+    assert dashboard.status_code == 403
+    assert diagnostics.status_code == 403
+
+
+def test_dashboard_does_not_swallow_request_cancellation() -> None:
+    """取消信号不是普通降级异常，必须继续向上传播。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+    client.app.state.admin_dashboard_service = CancelledDashboardStub()
+
+    # TestClient 的跨线程 portal 会把 asyncio 取消转换成 concurrent.futures 取消。
+    with pytest.raises(FutureCancelledError):
+        client.get("/employee/admin")

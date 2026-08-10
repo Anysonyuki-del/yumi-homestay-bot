@@ -1,5 +1,6 @@
 """唯一管理员的运营总览与只读诊断页面。"""
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol, cast
@@ -9,10 +10,11 @@ from fastapi.responses import HTMLResponse, Response
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.routes.employee_auth import require_employee_session
-from homestay_bot.services.admin_dashboard_service import Snapshot
+from homestay_bot.services.admin_dashboard_service import WUHAN_TIMEZONE, Snapshot
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/admin")
+logger = logging.getLogger(__name__)
 
 
 class AdminDashboardServicePort(Protocol):
@@ -94,7 +96,16 @@ async def _safe_health(request: Request) -> dict[str, str]:
 async def admin_dashboard(request: Request) -> Response:
     """展示不含客户身份、消息正文和门锁凭证的运营总览。"""
     await _require_admin(request)
-    snapshot = await _dashboard_service(request).snapshot(_clock(request))
+    observed_at = _clock(request)
+    snapshot_error: str | None = None
+    try:
+        snapshot = await _dashboard_service(request).snapshot(observed_at)
+    except Exception as error:
+        # 只记录异常类型，禁止把数据库错误正文或查询参数写入页面和日志。
+        logger.warning("管理员总览读取失败：error_type=%s", type(error).__name__)
+        aware_time = observed_at.replace(tzinfo=UTC) if observed_at.tzinfo is None else observed_at
+        snapshot = Snapshot.empty(aware_time.astimezone(WUHAN_TIMEZONE).date())
+        snapshot_error = "运营数据暂时不可用，当前显示安全空态。"
     health = await _safe_health(request)
     return templates.TemplateResponse(
         request=request,
@@ -103,7 +114,8 @@ async def admin_dashboard(request: Request) -> Response:
             "page_title": "运营总览",
             "active_nav": "dashboard",
             "snapshot": snapshot,
-            "health_degraded": health.get("status") != "ok",
+            "health_degraded": snapshot_error is not None or health.get("status") != "ok",
+            "error": snapshot_error,
         },
     )
 

@@ -29,6 +29,7 @@ from homestay_bot.domain.models import (
 )
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
+TERMINAL_STAY_STATUSES = ("canceled", "cancelled", "declined", "expired", "deleted")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +95,7 @@ class AdminDashboardService:
             .join(StayOrder, StayOrder.property_id == PropertyProfile.id)
             .where(
                 date_column == local_date,
-                func.lower(StayOrder.status).not_in(("cancelled", "canceled")),
+                func.lower(func.trim(StayOrder.status)).not_in(TERMINAL_STAY_STATUSES),
             )
             .order_by(PropertyProfile.title, StayOrder.id)
         )

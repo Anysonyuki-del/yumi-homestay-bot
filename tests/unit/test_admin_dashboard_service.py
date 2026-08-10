@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import (
@@ -102,4 +103,47 @@ async def test_snapshot_handles_empty_database() -> None:
     assert snapshot.pending_task_count == 0
     assert snapshot.pending_approval_count == 0
     assert snapshot.manual_attention_count == 0
+    await engine.dispose()  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    ["canceled", "cancelled", "declined", "expired", "deleted"],
+)
+async def test_snapshot_excludes_each_normalized_terminal_stay_status(
+    terminal_status: str,
+) -> None:
+    """今日动线不得计入大小写或空白变体的终止订单。"""
+    engine, factory = await _factory()
+    async with factory() as session:
+        session.add(PropertyProfile(id=7, title="测试房", is_active=True))
+        await session.flush()
+        session.add_all(
+            [
+                StayOrder(
+                    hostex_reservation_code=f"terminal-{terminal_status}",
+                    stay_code=f"terminal-{terminal_status}",
+                    property_id=7,
+                    check_in_date=datetime(2026, 8, 11).date(),
+                    check_out_date=datetime(2026, 8, 11).date(),
+                    status=f"  {terminal_status.upper()}  ",
+                ),
+                StayOrder(
+                    hostex_reservation_code=f"active-{terminal_status}",
+                    stay_code=f"active-{terminal_status}",
+                    property_id=7,
+                    check_in_date=datetime(2026, 8, 11).date(),
+                    check_out_date=datetime(2026, 8, 11).date(),
+                    status="confirmed",
+                ),
+            ]
+        )
+        await session.commit()
+
+        snapshot = await AdminDashboardService(session).snapshot(
+            datetime(2026, 8, 10, 16, 30, tzinfo=UTC)
+        )
+
+    assert snapshot.check_in_count == 1
+    assert snapshot.check_out_count == 1
     await engine.dispose()  # type: ignore[attr-defined]

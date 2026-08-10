@@ -19,7 +19,7 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html { min-width: 320px; scroll-behavior: smooth; }
-body { min-height: 100vh; margin: 0; background: var(--page); line-height: 1.55; }
+body { min-height: 100vh; margin: 0; overflow-x: clip; background: var(--page); line-height: 1.55; }
 a { color: var(--navy); text-underline-offset: 3px; }
 button, input, select, textarea { max-width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; }
 button, .button { cursor: pointer; }
