@@ -148,3 +148,28 @@ def test_settings_reject_plaintext_bootstrap_password(monkeypatch) -> None:
             data_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
             _env_file=None,
         )
+
+
+def test_settings_reject_forged_argon2id_prefix(monkeypatch) -> None:
+    """仅伪造 Argon2id 前缀但不含合法编码结构的字符串必须被拒绝。"""
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD_HASH", "$argon2id$plaintext")
+
+    with pytest.raises(ValidationError):
+        Settings(
+            database_url="sqlite+aiosqlite:///test.db",
+            public_base_url="https://local.example",
+            deepseek_api_key="key",
+            hostex_access_token="token",
+            hostex_webhook_secret_token="webhook-secret",
+            wecom_corp_id="corp",
+            wecom_kf_secret="kf",
+            wecom_callback_token="callback",
+            wecom_encoding_aes_key="A" * 43,
+            wecom_agent_id=1,
+            wecom_agent_secret="agent",
+            wecom_duty_userids="staff",
+            session_secret="s" * 32,
+            data_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+            _env_file=None,
+        )

@@ -90,3 +90,30 @@ async def test_repository_persists_lock_and_session_state() -> None:
         assert await repository.get_by_id(1) is loaded
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_rejects_forged_argon2id_prefix() -> None:
+    """仓储必须解析 Argon2 编码，不能只信任可伪造的算法前缀。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        employee = Employee(
+            wecom_userid="forged-hash-admin",
+            name="后台管理员",
+            role=EmployeeRole.ADMIN,
+        )
+        session.add(employee)
+        await session.flush()
+
+        with pytest.raises(ValueError, match="Argon2id"):
+            await SQLAlchemyAdminCredentialRepository(session).bootstrap(
+                employee_id=employee.id,
+                username="admin",
+                password_hash="$argon2id$plaintext",
+            )
+
+    await engine.dispose()

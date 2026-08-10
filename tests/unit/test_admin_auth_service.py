@@ -132,6 +132,26 @@ async def test_five_failures_lock_account_for_fifteen_minutes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_expired_lock_starts_a_new_failure_cycle() -> None:
+    """锁定到期后的首次错误密码应计为一，不得立刻再次锁定。"""
+    now = datetime(2026, 8, 11, 8, tzinfo=UTC)
+    credential = _credential()
+    credential.failed_attempts = 5
+    credential.locked_until = now
+    service = AdminAuthService(MemoryAdminCredentialRepository(credential))
+
+    with pytest.raises(AuthenticationError):
+        await service.authenticate(
+            "admin",
+            "wrong-password",
+            now + timedelta(seconds=1),
+        )
+
+    assert credential.failed_attempts == 1
+    assert credential.locked_until is None
+
+
+@pytest.mark.asyncio
 async def test_change_password_clears_first_login_and_revokes_old_sessions() -> None:
     """首次改密应写入新哈希并递增版本，让旧会话立即失效。"""
     credential = _credential()

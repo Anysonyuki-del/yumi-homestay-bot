@@ -1,5 +1,7 @@
 from typing import Any, cast
 
+from argon2 import Type, extract_parameters
+from argon2.exceptions import InvalidHashError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -48,8 +50,12 @@ class SQLAlchemyAdminCredentialRepository:
         password_hash: str,
     ) -> AdminCredential:
         """仅在单例不存在时导入预生成 Argon2id 哈希，绝不接收明文。"""
-        if not password_hash.startswith("$argon2id$"):
-            raise ValueError("管理员引导密码必须是预生成 Argon2id 哈希")
+        try:
+            parameters = extract_parameters(password_hash)
+        except InvalidHashError as exc:
+            raise ValueError("管理员引导密码必须是合法 Argon2id 哈希") from exc
+        if parameters.type is not Type.ID:
+            raise ValueError("管理员引导密码必须使用 Argon2id")
 
         values = {
             "id": 1,

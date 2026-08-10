@@ -73,10 +73,12 @@ class AdminAuthService:
             raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
 
         normalized_now = _as_utc(now)
-        if credential.locked_until is not None and _as_utc(
-            credential.locked_until
-        ) > normalized_now:
-            raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
+        if credential.locked_until is not None:
+            if _as_utc(credential.locked_until) > normalized_now:
+                raise AuthenticationError(AUTHENTICATION_ERROR_MESSAGE)
+            # 锁定期结束后开启新的五次失败计数周期，避免首次失败立即重锁。
+            credential.failed_attempts = 0
+            credential.locked_until = None
 
         if not self._verify(password, credential.password_hash):
             credential.failed_attempts += 1
