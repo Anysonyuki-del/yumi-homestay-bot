@@ -2,6 +2,7 @@ import asyncio
 from typing import cast
 
 import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -19,10 +20,72 @@ from homestay_bot.domain.models import (
     RuntimeConfigState,
     RuntimeConfigVersion,
 )
+from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot
 from homestay_bot.repositories.runtime_config import (
     RuntimeConfigConflictError,
     SQLAlchemyRuntimeConfigRepository,
 )
+from homestay_bot.services.runtime_config_cipher import RuntimeConfigCipher
+from homestay_bot.services.runtime_config_service import (
+    RuntimeConfigService,
+    RuntimeConfigTestResult,
+    UpdateRuntimeConfig,
+)
+
+
+def runtime_snapshot(**overrides: object) -> RuntimeConfigSnapshot:
+    """构造真实SQLite补偿测试使用的完整快照。"""
+    values: dict[str, object] = {
+        "deepseek_api_key": "deepseek-secret",
+        "deepseek_base_url": "https://deepseek.example",
+        "deepseek_model": "model",
+        "hostex_access_token": "hostex-secret",
+        "hostex_webhook_secret_token": "webhook-secret",
+        "hostex_reconcile_interval_seconds": 600.0,
+        "wecom_corp_id": "corp",
+        "wecom_kf_secret": "kf-secret",
+        "wecom_callback_token": "callback-token",
+        "wecom_encoding_aes_key": "A" * 43,
+        "wecom_agent_id": 100001,
+        "wecom_agent_secret": "agent-secret",
+        "wecom_contact_secret": None,
+        "wecom_duty_userids": "owner",
+        "wecom_poll_interval_seconds": 10.0,
+    }
+    values.update(overrides)
+    return RuntimeConfigSnapshot(**values)  # type: ignore[arg-type]
+
+
+class AllowAuth:
+    """允许真实仓储补偿测试通过管理员复核。"""
+
+    async def reverify_at_version(self, *args: object) -> None:
+        """模拟成功复核。"""
+
+
+class PassingTester:
+    """让候选进入激活和运行时发布阶段。"""
+
+    async def test(self, snapshot: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+        """验证候选完整并返回成功。"""
+        snapshot.validate()
+        return RuntimeConfigTestResult(succeeded=True)
+
+
+class GatedCompensationRepository(SQLAlchemyRuntimeConfigRepository):
+    """在真实restore SQL前暴露门闩，稳定注入第二次取消。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        """保存会话并初始化补偿门闩。"""
+        super().__init__(session)
+        self.restore_started = asyncio.Event()
+        self.restore_proceed = asyncio.Event()
+
+    async def restore_failed_activation(self, *args: object, **kwargs: object) -> bool:
+        """等待测试第二次取消后再执行真实CAS补偿。"""
+        self.restore_started.set()
+        await self.restore_proceed.wait()
+        return await super().restore_failed_activation(*args, **kwargs)  # type: ignore[arg-type]
 
 
 async def build_factory(database_url: str) -> async_sessionmaker[AsyncSession]:
@@ -196,6 +259,153 @@ async def test_failed_compensation_cas_does_not_mutate_reactivated_candidate(tmp
         assert stored_second is not None
         assert stored_second.status is RuntimeConfigVersionStatus.TEST_PASSED
         assert stored_second.failure_code is None
+    await dispose_factory(factory)
+
+
+@pytest.mark.asyncio
+async def test_create_compensation_survives_double_cancellation(tmp_path) -> None:
+    """create运行发布取消后，第二次cancel也必须等真实SQLite补偿提交再传播。"""
+    factory = await build_factory(f"sqlite+aiosqlite:///{tmp_path / 'create-cancel.db'}")
+    cipher = RuntimeConfigCipher(Fernet.generate_key().decode())
+    activation_started = asyncio.Event()
+    repository_holder: list[GatedCompensationRepository] = []
+
+    async def run_operation() -> None:
+        """用独立真实会话执行首次候选激活。"""
+        async with factory() as session:
+            repository = GatedCompensationRepository(session)
+            repository_holder.append(repository)
+
+            async def activate_runtime(*args: object) -> None:
+                """提交DB激活后等待首次取消。"""
+                await session.commit()
+                activation_started.set()
+                await asyncio.Event().wait()
+
+            service = RuntimeConfigService(
+                repository=repository,
+                cipher=cipher,
+                auth=AllowAuth(),
+                tester=PassingTester(),
+                environment_snapshot=None,
+                before_test=session.commit,
+                activate_runtime=activate_runtime,
+                after_compensation=session.commit,
+            )
+            await service.create_and_test(
+                UpdateRuntimeConfig.from_snapshot(runtime_snapshot()),
+                actor_id=1,
+                admin_id=1,
+                password="password",
+                expected_session_version=1,
+                expected_revision=0,
+            )
+
+    operation = asyncio.create_task(run_operation())
+    await asyncio.wait_for(activation_started.wait(), timeout=0.2)
+    operation.cancel()
+    repository = repository_holder[0]
+    await repository.restore_started.wait()
+    operation.cancel()
+    repository.restore_proceed.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+    async with factory() as session:
+        state = await session.get(RuntimeConfigState, 1)
+        candidate = await session.scalar(select(RuntimeConfigVersion))
+    assert state is not None
+    assert (state.revision, state.active_version_id, state.previous_version_id) == (
+        0,
+        None,
+        None,
+    )
+    assert candidate is not None
+    assert candidate.status is RuntimeConfigVersionStatus.ACTIVATION_FAILED
+    await dispose_factory(factory)
+
+
+@pytest.mark.asyncio
+async def test_rollback_compensation_survives_double_cancellation(tmp_path) -> None:
+    """rollback运行发布取消后，第二次cancel也必须恢复原指针并提交。"""
+    factory = await build_factory(f"sqlite+aiosqlite:///{tmp_path / 'rollback-cancel.db'}")
+    cipher = RuntimeConfigCipher(Fernet.generate_key().decode())
+    first_snapshot = runtime_snapshot(deepseek_model="first")
+    second_snapshot = runtime_snapshot(deepseek_model="second")
+    async with factory() as session:
+        repository = SQLAlchemyRuntimeConfigRepository(session)
+        first = await repository.create_candidate(
+            cipher.encrypt(first_snapshot),
+            first_snapshot.masked_view().to_dict(),
+            1,
+        )
+        await repository.mark_test_passed(first.id, {"succeeded": True})
+        await repository.activate(first.id, expected_revision=0)
+        second = await repository.create_candidate(
+            cipher.encrypt(second_snapshot),
+            second_snapshot.masked_view().to_dict(),
+            1,
+            based_on_version_id=first.id,
+            based_on_revision=1,
+        )
+        await repository.mark_test_passed(second.id, {"succeeded": True})
+        await repository.activate(second.id, expected_revision=1)
+        await session.commit()
+
+    activation_started = asyncio.Event()
+    repository_holder: list[GatedCompensationRepository] = []
+
+    async def run_operation() -> None:
+        """用独立真实会话执行回滚和取消补偿。"""
+        async with factory() as session:
+            repository = GatedCompensationRepository(session)
+            repository_holder.append(repository)
+
+            async def activate_runtime(*args: object) -> None:
+                """提交回滚指针后等待首次取消。"""
+                await session.commit()
+                activation_started.set()
+                await asyncio.Event().wait()
+
+            service = RuntimeConfigService(
+                repository=repository,
+                cipher=cipher,
+                auth=AllowAuth(),
+                tester=PassingTester(),
+                environment_snapshot=None,
+                activate_runtime=activate_runtime,
+                after_compensation=session.commit,
+            )
+            await service.rollback(
+                actor_id=1,
+                admin_id=1,
+                password="password",
+                expected_session_version=1,
+                expected_revision=2,
+                expected_previous_version_id=first.id,
+            )
+
+    operation = asyncio.create_task(run_operation())
+    await asyncio.wait_for(activation_started.wait(), timeout=0.2)
+    operation.cancel()
+    repository = repository_holder[0]
+    await repository.restore_started.wait()
+    operation.cancel()
+    repository.restore_proceed.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+    async with factory() as session:
+        state = await session.get(RuntimeConfigState, 1)
+        stored_first = await session.get(RuntimeConfigVersion, first.id)
+    assert state is not None
+    assert (state.revision, state.active_version_id, state.previous_version_id) == (
+        2,
+        second.id,
+        first.id,
+    )
+    assert stored_first is not None
+    assert stored_first.status is RuntimeConfigVersionStatus.TEST_PASSED
     await dispose_factory(factory)
 
 

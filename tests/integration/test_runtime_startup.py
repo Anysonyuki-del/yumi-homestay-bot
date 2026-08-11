@@ -482,6 +482,116 @@ async def test_first_runtime_start_failure_compensates_database_and_cleans_parti
 
 
 @pytest.mark.asyncio
+async def test_shutdown_waits_for_first_activation_and_prevents_late_publish(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """shutdown与首次构造竞态时禁止晚发布，并等待候选清理和DB补偿。"""
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'shutdown-activation.db'}"
+    await _create_runtime_database(database_url)
+    password = _set_bootstrap_environment(
+        monkeypatch,
+        database_url=database_url,
+        config_encryption_key=Fernet.generate_key().decode(),
+    )
+    _clear_runtime_environment(monkeypatch)
+    build_started = asyncio.Event()
+    build_proceed = asyncio.Event()
+    close_calls = 0
+    started_tasks = 0
+
+    class PassingTester:
+        """让候选进入首次运行构造。"""
+
+        async def test(self, candidate: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+            """验证候选后返回成功。"""
+            candidate.validate()
+            return RuntimeConfigTestResult(succeeded=True)
+
+    class CloseProbe:
+        """记录被shutdown拒绝的候选是否关闭。"""
+
+        async def aclose(self) -> None:
+            """记录候选资源关闭。"""
+            nonlocal close_calls
+            close_calls += 1
+
+    async def build_bundle(
+        snapshot: RuntimeConfigSnapshot,
+        *,
+        revision: int,
+        **kwargs,
+    ) -> RuntimeClientBundle:
+        """阻塞首次候选构造，稳定制造shutdown竞态。"""
+        build_started.set()
+        await build_proceed.wait()
+        return _runtime_bundle(snapshot, revision, CloseProbe())
+
+    async def finished_loop(*args, **kwargs) -> None:
+        """若错误晚发布则记录后台task数量后立即返回，避免RED泄漏。"""
+        nonlocal started_tasks
+        started_tasks += 1
+
+    monkeypatch.setattr(application, "RuntimeConfigTester", PassingTester)
+    monkeypatch.setattr(application, "build_runtime_client_bundle", build_bundle)
+    for loop_name in (
+        "_run_worker_loop",
+        "_run_wecom_poll_loop",
+        "_run_faq_maintenance_loop",
+        "_run_retention_loop",
+        "_run_context_maintenance_loop",
+        "_run_hostex_reconcile_loop",
+    ):
+        monkeypatch.setattr(application, loop_name, finished_loop)
+
+    test_app = FastAPI()
+    lifespan = application_lifespan(test_app)
+    await lifespan.__aenter__()
+    engine = create_async_engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        credential = await session.scalar(select(AdminCredential))
+        assert credential is not None
+        actor_id = int(credential.employee_id)
+        admin_id = int(credential.id)
+        session_version = int(credential.session_version)
+
+    activation = asyncio.create_task(
+        test_app.state.runtime_config_service.create_and_test(
+            UpdateRuntimeConfig.from_snapshot(_runtime_snapshot()),
+            actor_id=actor_id,
+            admin_id=admin_id,
+            password=password,
+            expected_session_version=session_version,
+            expected_revision=0,
+        )
+    )
+    await build_started.wait()
+    shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
+    await asyncio.sleep(0)
+    shutdown_finished_before_release = shutdown.done()
+    build_proceed.set()
+    activation_result = await asyncio.gather(activation, return_exceptions=True)
+    await shutdown
+
+    async with factory() as session:
+        state = await session.get(RuntimeConfigState, 1)
+        candidate = await session.scalar(select(RuntimeConfigVersion))
+    await engine.dispose()
+    assert shutdown_finished_before_release is False
+    assert len(activation_result) == 1
+    assert isinstance(activation_result[0], RuntimeConfigTestError)
+    assert state is not None
+    assert (state.revision, state.active_version_id) == (0, None)
+    assert candidate is not None
+    assert candidate.status is RuntimeConfigVersionStatus.ACTIVATION_FAILED
+    assert close_calls == 1
+    assert started_tasks == 0
+    assert not hasattr(test_app.state, "runtime_client_registry")
+    assert not hasattr(test_app.state, "approval_page_service")
+
+
+@pytest.mark.asyncio
 async def test_missing_config_key_keeps_settings_readable_but_disables_writes(
     tmp_path,
     monkeypatch,

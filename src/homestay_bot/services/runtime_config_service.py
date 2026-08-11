@@ -12,6 +12,7 @@ from homestay_bot.domain.runtime_config import (
     RuntimeConfigView,
 )
 from homestay_bot.repositories.runtime_config import RuntimeConfigConflictError
+from homestay_bot.services.cancellation import complete_cleanup
 from homestay_bot.services.runtime_config_cipher import RuntimeConfigCipher
 
 
@@ -393,6 +394,7 @@ class RuntimeConfigService:
         activate_runtime: (
             Callable[[RuntimeConfigSnapshot, int, int], Awaitable[None]] | None
         ) = None,
+        after_compensation: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """注入存储、独立密文服务、密码复核和候选测试端口。"""
         if not 2 <= retention <= 100:
@@ -405,6 +407,7 @@ class RuntimeConfigService:
         self._retention = retention
         self._before_test = before_test
         self._activate_runtime = activate_runtime
+        self._after_compensation = after_compensation
 
     async def load_active_or_environment(self) -> RuntimeConfigSnapshot:
         """数据库无激活版本时回退环境；一旦激活则数据库快照优先。"""
@@ -552,30 +555,45 @@ class RuntimeConfigService:
                     int(activated.revision),
                 )
         except BaseException as error:
-            restored = await self._repository.restore_failed_activation(
-                int(version.id),
-                failed_candidate_version_id=int(version.id),
-                expected_revision=int(activated.revision),
-                restore_revision=baseline.revision,
-                restore_active_version_id=baseline.active_version_id,
-                restore_previous_version_id=baseline.previous_version_id,
-                failure_code="activation_failed",
+            original_error = error
+
+            async def compensate_create() -> None:
+                """必须完成create指针恢复、失败审计和事务提交。"""
+                restored = await self._repository.restore_failed_activation(
+                    int(version.id),
+                    failed_candidate_version_id=int(version.id),
+                    expected_revision=int(activated.revision),
+                    restore_revision=baseline.revision,
+                    restore_active_version_id=baseline.active_version_id,
+                    restore_previous_version_id=baseline.previous_version_id,
+                    failure_code="activation_failed",
+                )
+                await self._repository.add_audit(
+                    actor_id=actor_id,
+                    action="runtime_config.activate",
+                    version_id=int(version.id),
+                    fields=changed_fields,
+                    result="failed",
+                    error_code="activation_failed",
+                )
+                if self._after_compensation is not None:
+                    await self._after_compensation()
+                if not restored:
+                    raise RuntimeConfigCompensationConflictError(
+                        "运行配置补偿时已由其他请求更新"
+                    ) from original_error
+
+            await complete_cleanup(
+                compensate_create(),
+                pending_cancel=(
+                    original_error
+                    if isinstance(original_error, asyncio.CancelledError)
+                    else None
+                ),
             )
-            await self._repository.add_audit(
-                actor_id=actor_id,
-                action="runtime_config.activate",
-                version_id=int(version.id),
-                fields=changed_fields,
-                result="failed",
-                error_code="activation_failed",
-            )
-            if not restored:
-                raise RuntimeConfigCompensationConflictError(
-                    "运行配置补偿时已由其他请求更新"
-                ) from error
-            if isinstance(error, asyncio.CancelledError):
+            if isinstance(original_error, asyncio.CancelledError):
                 raise
-            raise RuntimeConfigTestError("activation_failed") from error
+            raise RuntimeConfigTestError("activation_failed") from original_error
         await self._repository.add_audit(
             actor_id=actor_id,
             action="runtime_config.activate",
@@ -634,30 +652,45 @@ class RuntimeConfigService:
                     int(rolled_back.revision),
                 )
         except BaseException as error:
-            restored = await self._repository.restore_failed_activation(
-                int(previous_id),
-                failed_candidate_version_id=None,
-                expected_revision=int(rolled_back.revision),
-                restore_revision=original_revision,
-                restore_active_version_id=original_active_version_id,
-                restore_previous_version_id=original_previous_version_id,
-                failure_code="activation_failed",
+            original_error = error
+
+            async def compensate_rollback() -> None:
+                """必须完成rollback指针恢复、失败审计和事务提交。"""
+                restored = await self._repository.restore_failed_activation(
+                    int(previous_id),
+                    failed_candidate_version_id=None,
+                    expected_revision=int(rolled_back.revision),
+                    restore_revision=original_revision,
+                    restore_active_version_id=original_active_version_id,
+                    restore_previous_version_id=original_previous_version_id,
+                    failure_code="activation_failed",
+                )
+                await self._repository.add_audit(
+                    actor_id=actor_id,
+                    action="runtime_config.rollback",
+                    version_id=int(previous_id),
+                    fields=(),
+                    result="failed",
+                    error_code="activation_failed",
+                )
+                if self._after_compensation is not None:
+                    await self._after_compensation()
+                if not restored:
+                    raise RuntimeConfigCompensationConflictError(
+                        "运行配置补偿时已由其他请求更新"
+                    ) from original_error
+
+            await complete_cleanup(
+                compensate_rollback(),
+                pending_cancel=(
+                    original_error
+                    if isinstance(original_error, asyncio.CancelledError)
+                    else None
+                ),
             )
-            await self._repository.add_audit(
-                actor_id=actor_id,
-                action="runtime_config.rollback",
-                version_id=int(previous_id),
-                fields=(),
-                result="failed",
-                error_code="activation_failed",
-            )
-            if not restored:
-                raise RuntimeConfigCompensationConflictError(
-                    "运行配置补偿时已由其他请求更新"
-                ) from error
-            if isinstance(error, asyncio.CancelledError):
+            if isinstance(original_error, asyncio.CancelledError):
                 raise
-            raise RuntimeConfigTestError("activation_failed") from error
+            raise RuntimeConfigTestError("activation_failed") from original_error
         await self._repository.add_audit(
             actor_id=actor_id,
             action="runtime_config.rollback",

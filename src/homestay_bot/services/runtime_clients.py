@@ -26,6 +26,7 @@ from homestay_bot.integrations.wecom.api_client import WeComApiClient
 from homestay_bot.integrations.wecom.contact_client import WeComContactClient
 from homestay_bot.routes.hostex_webhook import HostexWebhookService
 from homestay_bot.routes.wecom_callback import WeComCallbackService
+from homestay_bot.services.cancellation import complete_cleanup
 from homestay_bot.services.lifecycle_reminders import TourismReminderWeatherProvider
 from homestay_bot.services.outbound_url_policy import (
     OutboundUrlPolicy,
@@ -139,6 +140,8 @@ class RuntimeClientRegistry:
         self._resource_health_setter = resource_health_setter
         self._failed_retired: dict[int, RuntimeClientBundle] = {}
         self._configuration_healthy = configuration_healthy
+        self._known_bundles = {id(initial): initial}
+        self._close_attempt: asyncio.Task[None] | None = None
 
     @asynccontextmanager
     async def acquire(self) -> AsyncIterator[RuntimeClientBundle]:
@@ -150,8 +153,17 @@ class RuntimeClientRegistry:
             entry.leases += 1
         try:
             yield entry.bundle
-        finally:
-            await self._release(entry)
+        except asyncio.CancelledError as error:
+            await complete_cleanup(
+                self._release(entry),
+                pending_cancel=error,
+            )
+            raise error from None
+        except BaseException:
+            await complete_cleanup(self._release(entry))
+            raise
+        else:
+            await complete_cleanup(self._release(entry))
 
     async def swap(self, candidate: RuntimeClientBundle) -> None:
         """立即发布候选；旧快照无租约时在锁外关闭，避免阻塞新请求。"""
@@ -159,10 +171,11 @@ class RuntimeClientRegistry:
         async with self._lock:
             if self._closed:
                 raise RuntimeError("运行客户端注册表已关闭")
-            if id(candidate) in self._entries:
+            if id(candidate) in self._known_bundles:
                 raise ValueError("运行客户端候选已发布")
             previous = self._entries[self._current_id]
             previous.retired = True
+            self._known_bundles[id(candidate)] = candidate
             self._entries[id(candidate)] = _RegistryEntry(candidate)
             self._current_id = id(candidate)
             # 候选成功发布后解除启动期损坏配置降级；健康服务还会核对DB revision。
@@ -192,22 +205,36 @@ class RuntimeClientRegistry:
             )
 
     async def close(self) -> None:
-        """停止新租约，等待在途业务，并重试先前清理失败的 bundle。"""
-        bundles_to_close: list[RuntimeClientBundle] = []
+        """共享当前关闭attempt；调用方取消不能中断底层资源清理。"""
         async with self._lock:
-            if self._closed:
-                wait_for_releases = bool(self._entries)
-            else:
-                self._closed = True
-                for entry in self._entries.values():
-                    entry.retired = True
-                    if entry.leases == 0:
-                        bundles_to_close.append(entry.bundle)
-                for bundle in bundles_to_close:
-                    self._entries.pop(id(bundle), None)
-                wait_for_releases = bool(self._entries)
-                if not wait_for_releases:
-                    self._all_released.set()
+            attempt = self._close_attempt
+            if attempt is None or attempt.done():
+                bundles_to_close: list[RuntimeClientBundle] = []
+                if self._closed:
+                    wait_for_releases = bool(self._entries)
+                else:
+                    self._closed = True
+                    for entry in self._entries.values():
+                        entry.retired = True
+                        if entry.leases == 0:
+                            bundles_to_close.append(entry.bundle)
+                    for bundle in bundles_to_close:
+                        self._entries.pop(id(bundle), None)
+                    wait_for_releases = bool(self._entries)
+                    if not wait_for_releases:
+                        self._all_released.set()
+                attempt = asyncio.create_task(
+                    self._close_once(bundles_to_close, wait_for_releases)
+                )
+                self._close_attempt = attempt
+        await complete_cleanup(attempt)
+
+    async def _close_once(
+        self,
+        bundles_to_close: list[RuntimeClientBundle],
+        wait_for_releases: bool,
+    ) -> None:
+        """执行一次有界关闭attempt，并让同期调用方共享同一结果。"""
         for bundle in bundles_to_close:
             await self._close_retired(bundle)
         if wait_for_releases:
@@ -245,7 +272,12 @@ class RuntimeClientRegistry:
                     self._all_released.set()
 
     async def _close_retired(self, bundle: RuntimeClientBundle) -> None:
-        """旧bundle清理失败只降级资源健康，不能反转已完成的发布。"""
+        """把实际关闭与健康记账作为一个取消安全的完整清理单元。"""
+        await complete_cleanup(self._record_retired_close(bundle))
+
+    async def _record_retired_close(self, bundle: RuntimeClientBundle) -> None:
+        """按实际关闭结果更新失败集合，取消不能被误记为成功。"""
+        close_cancel: asyncio.CancelledError | None = None
         try:
             await bundle.aclose()
         except BaseException as error:
@@ -256,12 +288,16 @@ class RuntimeClientRegistry:
             async with self._lock:
                 self._failed_retired[id(bundle)] = bundle
                 resources_healthy = False
+            if isinstance(error, asyncio.CancelledError):
+                close_cancel = error
         else:
             async with self._lock:
                 self._failed_retired.pop(id(bundle), None)
                 resources_healthy = not self._failed_retired
         if self._resource_health_setter is not None:
             self._resource_health_setter(resources_healthy)
+        if close_cancel is not None:
+            raise close_cancel
 
 
 async def _close_partial_resources(resources: list[Any]) -> None:

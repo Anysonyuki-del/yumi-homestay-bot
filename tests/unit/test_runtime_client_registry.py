@@ -69,6 +69,27 @@ class RetryCloseProbe(CloseProbe):
             raise RuntimeError("retryable close failure")
 
 
+class GatedCloseProbe(CloseProbe):
+    """在测试允许前阻塞关闭，并可模拟永久失败。"""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        """初始化关闭门闩和失败开关。"""
+        super().__init__()
+        self.started = asyncio.Event()
+        self.proceed = asyncio.Event()
+        self.completed = asyncio.Event()
+        self._fail = fail
+
+    async def aclose(self) -> None:
+        """等待测试放行后记录完成或抛出稳定清理异常。"""
+        await super().aclose()
+        self.started.set()
+        await self.proceed.wait()
+        if self._fail:
+            raise RuntimeError("gated close failure")
+        self.completed.set()
+
+
 def build_snapshot(**overrides: object) -> RuntimeConfigSnapshot:
     """构造用于生产 bundle 装配测试的完整运行快照。"""
     values: dict[str, object] = {
@@ -178,6 +199,55 @@ async def test_swap_does_not_interrupt_old_lease_and_delays_close() -> None:
 
 
 @pytest.mark.asyncio
+async def test_double_cancellation_cannot_interrupt_lease_release() -> None:
+    """业务task连续取消两次也必须完成lease释放，使shutdown不会永久等待。"""
+    probe = CloseProbe()
+    registry = RuntimeClientRegistry(build_bundle(1, probe))
+    entered = asyncio.Event()
+
+    async def use_bundle() -> None:
+        """持有租约直到测试取消业务。"""
+        async with registry.acquire():
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(use_bundle())
+    await entered.wait()
+    await registry._lock.acquire()  # noqa: SLF001
+    try:
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+    finally:
+        registry._lock.release()  # noqa: SLF001
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(registry.close(), timeout=0.1)
+    assert probe.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_retired_close_finishes_cleanup_then_propagates_cancel() -> None:
+    """swap清理被取消时仍完成旧bundle关闭，并在记录健康后传播取消。"""
+    old_probe = GatedCloseProbe()
+    registry = RuntimeClientRegistry(build_bundle(1, old_probe))
+    swap_task = asyncio.create_task(registry.swap(build_bundle(2, CloseProbe())))
+    await old_probe.started.wait()
+
+    swap_task.cancel()
+    await asyncio.sleep(0)
+    swap_task.cancel()
+    old_probe.proceed.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await swap_task
+    assert old_probe.completed.is_set()
+    assert (await registry.status()).resources_healthy is True
+    await registry.close()
+
+
+@pytest.mark.asyncio
 async def test_status_reads_current_bundle_metadata_without_exposing_secrets() -> None:
     """状态快照随swap更新，只暴露健康判断所需的非敏感字段。"""
     registry = RuntimeClientRegistry(
@@ -226,6 +296,31 @@ async def test_concurrent_swaps_close_every_retired_bundle_once() -> None:
 
     await registry.close()
     assert [probe.calls for probe in probes].count(1) == 3
+
+
+@pytest.mark.asyncio
+async def test_retired_bundle_cannot_be_published_again() -> None:
+    """registry永久记住已接管对象，退役并关闭后也拒绝重新发布同一bundle。"""
+    retired = build_bundle(1, CloseProbe())
+    registry = RuntimeClientRegistry(retired)
+    await registry.swap(build_bundle(2, CloseProbe()))
+
+    with pytest.raises(ValueError, match="已发布"):
+        await registry.swap(retired)
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_retired_bundle_cannot_be_published_again() -> None:
+    """仍在失败清理集合中的bundle不得作为candidate重新进入活动集。"""
+    retired = build_bundle(1, FailingCloseProbe())
+    registry = RuntimeClientRegistry(retired)
+    await registry.swap(build_bundle(2, CloseProbe()))
+
+    with pytest.raises(ValueError, match="已发布"):
+        await registry.swap(retired)
+    with pytest.raises(RuntimeError, match="运行客户端资源关闭失败"):
+        await registry.close()
 
 
 @pytest.mark.asyncio
@@ -312,6 +407,46 @@ async def test_close_rejects_new_leases_and_waits_for_existing_lease() -> None:
     await lease.__aexit__(None, None, None)
     await asyncio.wait_for(close_task, timeout=0.1)
     assert probe.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_close_callers_share_in_progress_attempt() -> None:
+    """并发close共享当前attempt，后来的调用不能在资源实际关闭前返回。"""
+    probe = GatedCloseProbe()
+    registry = RuntimeClientRegistry(build_bundle(1, probe))
+
+    first = asyncio.create_task(registry.close())
+    await probe.started.wait()
+    second = asyncio.create_task(registry.close())
+    await asyncio.sleep(0)
+    assert second.done() is False
+
+    probe.proceed.set()
+    await asyncio.gather(first, second)
+    assert probe.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_close_callers_share_error_and_later_call_retries() -> None:
+    """同期close获得同一稳定错误，后续新调用仅发起一次有限重试。"""
+    probe = GatedCloseProbe(fail=True)
+    registry = RuntimeClientRegistry(build_bundle(1, probe))
+
+    first = asyncio.create_task(registry.close())
+    await probe.started.wait()
+    second = asyncio.create_task(registry.close())
+    probe.proceed.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert all(
+        isinstance(result, RuntimeError)
+        and str(result) == "运行客户端资源关闭失败"
+        for result in results
+    )
+    assert probe.calls == 2
+    with pytest.raises(RuntimeError, match="运行客户端资源关闭失败"):
+        await registry.close()
+    assert probe.calls == 3
 
 
 @pytest.mark.asyncio

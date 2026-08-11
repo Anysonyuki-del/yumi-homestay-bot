@@ -90,6 +90,7 @@ from homestay_bot.services.approval_page_service import ApprovalPageService
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
 from homestay_bot.services.business_task_service import BusinessTaskService
+from homestay_bot.services.cancellation import complete_cleanup
 from homestay_bot.services.complaint_admin_service import ComplaintAdminService
 from homestay_bot.services.complaint_review_job import (
     ComplaintReviewJobService,
@@ -779,6 +780,8 @@ class SessionRuntimeConfigService:
             # 候选落库后先提交，后续测试阶段不能长期持有事务或数据库锁。
             before_test=session.commit,
             activate_runtime=activate_runtime,
+            # 补偿和失败审计必须在传播请求取消前真正落库。
+            after_compensation=session.commit,
         )
 
     async def page_data(self) -> RuntimeConfigPage:
@@ -2496,6 +2499,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     runtime_registry: RuntimeClientRegistry | None = None
     background_tasks: list[asyncio.Task[None]] = []
     runtime_start_lock = asyncio.Lock()
+    runtime_closing = False
 
     async def build_candidate_bundle(
         snapshot: RuntimeConfigSnapshot,
@@ -2789,7 +2793,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         """串行执行首次完整装配或后续swap，失败时不发布半成品运行时。"""
         nonlocal runtime_registry
         async with runtime_start_lock:
+            if runtime_closing:
+                raise RuntimeError("应用运行时正在关闭")
             candidate = await build_candidate_bundle(snapshot, revision)
+            if runtime_closing:
+                await complete_cleanup(candidate.aclose())
+                raise RuntimeError("应用运行时正在关闭")
             if runtime_registry is not None:
                 try:
                     await runtime_registry.swap(candidate)
@@ -2929,21 +2938,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.runtime_config_service.configure_runtime_activation(
         runtime_activator=start_runtime_services,
     )
-    try:
-        if runtime_snapshot is not None:
-            async with factory() as revision_session:
-                runtime_state = await SQLAlchemyRuntimeConfigRepository(
-                    revision_session
-                ).get_state()
-                initial_revision = int(runtime_state.revision)
-                await revision_session.commit()
-            await start_runtime_services(
-                runtime_snapshot,
-                initial_revision,
-                configuration_healthy=not runtime_degraded,
-            )
-        yield
-    finally:
+
+    async def shutdown_runtime() -> None:
+        """等待运行装配锁后关闭唯一已发布runtime，并清除全部生命周期state。"""
+        # closing在外层同步置位；锁仅作为在途构造/发布完成的屏障。
+        async with runtime_start_lock:
+            pass
         try:
             for task in background_tasks:
                 task.cancel()
@@ -2964,3 +2964,29 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                         cancel_futures=True,
                     )
                 await engine.dispose()
+
+    try:
+        if runtime_snapshot is not None:
+            async with factory() as revision_session:
+                runtime_state = await SQLAlchemyRuntimeConfigRepository(
+                    revision_session
+                ).get_state()
+                initial_revision = int(runtime_state.revision)
+                await revision_session.commit()
+            await start_runtime_services(
+                runtime_snapshot,
+                initial_revision,
+                configuration_healthy=not runtime_degraded,
+            )
+        yield
+    except asyncio.CancelledError as error:
+        runtime_closing = True
+        await complete_cleanup(shutdown_runtime(), pending_cancel=error)
+        raise error
+    except BaseException:
+        runtime_closing = True
+        await complete_cleanup(shutdown_runtime())
+        raise
+    else:
+        runtime_closing = True
+        await complete_cleanup(shutdown_runtime())
