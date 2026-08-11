@@ -137,6 +137,7 @@ class RuntimeConfigVersionStatus(StrEnum):
     TEST_FAILED = "test_failed"
     TEST_PASSED = "test_passed"
     ACTIVATION_CONFLICT = "activation_conflict"
+    ACTIVATION_FAILED = "activation_failed"
 
 
 class KnowledgeCandidateStatus(StrEnum):

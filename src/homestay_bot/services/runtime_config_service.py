@@ -1,5 +1,6 @@
 """编排运行配置合并、无业务写入测试、激活、回滚和安全审计。"""
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, fields
@@ -262,12 +263,17 @@ class RuntimeConfigUnavailableError(RuntimeError):
     """表示数据库和环境均没有可作为编辑基线的完整外部配置。"""
 
 
+class RuntimeConfigCompensationConflictError(RuntimeConfigConflictError):
+    """表示激活后补偿遇到并发更新，DB与本进程bundle可能暂时不一致。"""
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeConfigBaseline:
     """绑定一次读取获得的 revision、active 版本和完整快照。"""
 
     revision: int
     active_version_id: int | None
+    previous_version_id: int | None
     snapshot: RuntimeConfigSnapshot | None
 
 
@@ -330,6 +336,19 @@ class RuntimeConfigRepositoryPort(Protocol):
     ) -> Any:
         """按修订号交换当前和上一版本。"""
 
+    async def restore_failed_activation(
+        self,
+        expected_active_version_id: int,
+        *,
+        failed_candidate_version_id: int | None,
+        expected_revision: int,
+        restore_revision: int,
+        restore_active_version_id: int | None,
+        restore_previous_version_id: int | None,
+        failure_code: str,
+    ) -> bool:
+        """以失败操作的新revision为CAS恢复完整旧指针。"""
+
     async def prune(self, *, keep_latest: int = 20) -> int:
         """安全清理旧版本。"""
 
@@ -371,6 +390,9 @@ class RuntimeConfigService:
         environment_snapshot: RuntimeConfigSnapshot | None,
         retention: int = 20,
         before_test: Callable[[], Awaitable[None]] | None = None,
+        activate_runtime: (
+            Callable[[RuntimeConfigSnapshot, int, int], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         """注入存储、独立密文服务、密码复核和候选测试端口。"""
         if not 2 <= retention <= 100:
@@ -382,6 +404,7 @@ class RuntimeConfigService:
         self._environment_snapshot = environment_snapshot
         self._retention = retention
         self._before_test = before_test
+        self._activate_runtime = activate_runtime
 
     async def load_active_or_environment(self) -> RuntimeConfigSnapshot:
         """数据库无激活版本时回退环境；一旦激活则数据库快照优先。"""
@@ -519,6 +542,38 @@ class RuntimeConfigService:
                 error_code="revision_conflict",
             )
             raise
+        try:
+            if self._activate_runtime is not None:
+                await self._activate_runtime(
+                    candidate,
+                    int(version.id),
+                    int(activated.revision),
+                )
+        except BaseException as error:
+            restored = await self._repository.restore_failed_activation(
+                int(version.id),
+                failed_candidate_version_id=int(version.id),
+                expected_revision=int(activated.revision),
+                restore_revision=baseline.revision,
+                restore_active_version_id=baseline.active_version_id,
+                restore_previous_version_id=baseline.previous_version_id,
+                failure_code="activation_failed",
+            )
+            await self._repository.add_audit(
+                actor_id=actor_id,
+                action="runtime_config.activate",
+                version_id=int(version.id),
+                fields=changed_fields,
+                result="failed",
+                error_code="activation_failed",
+            )
+            if not restored:
+                raise RuntimeConfigCompensationConflictError(
+                    "运行配置补偿时已由其他请求更新"
+                ) from error
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            raise RuntimeConfigTestError("activation_failed") from error
         await self._repository.add_audit(
             actor_id=actor_id,
             action="runtime_config.activate",
@@ -550,6 +605,9 @@ class RuntimeConfigService:
             expected_session_version,
         )
         state = await self._repository.get_state()
+        original_revision = int(state.revision)
+        original_active_version_id = state.active_version_id
+        original_previous_version_id = state.previous_version_id
         if (
             int(state.revision) != expected_revision
             or state.previous_version_id != expected_previous_version_id
@@ -566,6 +624,38 @@ class RuntimeConfigService:
             expected_revision=expected_revision,
             expected_previous_version_id=expected_previous_version_id,
         )
+        try:
+            if self._activate_runtime is not None:
+                await self._activate_runtime(
+                    snapshot,
+                    int(previous_id),
+                    int(rolled_back.revision),
+                )
+        except BaseException as error:
+            restored = await self._repository.restore_failed_activation(
+                int(previous_id),
+                failed_candidate_version_id=None,
+                expected_revision=int(rolled_back.revision),
+                restore_revision=original_revision,
+                restore_active_version_id=original_active_version_id,
+                restore_previous_version_id=original_previous_version_id,
+                failure_code="activation_failed",
+            )
+            await self._repository.add_audit(
+                actor_id=actor_id,
+                action="runtime_config.rollback",
+                version_id=int(previous_id),
+                fields=(),
+                result="failed",
+                error_code="activation_failed",
+            )
+            if not restored:
+                raise RuntimeConfigCompensationConflictError(
+                    "运行配置补偿时已由其他请求更新"
+                ) from error
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            raise RuntimeConfigTestError("activation_failed") from error
         await self._repository.add_audit(
             actor_id=actor_id,
             action="runtime_config.rollback",
@@ -591,6 +681,7 @@ class RuntimeConfigService:
         return RuntimeConfigBaseline(
             revision=int(state.revision),
             active_version_id=state.active_version_id,
+            previous_version_id=state.previous_version_id,
             snapshot=snapshot,
         )
 

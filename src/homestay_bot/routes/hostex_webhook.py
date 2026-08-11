@@ -1,6 +1,7 @@
 import hashlib
 import json
 import secrets
+from collections.abc import AsyncIterator
 from json import JSONDecodeError
 from typing import Annotated, Any, Protocol
 
@@ -153,15 +154,24 @@ class HostexWebhookService:
         return event_key
 
 
-def get_hostex_webhook_service(request: Request) -> HostexWebhookService:
-    """从应用状态读取请求级 Webhook 服务。"""
-    service: object = getattr(request.app.state, "hostex_webhook_service", None)
-    if not isinstance(service, HostexWebhookService):
+async def get_hostex_webhook_service(
+    request: Request,
+) -> AsyncIterator[HostexWebhookService]:
+    """为完整Webhook请求租用当前 revision 的Secret校验与入库服务。"""
+    registry: Any = getattr(request.app.state, "runtime_client_registry", None)
+    if registry is None or not callable(getattr(registry, "acquire", None)):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="百居易 Webhook 服务尚未配置",
         )
-    return service
+    async with registry.acquire() as bundle:
+        service = bundle.hostex_webhook_service
+        if not isinstance(service, HostexWebhookService):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="百居易 Webhook 服务尚未配置",
+            )
+        yield service
 
 
 HostexWebhookDependency = Annotated[

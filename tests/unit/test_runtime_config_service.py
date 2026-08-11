@@ -208,6 +208,34 @@ class RepositoryStub:
         )
         return self.state
 
+    async def restore_failed_activation(
+        self,
+        expected_active_version_id: int,
+        *,
+        failed_candidate_version_id: int | None,
+        expected_revision: int,
+        restore_revision: int,
+        restore_active_version_id: int | None,
+        restore_previous_version_id: int | None,
+        failure_code: str,
+    ) -> bool:
+        """仅在失败版本仍为active时恢复操作前完整指针。"""
+        if (
+            self.state.revision != expected_revision
+            or self.state.active_version_id != expected_active_version_id
+        ):
+            return False
+        self.state = StateStub(
+            revision=restore_revision,
+            active_version_id=restore_active_version_id,
+            previous_version_id=restore_previous_version_id,
+        )
+        if failed_candidate_version_id is not None:
+            version = self.versions[failed_candidate_version_id]
+            version.status = RuntimeConfigVersionStatus.ACTIVATION_FAILED
+            version.failure_code = failure_code
+        return True
+
     async def prune(self, *, keep_latest: int) -> int:
         """记录保留上限。"""
         self.prune_calls.append(keep_latest)
@@ -307,6 +335,8 @@ def build_service(
     auth: AuthStub,
     tester: CandidateTesterStub,
     environment: RuntimeConfigSnapshot | None,
+    *,
+    activate_runtime=None,
 ) -> RuntimeConfigService:
     """装配使用真实加密器的配置服务。"""
     return RuntimeConfigService(
@@ -316,6 +346,7 @@ def build_service(
         tester=tester,
         environment_snapshot=environment,
         retention=5,
+        activate_runtime=activate_runtime,
     )
 
 
@@ -394,6 +425,94 @@ async def test_failed_candidate_is_saved_but_never_activated() -> None:
     }
     assert repository.state.active_version_id is None
     assert "new-secret-value" not in repr(repository.audits)
+
+
+@pytest.mark.asyncio
+async def test_runtime_constructor_failure_restores_database_pointer() -> None:
+    """DB激活后的bundle构造失败必须恢复原指针并标记稳定失败状态。"""
+    repository = RepositoryStub()
+
+    async def reject_runtime(snapshot, version_id: int, revision: int) -> None:
+        """模拟生产bundle构造失败。"""
+        raise RuntimeError("secret constructor details")
+
+    service = build_service(
+        repository,
+        AuthStub(),
+        CandidateTesterStub(),
+        build_snapshot(),
+        activate_runtime=reject_runtime,
+    )
+
+    with pytest.raises(RuntimeConfigTestError) as captured:
+        await activate(
+            service,
+            UpdateRuntimeConfig(deepseek_model="candidate-model"),
+            expected_revision=0,
+        )
+
+    assert captured.value.error_code == "activation_failed"
+    assert repository.state == StateStub()
+    assert repository.versions[1].status is RuntimeConfigVersionStatus.ACTIVATION_FAILED
+    assert repository.versions[1].failure_code == "activation_failed"
+    assert "secret constructor details" not in repr(repository.audits)
+
+
+@pytest.mark.asyncio
+async def test_runtime_swap_failure_restores_rollback_pointer() -> None:
+    """回滚bundle发布失败也必须恢复回滚前active与previous。"""
+    repository = RepositoryStub()
+
+    class ActivationStub:
+        """允许前两次激活并拒绝回滚发布。"""
+
+        def __init__(self) -> None:
+            """初始化调用次数。"""
+            self.calls = 0
+
+        async def __call__(self, snapshot, version_id: int, revision: int) -> None:
+            """第三次调用模拟registry.swap失败。"""
+            self.calls += 1
+            if self.calls == 3:
+                raise RuntimeError("swap failed")
+
+    activation = ActivationStub()
+    service = build_service(
+        repository,
+        AuthStub(),
+        CandidateTesterStub(),
+        build_snapshot(),
+        activate_runtime=activation,
+    )
+    await activate(
+        service,
+        UpdateRuntimeConfig(deepseek_model="model-one"),
+        expected_revision=0,
+    )
+    await activate(
+        service,
+        UpdateRuntimeConfig(deepseek_model="model-two"),
+        expected_revision=1,
+    )
+
+    with pytest.raises(RuntimeConfigTestError) as captured:
+        await service.rollback(
+            actor_id=7,
+            admin_id=1,
+            password="correct-password",
+            expected_session_version=4,
+            expected_revision=2,
+            expected_previous_version_id=1,
+        )
+
+    assert captured.value.error_code == "activation_failed"
+    assert repository.state == StateStub(
+        revision=2,
+        active_version_id=2,
+        previous_version_id=1,
+    )
+    assert repository.versions[1].status is RuntimeConfigVersionStatus.TEST_PASSED
+    assert repository.versions[1].failure_code is None
 
 
 @pytest.mark.asyncio

@@ -268,3 +268,29 @@ async def test_future_heartbeat_is_not_considered_healthy() -> None:
 
     assert result["status"] == "degraded"
     assert result["wecom_polling"] == "stale"
+@pytest.mark.asyncio
+async def test_runtime_configuration_health_can_degrade_after_startup() -> None:
+    """激活补偿冲突后动态配置标志应立即让健康状态降级。"""
+    configuration = {"ok": True}
+    now = datetime.now(UTC)
+
+    async def database_probe() -> bool:
+        """模拟健康数据库连接。"""
+        return True
+
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: now,
+        hostex_heartbeat_getter=lambda: now,
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
+        configuration_ok=lambda: configuration["ok"],
+        web_search_status_getter=lambda: "ok",
+    )
+
+    assert (await service.check())["configuration"] == "ok"
+    configuration["ok"] = False
+    result = await service.check()
+    assert result["configuration"] == "incomplete"
+    assert result["status"] == "degraded"

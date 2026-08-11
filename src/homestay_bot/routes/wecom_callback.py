@@ -1,4 +1,5 @@
-from typing import Annotated, Protocol
+from collections.abc import AsyncIterator
+from typing import Annotated, Any, Protocol
 
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
@@ -119,15 +120,22 @@ class WeComCallbackService:
         await self._queue.enqueue_wecom_sync(sync_token, open_kfid)
 
 
-def get_callback_service(request: Request) -> WeComCallbackService:
-    """从应用状态读取启动阶段装配的回调服务。"""
-    service: object = getattr(request.app.state, "wecom_callback_service", None)
-    if not isinstance(service, WeComCallbackService):
+async def get_callback_service(request: Request) -> AsyncIterator[WeComCallbackService]:
+    """为完整回调请求租用当前 revision 的验签与解密服务。"""
+    registry: Any = getattr(request.app.state, "runtime_client_registry", None)
+    if registry is None or not callable(getattr(registry, "acquire", None)):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="企业微信回调服务尚未配置",
         )
-    return service
+    async with registry.acquire() as bundle:
+        service = bundle.wecom_callback_service
+        if not isinstance(service, WeComCallbackService):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="企业微信回调服务尚未配置",
+            )
+        yield service
 
 
 CallbackServiceDependency = Annotated[

@@ -154,8 +154,13 @@ async def test_bootstrap_only_starts_secure_repair_console_without_external_clie
         """任何外部客户端构造都表示修复模式越界。"""
         raise AssertionError("repair-only 启动不得构造外部客户端")
 
-    for name in ("HostexClient", "WeComApiClient", "AsyncOpenAI", "AsyncAnthropic"):
+    for name in ("HostexClient", "WeComApiClient"):
         monkeypatch.setattr(application, name, reject_external_client)
+    for name in ("AsyncOpenAI", "AsyncAnthropic"):
+        monkeypatch.setattr(
+            "homestay_bot.services.runtime_clients." + name,
+            reject_external_client,
+        )
 
     test_app = FastAPI()
     async with application_lifespan(test_app):
@@ -361,10 +366,19 @@ def test_unavailable_admin_bootstrap_keeps_workers_running_and_reports_degraded(
     class FakeOpenAI:
         """记录生命周期传给 OpenAI 客户端的连接配置。"""
 
-        def __init__(self, *, api_key: str, base_url: str) -> None:
+        def __init__(
+            self,
+            *,
+            api_key: str,
+            base_url: str,
+            http_client,
+            max_retries: int,
+        ) -> None:
             """保存密钥和兼容接口根地址，避免测试访问外网。"""
             chat_configuration["api_key"] = api_key
             chat_configuration["base_url"] = base_url
+            assert http_client is not None
+            assert max_retries == 0
 
         async def close(self) -> None:
             """模拟关闭异步客户端。"""
@@ -373,10 +387,19 @@ def test_unavailable_admin_bootstrap_keeps_workers_running_and_reports_degraded(
     class FakeAnthropic:
         """记录 DeepSeek Anthropic 搜索客户端配置。"""
 
-        def __init__(self, *, api_key: str, base_url: str) -> None:
+        def __init__(
+            self,
+            *,
+            api_key: str,
+            base_url: str,
+            http_client,
+            max_retries: int,
+        ) -> None:
             """保存同一密钥与派生搜索地址。"""
             tourism_configuration["api_key"] = api_key
             tourism_configuration["base_url"] = base_url
+            assert http_client is not None
+            assert max_retries == 0
 
         async def close(self) -> None:
             """记录客户端已关闭。"""
@@ -418,17 +441,12 @@ def test_unavailable_admin_bootstrap_keeps_workers_running_and_reports_degraded(
     if admin_username is not None and admin_password_hash is not None:
         monkeypatch.setenv("ADMIN_BOOTSTRAP_USERNAME", admin_username)
         monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD_HASH", admin_password_hash)
-    monkeypatch.setattr("homestay_bot.application.AsyncOpenAI", FakeOpenAI)
-    monkeypatch.setattr("homestay_bot.application.AsyncAnthropic", FakeAnthropic)
+    monkeypatch.setattr("homestay_bot.services.runtime_clients.AsyncOpenAI", FakeOpenAI)
+    monkeypatch.setattr("homestay_bot.services.runtime_clients.AsyncAnthropic", FakeAnthropic)
 
     async def worker_loop(app, **kwargs) -> None:
         """验证生产 worker 注册了一期全部持久化任务处理器。"""
-        for name in (
-            "faq_draft_handler_factory",
-            "hostex_event_handler_factory",
-            "credential_part_handler_factory",
-            "lifecycle_handler_factory",
-        ):
+        for name in ("runtime_handler_factory",):
             worker_wiring[name] = callable(kwargs.get(name))
         worker_recovery_wiring.append(
             (
@@ -485,18 +503,13 @@ def test_unavailable_admin_bootstrap_keeps_workers_running_and_reports_degraded(
 
         assert response.status_code == 503
         assert response.json() == {"status": "degraded"}
-        assert worker_wiring == {
-            "faq_draft_handler_factory": True,
-            "hostex_event_handler_factory": True,
-            "credential_part_handler_factory": True,
-            "lifecycle_handler_factory": True,
-        }
+        assert worker_wiring == {"runtime_handler_factory": True}
         assert worker_recovery_wiring == [
             (None, {"wecom_process_message"}, True),
             ({"wecom_process_message"}, set(), True),
         ]
         assert app.state.private_file_service is app.state.task_page_service
-        assert app.state.hostex_webhook_service is not None
+        assert app.state.runtime_client_registry is not None
         assert app.state.admin_auth_available is False
         assert not hasattr(app.state, "admin_auth_service")
         assert not hasattr(app.state, "employee_access_verifier")

@@ -281,6 +281,47 @@ class SQLAlchemyRuntimeConfigRepository:
             raise RuntimeConfigConflictError("运行配置已由其他请求更新")
         raise RuntimeConfigRollbackError("当前没有可回滚的上一版本")
 
+    async def restore_failed_activation(
+        self,
+        expected_active_version_id: int,
+        *,
+        failed_candidate_version_id: int | None,
+        expected_revision: int,
+        restore_revision: int,
+        restore_active_version_id: int | None,
+        restore_previous_version_id: int | None,
+        failure_code: str,
+    ) -> bool:
+        """仅当失败版本仍为active时CAS恢复操作前的完整指针和revision。"""
+        if failure_code != "activation_failed":
+            raise ValueError("配置激活失败码无效")
+        statement = (
+            update(RuntimeConfigState)
+            .where(
+                RuntimeConfigState.id == 1,
+                RuntimeConfigState.revision == expected_revision,
+                RuntimeConfigState.active_version_id == expected_active_version_id,
+            )
+            .values(
+                active_version_id=restore_active_version_id,
+                previous_version_id=restore_previous_version_id,
+                revision=restore_revision,
+                updated_at=func.now(),
+            )
+        )
+        result = await self._session.execute(statement)
+        restored = int(result.rowcount or 0) == 1  # type: ignore[attr-defined]
+        if failed_candidate_version_id is not None:
+            await self._session.execute(
+                update(RuntimeConfigVersion)
+                .where(RuntimeConfigVersion.id == failed_candidate_version_id)
+                .values(
+                    status=RuntimeConfigVersionStatus.ACTIVATION_FAILED,
+                    failure_code=failure_code,
+                )
+            )
+        return restored
+
     async def prune(self, *, keep_latest: int = 20) -> int:
         """清理旧版本，但始终保留 active、previous 和指定数量的最新记录。"""
         if not 1 <= keep_latest <= 100:

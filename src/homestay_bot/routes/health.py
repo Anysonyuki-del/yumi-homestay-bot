@@ -49,7 +49,7 @@ class OperationalHealthService:
         hostex_heartbeat_getter: Callable[[], datetime | None],
         context_heartbeat_getter: Callable[[], datetime | None],
         lifecycle_heartbeat_getter: Callable[[], datetime | None],
-        configuration_ok: bool,
+        configuration_ok: bool | Callable[[], bool],
         web_search_status_getter: Callable[[], str],
         contact_sync_configured: bool = False,
         heartbeat_max_age: timedelta = timedelta(minutes=2),
@@ -66,7 +66,9 @@ class OperationalHealthService:
         self._hostex_heartbeat_getter = hostex_heartbeat_getter
         self._context_heartbeat_getter = context_heartbeat_getter
         self._lifecycle_heartbeat_getter = lifecycle_heartbeat_getter
-        self._configuration_ok = configuration_ok
+        self._configuration_ok_getter = (
+            configuration_ok if callable(configuration_ok) else lambda: configuration_ok
+        )
         self._web_search_status_getter = web_search_status_getter
         self._contact_sync_configured = contact_sync_configured
         self._heartbeat_max_age = heartbeat_max_age
@@ -115,6 +117,7 @@ class OperationalHealthService:
         )
         web_search_status = self._web_search_status_getter()
         web_search_ok = web_search_status in {"unknown", "ok"}
+        configuration_ok = self._configuration_ok_getter()
         result = {
             "status": (
                 "ok"
@@ -124,7 +127,7 @@ class OperationalHealthService:
                 and hostex_ok
                 and context_ok
                 and lifecycle_ok
-                and self._configuration_ok
+                and configuration_ok
                 and web_search_ok
                 else "degraded"
             ),
@@ -136,7 +139,7 @@ class OperationalHealthService:
             "lifecycle_scheduler": (
                 "ok" if lifecycle_ok else "stale"
             ),
-            "configuration": "ok" if self._configuration_ok else "incomplete",
+            "configuration": "ok" if configuration_ok else "incomplete",
             "web_search": web_search_status,
             "wecom_contact_sync": (
                 "ok" if self._contact_sync_configured else "not_configured"
