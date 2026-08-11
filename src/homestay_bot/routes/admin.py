@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, Response
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.services.admin_dashboard_service import WUHAN_TIMEZONE, Snapshot
+from homestay_bot.services.admin_diagnostics_service import AuditPage, DiagnosticsSnapshot
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/admin")
@@ -29,6 +30,16 @@ class HealthServicePort(Protocol):
 
     async def check(self) -> dict[str, str]:
         """返回受控组件状态。"""
+
+
+class AdminDiagnosticsServicePort(Protocol):
+    """定义诊断详情和审计分页所需的安全服务接口。"""
+
+    async def snapshot(self) -> DiagnosticsSnapshot:
+        """返回服务端生成的安全诊断 view model。"""
+
+    async def list_audits(self, *, page: int, page_size: int = 20) -> AuditPage:
+        """返回稳定倒序的安全审计分页。"""
 
 
 _CHECK_LABELS = {
@@ -75,6 +86,19 @@ def _health_service(request: Request) -> HealthServicePort:
     if service is None:
         raise HTTPException(status_code=503, detail="系统诊断服务尚未配置")
     return cast(HealthServicePort, service)
+
+
+def _diagnostics_service(request: Request) -> AdminDiagnosticsServicePort | None:
+    """读取批次七诊断服务；测试兼容期允许回退既有健康展示。"""
+    service = getattr(request.app.state, "admin_diagnostics_service", None)
+    return cast(AdminDiagnosticsServicePort | None, service)
+
+
+def _no_store(response: Response) -> Response:
+    """禁止诊断和审计信息进入浏览器或代理缓存。"""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 async def _require_admin(request: Request) -> None:
@@ -125,7 +149,17 @@ async def admin_dashboard(request: Request) -> Response:
 async def admin_diagnostics(request: Request) -> Response:
     """以固定中文标签展示现有健康服务结果，降级时仍返回 HTTP 200。"""
     await _require_admin(request)
-    health = await _safe_health(request)
+    service = _diagnostics_service(request)
+    diagnostic_snapshot: DiagnosticsSnapshot | None = None
+    if service is not None:
+        try:
+            diagnostic_snapshot = await service.snapshot()
+            health = diagnostic_snapshot.health
+        except Exception as error:
+            logger.warning("管理员诊断详情失败：error_type=%s", type(error).__name__)
+            health = {"status": "degraded"}
+    else:
+        health = await _safe_health(request)
     checks: list[dict[str, str]] = []
     for key, label in _CHECK_LABELS.items():
         if key not in health:
@@ -135,7 +169,7 @@ async def admin_diagnostics(request: Request) -> Response:
         )
         checks.append({"label": label, "status_label": status_label, "tone": tone})
     started_at = getattr(request.app.state, "started_at", None)
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="admin/diagnostics.html",
         context={
@@ -144,6 +178,56 @@ async def admin_diagnostics(request: Request) -> Response:
             "overall_ok": health.get("status") == "ok",
             "health_degraded": health.get("status") != "ok",
             "checks": checks,
-            "started_at": started_at,
+            "started_at": (
+                diagnostic_snapshot.started_at if diagnostic_snapshot else started_at
+            ),
+            "diagnostics": diagnostic_snapshot,
         },
     )
+    return _no_store(response)
+
+
+@router.get("/diagnostics/audits", response_class=HTMLResponse)
+async def admin_audits(
+    request: Request,
+) -> Response:
+    """展示不含 details、目标编号或客户身份的稳定审计分页。"""
+    await _require_admin(request)
+    raw_page = request.query_params.get("page", "1")
+    if (
+        not raw_page.isascii()
+        or not raw_page.isdigit()
+        or not 1 <= len(raw_page) <= 6
+        or not 1 <= int(raw_page) <= 100000
+    ):
+        return _no_store(
+            HTMLResponse(
+                "操作记录页码无效，请返回诊断页重试。",
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            )
+        )
+    page = int(raw_page)
+    service = _diagnostics_service(request)
+    if service is None:
+        raise HTTPException(status_code=503, detail="系统诊断服务尚未配置")
+    try:
+        audit_page = await service.list_audits(page=page, page_size=20)
+    except Exception as error:
+        logger.warning("管理员审计列表失败：error_type=%s", type(error).__name__)
+        audit_page = AuditPage(
+            items=(),
+            page=page,
+            page_size=20,
+            has_previous=page > 1,
+            has_next=False,
+        )
+    response = templates.TemplateResponse(
+        request=request,
+        name="admin/audits.html",
+        context={
+            "page_title": "操作记录",
+            "active_nav": "diagnostics",
+            "audit_page": audit_page,
+        },
+    )
+    return _no_store(response)

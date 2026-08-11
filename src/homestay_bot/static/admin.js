@@ -99,6 +99,22 @@ document.querySelectorAll("form").forEach((form) => {
   });
 });
 
+document.querySelectorAll("[data-copy-target]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    // 服务端已生成脱敏纯文本；浏览器只复制，不读取或过滤任何 raw 对象。
+    const targetId = button.getAttribute("data-copy-target");
+    const target = targetId ? document.getElementById(targetId) : null;
+    if (!(target instanceof HTMLTextAreaElement)) return;
+    try {
+      await navigator.clipboard.writeText(target.value);
+      button.textContent = "已复制";
+    } catch {
+      target.focus();
+      target.select();
+    }
+  });
+});
+
 document.querySelectorAll("form[data-unsaved-warning]").forEach((form) => {
   form.addEventListener("input", () => { dirtyForms.add(form); });
   form.addEventListener("submit", (event) => {

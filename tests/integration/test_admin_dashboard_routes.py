@@ -14,6 +14,7 @@ from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.routes.admin import router as admin_router
 from homestay_bot.routes.employee_auth import router as auth_router
 from homestay_bot.services.admin_dashboard_service import Snapshot
+from homestay_bot.services.admin_diagnostics_service import AuditPage, DiagnosticsSnapshot
 
 
 class DashboardStub:
@@ -55,6 +56,40 @@ class HealthStub:
             "worker_heartbeat": "stale",
             "configuration": "incomplete",
         }
+
+
+class DiagnosticsStub:
+    """提供不包含 raw 对象的诊断快照和安全审计分页。"""
+
+    async def snapshot(self) -> DiagnosticsSnapshot:
+        """返回服务端已生成的脱敏复制报告。"""
+        return DiagnosticsSnapshot(
+            health={"status": "degraded", "database": "ok"},
+            job_status_counts={"pending": 2},
+            recent_job_error_codes=("timeout",),
+            started_at=datetime(2026, 8, 11, tzinfo=UTC),
+            version="1.2.3",
+            configuration_revision=7,
+            report_text="YuMi 系统诊断报告（已脱敏）\n版本：1.2.3",
+        )
+
+    async def list_audits(self, *, page: int, page_size: int = 20) -> AuditPage:
+        """返回稳定倒序的安全审计视图。"""
+        items = (
+            SimpleNamespace(
+                id=9,
+                action="admin_debug_preview",
+                target_type="admin_debug",
+                created_at=datetime(2026, 8, 11, tzinfo=UTC),
+            ),
+        )
+        return AuditPage(
+            items=items,
+            page=page,
+            page_size=page_size,
+            has_previous=page > 1,
+            has_next=True,
+        )
 
 
 class FailingHealthStub:
@@ -241,3 +276,36 @@ def test_health_failure_logs_only_type_and_returns_degraded(
     assert "error_type=RuntimeError" in caplog.text
     assert "health-secret-detail" not in caplog.text
     assert "health-secret-detail" not in response.text
+
+
+def test_diagnostics_detail_and_audit_page_use_safe_server_view_models() -> None:
+    """详情和审计页应 no-store，复制报告不得依赖浏览器过滤 raw 对象。"""
+    client = build_client()
+    client.app.state.admin_diagnostics_service = DiagnosticsStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    diagnostics = client.get("/employee/admin/diagnostics")
+    audits = client.get("/employee/admin/diagnostics/audits", params={"page": 2})
+
+    assert diagnostics.status_code == 200
+    assert diagnostics.headers["cache-control"] == "no-store"
+    assert "revision 7" in diagnostics.text
+    assert "YuMi 系统诊断报告（已脱敏）" in diagnostics.text
+    assert "data-copy-target" in diagnostics.text
+    assert audits.status_code == 200
+    assert audits.headers["cache-control"] == "no-store"
+    assert "admin_debug_preview" in audits.text
+    assert "上一页" in audits.text
+    assert "下一页" in audits.text
+    for secret in ("UID-SECRET", "RAW-MESSAGE", "https://", "token=", "LOCK-SECRET"):
+        assert secret not in diagnostics.text
+        assert secret not in audits.text
+
+    invalid_query = client.get(
+        "/employee/admin/diagnostics/audits",
+        params={"page": "UID-SECRET?token=RAW"},
+    )
+    assert invalid_query.status_code == 422
+    assert invalid_query.headers["cache-control"] == "no-store"
+    assert "UID-SECRET" not in invalid_query.text
+    assert "token=" not in invalid_query.text

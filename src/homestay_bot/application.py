@@ -8,7 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from typing import Any, BinaryIO, cast
+from zoneinfo import ZoneInfo
 
 import httpx
 from cryptography.fernet import InvalidToken
@@ -42,6 +45,10 @@ from homestay_bot.repositories.admin_credentials import (
     SQLAlchemyAdminCredentialRepository,
 )
 from homestay_bot.repositories.admin_csrf import SQLAlchemyAdminCsrfRepository
+from homestay_bot.repositories.admin_diagnostics import (
+    SafeAuditEntry,
+    SQLAlchemyAdminDiagnosticsRepository,
+)
 from homestay_bot.repositories.approvals import (
     SQLAlchemyApprovalRepository,
     SQLAlchemyPermissionChecker,
@@ -82,6 +89,12 @@ from homestay_bot.services.admin_auth_service import (
 )
 from homestay_bot.services.admin_csrf import AdminCsrfService
 from homestay_bot.services.admin_dashboard_service import AdminDashboardService, Snapshot
+from homestay_bot.services.admin_debug_service import (
+    AdminDebugRateLimiter,
+    AdminDebugService,
+    DebugProperty,
+)
+from homestay_bot.services.admin_diagnostics_service import AdminDiagnosticsService
 from homestay_bot.services.admin_passwords import (
     ADMIN_PASSWORD_HASHER,
     validate_admin_password_hash,
@@ -1071,6 +1084,84 @@ class SessionAdminDashboardService:
         """在短会话中聚合运营快照，不提交任何数据。"""
         async with self._factory() as session:
             return await AdminDashboardService(session).snapshot(now)
+
+
+class SessionDebugPropertyRepository:
+    """用独立短会话读取调试房源，模型外联期间不持有数据库事务。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存短会话工厂。"""
+        self._factory = factory
+
+    async def get_debug_property(self, property_id: int) -> DebugProperty | None:
+        """读取一个启用房源投影并立即关闭会话。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(
+                session
+            ).get_debug_property(property_id)
+
+    async def list_debug_properties(self) -> tuple[DebugProperty, ...]:
+        """读取表单房源目录并立即关闭会话。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(
+                session
+            ).list_debug_properties()
+
+
+class SessionDebugAuditRepository:
+    """在模型调用结束后用独立短事务保存调试元数据。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存短会话工厂。"""
+        self._factory = factory
+
+    async def record_debug_preview(self, **details: object) -> None:
+        """写入白名单审计并提交，不与模型外联共享事务。"""
+        async with self._factory() as session:
+            await SQLAlchemyAdminDiagnosticsRepository(
+                session
+            ).record_debug_preview(**details)
+            await session.commit()
+
+
+class SessionAdminDiagnosticsRepository:
+    """为每项诊断读取创建独立短会话。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存短会话工厂。"""
+        self._factory = factory
+
+    async def job_status_counts(self) -> dict[str, int]:
+        """读取任务状态计数后立即释放连接。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(session).job_status_counts()
+
+    async def configuration_revision(self) -> int:
+        """读取数据库配置 revision 后立即释放连接。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(
+                session
+            ).configuration_revision()
+
+    async def recent_job_error_codes(self, *, limit: int) -> tuple[str, ...]:
+        """读取有限错误码后立即释放连接。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(
+                session
+            ).recent_job_error_codes(limit=limit)
+
+    async def list_audits(
+        self,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[SafeAuditEntry, ...]:
+        """读取安全审计分页后立即释放连接。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(session).list_audits(
+                offset=offset,
+                limit=limit,
+            )
 
 
 class SessionTaskPageService:
@@ -2336,6 +2427,9 @@ def _clear_lifespan_state(app: FastAPI) -> None:
         "employee_access_verifier",
         "approval_page_service",
         "admin_dashboard_service",
+        "admin_debug_service",
+        "admin_debug_rate_limiter",
+        "admin_diagnostics_service",
         "task_page_service",
         "private_file_service",
         "property_admin_service",
@@ -2512,6 +2606,18 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         configuration_ok=False,
         web_search_status_getter=web_search_state.get,
         contact_sync_configured=False,
+    )
+    try:
+        app_version = package_version("homestay-bot")
+    except PackageNotFoundError:
+        app_version = "0.1.0"
+    diagnostics_repository = SessionAdminDiagnosticsRepository(factory)
+    app.state.admin_diagnostics_service = AdminDiagnosticsService(
+        health=app.state.health_service,
+        repository=diagnostics_repository,
+        registry=None,
+        started_at=startup_time,
+        version=app_version,
     )
 
     queue = DurableJobQueue(factory)
@@ -2954,6 +3060,24 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.customer_admin_service = customer_service
             app.state.health_service = health_service
             app.state.runtime_client_registry = candidate_registry
+            debug_limiter = AdminDebugRateLimiter(limit=10)
+            app.state.admin_debug_rate_limiter = debug_limiter
+            app.state.admin_debug_service = AdminDebugService(
+                registry=candidate_registry,
+                properties=SessionDebugPropertyRepository(factory),
+                audits=SessionDebugAuditRepository(factory),
+                limiter=debug_limiter,
+                local_date_provider=lambda: datetime.now(
+                    ZoneInfo("Asia/Shanghai")
+                ).date(),
+            )
+            app.state.admin_diagnostics_service = AdminDiagnosticsService(
+                health=health_service,
+                repository=diagnostics_repository,
+                registry=candidate_registry,
+                started_at=startup_time,
+                version=app_version,
+            )
             runtime_registry = candidate_registry
             background_tasks.extend(started_tasks)
 

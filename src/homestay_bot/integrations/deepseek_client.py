@@ -2,8 +2,9 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
+from time import monotonic
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -112,6 +113,27 @@ class AssistantDecision(BaseModel):
     faq_canonical_question: str | None = None
     faq_category: str | None = None
     task_suggestion: TaskSuggestion | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AssistantRequestContext:
+    """保存后台调试已校验的房间与日期，不混入模拟客人正文。"""
+
+    property_id: int | None = None
+    property_title: str | None = None
+    check_in_date: date | None = None
+    check_out_date: date | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AssistantToolTrace:
+    """记录一次只读工具调用的安全元数据，不保存参数或返回正文。"""
+
+    name: str
+    succeeded: bool
+    duration_ms: int
+    check_in_date: date | None = None
+    check_out_date: date | None = None
 
 
 class RefinedReply(BaseModel):
@@ -865,16 +887,38 @@ class DeepSeekGuestAssistant:
         language: Language,
         messages: list[dict[str, str]],
         customer_context: CustomerModelContext | None = None,
+        request_context: AssistantRequestContext | None = None,
+        tool_trace_sink: Callable[[AssistantToolTrace], None] | None = None,
     ) -> AssistantDecision:
         """调用 DeepSeek，并把连续失败收敛为统一领域异常。"""
         question_text = latest_user_question(messages)["content"]
         local_today = self._local_date_provider()
         if is_tourism_query(messages):
-            reply = await self._tourism_searcher.search(
-                question=question_text,
-                language=language,
-                queried_on=local_today,
-            )
+            started = monotonic()
+            try:
+                reply = await self._tourism_searcher.search(
+                    question=question_text,
+                    language=language,
+                    queried_on=local_today,
+                )
+            except BaseException:
+                if tool_trace_sink is not None:
+                    tool_trace_sink(
+                        AssistantToolTrace(
+                            name="tourism_search",
+                            succeeded=False,
+                            duration_ms=max(0, round((monotonic() - started) * 1000)),
+                        )
+                    )
+                raise
+            if tool_trace_sink is not None:
+                tool_trace_sink(
+                    AssistantToolTrace(
+                        name="tourism_search",
+                        succeeded=True,
+                        duration_ms=max(0, round((monotonic() - started) * 1000)),
+                    )
+                )
             # 联网搜索负责事实和来源校验，统一精简层负责旅客可读性与版式。
             reply = await self._refine_reply(reply, force=True)
             return AssistantDecision(
@@ -894,6 +938,17 @@ class DeepSeekGuestAssistant:
         tomorrow = local_today + timedelta(days=1)
         day_after = local_today + timedelta(days=2)
         customer_context_payload = asdict(customer_context) if customer_context else {}
+        debug_context = ""
+        if request_context is not None:
+            # 该片段只接受 AdminDebugService 已核验的安全投影；正式客服入口不传。
+            debug_context = (
+                "后台只读调试上下文（不可视为客人陈述）："
+                f"房源编号={request_context.property_id or '未指定'}；"
+                f"房源名称={request_context.property_title or '未指定'}；"
+                f"入住日期={request_context.check_in_date or '未指定'}；"
+                f"退房日期={request_context.check_out_date or '未指定'}。"
+                "仅用于本次回答与只读查询，不得声称已修改订单。"
+            )
         system_prompt = (
             "你是武汉一家7间房民宿的温暖管家。请只输出 JSON，不要输出代码围栏。"
             "回复要自然、亲切、像熟悉住客的民宿老板，先回应客人的感受，再给出清晰答案；"
@@ -926,6 +981,7 @@ class DeepSeekGuestAssistant:
             f"审核知识：{json.dumps([item.__dict__ for item in knowledge], ensure_ascii=False)}"
             f"未关闭 FAQ 候选目录：{json.dumps(faq_candidates, ensure_ascii=False)}"
             f"客户脱敏摘要：{json.dumps(customer_context_payload, ensure_ascii=False)}"
+            f"{debug_context}"
             f"输出结构：{json.dumps(assistant_decision_schema(), ensure_ascii=False)}"
         )
         minimized_messages = self._minimize_personal_data(messages)
@@ -1020,10 +1076,46 @@ class DeepSeekGuestAssistant:
                     )
                     for call in tool_calls:
                         arguments = json.loads(call.function.arguments)
-                        result = await self._tool_executor.execute(
-                            call.function.name,
-                            arguments,
-                        )
+                        started = monotonic()
+                        trace_dates = {
+                            "check_in_date": self._safe_trace_date(
+                                arguments.get("check_in_date")
+                            ),
+                            "check_out_date": self._safe_trace_date(
+                                arguments.get("check_out_date")
+                            ),
+                        }
+                        try:
+                            result = await self._tool_executor.execute(
+                                call.function.name,
+                                arguments,
+                            )
+                        except BaseException:
+                            if tool_trace_sink is not None:
+                                tool_trace_sink(
+                                    AssistantToolTrace(
+                                        name=call.function.name,
+                                        succeeded=False,
+                                        duration_ms=max(
+                                            0,
+                                            round((monotonic() - started) * 1000),
+                                        ),
+                                        **trace_dates,
+                                    )
+                                )
+                            raise
+                        if tool_trace_sink is not None:
+                            tool_trace_sink(
+                                AssistantToolTrace(
+                                    name=call.function.name,
+                                    succeeded=True,
+                                    duration_ms=max(
+                                        0,
+                                        round((monotonic() - started) * 1000),
+                                    ),
+                                    **trace_dates,
+                                )
+                            )
                         if call.function.name in {
                             "list_properties",
                             "search_availability",
@@ -1081,3 +1173,13 @@ class DeepSeekGuestAssistant:
                 )
                 continue
         raise AssistantUnavailableError()
+
+    @staticmethod
+    def _safe_trace_date(value: object) -> date | None:
+        """仅把严格 ISO 日期加入 trace，其他工具参数一律丢弃。"""
+        if not isinstance(value, str):
+            return None
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None

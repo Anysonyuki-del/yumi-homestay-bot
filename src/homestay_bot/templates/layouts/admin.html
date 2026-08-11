@@ -29,6 +29,7 @@
           {% endif %}
           <a href="/employee/knowledge" {% if active_nav == "knowledge" %}aria-current="page"{% endif %}>{{ icons.icon("book") }}<span>知识库</span></a>
           {% if nav_is_admin %}
+          <a href="/employee/admin/debug" {% if active_nav == "debug" %}aria-current="page"{% endif %}>{{ icons.icon("pulse") }}<span>AI 调试台</span></a>
           <a href="/employee/admin/diagnostics" {% if active_nav == "diagnostics" %}aria-current="page"{% endif %}>{{ icons.icon("pulse") }}<span>系统诊断</span></a>
           <a href="/employee/admin/settings" {% if active_nav == "settings" %}aria-current="page"{% endif %}>{{ icons.icon("settings") }}<span>接口设置</span></a>
           {% endif %}
@@ -44,7 +45,7 @@
         </header>
         <details class="no-script-nav">
           <summary>打开页面导航</summary>
-          {% if nav_is_admin %}<a href="/employee/admin">总览</a><a href="/employee/properties">房源管理</a>{% endif %}<a href="/employee/knowledge">知识库</a>{% if nav_is_admin %}<a href="/employee/customers">客户管理</a>{% endif %}<a href="/employee/tasks">任务中心</a>{% if nav_is_admin %}<a href="/employee/approvals">预订审批</a><a href="/employee/admin/diagnostics">系统诊断</a><a href="/employee/admin/settings">接口设置</a>{% endif %}<a href="/employee/account">账号安全</a>
+          {% if nav_is_admin %}<a href="/employee/admin">总览</a><a href="/employee/properties">房源管理</a>{% endif %}<a href="/employee/knowledge">知识库</a>{% if nav_is_admin %}<a href="/employee/customers">客户管理</a>{% endif %}<a href="/employee/tasks">任务中心</a>{% if nav_is_admin %}<a href="/employee/approvals">预订审批</a><a href="/employee/admin/debug">AI 调试台</a><a href="/employee/admin/diagnostics">系统诊断</a><a href="/employee/admin/settings">接口设置</a>{% endif %}<a href="/employee/account">账号安全</a>
         </details>
         <main class="page-content" id="main-content" tabindex="-1">
           {% if health_degraded %}<div class="alert alert--warning" role="alert">{{ icons.icon("warning") }}<span>系统当前处于降级状态，部分自动化能力可能不可用。请查看<a href="/employee/admin/diagnostics">系统诊断</a>。</span></div>{% endif %}
