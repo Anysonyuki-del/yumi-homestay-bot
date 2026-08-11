@@ -10,6 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from homestay_bot.application import application_lifespan
 from homestay_bot.config import BootstrapSettings
 from homestay_bot.logging import configure_logging_redaction
+from homestay_bot.middleware import AdminNoStoreMiddleware
 from homestay_bot.routes.admin import router as admin_router
 from homestay_bot.routes.admin_debug import router as admin_debug_router
 from homestay_bot.routes.approvals import router as approvals_router
@@ -56,6 +57,8 @@ app.add_middleware(
     https_only=session_https_only,
     same_site="lax",
 )
+# 后加入的中间件先执行响应阶段，确保所有后台响应都带 no-store。
+app.add_middleware(AdminNoStoreMiddleware)
 app.include_router(wecom_callback_router)
 app.include_router(hostex_webhook_router)
 app.include_router(employee_auth_router)

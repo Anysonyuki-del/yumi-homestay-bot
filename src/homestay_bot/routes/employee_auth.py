@@ -1,4 +1,5 @@
 import asyncio
+import secrets
 from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -29,7 +30,11 @@ FIRST_LOGIN_ALLOWED_PATHS = {
 LOGIN_RATE_WINDOW = timedelta(minutes=1)
 LOGIN_RATE_PER_IP = 10
 LOGIN_RATE_GLOBAL = 60
+# 登录页只签发令牌，成本远低于 Argon2 校验，因此单独放宽并使用独立全局计数。
+LOGIN_PAGE_RATE_PER_IP = 30
+LOGIN_PAGE_RATE_GLOBAL = 120
 CSRF_SESSION_KEY = "admin_csrf_tokens"
+CSRF_SCOPE_SESSION_KEY = "admin_csrf_scope"
 
 
 class AdminLoginRateLimiter:
@@ -39,16 +44,33 @@ class AdminLoginRateLimiter:
         self,
         *,
         max_clients: int = 1024,
-        per_ip_limit: int = LOGIN_RATE_GLOBAL,
+        per_ip_limit: int = LOGIN_RATE_PER_IP,
         global_limit: int = LOGIN_RATE_GLOBAL,
+        page_per_ip_limit: int = LOGIN_PAGE_RATE_PER_IP,
+        page_global_limit: int = LOGIN_PAGE_RATE_GLOBAL,
     ) -> None:
-        """初始化按 IP 与全局时间队列。"""
+        """初始化按 IP 与按类别隔离的全局时间队列。"""
         self._max_clients = max_clients
         self._per_ip_limit = per_ip_limit
         self._global_limit = global_limit
+        self._page_per_ip_limit = page_per_ip_limit
+        self._page_global_limit = page_global_limit
         self._by_ip: dict[str, deque[datetime]] = {}
-        self._global: deque[datetime] = deque()
+        # 两类请求各自持有全局计数，刷登录页无法占满凭据提交的可用额度。
+        self._global: dict[str, deque[datetime]] = {
+            "login": deque(),
+            "page": deque(),
+        }
         self._lock = asyncio.Lock()
+
+    def _limits_for(self, category: str, per_ip_limit: int | None) -> tuple[int, int]:
+        """返回该类别生效的每 IP 上限与全局上限。"""
+        if category == "page":
+            return (
+                per_ip_limit or self._page_per_ip_limit,
+                self._page_global_limit,
+            )
+        return per_ip_limit or self._per_ip_limit, self._global_limit
 
     async def allow(
         self,
@@ -56,23 +78,25 @@ class AdminLoginRateLimiter:
         now: datetime,
         *,
         per_ip_limit: int | None = None,
+        category: str = "login",
     ) -> bool:
-        """原子清理过期记录并判断本次尝试是否仍在固定上限内。"""
+        """原子清理过期记录并判断本次尝试是否仍在该类别固定上限内。"""
         cutoff = now - LOGIN_RATE_WINDOW
+        effective_per_ip, effective_global = self._limits_for(category, per_ip_limit)
         async with self._lock:
-            while self._global and self._global[0] <= cutoff:
-                self._global.popleft()
+            global_attempts = self._global.setdefault(category, deque())
+            while global_attempts and global_attempts[0] <= cutoff:
+                global_attempts.popleft()
             if client_ip not in self._by_ip and len(self._by_ip) >= self._max_clients:
                 # 全局限速仍覆盖被淘汰来源；强制淘汰最老键以确保内存严格有界。
                 del self._by_ip[next(iter(self._by_ip))]
             attempts = self._by_ip.setdefault(client_ip, deque())
             while attempts and attempts[0] <= cutoff:
                 attempts.popleft()
-            effective_limit = per_ip_limit or self._per_ip_limit
-            if len(attempts) >= effective_limit or len(self._global) >= self._global_limit:
+            if len(attempts) >= effective_per_ip or len(global_attempts) >= effective_global:
                 return False
             attempts.append(now)
-            self._global.append(now)
+            global_attempts.append(now)
             return True
 
 
@@ -210,6 +234,30 @@ def _csrf_session_slot(purpose: str, admin_id: int | None) -> str:
     return f"{purpose}:{admin_id if admin_id is not None else 'anonymous'}"
 
 
+def _scoped_purpose(
+    request: Request,
+    purpose: str,
+    admin_id: int | None,
+    *,
+    create: bool,
+) -> str | None:
+    """已登录用途按管理员隔离；匿名用途改按浏览器随机作用域隔离。
+
+    未认证访客共用同一个 `admin_id=None` 作用域时，少量请求即可占满服务端
+    每作用域上限并让真实管理员拿不到登录令牌，因此匿名 nonce 必须绑定到
+    浏览器自身的随机标识。
+    """
+    if admin_id is not None:
+        return purpose
+    scope = request.session.get(CSRF_SCOPE_SESSION_KEY)
+    if not isinstance(scope, str) or not scope:
+        if not create:
+            return None
+        scope = secrets.token_urlsafe(12)
+        request.session[CSRF_SCOPE_SESSION_KEY] = scope
+    return f"{purpose}:{scope}"
+
+
 async def _issue_csrf(
     request: Request,
     purpose: str,
@@ -218,6 +266,9 @@ async def _issue_csrf(
 ) -> str:
     """复用浏览器未消费 nonce；过期后才向服务端申请新记录。"""
     now = _as_utc(_clock(request)())
+    scoped = _scoped_purpose(request, purpose, admin_id, create=True)
+    # create=True 时作用域必然存在，仅为类型收窄保留兜底。
+    purpose = scoped or purpose
     slot = _csrf_session_slot(purpose, admin_id)
     stored_tokens = request.session.get(CSRF_SESSION_KEY)
     if isinstance(stored_tokens, dict):
@@ -252,6 +303,11 @@ async def _consume_csrf(
     admin_id: int | None,
 ) -> None:
     """原子消费服务端 nonce，拒绝缺失、伪造、过期和重放。"""
+    scoped = _scoped_purpose(request, purpose, admin_id, create=False)
+    if scoped is None:
+        # 匿名作用域缺失说明浏览器未携带签发时的会话，令牌不可能属于本浏览器。
+        raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
+    purpose = scoped
     consumed = await _get_csrf_service(request).consume(
         token,
         purpose,
@@ -391,7 +447,9 @@ async def employee_login(
     """展示独立管理员账号密码登录页。"""
     client_ip = request.client.host if request.client is not None else "unknown"
     if not await _get_rate_limiter(request).allow(
-        f"page:{client_ip}", _as_utc(_clock(request)())
+        f"page:{client_ip}",
+        _as_utc(_clock(request)()),
+        category="page",
     ):
         raise HTTPException(status_code=429, detail="登录页请求过于频繁")
     return await _login_page(request, next_path=next_path)
@@ -415,7 +473,10 @@ async def employee_login_submit(
     client_ip = request.client.host if request.client is not None else "unknown"
     now = _as_utc(_clock(request)())
     if not await _get_rate_limiter(request).allow(
-        f"login:{client_ip}", now, per_ip_limit=LOGIN_RATE_PER_IP
+        f"login:{client_ip}",
+        now,
+        per_ip_limit=LOGIN_RATE_PER_IP,
+        category="login",
     ):
         return await _login_page(
             request,

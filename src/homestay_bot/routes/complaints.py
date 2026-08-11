@@ -4,6 +4,7 @@ from typing import Annotated, Any, Protocol, cast
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
+from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.repositories.complaints import ComplaintVersionConflict
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.web import templates
@@ -52,6 +53,17 @@ def _consume_csrf(request: Request, review_id: int, token: str) -> None:
         raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
 
 
+async def _require_admin(request: Request) -> int:
+    """客诉包含客人对话正文与对外回复权限，只允许管理员进入。"""
+    employee_id, role = await require_employee_session(request)
+    if role is not EmployeeRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有管理员可以复核客诉",
+        )
+    return employee_id
+
+
 @router.get("/{review_id}", response_class=HTMLResponse)
 async def complaint_detail(
     request: Request,
@@ -59,7 +71,7 @@ async def complaint_detail(
     before_message_id: Annotated[int | None, Query(gt=0)] = None,
 ) -> Response:
     """展示客诉分页对话、分析和可编辑回复草稿。"""
-    employee_id, role = await require_employee_session(request)
+    employee_id = await _require_admin(request)
     detail = await _service(request).get_detail(
         review_id,
         before_message_id=before_message_id,
@@ -86,7 +98,7 @@ async def _action(
     draft: str = "",
 ) -> RedirectResponse:
     """统一处理客诉编辑页的保存、发送、退回和关闭动作。"""
-    employee_id, _ = await require_employee_session(request)
+    employee_id = await _require_admin(request)
     _consume_csrf(request, review_id, csrf_token)
     try:
         service = _service(request)

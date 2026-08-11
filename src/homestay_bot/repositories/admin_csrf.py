@@ -27,6 +27,7 @@ class SQLAlchemyAdminCsrfRepository:
         purge_limit: int,
         max_active: int,
         max_active_per_scope: int,
+        max_active_anonymous: int,
     ) -> bool:
         """同一事务清理、预占数据库配额并写入 nonce。"""
         await self._ensure_quota()
@@ -48,6 +49,17 @@ class SQLAlchemyAdminCsrfRepository:
             if admin_id is None
             else AdminCsrfNonce.admin_id == admin_id
         )
+        if admin_id is None:
+            # 未认证访客整体只能占用独立子池，不得耗尽管理员可用的全局容量。
+            anonymous_count = await self._session.scalar(
+                select(func.count(AdminCsrfNonce.id)).where(
+                    AdminCsrfNonce.admin_id.is_(None),
+                    AdminCsrfNonce.expires_at > now,
+                )
+            )
+            if int(anonymous_count or 0) >= max_active_anonymous:
+                await self._decrement_quota(1)
+                return False
         scope_count = await self._session.scalar(
             select(func.count(AdminCsrfNonce.id)).where(
                 AdminCsrfNonce.purpose == purpose,
