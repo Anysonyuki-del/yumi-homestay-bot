@@ -198,7 +198,39 @@ async def test_failed_candidate_is_traceable_but_cannot_be_activated() -> None:
         )
         await repository.mark_test_failed(
             candidate.id,
-            {"succeeded": False, "error_code": "deepseek_auth_failed"},
+            {
+                "succeeded": False,
+                "error_code": "deepseek_auth_failed",
+                "providers": {
+                    "deepseek": {
+                        "succeeded": False,
+                        "error_code": "deepseek_auth_failed",
+                        "checks": {
+                            "openai": {
+                                "succeeded": False,
+                                "error_code": "deepseek_auth_failed",
+                            },
+                            "anthropic": {"succeeded": True},
+                        },
+                    },
+                    "hostex": {
+                        "succeeded": True,
+                        "checks": {"properties": {"succeeded": True}},
+                    },
+                    "wecom": {
+                        "succeeded": True,
+                        "callback_verification": "local_only",
+                        "checks": {
+                            "kf": {"succeeded": True},
+                            "agent": {"succeeded": True},
+                            "callback": {
+                                "succeeded": True,
+                                "verification": "local_only",
+                            },
+                        },
+                    },
+                },
+            },
             failure_code="deepseek_auth_failed",
         )
 
@@ -214,6 +246,35 @@ async def test_failed_candidate_is_traceable_but_cannot_be_activated() -> None:
         assert stored.test_results == {
             "succeeded": False,
             "error_code": "deepseek_auth_failed",
+            "providers": {
+                "deepseek": {
+                    "succeeded": False,
+                    "error_code": "deepseek_auth_failed",
+                    "checks": {
+                        "openai": {
+                            "succeeded": False,
+                            "error_code": "deepseek_auth_failed",
+                        },
+                        "anthropic": {"succeeded": True},
+                    },
+                },
+                "hostex": {
+                    "succeeded": True,
+                    "checks": {"properties": {"succeeded": True}},
+                },
+                "wecom": {
+                    "succeeded": True,
+                    "callback_verification": "local_only",
+                    "checks": {
+                        "kf": {"succeeded": True},
+                        "agent": {"succeeded": True},
+                        "callback": {
+                            "succeeded": True,
+                            "verification": "local_only",
+                        },
+                    },
+                },
+            },
         }
         assert state.active_version_id is None
     await dispose_factory(factory)

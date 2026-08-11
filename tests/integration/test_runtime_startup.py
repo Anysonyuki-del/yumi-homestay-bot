@@ -280,11 +280,7 @@ async def test_corrupt_active_uses_environment_repair_and_commits_activation_wit
                 await probe_session.commit()
             return RuntimeConfigTestResult(succeeded=True)
 
-    monkeypatch.setattr(
-        application,
-        "LocalRuntimeConfigTester",
-        TransactionProbeTester,
-    )
+    tester = TransactionProbeTester()
     executor = ThreadPoolExecutor(max_workers=2)
     semaphore = asyncio.Semaphore(2)
     try:
@@ -302,6 +298,7 @@ async def test_corrupt_active_uses_environment_repair_and_commits_activation_wit
             argon2_semaphore=semaphore,
             argon2_executor=executor,
             writable=True,
+            tester=tester,
         )
         page = await service.page_data()
         assert page.source == "environment"

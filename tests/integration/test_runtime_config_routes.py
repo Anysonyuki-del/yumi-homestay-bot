@@ -65,10 +65,37 @@ class RuntimeConfigServiceStub:
             SimpleNamespace(
                 version_id=12,
                 created_at=None,
-                created_by=1,
+                created_by_label="YuMi 管理员",
+                status="test_passed",
+                failure_code=None,
                 is_active=True,
                 is_previous=False,
                 masked_summary={"deepseek_api_key": "已配置 ····A1B2"},
+                provider_results={
+                    "deepseek": {
+                        "succeeded": True,
+                        "checks": {
+                            "openai": {"succeeded": True},
+                            "anthropic": {"succeeded": True},
+                        },
+                    },
+                    "hostex": {
+                        "succeeded": True,
+                        "checks": {"properties": {"succeeded": True}},
+                    },
+                    "wecom": {
+                        "succeeded": True,
+                        "callback_verification": "local_only",
+                        "checks": {
+                            "kf": {"succeeded": True},
+                            "agent": {"succeeded": True},
+                            "callback": {
+                                "succeeded": True,
+                                "verification": "local_only",
+                            },
+                        },
+                    },
+                },
             )
         ]
 
@@ -135,6 +162,30 @@ def test_settings_requires_admin_and_never_returns_complete_secrets() -> None:
     ):
         assert secret not in response.text
     assert "当前进程将在安全切换完成后使用" in response.text
+    assert "不发送客人消息、不修改订单" in response.text
+    assert "两次极小模型调用" in response.text
+    assert "供应商日志" in response.text
+    assert "仅本地校验，未验证真实回调投递" in response.text
+
+
+def test_version_page_displays_safe_provider_results_without_remote_body() -> None:
+    """版本页展示三方状态和回调边界，但不出现原始响应或敏感查询。"""
+    client, _ = build_client()
+    login_admin(client, next_path="/employee/admin/settings/versions")
+
+    response = client.get("/employee/admin/settings/versions")
+
+    assert response.status_code == 200
+    assert "DeepSeek" in response.text
+    assert "百居易" in response.text
+    assert "企业微信" in response.text
+    assert "OpenAI 兼容接口" in response.text
+    assert "Anthropic 兼容接口" in response.text
+    assert "客服 Secret" in response.text
+    assert "应用 AgentId" in response.text
+    assert "仅本地校验，未验证真实回调投递" in response.text
+    assert "response_body" not in response.text
+    assert "access_token=" not in response.text
 
 
 def test_activate_and_rollback_use_separate_multi_tab_server_nonces() -> None:

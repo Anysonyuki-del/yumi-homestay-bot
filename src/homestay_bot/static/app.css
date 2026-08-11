@@ -93,6 +93,10 @@ button, .button { border: 0; color: #fff; background: var(--navy); }
 .config-summary div { display: grid; grid-template-columns: minmax(120px, .8fr) 1.2fr; gap: 10px; }
 .config-summary dt, .config-summary dd { margin: 0; overflow-wrap: anywhere; }
 .config-summary dt { color: var(--muted); }
+.config-test-results { display: grid; gap: 10px; margin-top: 12px; }
+.config-test-result { display: grid; gap: 7px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
+.config-check-list { display: grid; gap: 5px; margin: 0; padding-left: 20px; color: var(--muted); }
+.config-check-list li span { color: var(--text); }
 .filter-links { display: flex; flex-wrap: wrap; gap: 10px 18px; }
 .candidate-card, .entry-card, .message-item { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .entry-card { display: grid; gap: 14px; }

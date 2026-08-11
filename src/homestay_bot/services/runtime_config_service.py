@@ -1,4 +1,4 @@
-"""编排运行配置合并、无副作用测试、激活、回滚和安全审计。"""
+"""编排运行配置合并、无业务写入测试、激活、回滚和安全审计。"""
 
 import re
 from collections.abc import Awaitable, Callable
@@ -81,17 +81,90 @@ class UpdateRuntimeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeConfigCheckTestResult:
+    """保存供应商内部单个只读探针的安全状态。"""
+
+    check: str
+    succeeded: bool
+    error_code: str | None = None
+    verification: str | None = None
+
+    def to_safe_dict(self) -> dict[str, object]:
+        """仅序列化布尔状态、稳定错误码和本地校验标记。"""
+        result: dict[str, object] = {"succeeded": self.succeeded}
+        if self.error_code is not None:
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", self.error_code):
+                raise ValueError("配置测试细项错误码无效")
+            result["error_code"] = self.error_code
+        if self.verification is not None:
+            if self.verification != "local_only" or self.check != "callback":
+                raise ValueError("配置测试细项校验方式无效")
+            result["verification"] = self.verification
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeConfigProviderTestResult:
+    """保存单一供应商的安全状态，不携带响应正文、URL 或凭据。"""
+
+    provider: str
+    succeeded: bool
+    error_code: str | None = None
+    callback_verification: str | None = None
+    checks: tuple[RuntimeConfigCheckTestResult, ...] = ()
+
+    def to_safe_dict(self) -> dict[str, object]:
+        """把单项结果限制为持久化白名单字段。"""
+        if self.provider not in {"deepseek", "hostex", "wecom"}:
+            raise ValueError("配置测试供应商无效")
+        if self.error_code is not None and not re.fullmatch(
+            r"[a-z][a-z0-9_]{0,63}", self.error_code
+        ):
+            raise ValueError("配置测试错误码无效")
+        if self.callback_verification not in {None, "local_only"}:
+            raise ValueError("企业微信回调校验状态无效")
+        if self.provider != "wecom" and self.callback_verification is not None:
+            raise ValueError("回调校验状态只能属于企业微信")
+        result: dict[str, object] = {"succeeded": self.succeeded}
+        if self.error_code is not None:
+            result["error_code"] = self.error_code
+        if self.callback_verification is not None:
+            result["callback_verification"] = self.callback_verification
+        if self.checks:
+            allowed_checks = {
+                "deepseek": {"openai", "anthropic"},
+                "hostex": {"properties"},
+                "wecom": {"kf", "agent", "contact", "callback"},
+            }[self.provider]
+            check_results: dict[str, object] = {}
+            for check in self.checks:
+                if check.check not in allowed_checks or check.check in check_results:
+                    raise ValueError("配置测试细项无效或重复")
+                check_results[check.check] = check.to_safe_dict()
+            result["checks"] = check_results
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeConfigTestResult:
     """候选连接测试的安全汇总，不携带远端响应正文。"""
 
     succeeded: bool
     error_code: str | None = None
+    providers: tuple[RuntimeConfigProviderTestResult, ...] = ()
 
     def to_safe_dict(self) -> dict[str, object]:
         """返回只含布尔状态和稳定错误码的候选元数据。"""
         result: dict[str, object] = {"succeeded": self.succeeded}
         if self.error_code is not None:
             result["error_code"] = self.error_code
+        if self.providers:
+            provider_results: dict[str, object] = {}
+            for provider in self.providers:
+                if provider.provider in provider_results:
+                    raise ValueError("配置测试供应商重复")
+                provider_results[provider.provider] = provider.to_safe_dict()
+            result["providers"] = provider_results
         return result
 
 
@@ -116,6 +189,52 @@ class RuntimeConfigVersionView:
     is_active: bool
     is_previous: bool
     masked_summary: dict[str, object]
+    provider_results: dict[str, dict[str, object]]
+
+
+def safe_provider_results(payload: object) -> dict[str, dict[str, object]]:
+    """从历史 JSON 提取固定三方安全状态，畸形旧数据一律忽略。"""
+    if not isinstance(payload, dict) or not isinstance(payload.get("providers"), dict):
+        return {}
+    providers = payload["providers"]
+    safe: dict[str, dict[str, object]] = {}
+    for name in ("deepseek", "hostex", "wecom"):
+        item = providers.get(name)
+        if not isinstance(item, dict) or not isinstance(item.get("succeeded"), bool):
+            continue
+        safe_item: dict[str, object] = {"succeeded": item["succeeded"]}
+        error_code = item.get("error_code")
+        if isinstance(error_code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code):
+            safe_item["error_code"] = error_code
+        if name == "wecom" and item.get("callback_verification") == "local_only":
+            safe_item["callback_verification"] = "local_only"
+        raw_checks = item.get("checks")
+        if isinstance(raw_checks, dict):
+            ordered_checks = {
+                "deepseek": ("openai", "anthropic"),
+                "hostex": ("properties",),
+                "wecom": ("kf", "agent", "contact", "callback"),
+            }[name]
+            safe_checks: dict[str, object] = {}
+            for check_name in ordered_checks:
+                check = raw_checks.get(check_name)
+                if not isinstance(check, dict) or not isinstance(
+                    check.get("succeeded"), bool
+                ):
+                    continue
+                safe_check: dict[str, object] = {"succeeded": check["succeeded"]}
+                check_error = check.get("error_code")
+                if isinstance(check_error, str) and re.fullmatch(
+                    r"[a-z][a-z0-9_]{0,63}", check_error
+                ):
+                    safe_check["error_code"] = check_error
+                if check_name == "callback" and check.get("verification") == "local_only":
+                    safe_check["verification"] = "local_only"
+                safe_checks[check_name] = safe_check
+            if safe_checks:
+                safe_item["checks"] = safe_checks
+        safe[name] = safe_item
+    return safe
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,7 +350,7 @@ class AdminReverifyPort(Protocol):
 
 
 class RuntimeConfigTesterPort(Protocol):
-    """定义批次四可注入、批次五将实现的无副作用测试端口。"""
+    """定义可注入的无业务写入候选测试端口。"""
 
     async def test(self, snapshot: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
         """测试候选并只返回稳定结果和错误码。"""
@@ -320,6 +439,7 @@ class RuntimeConfigService:
                 is_active=version.id == state.active_version_id,
                 is_previous=version.id == state.previous_version_id,
                 masked_summary=dict(version.masked_summary),
+                provider_results=safe_provider_results(version.test_results),
             )
             for version in versions
         ]
@@ -365,6 +485,7 @@ class RuntimeConfigService:
             safe_result = RuntimeConfigTestResult(
                 succeeded=False,
                 error_code=error_code,
+                providers=test_result.providers,
             ).to_safe_dict()
             await self._repository.mark_test_failed(
                 int(version.id),
@@ -381,10 +502,7 @@ class RuntimeConfigService:
             )
             raise RuntimeConfigTestError(error_code)
 
-        await self._repository.mark_test_passed(
-            int(version.id),
-            RuntimeConfigTestResult(succeeded=True).to_safe_dict(),
-        )
+        await self._repository.mark_test_passed(int(version.id), test_result.to_safe_dict())
         try:
             activated = await self._repository.activate(
                 int(version.id),

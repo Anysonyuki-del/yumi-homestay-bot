@@ -35,24 +35,65 @@ class WeComApiClient:
         kf_secret: str,
         agent_secret: str,
         *,
+        contact_secret: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        timeout_seconds: float = 10.0,
     ) -> None:
-        """保存两类 Secret，并为测试注入 HTTP 传输层。"""
+        """保存三类 Secret，并为只读探针和测试注入 HTTP 传输层。"""
         self._corp_id = corp_id
         self._kf_secret = kf_secret
         self._agent_secret = agent_secret
+        self._contact_secret = contact_secret
         self._tokens: dict[str, CachedToken] = {}
         self._kf_accounts_cache: tuple[float, list[dict[str, str]]] | None = None
         self._kf_customer_names: dict[tuple[str, str], tuple[float, str | None]] = {}
         self._client = httpx.AsyncClient(
             base_url=WECOM_BASE_URL,
-            timeout=10.0,
+            timeout=timeout_seconds,
             transport=transport,
         )
 
     async def aclose(self) -> None:
         """释放企业微信 HTTP 连接池。"""
         await self._client.aclose()
+
+    @property
+    def is_closed(self) -> bool:
+        """公开只读关闭状态，证明候选客户端不会泄漏连接池。"""
+        return self._client.is_closed
+
+    async def probe_credentials(self, *, agent_id: int, probe_contact: bool) -> None:
+        """只读验证客服、应用 AgentId 与可选通讯录权限。"""
+        await self.probe_kf_credentials()
+        await self.probe_agent_credentials(agent_id=agent_id)
+        if probe_contact:
+            await self.probe_contact_permissions()
+
+    async def probe_kf_credentials(self) -> None:
+        """只读验证微信客服 Secret 并列出客服账号。"""
+        await self.list_kf_accounts()
+
+    async def probe_agent_credentials(self, *, agent_id: int) -> None:
+        """只读验证内部应用 Secret 与指定 AgentId 是否匹配。"""
+        agent_token = await self._get_access_token(self._agent_secret)
+        agent_response = await self._client.get(
+            "/cgi-bin/agent/get",
+            params={"access_token": agent_token, "agentid": agent_id},
+        )
+        agent_response.raise_for_status()
+        self._raise_for_error(agent_response.json())
+
+    async def probe_contact_permissions(self) -> None:
+        """只读验证可选通讯录 Secret 至少具备部门读取权限。"""
+        if not self._contact_secret:
+            raise WeComApiError(-1, "通讯录 Secret 未配置")
+        contact_token = await self._get_access_token(self._contact_secret)
+        contact_response = await self._client.get(
+            "/cgi-bin/department/simplelist",
+            params={"access_token": contact_token, "id": 1},
+        )
+        contact_response.raise_for_status()
+        self._raise_for_error(contact_response.json())
 
     async def _get_access_token(self, secret: str) -> str:
         """按 Secret 分别缓存客服和内部应用 access token。"""

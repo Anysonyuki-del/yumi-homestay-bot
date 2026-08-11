@@ -9,11 +9,40 @@ from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot
 from homestay_bot.repositories.runtime_config import RuntimeConfigConflictError
 from homestay_bot.services.runtime_config_cipher import RuntimeConfigCipher
 from homestay_bot.services.runtime_config_service import (
+    RuntimeConfigCheckTestResult,
+    RuntimeConfigProviderTestResult,
     RuntimeConfigService,
     RuntimeConfigTestError,
     RuntimeConfigTestResult,
     UpdateRuntimeConfig,
 )
+
+
+def test_provider_test_results_only_serialize_safe_status_fields() -> None:
+    """候选测试元数据只允许固定供应商、布尔状态、稳定码和本地回调标记。"""
+    result = RuntimeConfigTestResult(
+        succeeded=False,
+        error_code="hostex_auth_failed",
+        providers=(
+            RuntimeConfigProviderTestResult("deepseek", True),
+            RuntimeConfigProviderTestResult("hostex", False, "hostex_auth_failed"),
+            RuntimeConfigProviderTestResult(
+                "wecom",
+                True,
+                callback_verification="local_only",
+            ),
+        ),
+    )
+
+    assert result.to_safe_dict() == {
+        "succeeded": False,
+        "error_code": "hostex_auth_failed",
+        "providers": {
+            "deepseek": {"succeeded": True},
+            "hostex": {"succeeded": False, "error_code": "hostex_auth_failed"},
+            "wecom": {"succeeded": True, "callback_verification": "local_only"},
+        },
+    }
 
 
 def build_snapshot(**overrides: object) -> RuntimeConfigSnapshot:
@@ -216,20 +245,60 @@ class CandidateTesterStub:
         *,
         success: bool = True,
         after_test: object | None = None,
+        detailed: bool = False,
     ) -> None:
         """保存结果、候选和可选测试完成钩子。"""
         self.success = success
         self.snapshots: list[RuntimeConfigSnapshot] = []
         self.after_test = after_test
+        self.detailed = detailed
 
     async def test(self, snapshot: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
         """记录候选并返回不含远端正文的结果。"""
         self.snapshots.append(snapshot)
         if callable(self.after_test):
             self.after_test()
+        error_code = None if self.success else "deepseek_auth_failed"
+        providers: tuple[RuntimeConfigProviderTestResult, ...] = ()
+        if self.detailed:
+            providers = (
+                RuntimeConfigProviderTestResult(
+                    "deepseek",
+                    self.success,
+                    error_code,
+                    checks=(
+                        RuntimeConfigCheckTestResult(
+                            "openai",
+                            self.success,
+                            error_code,
+                        ),
+                        RuntimeConfigCheckTestResult("anthropic", True),
+                    ),
+                ),
+                RuntimeConfigProviderTestResult(
+                    "hostex",
+                    True,
+                    checks=(RuntimeConfigCheckTestResult("properties", True),),
+                ),
+                RuntimeConfigProviderTestResult(
+                    "wecom",
+                    True,
+                    callback_verification="local_only",
+                    checks=(
+                        RuntimeConfigCheckTestResult("kf", True),
+                        RuntimeConfigCheckTestResult("agent", True),
+                        RuntimeConfigCheckTestResult(
+                            "callback",
+                            True,
+                            verification="local_only",
+                        ),
+                    ),
+                ),
+            )
         return RuntimeConfigTestResult(
             succeeded=self.success,
-            error_code=None if self.success else "deepseek_auth_failed",
+            error_code=error_code,
+            providers=providers,
         )
 
 
@@ -304,7 +373,7 @@ async def test_failed_candidate_is_saved_but_never_activated() -> None:
     service = build_service(
         repository,
         AuthStub(),
-        CandidateTesterStub(success=False),
+        CandidateTesterStub(success=False, detailed=True),
         build_snapshot(),
     )
 
@@ -319,6 +388,10 @@ async def test_failed_candidate_is_saved_but_never_activated() -> None:
     assert captured.value.error_code == "deepseek_auth_failed"
     assert candidate.status is RuntimeConfigVersionStatus.TEST_FAILED
     assert candidate.failure_code == "deepseek_auth_failed"
+    assert candidate.test_results["providers"]["deepseek"]["checks"]["openai"] == {
+        "succeeded": False,
+        "error_code": "deepseek_auth_failed",
+    }
     assert repository.state.active_version_id is None
     assert "new-secret-value" not in repr(repository.audits)
 

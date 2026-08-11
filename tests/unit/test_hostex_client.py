@@ -62,6 +62,55 @@ async def test_hostex_accepts_200_business_success_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_only_probe_only_lists_properties_and_exposes_closed_state() -> None:
+    """候选测试只能 GET 房源列表，且可证明临时客户端已经关闭。"""
+    requests: list[httpx.Request] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """拒绝任何非 GET /properties 的越界探针。"""
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.path.endswith("/properties")
+        return httpx.Response(
+            200,
+            json={"request_id": "probe", "error_code": 0, "data": {"properties": []}},
+        )
+
+    client = HostexClient("secret", transport=json_transport(responder))
+
+    await client.probe_read_only()
+    assert client.is_closed is False
+    await client.aclose()
+
+    assert len(requests) == 1
+    assert client.is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_read_only_probe_never_retries_failed_request() -> None:
+    """候选房源探针失败时只能请求一次，避免保存操作长时间等待。"""
+    attempts = 0
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """模拟可重试状态，但候选探针必须立即失败。"""
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            200,
+            json={"request_id": "probe", "error_code": 503, "error_msg": "busy"},
+        )
+
+    client = HostexClient("secret", transport=json_transport(responder))
+    try:
+        with pytest.raises(HostexBusinessError):
+            await client.probe_read_only()
+    finally:
+        await client.aclose()
+
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
 async def test_list_availabilities_sends_token_and_parses_days() -> None:
     """房态查询必须使用正确请求头、查询参数并解析每日可用性。"""
 

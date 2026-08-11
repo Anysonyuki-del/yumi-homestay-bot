@@ -149,12 +149,15 @@ from homestay_bot.services.runtime_config_service import (
     ActivationResult,
     RuntimeConfigPage,
     RuntimeConfigService,
+    RuntimeConfigTesterPort,
     RuntimeConfigTestError,
     RuntimeConfigTestResult,
     RuntimeConfigUnavailableError,
     RuntimeConfigVersionView,
     UpdateRuntimeConfig,
+    safe_provider_results,
 )
+from homestay_bot.services.runtime_config_tester import RuntimeConfigTester
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 from homestay_bot.services.task_page_service import TaskPageService
 from homestay_bot.worker import (
@@ -649,8 +652,9 @@ class SessionRuntimeConfigService:
         argon2_semaphore: asyncio.Semaphore | None,
         argon2_executor: ThreadPoolExecutor | None,
         writable: bool,
+        tester: RuntimeConfigTesterPort | None = None,
     ) -> None:
-        """固定进程启动时环境快照，并保存可写所需的认证边界。"""
+        """固定环境快照与测试端口；默认本地 stub 防止测试意外联网。"""
         self._factory = factory
         self._cipher = cipher
         self._environment_snapshot = environment_snapshot
@@ -659,6 +663,7 @@ class SessionRuntimeConfigService:
         self._argon2_semaphore = argon2_semaphore
         self._argon2_executor = argon2_executor
         self._writable = writable
+        self._tester = tester or LocalRuntimeConfigTester()
 
     async def _repository_for(
         self,
@@ -712,7 +717,7 @@ class SessionRuntimeConfigService:
             repository=cast(Any, await self._repository_for(session)),
             cipher=self._cipher,
             auth=auth,
-            tester=LocalRuntimeConfigTester(),
+            tester=self._tester,
             environment_snapshot=self._environment_snapshot,
             # 候选落库后先提交，后续测试阶段不能长期持有事务或数据库锁。
             before_test=session.commit,
@@ -773,6 +778,7 @@ class SessionRuntimeConfigService:
                     is_active=version.id == state.active_version_id,
                     is_previous=version.id == state.previous_version_id,
                     masked_summary=dict(version.masked_summary),
+                    provider_results=safe_provider_results(version.test_results),
                 )
                 for version in versions
             ]
@@ -2199,6 +2205,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         argon2_semaphore=argon2_semaphore,
         argon2_executor=argon2_executor,
         writable=runtime_writable,
+        # 只有生产生命周期显式装配真实外联测试器；直接构造服务默认零网络。
+        tester=RuntimeConfigTester(),
     )
 
     sensitive_data = SensitiveDataCipher(bootstrap.data_encryption_key)

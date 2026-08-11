@@ -53,7 +53,8 @@
     <fieldset class="config-confirm config-group--wide">
       <legend>测试并保存</legend>
       <label>当前管理员密码<input type="password" name="password" maxlength="128" autocomplete="current-password" required></label>
-      <p class="muted">系统会先建立候选、执行无副作用测试，再以页面修订号安全激活。测试失败不会替换旧版本。</p>
+      <p class="muted">系统会先建立候选并测试连接，再以页面修订号安全激活。测试不发送客人消息、不修改订单；会产生两次极小模型调用，并可能保留供应商日志或产生少量费用。测试失败不会替换旧版本。</p>
+      <p class="muted">企业微信回调 Token 与 EncodingAESKey 仅本地校验，未验证真实回调投递；客服、应用和可选通讯录凭据使用只读接口检查。</p>
       <button class="button" type="submit" {% if not page.writable %}disabled aria-disabled="true"{% endif %}>测试并保存新版本</button>
     </fieldset>
   </form>

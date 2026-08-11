@@ -374,8 +374,8 @@ class SQLAlchemyRuntimeConfigRepository:
         *,
         succeeded: bool,
     ) -> dict[str, object]:
-        """只允许布尔结果和稳定错误码进入候选元数据。"""
-        if set(test_results) - {"succeeded", "error_code"}:
+        """只允许总状态和固定供应商的安全分项进入候选元数据。"""
+        if set(test_results) - {"succeeded", "error_code", "providers"}:
             raise ValueError("配置测试结果字段无效")
         if test_results.get("succeeded") is not succeeded:
             raise ValueError("配置测试结果状态无效")
@@ -388,4 +388,101 @@ class SQLAlchemyRuntimeConfigRepository:
         result: dict[str, object] = {"succeeded": succeeded}
         if error_code is not None:
             result["error_code"] = error_code
+        providers = test_results.get("providers")
+        if providers is not None:
+            result["providers"] = cls._validate_provider_results(providers)
         return result
+
+    @classmethod
+    def _validate_provider_results(cls, providers: object) -> dict[str, object]:
+        """严格白名单校验三方结果，拒绝正文、URL 和任意扩展字段落库。"""
+        if not isinstance(providers, dict) or set(providers) != {
+            "deepseek",
+            "hostex",
+            "wecom",
+        }:
+            raise ValueError("配置测试供应商结果无效")
+        normalized: dict[str, object] = {}
+        for provider_name in ("deepseek", "hostex", "wecom"):
+            provider_result = providers[provider_name]
+            if not isinstance(provider_result, dict):
+                raise ValueError("配置测试供应商状态无效")
+            allowed = {"succeeded", "error_code", "checks"}
+            if provider_name == "wecom":
+                allowed.add("callback_verification")
+            if set(provider_result) - allowed or not isinstance(
+                provider_result.get("succeeded"), bool
+            ):
+                raise ValueError("配置测试供应商字段无效")
+            safe_item: dict[str, object] = {
+                "succeeded": provider_result["succeeded"],
+            }
+            provider_error = provider_result.get("error_code")
+            if provider_error is not None:
+                if not isinstance(provider_error, str) or cls._AUDIT_ERROR_PATTERN.fullmatch(
+                    provider_error
+                ) is None:
+                    raise ValueError("配置测试供应商错误码无效")
+                safe_item["error_code"] = provider_error
+            callback = provider_result.get("callback_verification")
+            if callback is not None:
+                if callback != "local_only":
+                    raise ValueError("企业微信回调校验状态无效")
+                safe_item["callback_verification"] = callback
+            checks = provider_result.get("checks")
+            if checks is not None:
+                safe_item["checks"] = cls._validate_provider_checks(
+                    provider_name,
+                    checks,
+                )
+            normalized[provider_name] = safe_item
+        return normalized
+
+    @classmethod
+    def _validate_provider_checks(
+        cls,
+        provider_name: str,
+        checks: object,
+    ) -> dict[str, object]:
+        """校验供应商内部固定只读探针，拒绝任意细项名称与正文。"""
+        allowed_names = {
+            "deepseek": {"openai", "anthropic"},
+            "hostex": {"properties"},
+            "wecom": {"kf", "agent", "contact", "callback"},
+        }[provider_name]
+        required_names = {
+            "deepseek": {"openai", "anthropic"},
+            "hostex": {"properties"},
+            "wecom": {"kf", "agent", "callback"},
+        }[provider_name]
+        if (
+            not isinstance(checks, dict)
+            or not required_names.issubset(checks)
+            or not set(checks).issubset(allowed_names)
+        ):
+            raise ValueError("配置测试细项集合无效")
+        safe_checks: dict[str, object] = {}
+        for check_name, value in checks.items():
+            if not isinstance(value, dict) or set(value) - {
+                "succeeded",
+                "error_code",
+                "verification",
+            }:
+                raise ValueError("配置测试细项字段无效")
+            if not isinstance(value.get("succeeded"), bool):
+                raise ValueError("配置测试细项状态无效")
+            safe_check: dict[str, object] = {"succeeded": value["succeeded"]}
+            error_code = value.get("error_code")
+            if error_code is not None:
+                if not isinstance(error_code, str) or cls._AUDIT_ERROR_PATTERN.fullmatch(
+                    error_code
+                ) is None:
+                    raise ValueError("配置测试细项错误码无效")
+                safe_check["error_code"] = error_code
+            verification = value.get("verification")
+            if verification is not None:
+                if check_name != "callback" or verification != "local_only":
+                    raise ValueError("配置测试细项校验方式无效")
+                safe_check["verification"] = verification
+            safe_checks[str(check_name)] = safe_check
+        return safe_checks
