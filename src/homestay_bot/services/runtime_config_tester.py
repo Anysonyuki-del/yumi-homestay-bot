@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import os
+import re
 import struct
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -23,6 +24,7 @@ from homestay_bot.integrations.wecom.api_client import WeComApiClient, WeComApiE
 from homestay_bot.integrations.wecom.callback_crypto import WeComCallbackCrypto
 from homestay_bot.services.outbound_url_policy import (
     OutboundRedirectRejected,
+    OutboundResolutionTimeout,
     OutboundResponseTooLarge,
     OutboundUrlPolicy,
     OutboundUrlRejected,
@@ -106,7 +108,17 @@ class RuntimeConfigTester:
         try:
             snapshot.validate()
         except ValueError:
-            return RuntimeConfigTestResult(False, "runtime_config_invalid")
+            # 空 Token 会触发快照必填校验；仅当替换 Token 后其余字段完整时，
+            # 才继续生成明确的 wecom_callback_invalid 分项结果。
+            if not self._callback_token_is_valid(snapshot.wecom_callback_token):
+                payload = snapshot.to_dict()
+                payload["wecom_callback_token"] = "A"
+                try:
+                    RuntimeConfigSnapshot.from_dict(payload)
+                except ValueError:
+                    return RuntimeConfigTestResult(False, "runtime_config_invalid")
+            else:
+                return RuntimeConfigTestResult(False, "runtime_config_invalid")
 
         deepseek = await self._test_deepseek(snapshot)
         hostex = await self._test_hostex(snapshot)
@@ -128,12 +140,10 @@ class RuntimeConfigTester:
         try:
             await self._url_policy.resolve(snapshot.deepseek_base_url)
             await self._url_policy.resolve(anthropic_url)
+        except OutboundResolutionTimeout:
+            return self._blocked_deepseek_result("deepseek_timeout")
         except OutboundUrlRejected:
-            return RuntimeConfigProviderTestResult(
-                "deepseek",
-                False,
-                "deepseek_url_blocked",
-            )
+            return self._blocked_deepseek_result("deepseek_url_blocked")
 
         openai_error = await self._run_openai_probe(snapshot)
         anthropic_error = await self._run_anthropic_probe(snapshot)
@@ -156,12 +166,26 @@ class RuntimeConfigTester:
             ),
         )
 
+    @staticmethod
+    def _blocked_deepseek_result(error_code: str) -> RuntimeConfigProviderTestResult:
+        """地址策略失败时为两套接口生成一致且不含 URL 的安全细项。"""
+        return RuntimeConfigProviderTestResult(
+            "deepseek",
+            False,
+            error_code,
+            checks=(
+                RuntimeConfigCheckTestResult("openai", False, error_code),
+                RuntimeConfigCheckTestResult("anthropic", False, error_code),
+            ),
+        )
+
     async def _run_openai_probe(self, snapshot: RuntimeConfigSnapshot) -> str | None:
         """使用 JSON 输出模式发送最多两个 token 的 OpenAI 兼容请求。"""
-        http_client = self._http_client_factory()
+        http_client: Any | None = None
         sdk_client: Any | None = None
         error_code: str | None = None
         try:
+            http_client = self._http_client_factory()
             sdk_client = self._openai_client_factory(snapshot, http_client)
             await sdk_client.chat.completions.create(
                 model=snapshot.deepseek_model,
@@ -183,10 +207,11 @@ class RuntimeConfigTester:
 
     async def _run_anthropic_probe(self, snapshot: RuntimeConfigSnapshot) -> str | None:
         """发送最多两个 token 的 Anthropic 兼容请求，覆盖旅游接口鉴权。"""
-        http_client = self._http_client_factory()
+        http_client: Any | None = None
         sdk_client: Any | None = None
         error_code: str | None = None
         try:
+            http_client = self._http_client_factory()
             sdk_client = self._anthropic_client_factory(snapshot, http_client)
             await sdk_client.messages.create(
                 model=snapshot.deepseek_model,
@@ -328,6 +353,10 @@ class RuntimeConfigTester:
     @staticmethod
     def _verify_callback_locally(snapshot: RuntimeConfigSnapshot) -> None:
         """严格解码 AESKey 并合成密文完成签名、解密和 CorpID 自检。"""
+        if not RuntimeConfigTester._callback_token_is_valid(
+            snapshot.wecom_callback_token
+        ):
+            raise ValueError("企业微信回调 Token 格式无效")
         key = base64.b64decode(
             f"{snapshot.wecom_encoding_aes_key}=",
             validate=True,
@@ -364,6 +393,11 @@ class RuntimeConfigTester:
         if decrypted != message:
             raise ValueError("企业微信回调本地自检失败")
 
+    @staticmethod
+    def _callback_token_is_valid(token: str) -> bool:
+        """企业微信回调 Token 仅允许 1 至 32 位英文或数字。"""
+        return re.fullmatch(r"[A-Za-z0-9]{1,32}", token) is not None
+
     @classmethod
     async def _close_clients(
         cls,
@@ -390,36 +424,61 @@ class RuntimeConfigTester:
 
     @staticmethod
     def _map_error(provider: str, error: Exception) -> str:
-        """把异常映射为供应商级稳定码，绝不返回异常正文。"""
-        if isinstance(error, OutboundUrlRejected):
-            return "deepseek_url_blocked"
-        if isinstance(error, OutboundRedirectRejected):
-            return "deepseek_redirect_rejected"
-        if isinstance(error, OutboundResponseTooLarge):
-            return "deepseek_response_too_large"
-        if isinstance(error, (TimeoutError, httpx.TimeoutException)):
-            return f"{provider}_timeout"
-        if isinstance(error, WeComApiError):
-            if error.error_code in _WECOM_TRUSTED_IP_CODES:
-                return "wecom_trusted_ip_required"
-            if error.error_code in _WECOM_AUTH_CODES:
-                return "wecom_auth_failed"
-            if error.error_code == 45009:
-                return "wecom_rate_limited"
-            return "wecom_api_failed"
-        if isinstance(error, HostexBusinessError):
-            if error.error_code in {401, 403}:
-                return "hostex_auth_failed"
-            if error.error_code == 429:
-                return "hostex_rate_limited"
-            return "hostex_api_failed"
-        status_code = getattr(error, "status_code", None)
-        if isinstance(error, httpx.HTTPStatusError):
-            status_code = error.response.status_code
-        if status_code in {401, 403}:
-            return f"{provider}_auth_failed"
-        if status_code == 429:
-            return f"{provider}_rate_limited"
-        if isinstance(error, (httpx.TransportError, ValueError, TypeError, KeyError)):
+        """只按有界异常链中的类型映射稳定码，绝不读取异常正文。"""
+        connection_failure = False
+        for current in RuntimeConfigTester._safe_exception_chain(error):
+            if isinstance(current, OutboundResolutionTimeout):
+                return "deepseek_timeout"
+            if isinstance(current, OutboundRedirectRejected):
+                return "deepseek_redirect_rejected"
+            if isinstance(current, OutboundResponseTooLarge):
+                return "deepseek_response_too_large"
+            if isinstance(current, OutboundUrlRejected):
+                return "deepseek_url_blocked"
+            if isinstance(current, (TimeoutError, httpx.TimeoutException)):
+                return f"{provider}_timeout"
+            if isinstance(current, WeComApiError):
+                if current.error_code in _WECOM_TRUSTED_IP_CODES:
+                    return "wecom_trusted_ip_required"
+                if current.error_code in _WECOM_AUTH_CODES:
+                    return "wecom_auth_failed"
+                if current.error_code == 45009:
+                    return "wecom_rate_limited"
+                return "wecom_api_failed"
+            if isinstance(current, HostexBusinessError):
+                if current.error_code in {401, 403}:
+                    return "hostex_auth_failed"
+                if current.error_code == 429:
+                    return "hostex_rate_limited"
+                return "hostex_api_failed"
+            status_code = getattr(current, "status_code", None)
+            if isinstance(current, httpx.HTTPStatusError):
+                status_code = current.response.status_code
+            if status_code in {401, 403}:
+                return f"{provider}_auth_failed"
+            if status_code == 429:
+                return f"{provider}_rate_limited"
+            if provider == "deepseek" and isinstance(status_code, int) and 300 <= status_code < 400:
+                return "deepseek_redirect_rejected"
+            if isinstance(
+                current,
+                (httpx.TransportError, ValueError, TypeError, KeyError),
+            ):
+                connection_failure = True
+        if connection_failure:
             return f"{provider}_connection_failed"
         return f"{provider}_unavailable"
+
+    @staticmethod
+    def _safe_exception_chain(error: Exception) -> tuple[Exception, ...]:
+        """有界且防循环地遍历 cause/context，只返回异常对象供类型判断。"""
+        chain: list[Exception] = []
+        seen: set[int] = set()
+        current: BaseException | None = error
+        for _ in range(8):
+            if not isinstance(current, Exception) or id(current) in seen:
+                break
+            seen.add(id(current))
+            chain.append(current)
+            current = current.__cause__ or current.__context__
+        return tuple(chain)

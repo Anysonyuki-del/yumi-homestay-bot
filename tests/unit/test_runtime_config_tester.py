@@ -1,14 +1,19 @@
 import base64
 import os
+import socket
 from typing import Any
 
 import httpx
 import pytest
 
 from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot
-from homestay_bot.integrations.hostex_client import HostexBusinessError
+from homestay_bot.integrations.hostex_client import HostexBusinessError, HostexClient
 from homestay_bot.integrations.wecom.api_client import WeComApiError
-from homestay_bot.services.outbound_url_policy import OutboundUrlRejected
+from homestay_bot.services.outbound_url_policy import (
+    OutboundUrlPolicy,
+    OutboundUrlRejected,
+    PublicHttpsTransport,
+)
 from homestay_bot.services.runtime_config_tester import (
     RuntimeConfigTester,
     build_probe_anthropic_client,
@@ -27,7 +32,7 @@ def build_snapshot(**overrides: object) -> RuntimeConfigSnapshot:
         "hostex_reconcile_interval_seconds": 900.0,
         "wecom_corp_id": "test-corp",
         "wecom_kf_secret": "test-kf-secret",
-        "wecom_callback_token": "test-callback-token",
+        "wecom_callback_token": "TestToken123",
         "wecom_encoding_aes_key": base64.b64encode(os.urandom(32)).decode().rstrip("="),
         "wecom_agent_id": 1000002,
         "wecom_agent_secret": "test-agent-secret",
@@ -423,6 +428,26 @@ async def test_invalid_callback_aes_key_fails_locally_without_skipping_api_close
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token",
+    ["", "invalid-token", "A" * 33, "测试Token"],
+)
+async def test_invalid_callback_token_maps_to_local_callback_failure(token: str) -> None:
+    """回调 Token 只允许 1 至 32 位英文或数字，失败不得影响 API 关闭。"""
+    tester, _, _, _, wecom, _ = build_tester()
+
+    result = await tester.test(build_snapshot(wecom_callback_token=token))
+    callback = result.to_safe_dict()["providers"]["wecom"]["checks"]["callback"]
+
+    assert callback == {
+        "succeeded": False,
+        "error_code": "wecom_callback_invalid",
+        "verification": "local_only",
+    }
+    assert wecom.closed is True
+
+
+@pytest.mark.asyncio
 async def test_optional_contact_secret_runs_independent_read_only_permission_check() -> None:
     """配置 Contact Secret 时新增独立权限细项，不影响 KF 与 Agent 结果。"""
     tester, _, _, _, wecom, _ = build_tester()
@@ -438,3 +463,129 @@ async def test_optional_contact_secret_runs_independent_read_only_permission_che
         "contact_permission",
     ]
     assert wecom_result["checks"]["contact"] == {"succeeded": True}
+
+
+@pytest.mark.asyncio
+async def test_http_client_factory_failure_is_isolated_to_one_deepseek_check() -> None:
+    """一个受控连接池构造失败不能中断另一套 SDK 或其他供应商测试。"""
+    calls = 0
+    anthropic = AnthropicClientStub()
+    hostex = HostexClientStub()
+    wecom = WeComClientStub()
+
+    def make_http_client() -> HttpClientStub:
+        """首个 OpenAI 连接池构造失败，Anthropic 随后正常创建。"""
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("secret factory failure")
+        return HttpClientStub()
+
+    tester = RuntimeConfigTester(
+        url_policy=PolicyStub(),
+        http_client_factory=make_http_client,
+        openai_client_factory=lambda snapshot, http_client: OpenAIClientStub(),
+        anthropic_client_factory=lambda snapshot, http_client: anthropic,
+        hostex_client_factory=lambda snapshot: hostex,
+        wecom_client_factory=lambda snapshot: wecom,
+    )
+
+    result = await tester.test(build_snapshot())
+    deepseek = result.to_safe_dict()["providers"]["deepseek"]
+
+    assert deepseek["checks"] == {
+        "openai": {"succeeded": False, "error_code": "deepseek_unavailable"},
+        "anthropic": {"succeeded": True},
+    }
+    assert hostex.closed and wecom.closed and anthropic.closed
+    assert "secret factory failure" not in repr(result.to_safe_dict())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        ("timeout", "deepseek_timeout"),
+        ("redirect", "deepseek_redirect_rejected"),
+        ("too_large", "deepseek_response_too_large"),
+    ],
+)
+async def test_real_sdks_map_wrapped_transport_causes(
+    failure: str,
+    expected_code: str,
+) -> None:
+    """两套真实 SDK 包装底层异常后，仍应按 cause 类型映射稳定码。"""
+
+    async def resolver(host: str, port: int) -> list[tuple[object, ...]]:
+        """返回固定公网地址，实际连接由 MockTransport 截获。"""
+        del host, port
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 443))]
+
+    policy = OutboundUrlPolicy(resolver=resolver)
+
+    def make_http_client() -> httpx.AsyncClient:
+        """为每套 SDK 创建独立受控传输层。"""
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            """在 IP 固定之后模拟三类底层失败。"""
+            if failure == "timeout":
+                raise httpx.ReadTimeout("secret response", request=request)
+            if failure == "redirect":
+                return httpx.Response(
+                    302,
+                    headers={"location": "https://redirect.example/secret"},
+                )
+            return httpx.Response(200, content=b"x" * 2049)
+
+        return httpx.AsyncClient(
+            transport=PublicHttpsTransport(
+                policy,
+                transport=httpx.MockTransport(responder),
+                max_response_bytes=2048,
+            ),
+            follow_redirects=False,
+            trust_env=False,
+        )
+
+    tester = RuntimeConfigTester(
+        url_policy=policy,
+        http_client_factory=make_http_client,
+        hostex_client_factory=lambda snapshot: HostexClientStub(),
+        wecom_client_factory=lambda snapshot: WeComClientStub(),
+    )
+
+    result = await tester.test(build_snapshot())
+    deepseek = result.to_safe_dict()["providers"]["deepseek"]
+
+    assert deepseek["error_code"] == expected_code
+    assert deepseek["checks"] == {
+        "openai": {"succeeded": False, "error_code": expected_code},
+        "anthropic": {"succeeded": False, "error_code": expected_code},
+    }
+    assert "secret response" not in repr(result.to_safe_dict())
+    assert "redirect.example" not in repr(result.to_safe_dict())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403])
+async def test_real_hostex_wrapped_http_status_maps_to_auth_failure(status_code: int) -> None:
+    """HostexTransportError 包装 401/403 后仍应识别为鉴权失败。"""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """返回没有正文依赖的鉴权状态。"""
+        return httpx.Response(status_code, json={"secret": "must-not-leak"})
+
+    hostex = HostexClient("token", transport=httpx.MockTransport(responder))
+    tester, _, _, _, _, _ = build_tester(hostex=hostex)  # type: ignore[arg-type]
+
+    result = await tester.test(build_snapshot())
+
+    assert result.to_safe_dict()["providers"]["hostex"] == {
+        "succeeded": False,
+        "error_code": "hostex_auth_failed",
+        "checks": {
+            "properties": {"succeeded": False, "error_code": "hostex_auth_failed"}
+        },
+    }
+    assert hostex.is_closed is True
+    assert "must-not-leak" not in repr(result.to_safe_dict())

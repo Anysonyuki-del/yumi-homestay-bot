@@ -28,6 +28,10 @@ class OutboundUrlRejected(ValueError):
     """表示外联地址未通过公网 HTTPS 安全策略。"""
 
 
+class OutboundResolutionTimeout(OutboundUrlRejected):
+    """表示公网域名预解析超过候选测试允许时间。"""
+
+
 class OutboundRedirectRejected(httpx.TransportError):
     """表示供应商返回重定向；敏感鉴权请求禁止跟随。"""
 
@@ -60,9 +64,17 @@ async def _system_resolver(hostname: str, port: int) -> Sequence[AddressInfo]:
 class OutboundUrlPolicy:
     """只允许没有凭据和查询串的公网 HTTPS 地址。"""
 
-    def __init__(self, *, resolver: Resolver = _system_resolver) -> None:
+    def __init__(
+        self,
+        *,
+        resolver: Resolver = _system_resolver,
+        resolve_timeout_seconds: float = 3.0,
+    ) -> None:
         """注入 DNS 解析器，测试可覆盖混合地址与重绑定场景。"""
+        if not 0.1 <= resolve_timeout_seconds <= 10.0:
+            raise ValueError("DNS 解析超时时间无效")
         self._resolver = resolver
+        self._resolve_timeout_seconds = resolve_timeout_seconds
 
     async def resolve(self, url: str) -> ResolvedPublicTarget:
         """解析并校验全部 A/AAAA；任一地址不安全就整体拒绝。"""
@@ -91,7 +103,12 @@ class OutboundUrlPolicy:
             addresses = (literal,)
         else:
             try:
-                records = await self._resolver(hostname, port)
+                records = await asyncio.wait_for(
+                    self._resolver(hostname, port),
+                    timeout=self._resolve_timeout_seconds,
+                )
+            except TimeoutError as error:
+                raise OutboundResolutionTimeout("外联域名解析超时") from error
             except (OSError, UnicodeError) as error:
                 raise OutboundUrlRejected("外联域名无法安全解析") from error
             addresses = self._extract_addresses(records)
@@ -159,6 +176,11 @@ class PublicHttpsTransport(httpx.AsyncBaseTransport):
         # 选择已全部校验集合中的第一个地址；URL 使用字面 IP 后，httpcore 不再解析域名。
         pinned_url = request.url.copy_with(host=target.addresses[0])
         authority = target.hostname
+        try:
+            if ipaddress.ip_address(target.hostname).version == 6:
+                authority = f"[{target.hostname}]"
+        except ValueError:
+            pass
         if target.port != 443:
             authority = f"{authority}:{target.port}"
         headers = [
@@ -174,9 +196,10 @@ class PublicHttpsTransport(httpx.AsyncBaseTransport):
             request.method,
             pinned_url,
             headers=headers,
-            content=request.stream,
             extensions=extensions,
         )
+        # 直接保留 AsyncClient 已构造的异步请求流，避免重新包装成同步 ByteStream。
+        pinned_request.stream = request.stream
         response = await self._transport.handle_async_request(pinned_request)
         if 300 <= response.status_code < 400:
             await response.aclose()
