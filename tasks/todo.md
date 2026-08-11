@@ -2746,7 +2746,22 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 
 #### 下一步
 
-1. 合并 `fix/admin-console-hardening-20260812` 到 `main`（待确认）。
-2. 本机部署验证：运行目录需补 `CONFIG_ENCRYPTION_KEY` 与管理员引导凭据，按手册部署清单备份、比对哈希、重启 LaunchAgent、查健康状态。涉及改本机 `.env` 与重启守护服务，需用户确认。
+1. ~~合并 `fix/admin-console-hardening-20260812` 到 `main`（待确认）~~ — 已完成，提交 `baa4903`。
+2. ~~本机部署验证~~ — 已完成，见下方部署记录。
 3. 云端部署与公网验收：缺服务器、生产 PostgreSQL、域名证书和正式回调地址，需用户提供后才能进行。
 4. 遗留未修（用户已决定不管）：总览与诊断页裸文字链接命中区 18–25px，低于 44px 要求。
+
+### 批次 8 本机部署（2026-08-12）
+
+- 合并提交：`baa4903`，已推送 `origin/main`。
+- 备份路径：`~/Library/Application Support/HomestayBot-backup-20260812-025712`（含旧数据库 960KB、`.env`、`data/private_uploads/`）。
+- 迁移执行：`0014_query_indexes` → `0015_admin_runtime_config` → `0016_admin_dashboard_indexes` → `0017_runtime_config_lifecycle`，验证头正确。
+- 代码同步：rsync 7.7MB，关键文件哈希与工作区 `baa4903` 完全一致。
+- 配置补充：运行目录 `.env` 新增 `CONFIG_ENCRYPTION_KEY`、`ADMIN_BOOTSTRAP_USERNAME=admin`、`ADMIN_BOOTSTRAP_PASSWORD_HASH`（Argon2id）。首次登录密码 `jpRZEeynJl9v9KlXuos32w`（登录后强制修改）。
+- LaunchAgent 修复：`start.sh` 改用 `python -m uvicorn` 绕过外部卷权限问题；`.env` 的 `ADMIN_BOOTSTRAP_PASSWORD_HASH` 改用单引号避免 shell 变量展开；删除运行目录的 `.venv`，直接复用工作区 venv（系统 Python 3.9.6 不满足 >=3.12 要求）。
+- 验证结果：
+  - 健康检查：`http://127.0.0.1:8010/health` 返回 `{"status":"ok"}`。
+  - 后台登录页：`http://127.0.0.1:8010/employee/login` 可访问，标题 "管理员登录 · YuMi"。
+  - 权限校验：`/employee/health` 正确返回 `{"detail":"管理员尚未登录"}`，未登录不可访问。
+  - LaunchAgent：PID 87393，状态码 0，`KeepAlive` 生效。
+- 残留：批次 8 的四项修复（匿名 CSRF 作用域隔离、限速分类、后台 no-store、客诉角色校验）均已部署生效，本机验证通过；云端部署与公网 11 项验收待进行。
