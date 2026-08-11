@@ -56,6 +56,10 @@ class AssistantStub:
             knowledge_gap_topic="parking",
             staff_confirmation_required=True,
             staff_confirmation_reason="availability_result_confirmation",
+            faq_candidate=True,
+            faq_candidate_id=23,
+            faq_canonical_question="民宿是否提供停车位？",
+            faq_category="停车",
         )
 
 
@@ -150,6 +154,10 @@ async def test_preview_returns_safe_fields_and_uses_one_revision_lease() -> None
     assert result.check_in_date == date(2026, 8, 12)
     assert result.staff_confirmation_required is True
     assert result.task_suggestion is None
+    assert result.faq_candidate is True
+    assert result.faq_candidate_id == 23
+    assert result.faq_canonical_question == "民宿是否提供停车位？"
+    assert result.faq_category == "停车"
     assert result.revision == 7
     assert registry.acquire_count == 1
     assert len(audit.items) == 1
@@ -159,6 +167,7 @@ async def test_preview_returns_safe_fields_and_uses_one_revision_lease() -> None
     assert "question_hash" in audit.items[0]
     assert audit.items[0]["question_length"] == 6
     assert audit.items[0]["tool_names"] == ["search_availability"]
+    assert "民宿是否提供停车位" not in repr(audit.items[0])
 
 
 @pytest.mark.asyncio
@@ -247,3 +256,64 @@ async def test_audit_failure_does_not_override_success_and_cancel_is_audited() -
         await cancelled.preview(command())
     assert audit.items[0]["succeeded"] is False
     assert "明天有房吗" not in repr(audit.items)
+
+
+@pytest.mark.asyncio
+async def test_service_normalizes_hostile_intent_and_tool_names_before_audit() -> None:
+    """服务层先把敌对机器码降级，并按固定白名单顺序去重工具名。"""
+
+    class HostileAssistant:
+        """模拟被污染的模型 intent 与 trace 名称。"""
+
+        async def respond(self, **kwargs: object) -> AssistantDecision:
+            """写入乱序、重复和携敏感片段的工具轨迹。"""
+            sink = kwargs["tool_trace_sink"]
+            for name in (
+                "search_reference_price",
+                "UID-13800138000?token=secret",
+                "list_properties",
+                "search_reference_price",
+                "tourism_search",
+                "search_availability",
+            ):
+                sink(
+                    SimpleNamespace(
+                        name=name,
+                        succeeded=True,
+                        duration_ms=1,
+                        check_in_date=None,
+                        check_out_date=None,
+                    )
+                )
+            return AssistantDecision(
+                reply_text="本次原始模拟回复仍正常显示",
+                language=Language.ZH,
+                intent="UID_13800138000?token=secret",
+                confidence=0.5,
+            )
+
+    assistant = AssistantStub()
+    registry = RegistryStub(assistant)
+    registry.bundle.assistant = HostileAssistant()
+    audit = AuditStub()
+    service = AdminDebugService(
+        registry=registry,
+        properties=PropertyStub(),
+        audits=audit,
+        limiter=AdminDebugRateLimiter(limit=10),
+        local_date_provider=lambda: date(2026, 8, 11),
+    )
+
+    result = await service.preview(command())
+
+    assert result.reply_text == "本次原始模拟回复仍正常显示"
+    assert result.intent == "unknown"
+    assert audit.items[0]["intent"] == "unknown"
+    assert audit.items[0]["tool_names"] == [
+        "list_properties",
+        "search_availability",
+        "search_reference_price",
+    ]
+    serialized = repr(audit.items[0])
+    for secret in ("13800138000", "UID", "token=", "secret", "tourism_search"):
+        assert secret not in serialized

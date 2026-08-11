@@ -23,6 +23,9 @@
     <div><dt>最终客人回复</dt><dd>{{ result.reply_text }}</dd></div>
     <div><dt>意图 / 置信度</dt><dd>{{ result.intent }} / {{ "%.2f"|format(result.confidence) }}</dd></div>
     <div><dt>知识缺口</dt><dd>{{ result.knowledge_gap_topic or ("有" if result.knowledge_gap else "无") }}</dd></div>
+    <div><dt>FAQ 候选</dt><dd>{{ "是" if result.faq_candidate else "否" }}{% if result.faq_candidate_id %} · 候选编号 {{ result.faq_candidate_id }}{% endif %}</dd></div>
+    <div><dt>FAQ 标准问题</dt><dd>{{ result.faq_canonical_question or "未提供" }}</dd></div>
+    <div><dt>FAQ 分类</dt><dd>{{ result.faq_category or "未提供" }}</dd></div>
     <div><dt>所选房间</dt><dd>{{ result.selected_property_title or "未指定" }}</dd></div>
     <div><dt>入住 / 退房</dt><dd>{{ result.check_in_date or "未指定" }} / {{ result.check_out_date or "未指定" }}</dd></div>
     <div><dt>人工确认</dt><dd>{{ "需要" if result.staff_confirmation_required else "不需要" }}</dd></div>

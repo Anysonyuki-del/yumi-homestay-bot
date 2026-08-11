@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import EmployeeRole, JobStatus
@@ -129,4 +130,59 @@ async def test_debug_audit_whitelists_metadata_without_question_or_reply() -> No
     assert len(entries) == 1
     assert "原始问题" not in repr(entries)
     assert "原始回复" not in repr(entries)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_debug_audit_rejects_hostile_intent_and_tool_names_in_sqlite() -> None:
+    """仓储层再次过滤敌对机器码，AuditLog JSON 不得含身份、query 或 secret。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        session.add(
+            Employee(
+                id=1,
+                wecom_userid="admin-uid",
+                name="管理员",
+                role=EmployeeRole.ADMIN,
+                is_active=True,
+            )
+        )
+        await session.flush()
+        repository = SQLAlchemyAdminDiagnosticsRepository(session)
+        await repository.record_debug_preview(
+            actor_employee_id=1,
+            question_hash="b" * 64,
+            question_length=8,
+            intent="UID_13800138000?token=secret",
+            tool_names=[
+                "search_reference_price",
+                "send_text?token=secret",
+                "list_properties",
+                "search_reference_price",
+                "search_availability",
+                "create_reservation_UID_13800138000",
+            ],
+            succeeded=True,
+        )
+        await session.commit()
+        audit = await session.scalar(select(AuditLog))
+
+    assert audit is not None
+    assert audit.details == {
+        "question_hash": "b" * 64,
+        "question_length": 8,
+        "intent": "unknown",
+        "tool_names": [
+            "list_properties",
+            "search_availability",
+            "search_reference_price",
+        ],
+        "succeeded": True,
+    }
+    serialized = repr(audit.details)
+    for secret in ("13800138000", "UID", "token=", "secret", "send_text", "create_reservation"):
+        assert secret not in serialized
     await engine.dispose()

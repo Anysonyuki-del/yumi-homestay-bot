@@ -13,7 +13,11 @@ from homestay_bot.domain.models import (
     PropertyProfile,
     RuntimeConfigState,
 )
-from homestay_bot.services.admin_debug_service import DebugProperty
+from homestay_bot.services.admin_debug_service import (
+    DebugProperty,
+    normalize_debug_intent,
+    normalize_debug_tool_names,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,11 +71,16 @@ class SQLAlchemyAdminDiagnosticsRepository:
             raise ValueError("调试审计编号或长度无效")
         if not isinstance(tool_names, (list, tuple)):
             raise ValueError("调试审计工具列表无效")
+        question_hash = details.get("question_hash")
+        if not isinstance(question_hash, str) or re.fullmatch(
+            r"[0-9a-f]{64}", question_hash
+        ) is None:
+            question_hash = "0" * 64
         safe_details = {
-            "question_hash": str(details["question_hash"]),
+            "question_hash": question_hash,
             "question_length": question_length,
-            "intent": str(details["intent"])[:64],
-            "tool_names": [str(item)[:64] for item in tool_names],
+            "intent": normalize_debug_intent(details.get("intent")),
+            "tool_names": normalize_debug_tool_names(tool_names),
             "succeeded": bool(details["succeeded"]),
         }
         self._session.add(

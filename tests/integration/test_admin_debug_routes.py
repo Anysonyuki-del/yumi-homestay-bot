@@ -2,6 +2,7 @@
 
 import re
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import date
 
 from admin_auth_helpers import configure_admin_auth, login_admin
@@ -57,6 +58,10 @@ class DebugServiceStub:
             staff_confirmation_required=True,
             staff_confirmation_reason="availability_result_confirmation",
             task_suggestion=None,
+            faq_candidate=True,
+            faq_candidate_id=23,
+            faq_canonical_question="民宿是否提供<script>alert(1)</script>停车位？",
+            faq_category="停车",
             revision=7,
         )
 
@@ -67,6 +72,21 @@ class GetMustNotPreviewStub(DebugServiceStub):
     async def preview(self, command):
         """GET 若误触发预览则立即失败。"""
         raise AssertionError("GET 不得触发模型或网络")
+
+
+class MissingFaqStub(DebugServiceStub):
+    """返回没有 FAQ 候选字段的安全结果。"""
+
+    async def preview(self, command):
+        """清空可选 FAQ 字段以验证模板 fallback。"""
+        result = await super().preview(command)
+        return replace(
+            result,
+            faq_candidate=False,
+            faq_candidate_id=None,
+            faq_canonical_question=None,
+            faq_category=None,
+        )
 
 
 class RoutePropertyStub:
@@ -180,6 +200,11 @@ def test_debug_post_consumes_atomic_csrf_and_never_echoes_invalid_input() -> Non
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert "当前有房" in response.text
+    assert "FAQ 候选" in response.text
+    assert "候选编号 23" in response.text
+    assert "民宿是否提供&lt;script&gt;alert(1)&lt;/script&gt;停车位？" in response.text
+    assert "<script>alert(1)</script>" not in response.text
+    assert "停车" in response.text
     assert replay.status_code == 409
     assert replay.headers["cache-control"] == "no-store"
     assert invalid.status_code == 422
@@ -227,3 +252,25 @@ def test_debug_route_enforces_real_per_admin_rate_limit() -> None:
     assert first.status_code == 200
     assert second.status_code == 429
     assert second.headers["cache-control"] == "no-store"
+
+
+def test_debug_template_falls_back_when_faq_fields_are_missing() -> None:
+    """无候选时模板必须显示受控 fallback，不能渲染 None。"""
+    client = build_client()
+    client.app.state.admin_debug_service = MissingFaqStub()
+    login_admin(client, next_path="/employee/admin/debug")
+    token = csrf_token(client.get("/employee/admin/debug").text)
+
+    response = client.post(
+        "/employee/admin/debug",
+        data={
+            "csrf_token": token,
+            "question": "几点入住？",
+            "language": "zh",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "<dt>FAQ 候选</dt><dd>否</dd>" in response.text
+    assert response.text.count("<dd>未提供</dd>") >= 2
+    assert "None" not in response.text

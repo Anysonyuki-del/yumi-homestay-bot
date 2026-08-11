@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import logging
+import re
 from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,6 +19,31 @@ from homestay_bot.integrations.deepseek_client import (
 )
 
 logger = logging.getLogger(__name__)
+
+DEBUG_TOOL_NAMES = (
+    "list_properties",
+    "search_availability",
+    "search_reference_price",
+)
+_DEBUG_INTENT_PATTERN = re.compile(r"[a-z0-9_]{1,64}")
+
+
+def normalize_debug_intent(value: object) -> str:
+    """只允许短小 ASCII 机器码作为调试意图，敌对内容统一降级。"""
+    if not isinstance(value, str):
+        return "unknown"
+    normalized = value.strip()
+    if _DEBUG_INTENT_PATTERN.fullmatch(normalized) is None:
+        return "unknown"
+    return normalized
+
+
+def normalize_debug_tool_names(values: object) -> list[str]:
+    """按固定白名单顺序去重工具名，未知名称一律丢弃。"""
+    if not isinstance(values, (list, tuple, set, frozenset)):
+        return []
+    provided = {item for item in values if isinstance(item, str)}
+    return [name for name in DEBUG_TOOL_NAMES if name in provided]
 
 
 class DebugPreviewInputError(ValueError):
@@ -66,6 +92,10 @@ class DebugPreviewResult:
     staff_confirmation_required: bool
     staff_confirmation_reason: str | None
     task_suggestion: TaskSuggestion | None
+    faq_candidate: bool
+    faq_candidate_id: int | None
+    faq_canonical_question: str | None
+    faq_category: str | None
     revision: int
 
 
@@ -179,15 +209,18 @@ class AdminDebugService:
                     ),
                     tool_trace_sink=traces.append,
                 )
-                intent = str(decision.intent)
+                intent = normalize_debug_intent(decision.intent)
                 succeeded = True
+                safe_traces = tuple(
+                    trace for trace in traces if trace.name in DEBUG_TOOL_NAMES
+                )
                 return DebugPreviewResult(
                     reply_text=decision.reply_text,
                     intent=intent,
                     confidence=float(decision.confidence),
                     knowledge_gap=bool(decision.knowledge_gap),
                     knowledge_gap_topic=decision.knowledge_gap_topic,
-                    tool_trace=tuple(traces),
+                    tool_trace=safe_traces,
                     selected_property_id=selected.id if selected else None,
                     selected_property_title=selected.title if selected else None,
                     check_in_date=command.check_in_date,
@@ -197,6 +230,10 @@ class AdminDebugService:
                     ),
                     staff_confirmation_reason=decision.staff_confirmation_reason,
                     task_suggestion=decision.task_suggestion,
+                    faq_candidate=bool(decision.faq_candidate),
+                    faq_candidate_id=decision.faq_candidate_id,
+                    faq_canonical_question=decision.faq_canonical_question,
+                    faq_category=decision.faq_category,
                     revision=int(bundle.revision),
                 )
         finally:
@@ -206,7 +243,9 @@ class AdminDebugService:
                     question_hash=hashlib.sha256(question.encode("utf-8")).hexdigest(),
                     question_length=len(question),
                     intent=intent,
-                    tool_names=list(dict.fromkeys(trace.name for trace in traces)),
+                    tool_names=normalize_debug_tool_names(
+                        [trace.name for trace in traces]
+                    ),
                     succeeded=succeeded,
                 )
             except Exception as error:
