@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.requests import Request
 
 from homestay_bot import application
 from homestay_bot.application import application_lifespan
@@ -23,8 +24,19 @@ from homestay_bot.domain.models import (
 )
 from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot
 from homestay_bot.main import app
+from homestay_bot.routes.hostex_webhook import (
+    HostexWebhookService,
+    get_hostex_webhook_service,
+)
+from homestay_bot.routes.wecom_callback import (
+    WeComCallbackService,
+    get_callback_service,
+)
+from homestay_bot.services.runtime_clients import RuntimeClientBundle
 from homestay_bot.services.runtime_config_cipher import RuntimeConfigCipher
 from homestay_bot.services.runtime_config_service import (
+    ActivationResult,
+    RuntimeConfigTestError,
     RuntimeConfigTestResult,
     RuntimeConfigUnavailableError,
     UpdateRuntimeConfig,
@@ -70,6 +82,50 @@ def _runtime_snapshot(**overrides: object) -> RuntimeConfigSnapshot:
     }
     values.update(overrides)
     return RuntimeConfigSnapshot(**values)  # type: ignore[arg-type]
+
+
+def _runtime_bundle(
+    snapshot: RuntimeConfigSnapshot,
+    revision: int,
+    closeable: object,
+    *,
+    callback_service: WeComCallbackService | None = None,
+    webhook_service: HostexWebhookService | None = None,
+) -> RuntimeClientBundle:
+    """构造生命周期协调测试使用的不联网完整bundle。"""
+    return RuntimeClientBundle(
+        revision=revision,
+        hostex=object(),
+        wecom=object(),
+        contact_client=(object() if snapshot.wecom_contact_secret is not None else None),
+        assistant=object(),
+        faq_drafter=object(),
+        tourism_searcher=object(),
+        reminder_weather=object(),
+        complaint_analyzer=object(),
+        context_summarizer=object(),
+        wecom_callback_service=(
+            callback_service
+            or WeComCallbackService.from_credentials(
+                snapshot.wecom_callback_token,
+                snapshot.wecom_encoding_aes_key,
+                snapshot.wecom_corp_id,
+                object(),  # type: ignore[arg-type]
+            )
+        ),
+        hostex_webhook_service=(
+            webhook_service
+            or HostexWebhookService(
+                snapshot.hostex_webhook_secret_token,
+                object(),  # type: ignore[arg-type]
+            )
+        ),
+        agent_id=snapshot.wecom_agent_id,
+        duty_userids=("owner",),
+        wecom_poll_interval_seconds=snapshot.wecom_poll_interval_seconds,
+        hostex_reconcile_interval_seconds=(snapshot.hostex_reconcile_interval_seconds),
+        closeables=(closeable,),
+    )
 
 
 async def _create_runtime_database(
@@ -176,6 +232,253 @@ async def test_bootstrap_only_starts_secure_repair_console_without_external_clie
         assert health["status"] == "degraded"
         assert not hasattr(test_app.state, "wecom_callback_service")
         assert not hasattr(test_app.state, "hostex_webhook_service")
+
+
+@pytest.mark.asyncio
+async def test_repair_only_first_activation_starts_runtime_without_restart(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """首次网页激活应在当前进程装配registry、路由依赖和全部后台循环。"""
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'first-activation.db'}"
+    await _create_runtime_database(database_url)
+    password = _set_bootstrap_environment(
+        monkeypatch,
+        database_url=database_url,
+        config_encryption_key=Fernet.generate_key().decode(),
+    )
+    _clear_runtime_environment(monkeypatch)
+    started_tasks = 0
+    closed = 0
+
+    class PassingTester:
+        """避免首次激活测试访问真实供应商。"""
+
+        async def test(self, candidate: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+            """验证候选完整后返回安全成功结果。"""
+            candidate.validate()
+            return RuntimeConfigTestResult(succeeded=True)
+
+    class CloseProbe:
+        """记录首次运行bundle在shutdown被释放。"""
+
+        async def aclose(self) -> None:
+            """记录一次资源关闭。"""
+            nonlocal closed
+            closed += 1
+
+    callback_service = WeComCallbackService.from_credentials(
+        "callback-token",
+        "A" * 43,
+        "corp-id",
+        object(),  # type: ignore[arg-type]
+    )
+    webhook_service = HostexWebhookService(
+        "webhook-token",
+        object(),  # type: ignore[arg-type]
+    )
+
+    async def build_bundle(
+        snapshot: RuntimeConfigSnapshot,
+        *,
+        revision: int,
+        **kwargs,
+    ) -> RuntimeClientBundle:
+        """构造不联网但字段完整的首次运行bundle。"""
+        snapshot.validate()
+        return _runtime_bundle(
+            snapshot,
+            revision,
+            CloseProbe(),
+            callback_service=callback_service,
+            webhook_service=webhook_service,
+        )
+
+    async def blocked_loop(*args, **kwargs) -> None:
+        """记录后台循环启动，并等待生命周期取消。"""
+        nonlocal started_tasks
+        started_tasks += 1
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(application, "RuntimeConfigTester", PassingTester)
+    monkeypatch.setattr(application, "build_runtime_client_bundle", build_bundle)
+    for loop_name in (
+        "_run_worker_loop",
+        "_run_wecom_poll_loop",
+        "_run_faq_maintenance_loop",
+        "_run_retention_loop",
+        "_run_context_maintenance_loop",
+        "_run_hostex_reconcile_loop",
+    ):
+        monkeypatch.setattr(application, loop_name, blocked_loop)
+
+    test_app = FastAPI()
+    async with application_lifespan(test_app):
+        engine = create_async_engine(database_url)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            credential = await session.scalar(select(AdminCredential))
+            assert credential is not None
+            actor_id = int(credential.employee_id)
+            admin_id = int(credential.id)
+            session_version = int(credential.session_version)
+        await engine.dispose()
+
+        snapshot = _runtime_snapshot(wecom_contact_secret="contact-secret")
+        outcomes = await asyncio.gather(
+            *(
+                test_app.state.runtime_config_service.create_and_test(
+                    UpdateRuntimeConfig.from_snapshot(snapshot),
+                    actor_id=actor_id,
+                    admin_id=admin_id,
+                    password=password,
+                    expected_session_version=session_version,
+                    expected_revision=0,
+                )
+                for _ in range(2)
+            ),
+            return_exceptions=True,
+        )
+        successful = [item for item in outcomes if isinstance(item, ActivationResult)]
+        failures = [item for item in outcomes if isinstance(item, BaseException)]
+        assert len(successful) == 1
+        assert len(failures) == 1
+        result = successful[0]
+        for _ in range(10):
+            if started_tasks == 7:
+                break
+            await asyncio.sleep(0)
+
+        registry = test_app.state.runtime_client_registry
+        assert (await registry.status()).revision == result.revision
+        assert started_tasks == 7
+        health = await test_app.state.health_service.check()
+        assert health["configuration"] == "ok"
+        assert health["wecom_contact_sync"] == "ok"
+
+        request = Request({"type": "http", "app": test_app})
+        callback_dependency = get_callback_service(request)
+        webhook_dependency = get_hostex_webhook_service(request)
+        assert await anext(callback_dependency) is callback_service
+        assert await anext(webhook_dependency) is webhook_service
+        await callback_dependency.aclose()
+        await webhook_dependency.aclose()
+
+    assert closed == 1
+    assert not hasattr(test_app.state, "runtime_client_registry")
+
+
+@pytest.mark.asyncio
+async def test_first_runtime_start_failure_compensates_database_and_cleans_partial_tasks(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """首次装配中途失败必须恢复DB指针、关闭bundle且不发布半成品state。"""
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'first-start-failure.db'}"
+    await _create_runtime_database(database_url)
+    password = _set_bootstrap_environment(
+        monkeypatch,
+        database_url=database_url,
+        config_encryption_key=Fernet.generate_key().decode(),
+    )
+    _clear_runtime_environment(monkeypatch)
+    close_calls = 0
+    create_calls = 0
+
+    class PassingTester:
+        """让候选进入激活后的运行装配阶段。"""
+
+        async def test(self, candidate: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+            """验证候选并返回成功。"""
+            candidate.validate()
+            return RuntimeConfigTestResult(succeeded=True)
+
+    class CloseProbe:
+        """记录补偿路径释放首次bundle。"""
+
+        async def aclose(self) -> None:
+            """记录一次关闭。"""
+            nonlocal close_calls
+            close_calls += 1
+
+    async def build_bundle(
+        snapshot: RuntimeConfigSnapshot,
+        *,
+        revision: int,
+        **kwargs,
+    ) -> RuntimeClientBundle:
+        """构造待首次装配的候选bundle。"""
+        return _runtime_bundle(snapshot, revision, CloseProbe())
+
+    async def blocked_loop(*args, **kwargs) -> None:
+        """若已创建则等待协调器取消。"""
+        await asyncio.Event().wait()
+
+    real_create_task = asyncio.create_task
+
+    def fail_third_create_task(coro):
+        """在已有两个task后模拟启动器中途失败。"""
+        nonlocal create_calls
+        create_calls += 1
+        if create_calls == 3:
+            coro.close()
+            raise RuntimeError("task start failed")
+        return real_create_task(coro)
+
+    monkeypatch.setattr(application, "RuntimeConfigTester", PassingTester)
+    monkeypatch.setattr(application, "build_runtime_client_bundle", build_bundle)
+    for loop_name in (
+        "_run_worker_loop",
+        "_run_wecom_poll_loop",
+        "_run_faq_maintenance_loop",
+        "_run_retention_loop",
+        "_run_context_maintenance_loop",
+        "_run_hostex_reconcile_loop",
+    ):
+        monkeypatch.setattr(application, loop_name, blocked_loop)
+    monkeypatch.setattr(application, "_create_runtime_task", fail_third_create_task)
+
+    test_app = FastAPI()
+    async with application_lifespan(test_app):
+        engine = create_async_engine(database_url)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            credential = await session.scalar(select(AdminCredential))
+            assert credential is not None
+            actor_id = int(credential.employee_id)
+            admin_id = int(credential.id)
+            session_version = int(credential.session_version)
+        repair_health_service = test_app.state.health_service
+        repair_customer_service = test_app.state.customer_admin_service
+
+        with pytest.raises(RuntimeConfigTestError) as captured:
+            await test_app.state.runtime_config_service.create_and_test(
+                UpdateRuntimeConfig.from_snapshot(_runtime_snapshot()),
+                actor_id=actor_id,
+                admin_id=admin_id,
+                password=password,
+                expected_session_version=session_version,
+                expected_revision=0,
+            )
+        assert captured.value.error_code == "activation_failed"
+
+        async with factory() as session:
+            state = await session.get(RuntimeConfigState, 1)
+            candidate = await session.scalar(select(RuntimeConfigVersion))
+        await engine.dispose()
+        assert state is not None
+        assert state.revision == 0
+        assert state.active_version_id is None
+        assert candidate is not None
+        assert candidate.status is RuntimeConfigVersionStatus.ACTIVATION_FAILED
+        assert close_calls == 1
+        assert not hasattr(test_app.state, "runtime_client_registry")
+        assert not hasattr(test_app.state, "approval_page_service")
+        assert test_app.state.health_service is repair_health_service
+        assert test_app.state.customer_admin_service is repair_customer_service
+        assert (await test_app.state.health_service.check())["configuration"] == (
+            "incomplete"
+        )
 
 
 @pytest.mark.asyncio
@@ -339,6 +642,106 @@ async def test_corrupt_active_uses_environment_repair_and_commits_activation_wit
     finally:
         await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_corrupt_startup_health_recovers_after_current_process_swap(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """损坏active回退环境后保持降级，网页修复swap且revision一致才恢复健康。"""
+    config_key = Fernet.generate_key().decode()
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'corrupt-health.db'}"
+    await _create_runtime_database(database_url, active_payload=b"corrupt-ciphertext")
+    password = _set_bootstrap_environment(
+        monkeypatch,
+        database_url=database_url,
+        config_encryption_key=config_key,
+    )
+    environment = _runtime_snapshot()
+    for name, value in environment.to_dict().items():
+        if name != "schema_version" and value is not None:
+            monkeypatch.setenv(name.upper(), str(value))
+
+    class PassingTester:
+        """让网页修复进入DB激活和当前进程swap阶段。"""
+
+        async def test(self, candidate: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+            """验证修复候选完整后返回成功。"""
+            candidate.validate()
+            return RuntimeConfigTestResult(succeeded=True)
+
+    class CloseProbe:
+        """提供可正常关闭的不联网资源。"""
+
+        async def aclose(self) -> None:
+            """模拟成功关闭。"""
+
+    async def build_bundle(
+        snapshot: RuntimeConfigSnapshot,
+        *,
+        revision: int,
+        **kwargs,
+    ) -> RuntimeClientBundle:
+        """按候选动态字段构造健康元数据bundle。"""
+        return _runtime_bundle(snapshot, revision, CloseProbe())
+
+    async def blocked_loop(*args, **kwargs) -> None:
+        """保持后台循环存活直到生命周期取消。"""
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(application, "RuntimeConfigTester", PassingTester)
+    monkeypatch.setattr(application, "build_runtime_client_bundle", build_bundle)
+    for loop_name in (
+        "_run_worker_loop",
+        "_run_wecom_poll_loop",
+        "_run_faq_maintenance_loop",
+        "_run_retention_loop",
+        "_run_context_maintenance_loop",
+        "_run_hostex_reconcile_loop",
+    ):
+        monkeypatch.setattr(application, loop_name, blocked_loop)
+
+    test_app = FastAPI()
+    async with application_lifespan(test_app):
+        initial_status = await test_app.state.runtime_client_registry.status()
+        initial_health = await test_app.state.health_service.check()
+        assert initial_status.configuration_healthy is False
+        assert initial_health["configuration"] == "incomplete"
+
+        engine = create_async_engine(database_url)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            credential = await session.scalar(select(AdminCredential))
+            assert credential is not None
+            actor_id = int(credential.employee_id)
+            admin_id = int(credential.id)
+            session_version = int(credential.session_version)
+        await engine.dispose()
+
+        result = await test_app.state.runtime_config_service.create_and_test(
+            UpdateRuntimeConfig(
+                deepseek_model="repaired-model",
+                wecom_contact_secret="contact-secret",
+                wecom_poll_interval_seconds=5.0,
+                hostex_reconcile_interval_seconds=60.0,
+            ),
+            actor_id=actor_id,
+            admin_id=admin_id,
+            password=password,
+            expected_session_version=session_version,
+            expected_revision=1,
+        )
+
+        current = await test_app.state.runtime_client_registry.status()
+        health = await test_app.state.health_service.check()
+        assert current.revision == result.revision
+        assert current.configuration_healthy is True
+        assert current.contact_configured is True
+        assert current.wecom_poll_interval_seconds == 5.0
+        assert current.hostex_reconcile_interval_seconds == 60.0
+        assert health["configuration"] == "ok"
+        assert health["wecom_contact_sync"] == "ok"
 
 
 @pytest.mark.parametrize(

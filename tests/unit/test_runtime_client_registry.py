@@ -53,6 +53,22 @@ class FailingCloseProbe(CloseProbe):
         raise RuntimeError("close failed")
 
 
+class RetryCloseProbe(CloseProbe):
+    """按指定次数失败后允许关闭成功。"""
+
+    def __init__(self, failures: int) -> None:
+        """保存剩余失败次数。"""
+        super().__init__()
+        self._failures = failures
+
+    async def aclose(self) -> None:
+        """失败期抛错，后续调用成功。"""
+        await super().aclose()
+        if self._failures > 0:
+            self._failures -= 1
+            raise RuntimeError("retryable close failure")
+
+
 def build_snapshot(**overrides: object) -> RuntimeConfigSnapshot:
     """构造用于生产 bundle 装配测试的完整运行快照。"""
     values: dict[str, object] = {
@@ -123,6 +139,24 @@ async def test_bundle_closes_unique_resources_in_reverse_ownership_order() -> No
 
 
 @pytest.mark.asyncio
+async def test_bundle_retries_only_failed_resources() -> None:
+    """部分关闭失败后重试失败资源，已成功资源不得二次关闭。"""
+    failed_then_ok = RetryCloseProbe(failures=1)
+    already_closed = CloseProbe()
+    bundle = build_bundle(1, failed_then_ok)
+    object.__setattr__(bundle, "closeables", (failed_then_ok, already_closed))
+
+    with pytest.raises(RuntimeError, match="retryable close failure"):
+        await bundle.aclose()
+    assert failed_then_ok.calls == 1
+    assert already_closed.calls == 1
+
+    await bundle.aclose()
+    assert failed_then_ok.calls == 2
+    assert already_closed.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_swap_does_not_interrupt_old_lease_and_delays_close() -> None:
     """热切换立即发布新版本，但在途旧业务完成前保留旧客户端。"""
     old_probe = CloseProbe()
@@ -141,6 +175,38 @@ async def test_swap_does_not_interrupt_old_lease_and_delays_close() -> None:
 
     assert old_probe.calls == 1
     assert new_probe.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_status_reads_current_bundle_metadata_without_exposing_secrets() -> None:
+    """状态快照随swap更新，只暴露健康判断所需的非敏感字段。"""
+    registry = RuntimeClientRegistry(
+        build_bundle(1, CloseProbe()),
+        configuration_healthy=False,
+    )
+    candidate = build_bundle(2, CloseProbe())
+    object.__setattr__(candidate, "contact_client", object())
+    object.__setattr__(candidate, "duty_userids", ())
+    object.__setattr__(candidate, "wecom_poll_interval_seconds", 7.0)
+    object.__setattr__(candidate, "hostex_reconcile_interval_seconds", 21.0)
+
+    initial = await registry.status()
+    await registry.swap(candidate)
+    current = await registry.status()
+
+    assert initial.revision == 1
+    assert initial.has_duty is True
+    assert initial.contact_configured is False
+    assert initial.configuration_healthy is False
+    assert current.revision == 2
+    assert current.has_duty is False
+    assert current.contact_configured is True
+    assert current.wecom_poll_interval_seconds == 7.0
+    assert current.hostex_reconcile_interval_seconds == 21.0
+    assert current.resources_healthy is True
+    assert current.configuration_healthy is True
+    assert not hasattr(current, "hostex")
+    await registry.close()
 
 
 @pytest.mark.asyncio
@@ -175,7 +241,57 @@ async def test_retired_close_failure_does_not_turn_published_swap_into_failure()
         assert current.revision == 2
     assert old_probe.calls == 1
     assert new_probe.calls == 0
+    with pytest.raises(RuntimeError, match="运行客户端资源关闭失败"):
+        await registry.close()
+    assert old_probe.calls == 2
+    assert new_probe.calls == 1
+
+    # 每次 shutdown 调用只重试一次，不在永久失败资源上循环等待。
+    with pytest.raises(RuntimeError, match="运行客户端资源关闭失败"):
+        await registry.close()
+    assert old_probe.calls == 3
+    assert new_probe.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_resource_health_recovers_only_after_failed_bundle_is_retried() -> None:
+    """无关bundle关闭成功不能掩盖旧失败，只有旧资源确认关闭才恢复健康。"""
+    health: list[bool] = []
+    failed_a = RetryCloseProbe(failures=1)
+    closed_b = CloseProbe()
+    current_c = CloseProbe()
+    registry = RuntimeClientRegistry(
+        build_bundle(1, failed_a),
+        resource_health_setter=health.append,
+    )
+
+    await registry.swap(build_bundle(2, closed_b))
+    assert health[-1] is False
+
+    await registry.swap(build_bundle(3, current_c))
+    assert closed_b.calls == 1
+    assert health[-1] is False
+
+    await registry.retry_failed_closes()
+    assert failed_a.calls == 2
+    assert health[-1] is True
     await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_retries_failed_bundle_without_reclosing_successes() -> None:
+    """shutdown重试遗留失败资源，同时不重复关闭bundle中已成功的资源。"""
+    failed_then_ok = RetryCloseProbe(failures=1)
+    already_closed = CloseProbe()
+    bundle = build_bundle(1, failed_then_ok)
+    object.__setattr__(bundle, "closeables", (failed_then_ok, already_closed))
+    registry = RuntimeClientRegistry(bundle)
+
+    await registry.swap(build_bundle(2, CloseProbe()))
+    assert (failed_then_ok.calls, already_closed.calls) == (1, 1)
+
+    await registry.close()
+    assert (failed_then_ok.calls, already_closed.calls) == (2, 1)
 
 
 @pytest.mark.asyncio

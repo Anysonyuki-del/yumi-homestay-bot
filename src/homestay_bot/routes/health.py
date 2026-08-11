@@ -18,6 +18,38 @@ class HealthServicePort(Protocol):
         """返回数据库、worker 和配置状态。"""
 
 
+class RuntimeHealthStatusPort(Protocol):
+    """限定健康检查可读取的无秘密运行元数据。"""
+
+    @property
+    def revision(self) -> int:
+        """返回当前运行revision。"""
+
+    @property
+    def has_duty(self) -> bool:
+        """返回值班人配置是否完整。"""
+
+    @property
+    def contact_configured(self) -> bool:
+        """返回可选客户联系是否配置。"""
+
+    @property
+    def wecom_poll_interval_seconds(self) -> float:
+        """返回企业微信补拉间隔。"""
+
+    @property
+    def hostex_reconcile_interval_seconds(self) -> float:
+        """返回百居易对账间隔。"""
+
+    @property
+    def resources_healthy(self) -> bool:
+        """返回全部退役资源是否确认关闭。"""
+
+    @property
+    def configuration_healthy(self) -> bool:
+        """返回启动损坏配置是否已被成功发布替代。"""
+
+
 class UnconfiguredHealthService:
     """表示应用尚未完成运行依赖装配。"""
 
@@ -58,6 +90,10 @@ class OperationalHealthService:
         hostex_max_age: timedelta = timedelta(minutes=30),
         context_max_age: timedelta = timedelta(hours=2),
         lifecycle_max_age: timedelta = timedelta(minutes=30),
+        runtime_status_provider: (
+            Callable[[], Awaitable[RuntimeHealthStatusPort]] | None
+        ) = None,
+        runtime_revision_provider: Callable[[], Awaitable[int]] | None = None,
     ) -> None:
         """注入无副作用探针和心跳读取器。"""
         self._database_probe = database_probe
@@ -78,6 +114,8 @@ class OperationalHealthService:
         self._lifecycle_max_age = (
             operational_max_age or lifecycle_max_age
         )
+        self._runtime_status_provider = runtime_status_provider
+        self._runtime_revision_provider = runtime_revision_provider
 
     @staticmethod
     def _is_recent(
@@ -93,19 +131,47 @@ class OperationalHealthService:
     async def check(self) -> dict[str, str]:
         """执行只读检查，不在健康接口创建任何外部资源。"""
         database_ok = await self._database_probe()
+        runtime_status: RuntimeHealthStatusPort | None = None
+        runtime_revision: int | None = None
+        if (
+            self._runtime_status_provider is not None
+            and self._runtime_revision_provider is not None
+        ):
+            try:
+                runtime_status = await self._runtime_status_provider()
+                runtime_revision = await self._runtime_revision_provider()
+            except Exception:
+                # registry关闭或DB状态读取失败时只降级，不泄露内部异常。
+                runtime_status = None
         heartbeat = self._heartbeat_getter()
         worker_ok = self._is_recent(
             heartbeat,
             self._heartbeat_max_age,
         )
         poll_heartbeat = self._poll_heartbeat_getter()
+        poll_max_age = self._poll_max_age
+        hostex_max_age = self._hostex_max_age
+        lifecycle_max_age = self._lifecycle_max_age
+        contact_sync_configured = self._contact_sync_configured
+        if runtime_status is not None:
+            poll_max_age = timedelta(
+                seconds=max(60, runtime_status.wecom_poll_interval_seconds * 3)
+            )
+            hostex_max_age = timedelta(
+                seconds=max(
+                    180,
+                    runtime_status.hostex_reconcile_interval_seconds * 3,
+                )
+            )
+            lifecycle_max_age = hostex_max_age
+            contact_sync_configured = runtime_status.contact_configured
         poll_ok = self._is_recent(
             poll_heartbeat,
-            self._poll_max_age,
+            poll_max_age,
         )
         hostex_ok = self._is_recent(
             self._hostex_heartbeat_getter(),
-            self._hostex_max_age,
+            hostex_max_age,
         )
         context_ok = self._is_recent(
             self._context_heartbeat_getter(),
@@ -113,11 +179,20 @@ class OperationalHealthService:
         )
         lifecycle_ok = self._is_recent(
             self._lifecycle_heartbeat_getter(),
-            self._lifecycle_max_age,
+            lifecycle_max_age,
         )
         web_search_status = self._web_search_status_getter()
         web_search_ok = web_search_status in {"unknown", "ok"}
         configuration_ok = self._configuration_ok_getter()
+        if self._runtime_status_provider is not None:
+            configuration_ok = bool(
+                configuration_ok
+                and runtime_status is not None
+                and runtime_status.has_duty
+                and runtime_status.resources_healthy
+                and runtime_status.configuration_healthy
+                and runtime_status.revision == runtime_revision
+            )
         result = {
             "status": (
                 "ok"
@@ -142,7 +217,7 @@ class OperationalHealthService:
             "configuration": "ok" if configuration_ok else "incomplete",
             "web_search": web_search_status,
             "wecom_contact_sync": (
-                "ok" if self._contact_sync_configured else "not_configured"
+                "ok" if contact_sync_configured else "not_configured"
             ),
         }
         return result

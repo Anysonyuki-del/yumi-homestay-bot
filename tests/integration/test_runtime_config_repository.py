@@ -138,6 +138,68 @@ async def test_failed_activation_compensation_restores_pointer_and_only_marks_ca
 
 
 @pytest.mark.asyncio
+async def test_failed_compensation_cas_does_not_mutate_reactivated_candidate(tmp_path) -> None:
+    """补偿CAS失配时不得把已被其他操作重新激活的候选标记失败。"""
+    factory = await build_factory(f"sqlite+aiosqlite:///{tmp_path / 'compensation-race.db'}")
+    async with factory() as session:
+        repository = SQLAlchemyRuntimeConfigRepository(session)
+        first = await repository.create_candidate(b"one", {}, 1)
+        await repository.mark_test_passed(first.id, {"succeeded": True})
+        await repository.activate(first.id, expected_revision=0)
+        second = await repository.create_candidate(
+            b"two",
+            {},
+            1,
+            based_on_version_id=first.id,
+            based_on_revision=1,
+        )
+        await repository.mark_test_passed(second.id, {"succeeded": True})
+        await repository.activate(second.id, expected_revision=1)
+        await session.commit()
+
+    # 另一实例连续回滚两次，使v2再次成为active，但revision已不再属于A操作。
+    async with factory() as session:
+        repository = SQLAlchemyRuntimeConfigRepository(session)
+        await repository.rollback(
+            expected_revision=2,
+            expected_previous_version_id=first.id,
+        )
+        await repository.rollback(
+            expected_revision=3,
+            expected_previous_version_id=second.id,
+        )
+        await session.commit()
+
+    async with factory() as session:
+        repository = SQLAlchemyRuntimeConfigRepository(session)
+        restored = await repository.restore_failed_activation(
+            second.id,
+            failed_candidate_version_id=second.id,
+            expected_revision=2,
+            restore_revision=1,
+            restore_active_version_id=first.id,
+            restore_previous_version_id=None,
+            failure_code="activation_failed",
+        )
+        await session.commit()
+
+    async with factory() as session:
+        repository = SQLAlchemyRuntimeConfigRepository(session)
+        state = await repository.get_state()
+        stored_second = await repository.get_version(second.id)
+        assert restored is False
+        assert (state.revision, state.active_version_id, state.previous_version_id) == (
+            4,
+            second.id,
+            first.id,
+        )
+        assert stored_second is not None
+        assert stored_second.status is RuntimeConfigVersionStatus.TEST_PASSED
+        assert stored_second.failure_code is None
+    await dispose_factory(factory)
+
+
+@pytest.mark.asyncio
 async def test_concurrent_activation_allows_only_one_expected_revision(tmp_path) -> None:
     """两个实例使用同一修订号并发激活时只能有一个成功。"""
     factory = await build_factory(f"sqlite+aiosqlite:///{tmp_path / 'runtime.db'}")

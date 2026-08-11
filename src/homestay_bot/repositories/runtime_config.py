@@ -311,7 +311,7 @@ class SQLAlchemyRuntimeConfigRepository:
         )
         result = await self._session.execute(statement)
         restored = int(result.rowcount or 0) == 1  # type: ignore[attr-defined]
-        if failed_candidate_version_id is not None:
+        if restored and failed_candidate_version_id is not None:
             await self._session.execute(
                 update(RuntimeConfigVersion)
                 .where(RuntimeConfigVersion.id == failed_candidate_version_id)

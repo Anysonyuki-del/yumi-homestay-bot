@@ -398,6 +398,22 @@ async def test_environment_baseline_blank_secret_and_explicit_optional_clear() -
 
 
 @pytest.mark.asyncio
+async def test_existing_optional_contact_blank_preserves_secret() -> None:
+    """已有基线中Contact Secret的空白输入继续表示保留旧值。"""
+    environment = build_snapshot()
+    tester = CandidateTesterStub()
+    service = build_service(RepositoryStub(), AuthStub(), tester, environment)
+
+    await activate(
+        service,
+        UpdateRuntimeConfig(wecom_contact_secret="   "),
+        expected_revision=0,
+    )
+
+    assert tester.snapshots[0].wecom_contact_secret == environment.wecom_contact_secret
+
+
+@pytest.mark.asyncio
 async def test_failed_candidate_is_saved_but_never_activated() -> None:
     """测试失败版本必须带失败状态留存，同时 active 指针保持不变。"""
     repository = RepositoryStub()
@@ -549,7 +565,7 @@ async def test_missing_environment_can_create_first_complete_snapshot() -> None:
     """外部 API 环境缺失时，只要页面提交完整字段就能创建首版配置。"""
     repository = RepositoryStub()
     service = build_service(repository, AuthStub(), CandidateTesterStub(), None)
-    complete = build_snapshot()
+    complete = build_snapshot(wecom_contact_secret=None)
     command = UpdateRuntimeConfig.from_snapshot(complete)
 
     result = await activate(service, command, expected_revision=0)

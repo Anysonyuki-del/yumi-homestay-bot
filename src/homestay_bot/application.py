@@ -3,7 +3,7 @@ import contextlib
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -160,6 +160,13 @@ from homestay_bot.worker import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _create_runtime_task(
+    coroutine: Coroutine[Any, Any, None],
+) -> asyncio.Task[None]:
+    """集中创建运行后台task，便于协调器验证中途失败的清理语义。"""
+    return asyncio.create_task(coroutine)
 
 
 class DurableJobQueue:
@@ -649,6 +656,9 @@ class SessionRuntimeConfigService:
             Callable[[RuntimeConfigSnapshot, int], Any] | None
         ) = None,
         runtime_consistency_setter: Callable[[bool], None] | None = None,
+        runtime_activator: (
+            Callable[[RuntimeConfigSnapshot, int], Any] | None
+        ) = None,
     ) -> None:
         """固定环境快照与测试端口；默认本地 stub 防止测试意外联网。"""
         self._factory = factory
@@ -663,18 +673,24 @@ class SessionRuntimeConfigService:
         self._registry = registry
         self._bundle_builder = bundle_builder
         self._runtime_consistency_setter = runtime_consistency_setter
+        self._runtime_activator = runtime_activator
         self._activation_lock = asyncio.Lock()
 
     def configure_runtime_activation(
         self,
-        registry: RuntimeClientRegistry,
-        bundle_builder: Callable[[RuntimeConfigSnapshot, int], Any],
+        registry: RuntimeClientRegistry | None = None,
+        bundle_builder: Callable[[RuntimeConfigSnapshot, int], Any] | None = None,
         runtime_consistency_setter: Callable[[bool], None] | None = None,
+        *,
+        runtime_activator: (
+            Callable[[RuntimeConfigSnapshot, int], Any] | None
+        ) = None,
     ) -> None:
-        """在初始bundle发布后接入激活协调器，repair-only保持未接入。"""
+        """接入可同时处理首次启动与后续swap的运行时协调入口。"""
         self._registry = registry
         self._bundle_builder = bundle_builder
         self._runtime_consistency_setter = runtime_consistency_setter
+        self._runtime_activator = runtime_activator
 
     async def _mark_runtime_consistent_if_current(self, revision: int) -> None:
         """仅当registry已发布同一DB revision时恢复健康标志。"""
@@ -740,6 +756,10 @@ class SessionRuntimeConfigService:
             revision: int,
         ) -> None:
             """先提交DB激活，再无事务构造并原子发布候选bundle。"""
+            if self._runtime_activator is not None:
+                await session.commit()
+                await self._runtime_activator(snapshot, revision)
+                return
             if self._registry is None or self._bundle_builder is None:
                 return
             await session.commit()
@@ -2440,6 +2460,13 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             return False
 
+    async def runtime_revision_provider() -> int:
+        """以短只读会话返回当前数据库激活指针revision。"""
+        async with factory() as session:
+            state = await SQLAlchemyRuntimeConfigRepository(session).get_state()
+            await session.commit()
+            return int(state.revision)
+
     startup_time = datetime.now(UTC)
     app.state.started_at = startup_time
     app.state.worker_last_heartbeat = startup_time
@@ -2462,48 +2489,13 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         contact_sync_configured=False,
     )
 
-    if runtime_snapshot is None:
-        # repair-only 仅运行数据库后台，不构造任何带空凭据的外部客户端或 worker。
-        try:
-            yield
-        finally:
-            _clear_lifespan_state(app)
-            if argon2_executor is not None:
-                await asyncio.to_thread(
-                    argon2_executor.shutdown,
-                    wait=True,
-                    cancel_futures=True,
-                )
-            await engine.dispose()
-        return
-
     queue = DurableJobQueue(factory)
     knowledge = KnowledgeService(SessionKnowledgeRepository(factory))
     faq_candidate_context = FaqCandidateContextService(SessionFaqCandidateRepository(factory))
     event_recorder = SessionHostexEventRecorder(factory)
-    async with factory() as revision_session:
-        runtime_state = await SQLAlchemyRuntimeConfigRepository(revision_session).get_state()
-        initial_revision = int(runtime_state.revision)
-        await revision_session.commit()
-    initial_bundle = await build_runtime_client_bundle(
-        runtime_snapshot,
-        revision=initial_revision,
-        callback_queue=queue,
-        hostex_event_recorder=event_recorder,
-        knowledge=knowledge,
-        faq_candidate_context=faq_candidate_context,
-        safety_hmac_key=bootstrap.session_secret.encode(),
-        web_search_status_setter=web_search_state.set,
-    )
-    runtime_registry = RuntimeClientRegistry(
-        initial_bundle,
-        resource_health_setter=lambda value: setattr(
-            app.state,
-            "runtime_resources_healthy",
-            value,
-        ),
-    )
-    app.state.runtime_client_registry = runtime_registry
+    runtime_registry: RuntimeClientRegistry | None = None
+    background_tasks: list[asyncio.Task[None]] = []
+    runtime_start_lock = asyncio.Lock()
 
     async def build_candidate_bundle(
         snapshot: RuntimeConfigSnapshot,
@@ -2520,16 +2512,6 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             safety_hmac_key=bootstrap.session_secret.encode(),
             web_search_status_setter=web_search_state.set,
         )
-
-    app.state.runtime_config_service.configure_runtime_activation(
-        runtime_registry,
-        build_candidate_bundle,
-        runtime_consistency_setter=lambda value: setattr(
-            app.state,
-            "runtime_configuration_consistent",
-            value,
-        ),
-    )
 
     async def handle_message(
         message: IncomingMessage,
@@ -2798,136 +2780,187 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             handlers=handlers,
         )
 
-    app.state.approval_page_service = SessionApprovalPageService(
-        factory=factory,
-        registry=runtime_registry,
-    )
-    app.state.customer_admin_service = SessionCustomerAdminService(
-        factory,
-        sensitive_data,
-        registry=runtime_registry,
-    )
-    # 启动宽限期避免首次补拉前被误报；一次成功后由真实心跳覆盖。
-    app.state.health_service = OperationalHealthService(
-        database_probe=database_probe,
-        heartbeat_getter=lambda: app.state.worker_last_heartbeat,
-        poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
-        hostex_heartbeat_getter=(lambda: app.state.hostex_sync_last_success),
-        context_heartbeat_getter=(lambda: app.state.context_maintenance_last_success),
-        lifecycle_heartbeat_getter=(lambda: app.state.lifecycle_scheduler_last_success),
-        configuration_ok=lambda: (
-            bool(initial_bundle.duty_userids)
-            and admin_auth_available
-            and not runtime_degraded
-            and app.state.runtime_configuration_consistent
-            and app.state.runtime_resources_healthy
-        ),
-        web_search_status_getter=web_search_state.get,
-        contact_sync_configured=initial_bundle.contact_client is not None,
-        poll_max_age=timedelta(
-            seconds=max(
-                60,
-                initial_bundle.wecom_poll_interval_seconds * 3,
-            )
-        ),
-        hostex_max_age=timedelta(
-            seconds=max(
-                180,
-                initial_bundle.hostex_reconcile_interval_seconds * 3,
-            )
-        ),
-        lifecycle_max_age=timedelta(
-            seconds=max(
-                180,
-                initial_bundle.hostex_reconcile_interval_seconds * 3,
-            )
-        ),
-    )
-    worker_task = asyncio.create_task(
-        _run_worker_loop(
-            app,
-            factory=factory,
-            registry=runtime_registry,
-            runtime_handler_factory=build_worker_bindings,
-            excluded_job_types={"wecom_process_message"},
-            recover_stale=True,
-        )
-    )
-    deferred_worker_task = asyncio.create_task(
-        _run_worker_loop(
-            app,
-            factory=factory,
-            registry=runtime_registry,
-            runtime_handler_factory=build_worker_bindings,
-            included_job_types={"wecom_process_message"},
-            recover_stale=True,
-        )
-    )
-    poll_task = asyncio.create_task(
-        _run_wecom_poll_loop(
-            app,
-            registry=runtime_registry,
-            runtime_poller_factory=lambda bundle: WeComMessagePoller(
-                api=bundle.wecom,
-                handler=build_sync_handler(bundle),
-            ),
-        )
-    )
-    faq_maintenance_task = asyncio.create_task(_run_faq_maintenance_loop(factory=factory))
-    retention_task = asyncio.create_task(_run_retention_loop(factory))
-    context_maintenance_task = asyncio.create_task(
-        _run_context_maintenance_loop(
-            factory=factory,
-            registry=runtime_registry,
-            heartbeat=lambda value: setattr(
-                app.state,
-                "context_maintenance_last_success",
-                value,
-            ),
-        )
-    )
-    hostex_reconcile_task = asyncio.create_task(
-        _run_hostex_reconcile_loop(
-            factory=factory,
-            registry=runtime_registry,
-            runtime_lifecycle_factory=build_lifecycle_service,
-            sync_heartbeat=lambda value: setattr(
-                app.state,
-                "hostex_sync_last_success",
-                value,
-            ),
-            lifecycle_heartbeat=lambda value: setattr(
-                app.state,
-                "lifecycle_scheduler_last_success",
-                value,
-            ),
-        )
-    )
+    async def start_runtime_services(
+        snapshot: RuntimeConfigSnapshot,
+        revision: int,
+        *,
+        configuration_healthy: bool = True,
+    ) -> None:
+        """串行执行首次完整装配或后续swap，失败时不发布半成品运行时。"""
+        nonlocal runtime_registry
+        async with runtime_start_lock:
+            candidate = await build_candidate_bundle(snapshot, revision)
+            if runtime_registry is not None:
+                try:
+                    await runtime_registry.swap(candidate)
+                except BaseException:
+                    with contextlib.suppress(BaseException):
+                        await candidate.aclose()
+                    raise
+                return
 
+            candidate_registry = RuntimeClientRegistry(
+                candidate,
+                resource_health_setter=lambda value: setattr(
+                    app.state,
+                    "runtime_resources_healthy",
+                    value,
+                ),
+                configuration_healthy=configuration_healthy,
+            )
+            approval_service = SessionApprovalPageService(
+                factory=factory,
+                registry=candidate_registry,
+            )
+            customer_service = SessionCustomerAdminService(
+                factory,
+                sensitive_data,
+                registry=candidate_registry,
+            )
+            # 启动宽限期避免首次补拉前被误报；真实心跳会覆盖初始时间。
+            health_service = OperationalHealthService(
+                database_probe=database_probe,
+                heartbeat_getter=lambda: app.state.worker_last_heartbeat,
+                poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
+                hostex_heartbeat_getter=(lambda: app.state.hostex_sync_last_success),
+                context_heartbeat_getter=(
+                    lambda: app.state.context_maintenance_last_success
+                ),
+                lifecycle_heartbeat_getter=(
+                    lambda: app.state.lifecycle_scheduler_last_success
+                ),
+                configuration_ok=admin_auth_available and runtime_writable,
+                web_search_status_getter=web_search_state.get,
+                runtime_status_provider=candidate_registry.status,
+                runtime_revision_provider=runtime_revision_provider,
+            )
+            started_tasks: list[asyncio.Task[None]] = []
+            try:
+                started_tasks.append(
+                    _create_runtime_task(
+                        _run_worker_loop(
+                            app,
+                            factory=factory,
+                            registry=candidate_registry,
+                            runtime_handler_factory=build_worker_bindings,
+                            excluded_job_types={"wecom_process_message"},
+                            recover_stale=True,
+                        )
+                    )
+                )
+                started_tasks.append(
+                    _create_runtime_task(
+                        _run_worker_loop(
+                            app,
+                            factory=factory,
+                            registry=candidate_registry,
+                            runtime_handler_factory=build_worker_bindings,
+                            included_job_types={"wecom_process_message"},
+                            recover_stale=True,
+                        )
+                    )
+                )
+                started_tasks.append(
+                    _create_runtime_task(
+                        _run_wecom_poll_loop(
+                            app,
+                            registry=candidate_registry,
+                            runtime_poller_factory=lambda bundle: WeComMessagePoller(
+                                api=bundle.wecom,
+                                handler=build_sync_handler(bundle),
+                            ),
+                        )
+                    )
+                )
+                started_tasks.append(
+                    _create_runtime_task(_run_faq_maintenance_loop(factory=factory))
+                )
+                started_tasks.append(_create_runtime_task(_run_retention_loop(factory)))
+                started_tasks.append(
+                    _create_runtime_task(
+                        _run_context_maintenance_loop(
+                            factory=factory,
+                            registry=candidate_registry,
+                            heartbeat=lambda value: setattr(
+                                app.state,
+                                "context_maintenance_last_success",
+                                value,
+                            ),
+                        )
+                    )
+                )
+                started_tasks.append(
+                    _create_runtime_task(
+                        _run_hostex_reconcile_loop(
+                            factory=factory,
+                            registry=candidate_registry,
+                            runtime_lifecycle_factory=build_lifecycle_service,
+                            sync_heartbeat=lambda value: setattr(
+                                app.state,
+                                "hostex_sync_last_success",
+                                value,
+                            ),
+                            lifecycle_heartbeat=lambda value: setattr(
+                                app.state,
+                                "lifecycle_scheduler_last_success",
+                                value,
+                            ),
+                        )
+                    )
+                )
+            except BaseException:
+                for task in started_tasks:
+                    task.cancel()
+                for task in started_tasks:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                with contextlib.suppress(BaseException):
+                    await candidate_registry.close()
+                raise
+
+            # create_task在下一次让出事件循环前不会运行，故此处原子发布完整state。
+            app.state.approval_page_service = approval_service
+            app.state.customer_admin_service = customer_service
+            app.state.health_service = health_service
+            app.state.runtime_client_registry = candidate_registry
+            runtime_registry = candidate_registry
+            background_tasks.extend(started_tasks)
+
+    app.state.runtime_config_service.configure_runtime_activation(
+        runtime_activator=start_runtime_services,
+    )
     try:
+        if runtime_snapshot is not None:
+            async with factory() as revision_session:
+                runtime_state = await SQLAlchemyRuntimeConfigRepository(
+                    revision_session
+                ).get_state()
+                initial_revision = int(runtime_state.revision)
+                await revision_session.commit()
+            await start_runtime_services(
+                runtime_snapshot,
+                initial_revision,
+                configuration_healthy=not runtime_degraded,
+            )
         yield
     finally:
-        background_tasks = (
-            worker_task,
-            deferred_worker_task,
-            poll_task,
-            faq_maintenance_task,
-            retention_task,
-            context_maintenance_task,
-            hostex_reconcile_task,
-        )
-        for task in background_tasks:
-            task.cancel()
-        for task in background_tasks:
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        await runtime_registry.close()
-        _clear_lifespan_state(app)
-        if argon2_executor is not None:
-            # 等待仍在执行的 Argon2 线程退出，并取消尚未开始的排队任务。
-            await asyncio.to_thread(
-                argon2_executor.shutdown,
-                wait=True,
-                cancel_futures=True,
-            )
-        await engine.dispose()
+        try:
+            for task in background_tasks:
+                task.cancel()
+            for task in background_tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        finally:
+            try:
+                if runtime_registry is not None:
+                    await runtime_registry.close()
+            finally:
+                _clear_lifespan_state(app)
+                if argon2_executor is not None:
+                    # 等待仍在执行的 Argon2 线程退出，并取消尚未开始的排队任务。
+                    await asyncio.to_thread(
+                        argon2_executor.shutdown,
+                        wait=True,
+                        cancel_futures=True,
+                    )
+                await engine.dispose()

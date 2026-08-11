@@ -488,6 +488,8 @@ class RuntimeConfigService:
         updates = command.normalized_updates()
         if baseline.snapshot is None:
             payload = dict(updates)
+            # 首次配置允许可选Contact Secret留空，但严格快照仍要求字段存在。
+            payload.setdefault("wecom_contact_secret", None)
             payload["schema_version"] = 1
             candidate = RuntimeConfigSnapshot.from_dict(payload)
         else:

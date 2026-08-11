@@ -40,7 +40,8 @@ class _BundleCloseState:
     """保存不可变 bundle 内部唯一允许变化的关闭状态。"""
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    closed: bool = False
+    closed_resource_ids: set[int] = field(default_factory=set)
+    fully_closed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,22 +72,43 @@ class RuntimeClientBundle:
     )
 
     async def aclose(self) -> None:
-        """按所有权清单关闭全部资源；重复调用不会重复释放连接池。"""
+        """逆序关闭未成功释放的资源，并允许失败资源在稍后重试。"""
         async with self._close_state.lock:
-            if self._close_state.closed:
+            if self._close_state.fully_closed:
                 return
-            self._close_state.closed = True
             first_error: BaseException | None = None
             unique_resources = list({id(item): item for item in self.closeables}.values())
             for resource in reversed(unique_resources):
+                resource_id = id(resource)
+                if resource_id in self._close_state.closed_resource_ids:
+                    continue
                 try:
                     await _close_resource(resource)
                 except BaseException as error:
                     # 单个连接池关闭失败不能阻止其余资源得到释放。
                     if first_error is None:
                         first_error = error
+                else:
+                    self._close_state.closed_resource_ids.add(resource_id)
+            self._close_state.fully_closed = all(
+                id(resource) in self._close_state.closed_resource_ids
+                for resource in unique_resources
+            )
             if first_error is not None:
                 raise first_error
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeClientStatus:
+    """仅暴露健康检查所需的当前revision和非敏感运行元数据。"""
+
+    revision: int
+    has_duty: bool
+    contact_configured: bool
+    wecom_poll_interval_seconds: float
+    hostex_reconcile_interval_seconds: float
+    resources_healthy: bool
+    configuration_healthy: bool = True
 
 
 @dataclass(slots=True)
@@ -106,6 +128,7 @@ class RuntimeClientRegistry:
         initial: RuntimeClientBundle,
         *,
         resource_health_setter: Callable[[bool], None] | None = None,
+        configuration_healthy: bool = True,
     ) -> None:
         """发布初始运行快照。"""
         self._lock = asyncio.Lock()
@@ -114,6 +137,8 @@ class RuntimeClientRegistry:
         self._closed = False
         self._all_released = asyncio.Event()
         self._resource_health_setter = resource_health_setter
+        self._failed_retired: dict[int, RuntimeClientBundle] = {}
+        self._configuration_healthy = configuration_healthy
 
     @asynccontextmanager
     async def acquire(self) -> AsyncIterator[RuntimeClientBundle]:
@@ -140,14 +165,34 @@ class RuntimeClientRegistry:
             previous.retired = True
             self._entries[id(candidate)] = _RegistryEntry(candidate)
             self._current_id = id(candidate)
+            # 候选成功发布后解除启动期损坏配置降级；健康服务还会核对DB revision。
+            self._configuration_healthy = True
             if previous.leases == 0:
                 self._entries.pop(id(previous.bundle), None)
                 retired_bundle = previous.bundle
         if retired_bundle is not None:
             await self._close_retired(retired_bundle)
 
+    async def status(self) -> RuntimeClientStatus:
+        """在注册表锁内读取一致且不含凭证的当前运行状态。"""
+        async with self._lock:
+            if self._closed or self._current_id not in self._entries:
+                raise RuntimeError("运行客户端注册表已关闭")
+            bundle = self._entries[self._current_id].bundle
+            return RuntimeClientStatus(
+                revision=bundle.revision,
+                has_duty=bool(bundle.duty_userids),
+                contact_configured=bundle.contact_client is not None,
+                wecom_poll_interval_seconds=bundle.wecom_poll_interval_seconds,
+                hostex_reconcile_interval_seconds=(
+                    bundle.hostex_reconcile_interval_seconds
+                ),
+                resources_healthy=not self._failed_retired,
+                configuration_healthy=self._configuration_healthy,
+            )
+
     async def close(self) -> None:
-        """停止新租约，并等待所有在途业务退出后关闭全部 bundle。"""
+        """停止新租约，等待在途业务，并重试先前清理失败的 bundle。"""
         bundles_to_close: list[RuntimeClientBundle] = []
         async with self._lock:
             if self._closed:
@@ -163,17 +208,23 @@ class RuntimeClientRegistry:
                 wait_for_releases = bool(self._entries)
                 if not wait_for_releases:
                     self._all_released.set()
-        first_error: BaseException | None = None
         for bundle in bundles_to_close:
-            try:
-                await bundle.aclose()
-            except BaseException as error:
-                if first_error is None:
-                    first_error = error
+            await self._close_retired(bundle)
         if wait_for_releases:
             await self._all_released.wait()
-        if first_error is not None:
-            raise first_error
+        await self.retry_failed_closes()
+
+    async def retry_failed_closes(self) -> None:
+        """对遗留失败 bundle 各重试一次，仍失败时返回稳定可观察错误。"""
+        async with self._lock:
+            failed_bundles = tuple(self._failed_retired.values())
+        for bundle in failed_bundles:
+            await self._close_retired(bundle)
+        async with self._lock:
+            still_failed = bool(self._failed_retired)
+        if still_failed:
+            # 不透传第三方异常正文，避免关闭错误携带凭证或请求内容。
+            raise RuntimeError("运行客户端资源关闭失败") from None
 
     async def _release(self, entry: _RegistryEntry) -> None:
         """释放一个租约，并在退役 bundle 的最后租约退出时关闭它。"""
@@ -202,11 +253,15 @@ class RuntimeClientRegistry:
                 "退役运行客户端关闭失败：error_type=%s",
                 type(error).__name__,
             )
-            if self._resource_health_setter is not None:
-                self._resource_health_setter(False)
+            async with self._lock:
+                self._failed_retired[id(bundle)] = bundle
+                resources_healthy = False
         else:
-            if self._resource_health_setter is not None:
-                self._resource_health_setter(True)
+            async with self._lock:
+                self._failed_retired.pop(id(bundle), None)
+                resources_healthy = not self._failed_retired
+        if self._resource_health_setter is not None:
+            self._resource_health_setter(resources_healthy)
 
 
 async def _close_partial_resources(resources: list[Any]) -> None:
