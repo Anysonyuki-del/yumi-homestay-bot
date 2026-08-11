@@ -10,6 +10,7 @@ from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.runtime_config import RuntimeConfigView
 from homestay_bot.routes.employee_auth import router as auth_router
 from homestay_bot.routes.runtime_config import router as runtime_config_router
+from homestay_bot.services.admin_auth_service import Argon2CapacityError
 from homestay_bot.services.runtime_config_service import (
     ActivationResult,
     RuntimeConfigPage,
@@ -230,6 +231,7 @@ def test_rollback_passes_both_page_cas_values_and_replay_is_rejected() -> None:
 
     assert response.status_code == 303
     assert replay.status_code == 409
+    assert replay.headers["cache-control"] == "no-store"
     assert service.rollback_calls == [
         {
             "actor_id": 1,
@@ -287,6 +289,29 @@ def test_invalid_long_secret_and_password_are_never_echoed() -> None:
     assert service.activation_calls == []
 
 
+def test_validation_error_does_not_echo_url_and_is_never_cached() -> None:
+    """框架级表单错误也不得回显可能带凭据的 URL，且必须禁止缓存。"""
+    client, _ = build_client()
+    login_admin(client, next_path="/employee/admin/settings")
+    page = client.get("/employee/admin/settings")
+    url = "https://user:token-sentinel@example.com/" + "x" * 2100
+
+    response = client.post(
+        "/employee/admin/settings/activate",
+        data={
+            "csrf_token": tokens(page.text, "/employee/admin/settings/activate")[0],
+            "password": "correct-password",
+            "expected_revision": "6",
+            "deepseek_base_url": url,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.headers["cache-control"] == "no-store"
+    assert url not in response.text
+    assert "token-sentinel" not in response.text
+
+
 def test_missing_config_key_keeps_page_readable_but_rejects_writes() -> None:
     """配置主密钥缺失时页面应明确只读，提交返回受控降级响应。"""
     client, service = build_client()
@@ -323,3 +348,30 @@ def test_missing_config_key_keeps_page_readable_but_rejects_writes() -> None:
     assert response.status_code == 503
     assert "配置主密钥未就绪" in response.text
     assert "secret-sentinel-must-not-leak" not in response.text
+
+
+def test_password_verification_capacity_returns_retryable_safe_response() -> None:
+    """密码线程池繁忙时应返回 429，且不得记录或回显密码。"""
+    client, service = build_client()
+
+    async def reject_capacity(*args: object, **kwargs: object) -> object:
+        """模拟 Argon2 有界执行池暂时饱和。"""
+        raise Argon2CapacityError("password-sentinel-must-not-leak")
+
+    service.create_and_test = reject_capacity  # type: ignore[method-assign]
+    login_admin(client, next_path="/employee/admin/settings")
+    page = client.get("/employee/admin/settings")
+    response = client.post(
+        "/employee/admin/settings/activate",
+        data={
+            "csrf_token": tokens(page.text, "/employee/admin/settings/activate")[0],
+            "password": "correct-password",
+            "expected_revision": "6",
+            "deepseek_model": "new-model",
+        },
+    )
+
+    assert response.status_code == 429
+    assert response.headers["cache-control"] == "no-store"
+    assert "认证服务繁忙" in response.text
+    assert "password-sentinel-must-not-leak" not in response.text

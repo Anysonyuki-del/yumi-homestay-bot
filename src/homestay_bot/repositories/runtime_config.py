@@ -181,6 +181,37 @@ class SQLAlchemyRuntimeConfigRepository:
         expected_revision: int,
     ) -> RuntimeConfigState:
         """以 revision 为 CAS 条件激活候选，并保存原 active 为 previous。"""
+        return await self._activate_pointer(
+            version_id,
+            expected_revision=expected_revision,
+            repair_previous_version_id=None,
+            preserve_current_active=True,
+        )
+
+    async def activate_repair(
+        self,
+        version_id: int,
+        expected_revision: int,
+        *,
+        previous_version_id: int | None,
+    ) -> RuntimeConfigState:
+        """修复损坏 active 时只保留经过解密确认的上一有效版本。"""
+        return await self._activate_pointer(
+            version_id,
+            expected_revision=expected_revision,
+            repair_previous_version_id=previous_version_id,
+            preserve_current_active=False,
+        )
+
+    async def _activate_pointer(
+        self,
+        version_id: int,
+        *,
+        expected_revision: int,
+        repair_previous_version_id: int | None,
+        preserve_current_active: bool,
+    ) -> RuntimeConfigState:
+        """集中校验候选并以单条 CAS 更新配置指针。"""
         version = await self._require_version(version_id)
         if version.status is not RuntimeConfigVersionStatus.TEST_PASSED:
             raise LookupError("运行配置候选尚未通过测试")
@@ -194,7 +225,11 @@ class SQLAlchemyRuntimeConfigRepository:
                 RuntimeConfigState.revision == expected_revision,
             )
             .values(
-                previous_version_id=RuntimeConfigState.active_version_id,
+                previous_version_id=(
+                    RuntimeConfigState.active_version_id
+                    if preserve_current_active
+                    else repair_previous_version_id
+                ),
                 active_version_id=version_id,
                 revision=RuntimeConfigState.revision + 1,
                 updated_at=func.now(),

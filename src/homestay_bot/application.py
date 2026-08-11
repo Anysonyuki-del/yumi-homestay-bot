@@ -603,9 +603,15 @@ class UnavailableAdminReverify:
 class EnvironmentFallbackRuntimeConfigRepository:
     """保留真实 CAS 状态，同时让损坏 active 以环境快照作为修复基线。"""
 
-    def __init__(self, repository: SQLAlchemyRuntimeConfigRepository) -> None:
-        """保存真实仓储，除 active 密文读取外全部原样委托。"""
+    def __init__(
+        self,
+        repository: SQLAlchemyRuntimeConfigRepository,
+        *,
+        previous_version_id: int | None,
+    ) -> None:
+        """保存真实仓储及已确认可解密的上一版本编号。"""
         self._repository = repository
+        self._previous_version_id = previous_version_id
 
     def __getattr__(self, name: str) -> Any:
         """把候选、激活、审计和清理操作委托给真实仓储。"""
@@ -619,6 +625,14 @@ class EnvironmentFallbackRuntimeConfigRepository:
         """返回真实 revision 和指针，但以空版本触发完整环境修复基线。"""
         state, _ = await self._repository.get_activation_context()
         return state, None
+
+    async def activate(self, version_id: int, expected_revision: int) -> Any:
+        """修复激活时禁止把已损坏的 active 变成可回滚版本。"""
+        return await self._repository.activate_repair(
+            version_id,
+            expected_revision,
+            previous_version_id=self._previous_version_id,
+        )
 
 
 class SessionRuntimeConfigService:
@@ -654,13 +668,26 @@ class SessionRuntimeConfigService:
         repository = SQLAlchemyRuntimeConfigRepository(session)
         if self._cipher is None:
             return repository
-        _, active = await repository.get_activation_context()
+        state, active = await repository.get_activation_context()
         if active is None:
             return repository
         try:
             self._cipher.decrypt(bytes(active.encrypted_payload))
         except (InvalidToken, RuntimeConfigPayloadError, ValueError):
-            return EnvironmentFallbackRuntimeConfigRepository(repository)
+            previous_version_id: int | None = None
+            if state.previous_version_id is not None:
+                previous = await repository.get_version(int(state.previous_version_id))
+                if previous is not None:
+                    try:
+                        self._cipher.decrypt(bytes(previous.encrypted_payload))
+                    except (InvalidToken, RuntimeConfigPayloadError, ValueError):
+                        pass
+                    else:
+                        previous_version_id = int(previous.id)
+            return EnvironmentFallbackRuntimeConfigRepository(
+                repository,
+                previous_version_id=previous_version_id,
+            )
         return repository
 
     async def _service(self, session: AsyncSession) -> RuntimeConfigService:

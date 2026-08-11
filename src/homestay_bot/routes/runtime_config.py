@@ -4,7 +4,9 @@ import logging
 from typing import Annotated, Protocol, cast
 
 from fastapi import APIRouter, Form, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.routing import APIRoute
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.repositories.runtime_config import (
@@ -15,7 +17,7 @@ from homestay_bot.routes.employee_auth import (
     AdminCsrfServicePort,
     require_employee_session,
 )
-from homestay_bot.services.admin_auth_service import AuthenticationError
+from homestay_bot.services.admin_auth_service import Argon2CapacityError, AuthenticationError
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 from homestay_bot.services.runtime_config_service import (
     ActivationResult,
@@ -27,10 +29,49 @@ from homestay_bot.services.runtime_config_service import (
 )
 from homestay_bot.web import templates
 
-router = APIRouter(prefix="/employee/admin/settings")
 logger = logging.getLogger(__name__)
 ACTIVATE_CSRF_PURPOSE = "runtime-config-activate"
 ROLLBACK_CSRF_PURPOSE = "runtime-config-rollback"
+
+
+def _add_no_store_headers(response: Response) -> Response:
+    """为设置域全部响应统一禁止浏览器和代理缓存。"""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+class RuntimeConfigSafeRoute(APIRoute):
+    """把框架级校验和 HTTP 错误转换为不回显输入的安全响应。"""
+
+    def get_route_handler(self):  # type: ignore[no-untyped-def]
+        """包装 FastAPI 生成的处理器，并保留跳转等受控响应头。"""
+        original_handler = super().get_route_handler()
+
+        async def safe_handler(request: Request) -> Response:
+            """捕获进入端点前的异常，确保设置路径始终脱敏且 no-store。"""
+            try:
+                response = await original_handler(request)
+            except RequestValidationError:
+                response = HTMLResponse(
+                    "设置表单格式无效，请刷新页面后重试。",
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                )
+            except HTTPException as error:
+                response = HTMLResponse(
+                    "设置请求未完成，请刷新页面后重试。",
+                    status_code=error.status_code,
+                    headers=error.headers,
+                )
+            return _add_no_store_headers(response)
+
+        return safe_handler
+
+
+router = APIRouter(
+    prefix="/employee/admin/settings",
+    route_class=RuntimeConfigSafeRoute,
+)
 
 
 class RuntimeConfigServicePort(Protocol):
@@ -120,9 +161,7 @@ async def _consume_nonce(
 
 def _no_store(response: Response) -> Response:
     """禁止浏览器、代理和历史记录缓存设置页面或操作结果。"""
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["Pragma"] = "no-cache"
-    return response
+    return _add_no_store_headers(response)
 
 
 async def _render_settings(
@@ -270,6 +309,13 @@ async def activate_settings(
             admin_id=admin_id,
             error="当前密码验证失败，配置未保存。",
         )
+    except Argon2CapacityError:
+        return await _render_settings(
+            request,
+            admin_id=admin_id,
+            error="认证服务繁忙，请稍后重试。",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
     except RuntimeConfigUnavailableError:
         return await _render_settings(
             request,
@@ -334,6 +380,13 @@ async def rollback_settings(
             request,
             admin_id=admin_id,
             error="当前密码验证失败，未执行回滚。",
+        )
+    except Argon2CapacityError:
+        return await _render_settings(
+            request,
+            admin_id=admin_id,
+            error="认证服务繁忙，请稍后重试。",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         )
     except RuntimeConfigUnavailableError:
         return await _render_settings(

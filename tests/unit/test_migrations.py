@@ -167,3 +167,47 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
     assert "0017_runtime_config_lifecycle (head)" in current.stdout
+
+
+def test_runtime_config_lifecycle_backfills_existing_versions_with_orm_enum_name(
+    tmp_path: Path,
+) -> None:
+    """0017 必须用 SQLAlchemy Enum 可读取的大写成员名回填既有版本。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "runtime-config-existing-row.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+    alembic = str(project_root / ".venv/bin/alembic")
+
+    before = subprocess.run(
+        [alembic, "upgrade", "0016_admin_dashboard_indexes"],
+        cwd=project_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert before.returncode == 0, before.stderr
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO runtime_config_versions "
+            "(encrypted_payload, masked_summary, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            (b"legacy-cipher", "{}"),
+        )
+        connection.commit()
+
+    after = subprocess.run(
+        [alembic, "upgrade", "head"],
+        cwd=project_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert after.returncode == 0, after.stderr
+    with sqlite3.connect(database_path) as connection:
+        status_value = connection.execute(
+            "SELECT status FROM runtime_config_versions LIMIT 1"
+        ).fetchone()[0]
+
+    assert status_value == "CANDIDATE"

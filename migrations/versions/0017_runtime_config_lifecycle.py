@@ -18,7 +18,7 @@ def upgrade() -> None:
             sa.Column(
                 "status",
                 sa.String(length=32),
-                server_default="candidate",
+                server_default="CANDIDATE",
                 nullable=False,
             )
         )

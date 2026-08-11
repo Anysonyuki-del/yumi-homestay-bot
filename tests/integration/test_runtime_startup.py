@@ -332,6 +332,7 @@ async def test_corrupt_active_uses_environment_repair_and_commits_activation_wit
             )
         assert state is not None
         assert state.active_version_id == result.version_id
+        assert state.previous_version_id is None
         assert len(audits) == 1
     finally:
         await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
