@@ -1,10 +1,13 @@
 """验证管理员 AI 调试路由的权限、CSRF、缓存和脱敏边界。"""
 
+import asyncio
 import re
+from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
 
+import pytest
 from admin_auth_helpers import configure_admin_auth, login_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -87,6 +90,40 @@ class MissingFaqStub(DebugServiceStub):
             faq_canonical_question=None,
             faq_category=None,
         )
+
+
+class FailingPropertyListStub(DebugServiceStub):
+    """模拟房源列表异常且正文携带敏感内容。"""
+
+    async def list_properties(self):
+        """抛出必须由 SafeRoute 收敛的普通异常。"""
+        raise RuntimeError("property-list-UID-secret?token=raw")
+
+
+class CancelledPropertyListStub(DebugServiceStub):
+    """模拟请求任务在读取房源列表时被取消。"""
+
+    async def list_properties(self):
+        """取消信号必须继续传播，不能伪装成 503。"""
+        raise asyncio.CancelledError
+
+
+class FailingConsumeCsrf:
+    """模拟 POST 消费 nonce 时发生普通异常。"""
+
+    async def issue(self, purpose: str, *, admin_id: int | None) -> str:
+        """允许先渲染 GET 表单。"""
+        return "csrf-post-exception"
+
+    async def consume(
+        self,
+        token: str,
+        purpose: str,
+        *,
+        admin_id: int | None,
+    ) -> bool:
+        """抛出携敏感正文异常。"""
+        raise RuntimeError("csrf-UID-secret?token=raw")
 
 
 class RoutePropertyStub:
@@ -274,3 +311,55 @@ def test_debug_template_falls_back_when_faq_fields_are_missing() -> None:
     assert "<dt>FAQ 候选</dt><dd>否</dd>" in response.text
     assert response.text.count("<dd>未提供</dd>") >= 2
     assert "None" not in response.text
+
+
+def test_safe_route_converts_get_exception_to_no_store_503(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """GET 普通异常必须安全降级，响应和日志均不得含异常正文。"""
+    client = build_client()
+    client.app.state.admin_debug_service = FailingPropertyListStub()
+    login_admin(client, next_path="/employee/admin/debug")
+
+    with caplog.at_level("WARNING", logger="homestay_bot.routes.admin_debug"):
+        response = client.get("/employee/admin/debug")
+
+    assert response.status_code == 503
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    assert "error_type=RuntimeError" in caplog.text
+    assert "property-list-UID-secret" not in response.text
+    assert "property-list-UID-secret" not in caplog.text
+
+
+def test_safe_route_converts_post_exception_to_no_store_503(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """POST 普通异常也必须由外层统一安全收敛。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin/debug")
+    client.app.state.admin_csrf_service = FailingConsumeCsrf()
+    token = csrf_token(client.get("/employee/admin/debug").text)
+
+    with caplog.at_level("WARNING", logger="homestay_bot.routes.admin_debug"):
+        response = client.post(
+            "/employee/admin/debug",
+            data={"csrf_token": token, "question": "几点入住？", "language": "zh"},
+        )
+
+    assert response.status_code == 503
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    assert "error_type=RuntimeError" in caplog.text
+    assert "csrf-UID-secret" not in response.text
+    assert "csrf-UID-secret" not in caplog.text
+
+
+def test_safe_route_does_not_swallow_request_cancellation() -> None:
+    """CancelledError 不是普通异常，必须继续传播给请求执行器。"""
+    client = build_client()
+    client.app.state.admin_debug_service = CancelledPropertyListStub()
+    login_admin(client, next_path="/employee/admin/debug")
+
+    with pytest.raises(FutureCancelledError):
+        client.get("/employee/admin/debug")

@@ -54,6 +54,16 @@ class AdminDebugSafeRoute(APIRoute):
                     status_code=error.status_code,
                     headers=error.headers,
                 )
+            except Exception as error:
+                # 仅记录异常类型；第三方正文可能包含问题、UID 或查询参数。
+                logger.warning(
+                    "管理员调试路由异常：error_type=%s",
+                    type(error).__name__,
+                )
+                response = HTMLResponse(
+                    "AI 调试暂时不可用，请稍后重试。",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
             return _no_store(response)
 
         return handler
