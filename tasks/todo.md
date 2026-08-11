@@ -2658,16 +2658,6 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 
 ### 批次 8：全量验证、UI 验收与云端部署
 
-- [x] 执行 `pytest -q`，要求全部非 live 测试通过；真实 DeepSeek/百居易/企业微信 contract 仍只在显式开启时运行。
-- [x] 执行 `ruff check .`、`mypy src/homestay_bot`、`python -m compileall -q src tests migrations`、`pip check`、`git diff --check`。
-- [x] 对临时 SQLite 执行 `alembic upgrade head`、允许的 downgrade、再次 upgrade；生成 PostgreSQL 离线 SQL并检查单头为 `0015_admin_runtime_config`。
-- [x] 运行模板 smoke；使用浏览器验证 375/768/1024/1440、键盘焦点、抽屉 ESC、危险确认、无 JS 表单和无横向溢出，并保存截图证据但不提交含数据截图。
-- [ ] 使用 `requesting-code-review` 做 Spec 一致性和安全复审，修正后重复定向及全量验证。
-- [ ] 提交并推送功能分支，经确认无未合并分支和敏感文件后合并 `main`。
-- [ ] 云端先备份 PostgreSQL 和运行配置，再拉取主干、构建镜像、运行迁移、启动服务。
-- [ ] 公网验收：未登录跳转、错误密码拒绝、首次改密、总览、业务编辑、候选配置失败保旧值、成功热切换、回滚、AI 调试无副作用、HTTPS 和健康检查。
-- [ ] 在本节末尾添加 Review：提交号、测试数量、跳过项、云端容器状态、证书状态、残余风险和可回滚点。
-
 进展记录（批次 8，本地只读部分）：
 
 - 全量禁 live：794 passed、15 skipped（skip 全部为 DeepSeek/百居易/企业微信 contract，需显式开启）。
@@ -2683,9 +2673,80 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
   - 无 JS：`java_script_enabled=False` 下登录表单与提交按钮仍然存在可用。
   - 已知遗留（未修）：总览"查看任务/查看审批"、诊断"系统诊断"、操作记录"返回系统诊断/下一页"等裸文字链接高度仅 18–25px，低于计划的 44px 点击区域要求。这些是 `<a>` 而非 `.button`，未命中 `app.css` 的 `min-height: 44px` 规则。实测与最近可点目标间距 21–46px，留白充足不易误触，故判为轻微可访问性缺口而非阻塞项；修复面很小（给行内链接补命中区的若干 CSS 规则，无需改模板），是否修复待用户决定。
   - 说明：验收脚本首轮因先按 Tab 使 skip-link 获得焦点而遮挡抽屉触发按钮，已确认未聚焦时其 `bottom` 为 −19px 完全移出视口、汉堡按钮命中测试正常，属脚本顺序问题而非缺陷，已在脚本中于抽屉检查前清除焦点。
-- 尚未执行：`requesting-code-review` 复审、推送、合并 `main`、云端备份与部署、公网验收。这些需用户逐项确认后再进行。
-- [ ] 使用 `requesting-code-review` 做 Spec 一致性和安全复审，修正后重复定向及全量验证。
-- [ ] 提交并推送功能分支，经确认无未合并分支和敏感文件后合并 `main`。
+- [x] 使用 `requesting-code-review` 做 Spec 一致性和安全复审，修正后重复定向及全量验证。
+- [x] 提交并推送功能分支（复审修复分支已推送；合并 `main` 仍待确认）。
 - [ ] 云端先备份 PostgreSQL 和运行配置，再拉取主干、构建镜像、运行迁移、启动服务。
 - [ ] 公网验收：未登录跳转、错误密码拒绝、首次改密、总览、业务编辑、候选配置失败保旧值、成功热切换、回滚、AI 调试无副作用、HTTPS 和健康检查。
 - [ ] 在本节末尾添加 Review：提交号、测试数量、跳过项、云端容器状态、证书状态、残余风险和可回滚点。
+
+### 批次 8 安全复审与修复（2026-08-12）
+
+复审范围 `565b6a8..dc4bef1`，71 个文件、约 9750 行新增。发现四项问题并全部按 TDD 修复，提交 `cad4a95`，分支 `fix/admin-console-hardening-20260812` 已推送 `origin`，尚未合并 `main`。
+
+#### 记录校正
+
+- 批次 8 的"提交并推送功能分支…合并 `main`"此前未勾，但 `dc4bef1` 早已合并 `feature/yumi-admin-console` 并推送 `origin/main`；三个 worktree 分支（`yumi-admin-console`、`complaint-quality`、`continue-verify-20260731`）均已是 `main` 祖先，无遗留未合并分支。
+- 本机运行副本仍是 8 月初版本（`~/Library/Application Support/HomestayBot/src` 停在 8 月 1 日），后台管理台连本机都尚未部署；LaunchAgent 在跑，`http://127.0.0.1:8010/health` 返回 `{"status":"ok"}`。
+- `AKROS.ICU` 在全仓只出现于本任务标题行，没有任何对应云端配置；现有 `compose.yaml` 是本地 PostgreSQL 加硬编码弱密码，`deploy/` 下只有 macOS LaunchAgent。云服务器、生产库、域名证书和正式回调地址均不存在。
+
+#### 修复一：匿名 CSRF nonce 作用域可被耗尽（高）
+
+- 现象：`services/admin_csrf.py` 的 `max_active_per_scope=8`，作用域为 `(purpose, admin_id)`；登录令牌匿名签发，`admin_id=None`，全部访客共用一个作用域。8 次未认证 `GET /employee/login` 即可占满，真实管理员用干净浏览器打开登录页时 `_issue_csrf` 抛 `AdminCsrfCapacityError` 转 HTTP 429。TTL 15 分钟且 `_delete_expired` 只清过期记录，窗口内无法自愈，每 15 分钟重复即可无限延长。
+- 根因：设计意图是"每个管理员 8 个多标签页"，匿名场景没有管理员可绑定，per-admin 上限退化为全局上限。
+- 修复：`routes/employee_auth.py` 新增 `_scoped_purpose()`，已登录用途仍按 `admin_id` 隔离，匿名用途绑定会话内随机作用域标识（`CSRF_SCOPE_SESSION_KEY`）；消费时作用域缺失一律 409，令牌不能跨浏览器使用。另在 `services/admin_csrf.py` 与 `repositories/admin_csrf.py` 增加匿名独立子上限（默认 200/1000），防止反复更换会话耗尽管理员写操作所需的全局容量；子上限取 `min(子上限, 全局上限)`，避免小容量部署失去子池语义。
+
+#### 修复二：登录限速两类共用全局桶（中）
+
+- 现象：`AdminLoginRateLimiter.__init__` 的 `per_ip_limit` 默认写成 `LOGIN_RATE_GLOBAL`（60）而非 `LOGIN_RATE_PER_IP`（10）；生产以默认参数装配（`application.py:2504`），GET 登录页按 60/分钟/IP 放行。更根本的是登录页与凭据提交共用一个 60/分钟全局桶，单 IP 刷登录页即可挤掉其他来源的登录 POST。
+- 修复：纠正默认值；把全局计数按类别拆分，页面浏览与凭据提交各自独立（页面 30/IP、120 全局；凭据 10/IP、60 全局）。GET 传 `category="page"`，POST 传 `category="login"`。
+- 残留：限速仍是单进程内存态，分布式 IP 打满某一类别的全局上限仍会影响该类别；彻底解决需共享计数存储，本轮未做。
+
+#### 修复三：后台缓存边界缺失（低）
+
+- 现象：只有 `runtime_config`、`admin`、`admin_debug`、`properties`、`private_files` 设 `Cache-Control: no-store`，且无全局中间件；缺失的是 `employee_auth`（登录、账号、改密）、`tasks`、`customers`、`knowledge`、`complaints`、`approvals`。其中 `customers` 渲染客人档案、`complaints` 渲染客诉对话正文。
+- 修复：新增 `src/homestay_bot/middleware.py` 的 `AdminNoStoreMiddleware`，对 `/employee` 前缀全部响应补 `no-store` 与 `nosniff`（已有更严格声明时不覆盖）。采用纯 ASGI 而非 `BaseHTTPMiddleware`，以免包装 `private_files` 的流式 `FileResponse`；`/static` 与公开 `/health` 不受影响。
+
+#### 修复四：客诉路由缺角色校验（低）
+
+- 现象：`routes/complaints.py` 详情页取了 `role` 却从不判断，`_action`（保存/发送/退回/关闭）直接以 `_` 丢弃。
+- 可达性：当前不可达。唯一会话写入点是 `routes/employee_auth.py:456`，只认 `AdminCredential`；`_upsert_local_admin_employee` 强制 `role=ADMIN`，`_has_valid_existing_admin` 每次启动复核。OAuth 入口已彻底移除。
+- 历史：`565b6a8` 之前即如此，非批次 1–7 引入。
+- 修复：新增 `_require_admin()`，详情页与四个动作入口统一要求管理员，不再依赖"普通员工无法登录"这一外部前提。
+
+#### 附带修复
+
+- `logging.py` 的 `_SENSITIVE_KEY_PATTERN` 补 `aes[_-]?key`，覆盖企业微信 `EncodingAESKey`；未放宽到裸 `key`，新增测试锁死 `dedupe_key` 不被误伤。无已确认泄露路径，属纵深防御。
+- `.env.example` 补齐后台登录必需的 `CONFIG_ENCRYPTION_KEY`、`ADMIN_BOOTSTRAP_USERNAME`、`ADMIN_BOOTSTRAP_PASSWORD_HASH`，并附生成命令；其中 Argon2 命令实测可产出通过 `validate_admin_password_hash()` 的哈希。缺这三项时服务不崩，但 `admin_auth_available=False`（登录不可用）且设置页降级只读。
+
+#### 调整的既有测试
+
+- `test_concurrent_login_posts_can_only_consume_same_nonce_once` 原用无效 Cookie 配真实 token 断言 `[303, 409]`，固化的正是"A 浏览器令牌 B 浏览器可用"。拆为两条：新增 `test_login_nonce_is_rejected_without_the_issuing_browser_session` 断言跨浏览器一律 `[409, 409]`；原测试改为复用签发会话 Cookie，继续断言 `[303, 409]` 保住"只能消费一次"。
+- `test_anonymous_login_get_is_rate_limited_by_real_client_ip` 因 GET 改走页面类别，构造参数改为 `page_per_ip_limit` / `page_global_limit`；测试意图（伪造 XFF 不能绕过真实来源 IP）不变。
+
+#### 复审确认无问题的部分
+
+- SSRF 与 DNS 重绑定：全部 A/AAAA 要求公网、固定字面 IP 连接、保留 SNI 与证书校验、拒重定向、`Content-Length` 与流式双重限流、`trust_env=False` 挡代理。逐个验证 IPv4-mapped、NAT64、6to4、元数据地址、链路本地均正确拒绝。生产 `AsyncOpenAI` 与 `AsyncAnthropic` 确实复用 `build_public_https_client`；两个 SDK 均无查询串，不触发策略的 query 拒绝分支。
+- Argon2 校验与锁定的 CAS 原子性、未知用户名的虚拟哈希时序对齐、统一错误文案。
+- nonce 只存 SHA-256、单条 `DELETE RETURNING` 原子消费、用途与管理员绑定。
+- 配置整份 Fernet 加密；`masked_view()` 只露末四位；`RuntimeConfigSnapshot.__repr__` 实测输出 `values=<redacted>`。
+- 热切换的租约计数、退役强跟踪、bundle 关闭幂等、取消安全清理。
+- 健康检查公私分层：`/health` 只回总体状态，`/employee/health` 需管理员。
+- 模板无 `|safe`、`admin.js` 无 `innerHTML` / `eval`，autoescape 完整。
+- 私有文件 `file_id` 正则加 resolved-parent 双重校验，读取前先过数据库授权。
+- 候选探针全部只读（`chat.completions.create` / `messages.create` 最短请求、百居易 `list_properties`、企业微信 token/kf/`agent/get`/contact 只读权限）。
+- 曾怀疑 `_safe_next` 的反斜杠开放重定向（确实放行 `/\evil.example`），实测不成立：Starlette 将其编码为 `/%5Cevil.example`，浏览器按路径处理，仍同源。
+
+#### 验证证据
+
+- 全量 `pytest`：**815 passed、15 skipped**（修复前基线 794 passed、15 skipped，净增 21 项）。15 项 skip 全为需显式开启的 DeepSeek / 百居易 / 企业微信真实契约，未计为通过。
+- `ruff check .` 通过；`mypy src/homestay_bot` 102 源文件无问题（新增 `middleware.py`）；`compileall`、`pip check`、`git diff --check` 全部通过。
+- 按手册第 9 条验证测试真实驱动实现：把 `_scoped_purpose` 的管理员分支短路为恒真后，作用域隔离测试立即转红，还原后转绿。
+- 原始两条 PoC 复验：第 9 个浏览器可正常取得登录令牌；页面类别占满 120 次后管理员凭据提交仍放行。
+- 未改动数据模型与迁移，无新 schema 变更，迁移链条保持单头 `0017_runtime_config_lifecycle`。
+
+#### 下一步
+
+1. 合并 `fix/admin-console-hardening-20260812` 到 `main`（待确认）。
+2. 本机部署验证：运行目录需补 `CONFIG_ENCRYPTION_KEY` 与管理员引导凭据，按手册部署清单备份、比对哈希、重启 LaunchAgent、查健康状态。涉及改本机 `.env` 与重启守护服务，需用户确认。
+3. 云端部署与公网验收：缺服务器、生产 PostgreSQL、域名证书和正式回调地址，需用户提供后才能进行。
+4. 遗留未修（用户已决定不管）：总览与诊断页裸文字链接命中区 18–25px，低于 44px 要求。
