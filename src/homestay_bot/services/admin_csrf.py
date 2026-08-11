@@ -19,6 +19,7 @@ class AdminCsrfRepository(Protocol):
         purge_limit: int,
         max_active: int,
         max_active_per_scope: int,
+        max_active_anonymous: int,
     ) -> bool:
         """原子预占数据库配额并保存 nonce 摘要。"""
 
@@ -51,14 +52,20 @@ class AdminCsrfService:
         ttl: timedelta = timedelta(minutes=15),
         max_active: int = 1000,
         max_active_per_scope: int = 8,
+        max_active_anonymous: int = 200,
         purge_limit: int = 100,
     ) -> None:
         """注入仓储、UTC 时钟和短有效期。"""
+        if max_active_anonymous < 1:
+            raise ValueError("匿名 nonce 子上限无效")
         self._repository = repository
         self._clock = clock or (lambda: datetime.now(UTC))
         self._ttl = ttl
         self._max_active = max_active
         self._max_active_per_scope = max_active_per_scope
+        # 未认证访客只能消耗独立子池，避免挤占管理员写操作所需的令牌容量。
+        # 子上限不得超过全局上限，否则小容量部署会失去子池语义。
+        self._max_active_anonymous = min(max_active_anonymous, max_active)
         self._purge_limit = purge_limit
 
     async def issue(self, purpose: str, *, admin_id: int | None) -> str:
@@ -74,6 +81,7 @@ class AdminCsrfService:
             purge_limit=self._purge_limit,
             max_active=self._max_active,
             max_active_per_scope=self._max_active_per_scope,
+            max_active_anonymous=self._max_active_anonymous,
         )
         if not created:
             raise AdminCsrfCapacityError("认证表单容量已满")

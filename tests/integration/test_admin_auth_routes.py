@@ -221,8 +221,8 @@ def test_anonymous_login_get_is_rate_limited_by_real_client_ip() -> None:
     """匿名 GET 也受共享限速，伪造 XFF 不能绕过真实来源 IP 上限。"""
     client, _ = build_client()
     client.app.state.admin_login_rate_limiter = AdminLoginRateLimiter(
-        per_ip_limit=2,
-        global_limit=3,
+        page_per_ip_limit=2,
+        page_global_limit=3,
     )
 
     statuses = [
@@ -325,17 +325,45 @@ def test_unauthenticated_post_redirect_uses_safe_get_next() -> None:
     assert response.headers["location"].endswith("next=%2Femployee%2Ftasks")
 
 
-def test_concurrent_login_posts_can_only_consume_same_nonce_once() -> None:
-    """两个相同旧 Cookie 与 token 的并发登录 POST 最多一个进入认证。"""
+def test_login_nonce_is_rejected_without_the_issuing_browser_session() -> None:
+    """匿名 nonce 绑定签发它的浏览器作用域，换一个 Cookie 一律不得消费。"""
     client, _ = build_client()
     page = client.get("/employee/login")
     token = csrf_from(page.text)
-    shared_cookie = "stale-browser-session"
 
     def submit() -> int:
-        """使用独立客户端模拟同一旧浏览器状态的并发提交。"""
+        """使用与签发无关的旧 Cookie 模拟并发提交。"""
         request_client = TestClient(client.app)
-        request_client.cookies.set("session", shared_cookie)
+        request_client.cookies.set("session", "stale-browser-session")
+        return request_client.post(
+            "/employee/login",
+            data={
+                "username": "admin",
+                "password": "correct-password",
+                "next": "/employee/protected",
+                "csrf_token": token,
+            },
+            follow_redirects=False,
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        statuses = sorted(executor.map(lambda _: submit(), range(2)))
+
+    assert statuses == [409, 409]
+
+
+def test_concurrent_login_posts_can_only_consume_same_nonce_once() -> None:
+    """同一浏览器会话的两个并发登录 POST 仍然只有一个能消费该 nonce。"""
+    client, _ = build_client()
+    page = client.get("/employee/login")
+    token = csrf_from(page.text)
+    issuing_cookies = dict(client.cookies)
+
+    def submit() -> int:
+        """复用签发时的真实会话 Cookie 并发提交同一 token。"""
+        request_client = TestClient(client.app)
+        for name, value in issuing_cookies.items():
+            request_client.cookies.set(name, value)
         return request_client.post(
             "/employee/login",
             data={

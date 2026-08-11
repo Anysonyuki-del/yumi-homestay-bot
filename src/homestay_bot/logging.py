@@ -5,7 +5,9 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _SENSITIVE_KEY_PATTERN = re.compile(
-    r"token|secret|password|api[_-]?key|authorization", re.IGNORECASE
+    # aes_key 覆盖企业微信回调 EncodingAESKey；不放宽到裸 key，避免误伤业务幂等键。
+    r"token|secret|password|api[_-]?key|aes[_-]?key|authorization",
+    re.IGNORECASE,
 )
 _MOBILE_KEY_PATTERN = re.compile(r"mobile|phone", re.IGNORECASE)
 _TOKEN_IN_TEXT_PATTERN = re.compile(
