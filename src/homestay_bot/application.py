@@ -676,6 +676,21 @@ class SessionRuntimeConfigService:
         self._runtime_consistency_setter = runtime_consistency_setter
         self._runtime_activator = runtime_activator
         self._activation_lock = asyncio.Lock()
+        self._closing = False
+
+    def begin_closing(self) -> None:
+        """同步禁止新激活操作进入外联或数据库临界区。"""
+        self._closing = True
+
+    async def wait_for_activation_idle(self) -> None:
+        """取消安全地等待当前认证、测试、发布及补偿全部退出。"""
+
+        async def wait_for_lock() -> None:
+            """以同一activation锁作为完整操作的生命周期屏障。"""
+            async with self._activation_lock:
+                pass
+
+        await complete_cleanup(wait_for_lock())
 
     def configure_runtime_activation(
         self,
@@ -859,35 +874,38 @@ class SessionRuntimeConfigService:
         """用单会话保存候选，并在测试前释放事务、激活后原子提交审计。"""
         if not self._writable:
             raise RuntimeConfigUnavailableError("运行配置当前只读")
-        async with self._activation_lock, self._factory() as session:
-            try:
-                result = await (await self._service(session)).create_and_test(
-                    command,
-                    actor_id=actor_id,
-                    admin_id=admin_id,
-                    password=password,
-                    expected_session_version=expected_session_version,
-                    expected_revision=expected_revision,
-                )
-            except RuntimeConfigCompensationConflictError:
+        async with self._activation_lock:
+            if self._closing:
+                raise RuntimeConfigUnavailableError("运行配置服务正在关闭")
+            async with self._factory() as session:
+                try:
+                    result = await (await self._service(session)).create_and_test(
+                        command,
+                        actor_id=actor_id,
+                        admin_id=admin_id,
+                        password=password,
+                        expected_session_version=expected_session_version,
+                        expected_revision=expected_revision,
+                    )
+                except RuntimeConfigCompensationConflictError:
+                    await session.commit()
+                    if self._runtime_consistency_setter is not None:
+                        self._runtime_consistency_setter(False)
+                    raise
+                except (
+                    AuthenticationError,
+                    RuntimeConfigConflictError,
+                    RuntimeConfigTestError,
+                ):
+                    # 认证失败计数、失败候选和补偿审计都属于应持久化的安全结果。
+                    await session.commit()
+                    raise
+                except Exception:
+                    await session.rollback()
+                    raise
                 await session.commit()
-                if self._runtime_consistency_setter is not None:
-                    self._runtime_consistency_setter(False)
-                raise
-            except (
-                AuthenticationError,
-                RuntimeConfigConflictError,
-                RuntimeConfigTestError,
-            ):
-                # 认证失败计数、失败候选和补偿审计都属于应持久化的安全结果。
-                await session.commit()
-                raise
-            except Exception:
-                await session.rollback()
-                raise
-            await session.commit()
-            await self._mark_runtime_consistent_if_current(result.revision)
-            return result
+                await self._mark_runtime_consistent_if_current(result.revision)
+                return result
 
     async def rollback(
         self,
@@ -902,34 +920,37 @@ class SessionRuntimeConfigService:
         """在单一事务中原子提交回滚指针和安全审计。"""
         if not self._writable:
             raise RuntimeConfigUnavailableError("运行配置当前只读")
-        async with self._activation_lock, self._factory() as session:
-            try:
-                result = await (await self._service(session)).rollback(
-                    actor_id=actor_id,
-                    admin_id=admin_id,
-                    password=password,
-                    expected_session_version=expected_session_version,
-                    expected_revision=expected_revision,
-                    expected_previous_version_id=expected_previous_version_id,
-                )
-            except RuntimeConfigCompensationConflictError:
+        async with self._activation_lock:
+            if self._closing:
+                raise RuntimeConfigUnavailableError("运行配置服务正在关闭")
+            async with self._factory() as session:
+                try:
+                    result = await (await self._service(session)).rollback(
+                        actor_id=actor_id,
+                        admin_id=admin_id,
+                        password=password,
+                        expected_session_version=expected_session_version,
+                        expected_revision=expected_revision,
+                        expected_previous_version_id=expected_previous_version_id,
+                    )
+                except RuntimeConfigCompensationConflictError:
+                    await session.commit()
+                    if self._runtime_consistency_setter is not None:
+                        self._runtime_consistency_setter(False)
+                    raise
+                except (
+                    AuthenticationError,
+                    RuntimeConfigConflictError,
+                    RuntimeConfigTestError,
+                ):
+                    await session.commit()
+                    raise
+                except Exception:
+                    await session.rollback()
+                    raise
                 await session.commit()
-                if self._runtime_consistency_setter is not None:
-                    self._runtime_consistency_setter(False)
-                raise
-            except (
-                AuthenticationError,
-                RuntimeConfigConflictError,
-                RuntimeConfigTestError,
-            ):
-                await session.commit()
-                raise
-            except Exception:
-                await session.rollback()
-                raise
-            await session.commit()
-            await self._mark_runtime_consistent_if_current(result.revision)
-            return result
+                await self._mark_runtime_consistent_if_current(result.revision)
+                return result
 
 
 class SessionAdminCsrfService:
@@ -2416,7 +2437,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     runtime_writable = runtime_cipher is not None and admin_auth_available
     app.state.runtime_config_writes_available = runtime_writable
-    app.state.runtime_config_service = SessionRuntimeConfigService(
+    runtime_config_service = SessionRuntimeConfigService(
         factory,
         cipher=runtime_cipher,
         environment_snapshot=environment_snapshot,
@@ -2428,6 +2449,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 只有生产生命周期显式装配真实外联测试器；直接构造服务默认零网络。
         tester=RuntimeConfigTester(),
     )
+    app.state.runtime_config_service = runtime_config_service
 
     sensitive_data = SensitiveDataCipher(bootstrap.data_encryption_key)
     private_file_storage = PrivateFileStorage(bootstrap.private_upload_dir)
@@ -2935,12 +2957,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             runtime_registry = candidate_registry
             background_tasks.extend(started_tasks)
 
-    app.state.runtime_config_service.configure_runtime_activation(
+    runtime_config_service.configure_runtime_activation(
         runtime_activator=start_runtime_services,
     )
 
     async def shutdown_runtime() -> None:
-        """等待运行装配锁后关闭唯一已发布runtime，并清除全部生命周期state。"""
+        """等待配置操作与运行装配退出后，再清理全部生命周期资源。"""
+        # 配置操作可在tester、补偿或提交阶段，须先等待整个临界区退出。
+        await runtime_config_service.wait_for_activation_idle()
         # closing在外层同步置位；锁仅作为在途构造/发布完成的屏障。
         async with runtime_start_lock:
             pass
@@ -2981,12 +3005,15 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     except asyncio.CancelledError as error:
         runtime_closing = True
+        runtime_config_service.begin_closing()
         await complete_cleanup(shutdown_runtime(), pending_cancel=error)
         raise error
     except BaseException:
         runtime_closing = True
+        runtime_config_service.begin_closing()
         await complete_cleanup(shutdown_runtime())
         raise
     else:
         runtime_closing = True
+        runtime_config_service.begin_closing()
         await complete_cleanup(shutdown_runtime())

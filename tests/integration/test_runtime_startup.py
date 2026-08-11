@@ -592,6 +592,131 @@ async def test_shutdown_waits_for_first_activation_and_prevents_late_publish(
 
 
 @pytest.mark.asyncio
+async def test_shutdown_waits_for_blocked_tester_and_rejects_queued_activation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """shutdown必须等待完整activation退出，closing后排队操作不得再外联。"""
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'shutdown-tester.db'}"
+    await _create_runtime_database(database_url)
+    password = _set_bootstrap_environment(
+        monkeypatch,
+        database_url=database_url,
+        config_encryption_key=Fernet.generate_key().decode(),
+    )
+    _clear_runtime_environment(monkeypatch)
+    tester_started = asyncio.Event()
+    tester_proceed = asyncio.Event()
+    tester_calls = 0
+    builder_calls = 0
+
+    class GatedTester:
+        """阻塞候选外联测试，稳定暴露服务级activation临界区。"""
+
+        async def test(self, candidate: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+            """记录外联次数并等待测试放行。"""
+            nonlocal tester_calls
+            tester_calls += 1
+            tester_started.set()
+            await tester_proceed.wait()
+            candidate.validate()
+            return RuntimeConfigTestResult(succeeded=True)
+
+    async def reject_bundle_build(*args, **kwargs) -> RuntimeClientBundle:
+        """closing后的操作不得进入客户端构造。"""
+        nonlocal builder_calls
+        builder_calls += 1
+        raise AssertionError("shutdown后不得构造运行客户端")
+
+    monkeypatch.setattr(application, "RuntimeConfigTester", GatedTester)
+    monkeypatch.setattr(
+        application,
+        "build_runtime_client_bundle",
+        reject_bundle_build,
+    )
+
+    test_app = FastAPI()
+    lifespan = application_lifespan(test_app)
+    await lifespan.__aenter__()
+    runtime_service = test_app.state.runtime_config_service
+    engine = create_async_engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        credential = await session.scalar(select(AdminCredential))
+        assert credential is not None
+        actor_id = int(credential.employee_id)
+        admin_id = int(credential.id)
+        session_version = int(credential.session_version)
+
+    activation = asyncio.create_task(
+        runtime_service.create_and_test(
+            UpdateRuntimeConfig.from_snapshot(_runtime_snapshot()),
+            actor_id=actor_id,
+            admin_id=admin_id,
+            password=password,
+            expected_session_version=session_version,
+            expected_revision=0,
+        )
+    )
+    await tester_started.wait()
+    shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
+    await asyncio.sleep(0)
+    shutdown.cancel()
+    await asyncio.sleep(0)
+    shutdown.cancel()
+    queued = asyncio.create_task(
+        runtime_service.create_and_test(
+            UpdateRuntimeConfig.from_snapshot(_runtime_snapshot()),
+            actor_id=actor_id,
+            admin_id=admin_id,
+            password=password,
+            expected_session_version=session_version,
+            expected_revision=0,
+        )
+    )
+    queued_rollback = asyncio.create_task(
+        runtime_service.rollback(
+            actor_id=actor_id,
+            admin_id=admin_id,
+            password=password,
+            expected_session_version=session_version,
+            expected_revision=0,
+            expected_previous_version_id=999,
+        )
+    )
+    for _ in range(20):
+        await asyncio.sleep(0)
+    shutdown_finished_before_tester = shutdown.done()
+
+    tester_proceed.set()
+    activation_result = await asyncio.gather(activation, return_exceptions=True)
+    queued_result = await asyncio.gather(queued, return_exceptions=True)
+    rollback_result = await asyncio.gather(queued_rollback, return_exceptions=True)
+    with pytest.raises(asyncio.CancelledError):
+        await shutdown
+
+    async with factory() as session:
+        state = await session.get(RuntimeConfigState, 1)
+        candidates = list(await session.scalars(select(RuntimeConfigVersion)))
+    await engine.dispose()
+    assert shutdown_finished_before_tester is False
+    assert len(activation_result) == 1
+    assert isinstance(activation_result[0], RuntimeConfigTestError)
+    assert len(queued_result) == 1
+    assert isinstance(queued_result[0], RuntimeConfigUnavailableError)
+    assert len(rollback_result) == 1
+    assert isinstance(rollback_result[0], RuntimeConfigUnavailableError)
+    assert tester_calls == 1
+    assert builder_calls == 0
+    assert state is not None
+    assert (state.revision, state.active_version_id) == (0, None)
+    assert len(candidates) == 1
+    assert candidates[0].status is RuntimeConfigVersionStatus.ACTIVATION_FAILED
+    assert not hasattr(test_app.state, "runtime_config_service")
+    assert not hasattr(test_app.state, "runtime_client_registry")
+
+
+@pytest.mark.asyncio
 async def test_missing_config_key_keeps_settings_readable_but_disables_writes(
     tmp_path,
     monkeypatch,

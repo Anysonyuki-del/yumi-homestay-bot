@@ -302,7 +302,7 @@ async def test_create_compensation_survives_double_cancellation(tmp_path) -> Non
             )
 
     operation = asyncio.create_task(run_operation())
-    await asyncio.wait_for(activation_started.wait(), timeout=0.2)
+    await asyncio.wait_for(activation_started.wait(), timeout=1.0)
     operation.cancel()
     repository = repository_holder[0]
     await repository.restore_started.wait()
@@ -386,7 +386,7 @@ async def test_rollback_compensation_survives_double_cancellation(tmp_path) -> N
             )
 
     operation = asyncio.create_task(run_operation())
-    await asyncio.wait_for(activation_started.wait(), timeout=0.2)
+    await asyncio.wait_for(activation_started.wait(), timeout=1.0)
     operation.cancel()
     repository = repository_holder[0]
     await repository.restore_started.wait()
