@@ -1,23 +1,19 @@
 import logging
 import secrets
-from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.property_admin_service import PropertyFields
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/properties")
 logger = logging.getLogger(__name__)
-templates = Jinja2Templates(
-    directory=Path(__file__).resolve().parent.parent / "templates"
-)
 
 
 class PropertyAdminServicePort(Protocol):
@@ -139,7 +135,11 @@ async def property_index(request: Request) -> Response:
     return templates.TemplateResponse(
         request=request,
         name="properties/index.html",
-        context={"properties": properties},
+        context={
+            "properties": properties,
+            "page_title": "房源管理",
+            "active_nav": "properties",
+        },
     )
 
 
@@ -160,6 +160,12 @@ async def property_detail(request: Request, property_id: int) -> Response:
         context={
             **detail,
             "csrf_token": _issue_csrf(request, property_id),
+            "page_title": getattr(
+                detail["property"],
+                "title",
+                f"房源 #{property_id}",
+            ),
+            "active_nav": "properties",
         },
     )
 

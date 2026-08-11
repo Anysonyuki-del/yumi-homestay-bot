@@ -1,7 +1,6 @@
 import logging
 import secrets
 from datetime import date
-from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import (
@@ -15,17 +14,14 @@ from fastapi import (
     status,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import BusinessTask, Employee
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/tasks")
 logger = logging.getLogger(__name__)
-templates = Jinja2Templates(
-    directory=Path(__file__).resolve().parent.parent / "templates"
-)
 
 
 class TaskPageServicePort(Protocol):
@@ -165,13 +161,7 @@ async def task_index(
     page: int = Query(1, ge=1, le=10_000),
 ) -> Response:
     """展示管理员全部待办或员工自己的任务。"""
-    try:
-        employee = await _current_employee(request)
-    except HTTPException:
-        return RedirectResponse(
-            "/employee/login?next=/employee/tasks",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+    employee = await _current_employee(request)
     try:
         items = await _get_service(request).list_for(
             employee,
@@ -186,8 +176,15 @@ async def task_index(
         context={
             "tasks": items[:50],
             "is_admin": employee.role is EmployeeRole.ADMIN,
+            "page": page,
             "previous_page": page - 1 if page > 1 else None,
             "next_page": page + 1 if len(items) > 50 else None,
+            "page_title": (
+                "全部待办任务"
+                if employee.role is EmployeeRole.ADMIN
+                else "自己的任务"
+            ),
+            "active_nav": "tasks",
         },
     )
 
@@ -219,6 +216,8 @@ async def task_detail(request: Request, task_id: int) -> Response:
             **options,
             "is_admin": employee.role is EmployeeRole.ADMIN,
             "csrf_token": _issue_csrf(request, task_id),
+            "page_title": f"任务 #{task_id}",
+            "active_nav": "tasks",
         },
     )
 

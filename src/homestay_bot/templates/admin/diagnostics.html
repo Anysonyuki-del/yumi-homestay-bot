@@ -1,0 +1,35 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+{% block title %}系统诊断 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="panel diagnostics-summary">
+  <div>
+    <p class="eyebrow">只读运行状态</p>
+    <h2>{{ "运行正常" if overall_ok else "需要关注" }}</h2>
+    <p>此页面仅展示受控状态，不包含配置内容、客户资料或外部服务响应。</p>
+  </div>
+  {{ ui.badge("正常" if overall_ok else "降级", "success" if overall_ok else "warning") }}
+</section>
+<section class="panel">
+  <div class="panel__header"><div><p class="eyebrow">基础组件</p><h2>检查结果</h2></div><small>服务启动于 {{ started_at|datetime_zh }}</small></div>
+  <dl class="diagnostics-list">
+    {% for item in checks %}
+    <div><dt>{{ item.label }}</dt><dd>{{ ui.badge(item.status_label, item.tone) }}</dd></div>
+    {% endfor %}
+  </dl>
+</section>
+{% if diagnostics %}
+<section class="panel">
+  <div class="panel__header"><div><p class="eyebrow">运行元数据</p><h2>任务与配置</h2></div><a href="/employee/admin/diagnostics/audits">查看操作记录</a></div>
+  <dl class="diagnostics-list">
+    <div><dt>应用版本</dt><dd>{{ diagnostics.version }}</dd></div>
+    <div><dt>配置版本</dt><dd>revision {{ diagnostics.configuration_revision if diagnostics.configuration_revision is not none else "不可用" }}</dd></div>
+    {% for name, count in diagnostics.job_status_counts|dictsort %}<div><dt>任务 {{ name }}</dt><dd>{{ count }}</dd></div>{% endfor %}
+    <div><dt>最近稳定错误码</dt><dd>{{ diagnostics.recent_job_error_codes|join("、") or "无" }}</dd></div>
+  </dl>
+  <label for="diagnostic-report">脱敏诊断报告</label>
+  <textarea id="diagnostic-report" rows="8" readonly>{{ diagnostics.report_text }}</textarea>
+  <button class="button" type="button" data-copy-target="diagnostic-report">复制诊断报告</button>
+</section>
+{% endif %}
+{% endblock %}

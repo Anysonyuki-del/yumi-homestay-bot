@@ -48,6 +48,58 @@ async def test_list_kf_account_ids_uses_customer_service_secret() -> None:
 
 
 @pytest.mark.asyncio
+async def test_credential_probe_only_reads_kf_agent_and_optional_contact_permissions() -> None:
+    """候选探针只读客服列表、指定 AgentId 和客户联系权限，并可证明已关闭。"""
+    requests: list[httpx.Request] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        """按三个 Secret 返回 token，并严格检查后续只读端点。"""
+        requests.append(request)
+        if request.url.path.endswith("/gettoken"):
+            secret = request.url.params["corpsecret"]
+            return httpx.Response(
+                200,
+                json={"errcode": 0, "access_token": f"token-{secret}", "expires_in": 7200},
+            )
+        if request.url.path.endswith("/kf/account/list"):
+            return httpx.Response(200, json={"errcode": 0, "account_list": []})
+        if request.url.path.endswith("/agent/get"):
+            assert request.url.params["agentid"] == "1000002"
+            return httpx.Response(200, json={"errcode": 0, "agentid": 1000002})
+        assert request.url.path.endswith("/externalcontact/get_follow_user_list")
+        return httpx.Response(200, json={"errcode": 0, "follow_user": []})
+
+    client = WeComApiClient(
+        "corp-id",
+        "kf-secret",
+        "agent-secret",
+        contact_secret="contact-secret",
+        transport=httpx.MockTransport(responder),
+    )
+
+    await client.probe_credentials(agent_id=1000002, probe_contact=True)
+    assert client.is_closed is False
+    await client.aclose()
+
+    assert [request.method for request in requests] == ["GET"] * 6
+    assert [request.url.path for request in requests] == [
+        "/cgi-bin/gettoken",
+        "/cgi-bin/kf/account/list",
+        "/cgi-bin/gettoken",
+        "/cgi-bin/agent/get",
+        "/cgi-bin/gettoken",
+        "/cgi-bin/externalcontact/get_follow_user_list",
+    ]
+    assert requests[4].url.params["corpsecret"] == "contact-secret"
+    assert client.is_closed is True
+    assert not any(
+        forbidden in request.url.path
+        for request in requests
+        for forbidden in ("department/", "mark_tag", "message/send")
+    )
+
+
+@pytest.mark.asyncio
 async def test_identity_lookups_return_kf_and_customer_names() -> None:
     """员工通知使用企业微信返回的客服账号名和客人昵称。"""
     account_requests = 0

@@ -2,12 +2,12 @@ import re
 from types import SimpleNamespace
 
 import pytest
+from admin_auth_helpers import configure_admin_auth, login_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.domain.enums import EmployeeRole
-from homestay_bot.domain.models import Employee
 from homestay_bot.routes.customers import router as customers_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.services.customer_admin_service import CustomerCard
@@ -16,28 +16,6 @@ from homestay_bot.services.customer_errors import (
     CustomerNotFoundError,
     CustomerPermissionError,
 )
-
-
-class EmployeeAuthStub:
-    """返回测试指定角色的活动企业微信员工。"""
-
-    def __init__(self, role: EmployeeRole) -> None:
-        """保存登录角色。"""
-        self.role = role
-
-    def authorization_url(self, redirect_uri: str, state: str) -> str:
-        """返回包含 state 的测试授权地址。"""
-        return f"https://wecom.example/authorize?state={state}"
-
-    async def authenticate(self, code: str) -> Employee:
-        """建立活动员工会话。"""
-        return Employee(
-            id=1 if self.role is EmployeeRole.ADMIN else 2,
-            wecom_userid="employee-test",
-            name="测试员工",
-            role=self.role,
-            is_active=True,
-        )
 
 
 class CustomerAdminStub:
@@ -216,26 +194,15 @@ def build_client(
     app.add_middleware(SessionMiddleware, secret_key="customer-test-secret")
     app.include_router(employee_auth_router)
     app.include_router(customers_router)
-    app.state.employee_auth_service = EmployeeAuthStub(role)
+    configure_admin_auth(app, role)
     customers = CustomerAdminStub()
     app.state.customer_admin_service = customers
     return TestClient(app), customers
 
 
 def login(client: TestClient) -> None:
-    """走 OAuth state 流程建立员工会话。"""
-    response = client.get(
-        "/employee/login",
-        params={"next": "/employee/customers"},
-        follow_redirects=False,
-    )
-    state = re.search(r"state=([^&]+)", response.headers["location"]).group(1)
-    callback = client.get(
-        "/employee/oauth/callback",
-        params={"code": "code", "state": state},
-        follow_redirects=False,
-    )
-    assert callback.status_code == 303
+    """通过独立账号密码表单建立版本化员工会话。"""
+    login_admin(client, next_path="/employee/customers")
 
 
 def detail_csrf(client: TestClient, customer_id: int = 7) -> str:
@@ -303,6 +270,31 @@ def test_admin_sees_masked_customer_and_multi_select_tags() -> None:
     assert "phone_ciphertext" not in detail.text
     assert detail.text.count('name="tag_ids"') == 2
     assert "/employee/customers/merge/9" in detail.text
+
+
+def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
+    """客户列表提供桌面表格与移动卡片，详情和合并页保护写操作。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    index = client.get("/employee/customers")
+    detail = client.get("/employee/customers/7")
+    merge = client.get("/employee/customers/merge/9")
+
+    assert '/static/admin.js' in index.text
+    assert 'href="/employee/customers" aria-current="page"' in detail.text
+    assert 'class="responsive-table"' in index.text
+    assert 'class="mobile-card-list clean-list"' in index.text
+    assert 'data-unsaved-warning' in detail.text
+    assert (
+        'action="/employee/customers/7/summary/delete" data-confirm='
+        in detail.text
+    )
+    assert (
+        'action="/employee/customers/merge/9/confirm" data-confirm='
+        in merge.text
+    )
+    assert "13800138000" not in index.text + detail.text + merge.text
 
 
 def test_admin_can_update_tags_note_and_summary_with_one_time_csrf() -> None:

@@ -1,7 +1,8 @@
 import pytest
+from argon2 import PasswordHasher, Type
 from pydantic import ValidationError
 
-from homestay_bot.config import Settings
+from homestay_bot.config import BootstrapSettings, RuntimeEnvironmentSettings, Settings
 
 
 def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
@@ -23,6 +24,9 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
         "WECOM_DUTY_USERIDS": "staff-1",
         "SESSION_SECRET": "local-test-session-secret-at-least-32",
         "DATA_ENCRYPTION_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        "CONFIG_ENCRYPTION_KEY": "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=",
+        "ADMIN_BOOTSTRAP_USERNAME": "admin",
+        "ADMIN_BOOTSTRAP_PASSWORD_HASH": PasswordHasher(type=Type.ID).hash("bootstrap-password"),
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
@@ -32,9 +36,10 @@ def test_settings_load_deepseek_clients_from_one_base_url(monkeypatch) -> None:
     assert settings.deepseek_api_key == "test-deepseek-key"
     assert settings.deepseek_model == "deepseek-v4-flash"
     assert settings.data_encryption_key.startswith("MDAw")
-    assert settings.deepseek_anthropic_base_url == (
-        "https://api.deepseek.test/anthropic"
-    )
+    assert settings.config_encryption_key.startswith("MTEx")
+    assert settings.admin_bootstrap_username == "admin"
+    assert settings.admin_bootstrap_password_hash.startswith("$argon2id$")
+    assert settings.deepseek_anthropic_base_url == ("https://api.deepseek.test/anthropic")
     assert settings.wecom_contact_secret is None
 
 
@@ -55,9 +60,7 @@ def test_settings_load_optional_wecom_contact_secret(monkeypatch) -> None:
         "WECOM_DUTY_USERIDS": "staff-1",
         "WECOM_CONTACT_SECRET": "contact-secret",
         "SESSION_SECRET": "local-test-session-secret-at-least-32",
-        "DATA_ENCRYPTION_KEY": (
-            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
-        ),
+        "DATA_ENCRYPTION_KEY": ("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="),
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
@@ -117,3 +120,96 @@ def test_settings_require_independent_data_encryption_key(monkeypatch) -> None:
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_settings_defers_invalid_bootstrap_password_to_degraded_startup(monkeypatch) -> None:
+    """无效后台引导值不得阻断主配置加载，由仓储拒绝并触发健康降级。"""
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD_HASH", "plaintext-password")
+
+    settings = Settings(
+        database_url="sqlite+aiosqlite:///test.db",
+        public_base_url="https://local.example",
+        deepseek_api_key="key",
+        hostex_access_token="token",
+        hostex_webhook_secret_token="webhook-secret",
+        wecom_corp_id="corp",
+        wecom_kf_secret="kf",
+        wecom_callback_token="callback",
+        wecom_encoding_aes_key="A" * 43,
+        wecom_agent_id=1,
+        wecom_agent_secret="agent",
+        wecom_duty_userids="staff",
+        session_secret="s" * 32,
+        data_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        _env_file=None,
+    )
+    assert settings.admin_bootstrap_password_hash == "plaintext-password"
+
+
+def test_settings_defers_forged_argon2id_prefix_to_bootstrap(monkeypatch) -> None:
+    """伪造哈希同样延迟到可降级的仓储引导校验，主配置仍可加载。"""
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_BOOTSTRAP_PASSWORD_HASH", "$argon2id$plaintext")
+
+    settings = Settings(
+        database_url="sqlite+aiosqlite:///test.db",
+        public_base_url="https://local.example",
+        deepseek_api_key="key",
+        hostex_access_token="token",
+        hostex_webhook_secret_token="webhook-secret",
+        wecom_corp_id="corp",
+        wecom_kf_secret="kf",
+        wecom_callback_token="callback",
+        wecom_encoding_aes_key="A" * 43,
+        wecom_agent_id=1,
+        wecom_agent_secret="agent",
+        wecom_duty_userids="staff",
+        session_secret="s" * 32,
+        data_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        _env_file=None,
+    )
+    assert settings.admin_bootstrap_password_hash == "$argon2id$plaintext"
+
+
+def test_bootstrap_settings_do_not_require_external_api_credentials() -> None:
+    """数据库、会话和加密边界完整时，外部 API 缺失不能阻止后台启动。"""
+    settings = BootstrapSettings(
+        database_url="sqlite+aiosqlite:///test.db",
+        public_base_url="https://local.example",
+        session_secret="s" * 32,
+        data_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        config_encryption_key="MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=",
+        _env_file=None,
+    )
+
+    assert settings.database_url.endswith("test.db")
+    assert not hasattr(settings, "deepseek_api_key")
+
+
+def test_runtime_environment_settings_only_contain_web_editable_external_fields() -> None:
+    """运行环境投影不得包含数据库、域名、会话或任何主加密密钥。"""
+    runtime = RuntimeEnvironmentSettings(
+        deepseek_api_key="deepseek",
+        hostex_access_token="hostex",
+        hostex_webhook_secret_token="hostex-webhook",
+        wecom_corp_id="corp",
+        wecom_kf_secret="kf",
+        wecom_callback_token="callback",
+        wecom_encoding_aes_key="A" * 43,
+        wecom_agent_id=1,
+        wecom_agent_secret="agent",
+        wecom_duty_userids="owner",
+        _env_file=None,
+    )
+
+    dumped = runtime.model_dump()
+    assert "deepseek_api_key" in dumped
+    for immutable in (
+        "database_url",
+        "public_base_url",
+        "session_secret",
+        "data_encryption_key",
+        "config_encryption_key",
+    ):
+        assert immutable not in dumped

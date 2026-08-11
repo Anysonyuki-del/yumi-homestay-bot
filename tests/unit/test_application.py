@@ -538,6 +538,47 @@ def test_worker_handlers_register_faq_draft_factory() -> None:
     assert handlers["faq_draft_generate"] is faq_handler
 
 
+@pytest.mark.asyncio
+async def test_complaint_page_session_adapter_forwards_message_cursor(
+    monkeypatch,
+) -> None:
+    """客诉页面适配器必须把历史消息游标传到真实页面服务。"""
+    session = object()
+    calls: list[tuple[int, int | None]] = []
+
+    class SessionContext:
+        """提供不访问数据库的短会话。"""
+
+        async def __aenter__(self):
+            """返回固定会话标记。"""
+            return session
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出测试会话。"""
+
+    class ComplaintServiceStub:
+        """记录应用适配层传入的历史消息游标。"""
+
+        def __init__(self, selected_session, outbox) -> None:
+            """验证服务绑定固定短会话。"""
+            assert selected_session is session
+
+        async def get_detail(self, review_id: int, *, before_message_id=None):
+            """记录详情编号和游标。"""
+            calls.append((review_id, before_message_id))
+            return {"review_id": review_id}
+
+    monkeypatch.setattr(application, "ComplaintAdminService", ComplaintServiceStub)
+    service = application.SessionComplaintAdminService(
+        cast(Any, lambda: SessionContext())
+    )
+
+    result = await service.get_detail(7, before_message_id=301)
+
+    assert result == {"review_id": 7}
+    assert calls == [(7, 301)]
+
+
 def test_worker_handlers_register_lifecycle_factory() -> None:
     """worker 装配应为当前事务注册生命周期发送处理器。"""
     session = object()

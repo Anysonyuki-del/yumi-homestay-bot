@@ -1,30 +1,14 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>房源配置</title>
-    <link rel="stylesheet" href="/static/app.css">
-  </head>
-  <body>
-    <main class="card">
-      <a class="back-link" href="/employee/tasks">← 返回任务中心</a>
-      <header class="page-header">
-        <p class="eyebrow">仅管理员可见</p>
-        <h1>房源配置</h1>
-      </header>
-      <section>
-        {% for property in properties %}
-        <article>
-          <h2>{{ property.title }}</h2>
-          <p>百居易房间编号：{{ property.id }}</p>
-          <p>{{ property.district or "区域待补充" }} · {{ "启用" if property.is_active else "停用" }}</p>
-          <a href="/employee/properties/{{ property.id }}">配置房源</a>
-        </article>
-        {% else %}
-        <p>暂无从百居易同步的房源。</p>
-        {% endfor %}
-      </section>
-    </main>
-  </body>
-</html>
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<section class="property-grid">
+  {% for property in properties %}
+  <article class="panel property-card">
+    <div class="section-heading"><h2>{{ property.title }}</h2>{{ ui.badge("启用" if property.is_active else "停用", "success" if property.is_active else "neutral") }}</div>
+    <dl class="compact-detail"><dt>百居易编号</dt><dd>{{ property.id }}</dd><dt>区域</dt><dd>{{ property.district or "待补充" }}</dd><dt>房型</dt><dd>{{ property.room_type or "待补充" }}</dd></dl>
+    <a class="button" href="/employee/properties/{{ property.id }}">配置房源</a>
+  </article>
+  {% else %}{{ ui.empty("暂无同步房源", "请先检查百居易同步状态。") }}{% endfor %}
+</section>
+{% endblock %}

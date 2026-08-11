@@ -1,0 +1,38 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+{% block title %}AI 调试台 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <p class="eyebrow">安全只读预览</p>
+  <h2>模拟客人提问</h2>
+  <p>每次调试会产生少量模型费用，但不会向客人发送消息、不会转人工，也不会修改订单或创建任务。</p>
+  <form method="post" action="/employee/admin/debug" data-unsaved-warning>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>模拟问题<textarea name="question" required maxlength="1000" rows="4"></textarea></label>
+    <label>语言<select name="language"><option value="zh">中文</option><option value="en">English</option></select></label>
+    <label>房间<select name="property_id"><option value="">不指定</option>{% for item in properties %}<option value="{{ item.id }}">{{ item.title }}</option>{% endfor %}</select></label>
+    <label>入住日期<input type="date" name="check_in_date"></label>
+    <label>退房日期<input type="date" name="check_out_date"></label>
+    <button class="button button--primary" type="submit">生成只读预览</button>
+  </form>
+</section>
+{% if result %}
+<section class="panel">
+  <div class="panel__header"><h2>预览结果</h2>{{ ui.badge("revision " ~ result.revision, "neutral") }}</div>
+  <dl class="diagnostics-list">
+    <div><dt>最终客人回复</dt><dd>{{ result.reply_text }}</dd></div>
+    <div><dt>意图 / 置信度</dt><dd>{{ result.intent }} / {{ "%.2f"|format(result.confidence) }}</dd></div>
+    <div><dt>知识缺口</dt><dd>{{ result.knowledge_gap_topic or ("有" if result.knowledge_gap else "无") }}</dd></div>
+    <div><dt>FAQ 候选</dt><dd>{{ "是" if result.faq_candidate else "否" }}{% if result.faq_candidate_id %} · 候选编号 {{ result.faq_candidate_id }}{% endif %}</dd></div>
+    <div><dt>FAQ 标准问题</dt><dd>{{ result.faq_canonical_question or "未提供" }}</dd></div>
+    <div><dt>FAQ 分类</dt><dd>{{ result.faq_category or "未提供" }}</dd></div>
+    <div><dt>所选房间</dt><dd>{{ result.selected_property_title or "未指定" }}</dd></div>
+    <div><dt>入住 / 退房</dt><dd>{{ result.check_in_date or "未指定" }} / {{ result.check_out_date or "未指定" }}</dd></div>
+    <div><dt>人工确认</dt><dd>{{ "需要" if result.staff_confirmation_required else "不需要" }}</dd></div>
+    <div><dt>任务建议</dt><dd>{{ result.task_suggestion.description if result.task_suggestion else "无" }}</dd></div>
+  </dl>
+  <h3>只读工具轨迹</h3>
+  <ul>{% for trace in result.tool_trace %}<li>{{ trace.name }} · {{ "成功" if trace.succeeded else "失败" }} · {{ trace.duration_ms }}ms</li>{% else %}<li>未调用工具</li>{% endfor %}</ul>
+</section>
+{% endif %}
+{% endblock %}

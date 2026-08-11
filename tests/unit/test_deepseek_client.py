@@ -7,6 +7,8 @@ import pytest
 
 from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.deepseek_client import (
+    AssistantRequestContext,
+    AssistantToolTrace,
     AssistantUnavailableError,
     DeepSeekGuestAssistant,
     HostexReadOnlyToolExecutor,
@@ -1447,3 +1449,65 @@ async def test_fast_ack_uses_standard_warm_host_wording_and_short_timeout() -> N
     assert "管家" in reply
     assert "稍作等待" in reply
     assert client.chat.completions.requests[0]["timeout"] <= 1.5
+
+
+@pytest.mark.asyncio
+async def test_debug_context_only_enters_system_prompt_and_traces_safe_tool_metadata() -> None:
+    """后台房间与日期只能进入 system context，trace 不得包含结果正文。"""
+    client = ToolClientStub()
+    executor = ToolExecutorStub()
+    traces: list[AssistantToolTrace] = []
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=executor,
+    )
+
+    await assistant.respond(
+        guest_identifier="admin-debug",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "有空房吗？"}],
+        request_context=AssistantRequestContext(
+            property_id=11,
+            property_title="江汉路一号房",
+            check_in_date=date(2026, 7, 30),
+            check_out_date=date(2026, 7, 31),
+        ),
+        tool_trace_sink=traces.append,
+    )
+
+    messages = client.chat.completions.requests[0]["messages"]
+    assert "江汉路一号房" in messages[0]["content"]
+    assert messages[1] == {"role": "user", "content": "有空房吗？"}
+    assert len(traces) == 1
+    assert traces[0].name == "search_availability"
+    assert traces[0].succeeded is True
+    assert traces[0].check_in_date == date(2026, 7, 30)
+    assert traces[0].check_out_date == date(2026, 7, 31)
+    assert "available" not in repr(traces)
+
+
+@pytest.mark.asyncio
+async def test_production_respond_without_request_context_keeps_request_unchanged() -> None:
+    """正式入口不传新增参数时不得出现后台调试上下文或 trace 状态。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "几点入住？"}],
+    )
+
+    request_text = json.dumps(client.chat.completions.requests[0], ensure_ascii=False)
+    assert "后台调试" not in request_text
+    assert "selected_property" not in request_text

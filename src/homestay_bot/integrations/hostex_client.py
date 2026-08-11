@@ -200,6 +200,15 @@ class HostexClient:
         """显式释放底层 HTTP 连接池。"""
         await self._client.aclose()
 
+    @property
+    def is_closed(self) -> bool:
+        """公开只读关闭状态，供候选测试和生命周期验收检查资源释放。"""
+        return self._client.is_closed
+
+    async def probe_read_only(self) -> None:
+        """候选配置只读取房源列表，不触发订单、房态或任何写操作。"""
+        await self.list_properties(retry_safe=False)
+
     async def _request(
         self,
         method: str,
@@ -242,9 +251,14 @@ class HostexClient:
 
         raise HostexTransportError("百居易请求超过最大尝试次数")
 
-    async def list_properties(self) -> list[Property]:
+    async def list_properties(self, *, retry_safe: bool = True) -> list[Property]:
         """读取物理房间，供房型映射、房态查询和员工选房使用。"""
-        envelope = await self._request("GET", "/properties", params={"offset": 0, "limit": 100})
+        envelope = await self._request(
+            "GET",
+            "/properties",
+            params={"offset": 0, "limit": 100},
+            retry_safe=retry_safe,
+        )
         raw_properties = envelope["data"]["properties"]
         return [Property.model_validate(item) for item in raw_properties]
 

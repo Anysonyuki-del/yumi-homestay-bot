@@ -1,11 +1,9 @@
 import secrets
-from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
@@ -15,11 +13,9 @@ from homestay_bot.services.customer_errors import (
     CustomerNotFoundError,
     CustomerPermissionError,
 )
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/customers")
-templates = Jinja2Templates(
-    directory=Path(__file__).resolve().parent.parent / "templates"
-)
 
 
 class CustomerAdminServicePort(Protocol):
@@ -205,6 +201,8 @@ async def customer_index(
                 if len(customers) > 50
                 else None
             ),
+            "page_title": "客户管理",
+            "active_nav": "customers",
         },
     )
 
@@ -233,6 +231,8 @@ async def customer_merge_detail(
                 namespace="customer_merge_csrf",
                 object_id=suggestion_id,
             ),
+            "page_title": "复核客户合并",
+            "active_nav": "customers",
         },
     )
 
@@ -310,6 +310,8 @@ async def customer_detail(
                 namespace="customer_csrf",
                 object_id=customer_id,
             ),
+            "page_title": detail["customer"].display_name,
+            "active_nav": "customers",
         },
     )
 

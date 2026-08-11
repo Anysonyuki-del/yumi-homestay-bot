@@ -2397,9 +2397,9 @@ Expected: 只提交验收记录；工作区干净；不合并 `main`，不部署
 
 **范围：** 保留当前主工作区中用户未跟踪资料和本任务记录，在独立 worktree 开发。
 
-- [ ] 运行 `git status --short --branch`，确认只存在本任务的 `tasks/*.md` 改动和用户既有未跟踪资料；不得把敏感资料加入 Git。
-- [ ] 运行 `pytest -q`、`ruff check .`、`mypy src/homestay_bot`、`git diff --check`，保存修改前基线。
-- [ ] 使用 `using-git-worktrees` 建立 `yumi-admin-console` 功能 worktree；后续代码只在该 worktree 修改。
+- [x] 运行 `git status --short --branch`，确认只存在本任务的 `tasks/*.md` 改动和用户既有未跟踪资料；不得把敏感资料加入 Git。
+- [x] 运行 `pytest -q`、`ruff check .`、`mypy src/homestay_bot`、`git diff --check`，保存修改前基线。
+- [x] 使用 `using-git-worktrees` 建立 `yumi-admin-console` 功能 worktree；后续代码只在该 worktree修改。
 
 ### 批次 1：管理员凭证模型、迁移与密码服务
 
@@ -2424,13 +2424,13 @@ class AdminAuthService:
     async def revoke_other_sessions(self, admin_id: int) -> int
 ```
 
-- [ ] 先写失败测试：Argon2id 校验、错误凭据统一失败、5 次失败锁 15 分钟、成功清零、首次改密、会话版本递增。
-- [ ] 运行定向测试，确认因模型/服务不存在而失败。
-- [ ] 实现单例管理员凭证；`password_hash` 只存哈希，审计不记录用户名密码正文。
-- [ ] 实现首次 bootstrap：只导入环境中的用户名和预生成 Argon2 哈希，不读取或保存明文初始密码。
-- [ ] 实现 `0015` 的 PostgreSQL/SQLite 兼容迁移、索引、外键和单例约束。
-- [ ] 运行迁移 upgrade/downgrade/upgrade、模型、配置和认证服务测试。
-- [ ] 提交 `feat: add secure single-admin credentials`。
+- [x] 先写失败测试：Argon2id 校验、错误凭据统一失败、5 次失败锁 15 分钟、成功清零、首次改密、会话版本递增。
+- [x] 运行定向测试，确认因模型/服务不存在而失败。
+- [x] 实现单例管理员凭证；`password_hash` 只存哈希，审计不记录用户名密码正文。
+- [x] 实现首次 bootstrap：只导入环境中的用户名和预生成 Argon2 哈希，不读取或保存明文初始密码。
+- [x] 实现 `0015` 的 PostgreSQL/SQLite 兼容迁移、索引、外键和单例约束。
+- [x] 运行迁移 upgrade/downgrade/upgrade、模型、配置和认证服务测试。
+- [x] 提交 `feat: add secure single-admin credentials`。
 
 ### 批次 2：独立登录、会话保护与账号安全页
 
@@ -2455,13 +2455,13 @@ POST /employee/account/password
 POST /employee/account/revoke-sessions
 ```
 
-- [ ] 先写失败测试：GET 登录页、CSRF、站内 next、相同错误文案、锁定、首次改密、退出、8 小时闲置、会话版本失效。
-- [ ] 登录成功前清空旧 session，再写 `employee_id`、管理员角色、`admin_session_version`、`last_activity_at`。
-- [ ] 改造 `require_employee_session()`：每次复核唯一管理员启用状态、版本和闲置时间；未登录的 HTML 页面统一跳登录。
-- [ ] 删除管理后台企业微信 OAuth 跳转入口；保留企业微信客服 API 和员工业务身份模型。
-- [ ] 所有改密、退出和撤销会话动作使用 POST + CSRF；敏感操作错误不进入日志。
-- [ ] 运行认证路由和全部现有后台 route 测试。
-- [ ] 提交 `feat: replace admin OAuth with password login`。
+- [x] 先写失败测试：GET 登录页、CSRF、站内 next、相同错误文案、锁定、首次改密、退出、8 小时闲置、会话版本失效。
+- [x] 登录成功前清空旧 session，再写 `employee_id`、管理员角色、`admin_session_version`、`last_activity_at`。
+- [x] 改造 `require_employee_session()`：每次复核唯一管理员启用状态、版本和闲置时间；未登录的 HTML 页面统一跳登录。
+- [x] 删除管理后台企业微信 OAuth 跳转入口；保留企业微信客服 API 和员工业务身份模型。
+- [x] 所有改密、退出和撤销会话动作使用 POST + CSRF；敏感操作错误不进入日志。
+- [x] 运行认证路由和全部现有后台 route 测试。
+- [x] 提交 `feat: replace admin OAuth with password login`。
 
 ### 批次 3：统一 UI Shell、总览与现有页面迁移
 
@@ -2473,6 +2473,7 @@ POST /employee/account/revoke-sessions
 - 新建：`src/homestay_bot/static/admin.js`。
 - 重构：`src/homestay_bot/static/app.css`，保留旧类兼容层。
 - 新建：`src/homestay_bot/routes/admin.py`、`services/admin_dashboard_service.py`。
+- 新建：`migrations/versions/0016_admin_dashboard_indexes.py`，为总览的入住/退房日期查询增加复合索引。
 - 新建：`src/homestay_bot/templates/admin/dashboard.html`、`admin/diagnostics.html`。
 - 修改：`src/homestay_bot/main.py`、`application.py::application_lifespan()`。
 - 修改：`templates/tasks/*`、`properties/*`、`knowledge/*`、`customers/*`、`approvals/*`、`complaints/edit.html`，继承统一 shell。
@@ -2489,14 +2490,15 @@ class AdminDashboardService:
 async def admin_dashboard(request: Request) -> HTMLResponse
 ```
 
-- [ ] 先写模板 smoke 和 dashboard 失败测试：统一导航、active 状态、健康降级仍可打开、页面不含密钥/UID/门锁密码/消息正文。
-- [ ] 实现全局 shell、移动抽屉、SVG 图标、状态组件、flash 区、提交禁用和未保存离页提示；无 JS 时核心表单仍能提交。
-- [ ] 实现今日入住/退房、房态、待办和组件健康的只读聚合；按 `Asia/Shanghai` 计算今日边界。
-- [ ] 逐页迁移现有模板，不改变原 POST URL、权限、CSRF 和业务服务调用。
-- [ ] FAQ 列表新增明确的编辑详情入口；客诉列表未实现前不放失效导航。
-- [ ] 验证 focus-visible、44px 点击区域、reduced-motion 和小屏无横向溢出。
-- [ ] 运行全部后台路由、dashboard 和模板测试。
-- [ ] 提交 `feat: add responsive YuMi admin console`。
+- [x] 先写模板 smoke 和 dashboard 失败测试：统一导航、active 状态、健康降级仍可打开、页面不含密钥/UID/门锁密码/消息正文。
+- [x] 实现全局 shell、移动抽屉、SVG 图标、状态组件、flash 区、提交禁用和未保存离页提示；无 JS 时核心表单仍能提交。
+- [x] 实现今日入住/退房、房态、待办和组件健康的只读聚合；按 `Asia/Shanghai` 计算今日边界。
+- [x] PostgreSQL 总览读取使用短只读一致性事务；入住/退房日期查询具备匹配索引，避免历史订单增长后扫描全表。
+- [x] 逐页迁移现有模板，不改变原 POST URL、权限、CSRF 和业务服务调用。
+- [x] FAQ 列表新增明确的编辑详情入口；客诉列表未实现前不放失效导航。
+- [x] 验证 focus-visible、44px 点击区域、reduced-motion 和小屏无横向溢出。
+- [x] 运行全部后台路由、dashboard 和模板测试。
+- [x] 提交 `feat: add responsive YuMi admin console`。
 
 ### 批次 4：加密配置快照、版本仓储与设置页面
 
@@ -2515,21 +2517,36 @@ async def admin_dashboard(request: Request) -> HTMLResponse
 
 ```python
 class RuntimeConfigService:
-    async def create_and_test(self, command: UpdateRuntimeConfig, actor_id: int, password: str) -> ActivationResult
-    async def rollback(self, actor_id: int, password: str) -> ActivationResult
+    async def create_and_test(self, command: UpdateRuntimeConfig, actor_id: int, admin_id: int, password: str, expected_session_version: int, expected_revision: int) -> ActivationResult
+    async def rollback(self, actor_id: int, admin_id: int, password: str, expected_session_version: int, expected_revision: int, expected_previous_version_id: int) -> ActivationResult
 
 class RuntimeConfigRepository:
     async def create_candidate(self, encrypted_payload: bytes, masked_summary: dict[str, object]) -> RuntimeConfigVersion
     async def activate(self, version_id: int, expected_revision: int) -> RuntimeConfigState
 ```
 
-- [ ] 先写失败测试：用途隔离、错误主密钥不可解密、响应/日志不泄密、失败不激活、乐观版本冲突、回滚指针正确。
-- [ ] 采用整份快照单密文而非逐字段写入；`RuntimeConfigState` 单例保存 active/previous/revision。
-- [ ] 页面空白密钥表示“保留旧值”，明确输入新值才替换；页面只返回是否配置和末尾掩码。
-- [ ] 二次密码验证成功后才能测试、激活或回滚；AuditLog 只存字段名、版本、错误码和结果。
-- [ ] 首次无数据库版本时使用环境快照；首次成功激活后数据库版本优先。
-- [ ] 运行配置 service、repository、route、retention 和泄密边界测试。
-- [ ] 提交 `feat: add encrypted runtime configuration`。
+**设计复审补充（批次 4 执行前反向同步）：**
+
+- 新建 `migrations/versions/0017_runtime_config_lifecycle.py`：为候选版本增加状态、脱敏测试结果、稳定失败码、激活时间、基线版本和基线修订号；测试失败候选必须可追踪但绝不激活。
+- 拆分不可网页修改的 bootstrap 配置与可进入快照的外部业务 API 环境配置；外部 API 环境字段缺失时，登录和设置页仍能启动修复。`public_base_url` 属于部署/回调边界，禁止网页修改。
+- `create_and_test` 在测试前一次读取基线快照与 revision，候选记录该基线；测试后只能用原 revision CAS 激活，并发变更必须标记 conflict。
+- `rollback` 的 service、表单和 route 都必须携带页面读取的 `expected_revision`，禁止回滚时重新读取新 revision。
+- 创建候选和回滚的二次认证都携带当前 `admin_session_version`；回滚额外绑定页面看到的 `expected_previous_version_id`，防止旧页面误操作新版本。
+- 快照增加严格的 `schema_version` 信封、字段类型和长度验证，并覆盖安全 `repr`；页面及错误日志不得通过对象表示泄露秘密。
+- 密文和解密 JSON 设固定大小上限，未知 schema/畸形信封映射为受控错误；`RuntimeConfigState` 迁移初始化单例，并约束 `revision >= 0` 且 active/previous 不得相同。
+- 激活与回滚使用不同用途的服务端一次性 CSRF nonce；同一动作允许最多 8 个多标签页 nonce 独立消费。可选 `wecom_contact_secret` 使用明确“清除”动作，空白输入仍表示保留。
+- 批次 4 只装配注入的 TesterPort/stub；真实外联探针留到批次 5，进程内客户端热切换留到批次 6。页面必须明确“版本已保存，当前进程将在安全热切换能力完成后使用”，不得宣称数据库指针更新等于当前进程立即生效。
+
+- [x] 先写失败测试：用途隔离、错误主密钥不可解密、响应/日志不泄密、失败候选可追踪但不激活、测试期间并发激活导致乐观版本冲突、回滚指针正确。
+- [x] 采用整份快照单密文而非逐字段写入；`RuntimeConfigState` 单例保存 active/previous/revision。
+- [x] 页面空白密钥表示“保留旧值”，明确输入新值才替换；页面只返回是否配置和末尾掩码。
+- [x] 二次密码验证成功后才能测试、激活或回滚；AuditLog 只存字段名、版本、错误码和结果。
+- [x] 设置页所有 POST 使用按用途和管理员绑定的服务端原子 CSRF nonce，多标签页互不覆盖；响应 `Cache-Control: no-store`。
+- [x] 首次无数据库版本时使用环境快照；首次成功激活后数据库版本优先。
+- [x] 运行配置 service、repository、route、retention 和泄密边界测试。
+- [x] 提交 `feat: add encrypted runtime configuration`。
+
+**批次 4 Review：** `470f838`、`3fe8766`、`a9935cd`、`30dd45f`；全量 `677 passed, 15 skipped`，Ruff、mypy（93 个源码文件）、迁移回放、编译和 diff-check 通过；独立质量复审 APPROVED。回滚点为 `0f52bdd`。
 
 ### 批次 5：无副作用连接测试与外联地址防护
 
@@ -2541,12 +2558,21 @@ class RuntimeConfigRepository:
 - 修改：`integrations/wecom/api_client.py::WeComApiClient`，补充鉴权/客服列表 probe。
 - 新建测试：`tests/unit/test_runtime_config_tester.py`、`tests/unit/test_outbound_url_policy.py`。
 
-- [ ] 先写失败测试：DeepSeek/百居易/企业微信三项成功、单项失败、超时、可信 IP 错误映射、所有临时客户端关闭、结果无响应正文。
-- [ ] DeepSeek 只发送最短测试请求；百居易只调用 `list_properties()`；企业微信只获取 token 和 `list_kf_accounts()`。
-- [ ] 企业微信回调 Token/AESKey 只做本地长度与加解密格式检测，UI 明确“未验证真实回调投递”。
-- [ ] 企业微信和百居易根地址固定；DeepSeek 自定义地址只允许公网 HTTPS，拒绝 localhost、私网、链路本地、元数据和越权重定向。
-- [ ] 运行所有集成客户端与候选测试器测试，不启用真实 contract 环境变量。
-- [ ] 提交 `feat: validate runtime integrations before activation`。
+**设计复审补充（批次 5 执行前反向同步）：**
+
+- 自定义 DeepSeek 公网 HTTPS 地址必须在实际连接时把全部 DNS A/AAAA 校验为公网，并把请求固定到已校验字面 IP；保留原域名 Host 与 TLS SNI/证书校验，禁代理、禁自动重试、禁任何重定向，避免 DNS rebinding/TOCTOU。
+- DeepSeek 同时执行 OpenAI 客服与 Anthropic 旅游兼容端点的最短探针；使用受控客户端、严格超时、单连接和响应体硬上限，成功失败都关闭临时客户端。
+- 企业微信分别验证客服 Secret、Agent Secret + AgentId 的只读 `agent/get`，可选 Contact Secret 也使用只读权限探针；任何发送、转人工、标签或订单写操作均禁止。
+- 测试结果保存 provider 级安全聚合状态和稳定错误码；UI 明确模型探针会产生两次极小调用和供应商日志，企业微信回调仅本地校验、未验证真实投递。
+
+- [x] 先写失败测试：DeepSeek/百居易/企业微信三项成功、单项失败、超时、可信 IP 错误映射、所有临时客户端关闭、结果无响应正文。
+- [x] DeepSeek 对 OpenAI/Anthropic 两个生产兼容端点各发送最短测试请求；百居易只调用 `list_properties()`；企业微信只使用 token、客服列表、`agent/get` 和 Contact 只读权限探针。
+- [x] 企业微信回调 Token/AESKey 只做本地长度与加解密格式检测，UI 明确“未验证真实回调投递”。
+- [x] 企业微信和百居易根地址固定；DeepSeek 自定义地址只允许公网 HTTPS，拒绝 localhost、私网、链路本地、元数据和越权重定向。
+- [x] 运行所有集成客户端与候选测试器测试，不启用真实 contract 环境变量。
+- [x] 提交 `feat: validate runtime integrations before activation`。
+
+**批次 5 Review：** `d84e113`、`96b5361`、`4560fb2`；全量 `724 passed, 15 skipped`，批次定向 `100 passed`，Ruff、mypy（95 个源码文件）、compileall、pip check 和 diff-check 通过；独立 Spec 与质量/安全复审均 APPROVED。回滚点为 `30dd45f`。
 
 ### 批次 6：客户端租约、原子热切换与后台循环动态化
 
@@ -2577,13 +2603,27 @@ class RuntimeClientRegistry:
     async def swap(self, candidate: RuntimeClientBundle) -> None
 ```
 
-- [ ] 先写并发失败测试：swap 时旧租约不中断、旧 bundle 在最后租约释放后关闭、失败 candidate 不替换 active、关闭应用释放全部 bundle。
-- [ ] 所有新消息、新 job 和每轮 poll/reconcile 在入口 acquire 一次，单次业务处理中不跨 revision。
-- [ ] 数据库激活成功后 swap；若 swap 失败则恢复数据库指针并标记 activation_failed，旧 bundle 继续服务。
-- [ ] Worker 间隔在下一轮读取新快照；回调校验与 webhook 服务同样按当前 revision 获取依赖。
-- [ ] 扩展启动测试：数据库 active 优先、损坏密文回退环境并健康降级、应用退出无客户端泄漏。
-- [ ] 运行 runtime、worker、callback、webhook、消息流和完整 phase-one 测试。
-- [ ] 提交 `feat: hot-swap integration clients safely`。
+- [x] 先写并发失败测试：swap 时旧租约不中断、旧 bundle 在最后租约释放后关闭、失败 candidate 不替换 active、关闭应用释放全部 bundle。
+- [x] 所有新消息、新 job 和每轮 poll/reconcile 在入口 acquire 一次，单次业务处理中不跨 revision。
+- [x] Bundle/运行时标量覆盖企业微信客服与通讯录客户端、DeepSeek 客服/FAQ/旅游/客诉/摘要能力、回调和百居易 webhook 校验器、Agent ID、值班员工及轮询/同步间隔；`public_base_url` 继续使用只读环境配置。
+- [x] 生产 AsyncOpenAI 与 AsyncAnthropic 必须复用批次 5 的受控公网 HTTPS transport/client 构造器；不能只保护候选探针后又让正式客服重新 DNS 解析。
+- [x] 数据库激活成功后 swap；若 swap 失败则恢复数据库指针并标记 activation_failed，旧 bundle 继续服务。
+- [x] `activation_failed` 只标记本次新建且已测试通过的候选版本；回滚目标是既有已验证版本，回滚热切换失败时只恢复指针并写稳定审计，不得破坏目标版本的可再次回滚资格。
+- [x] Worker 间隔在下一轮读取新快照；回调校验与 webhook 服务同样按当前 revision 获取依赖。
+- [x] 扩展启动测试：数据库 active 优先、损坏密文回退环境并健康降级、应用退出无客户端泄漏。
+- [x] 健康检查从 registry 获取无秘密动态 metadata；Contact 配置、轮询/同步阈值和修复后的健康恢复不得永久捕获启动 bundle。
+- [x] repair-only 启动也必须保留可安全创建首个 bundle/registry/workers 的激活协调器；首次成功配置应在当前进程生效，不能静默要求重启。
+- [x] 资源关闭失败只能在该失败资源被确认处理后恢复健康；无关 bundle 的成功关闭不得掩盖仍未释放的资源。
+- [x] 租约释放、数据库补偿和退役资源关闭必须抵抗重复取消：清理任务受跟踪且真正完成后才恢复原取消语义，禁止泄漏 refcount 或留下数据库/内存不一致。
+- [x] shutdown 与首次 repair 激活共用协调锁和 closing 状态；关闭开始后不得再发布 registry、服务或后台任务。
+- [x] shutdown 必须先关闭配置激活入口并等待完整的候选测试、数据库激活/补偿和运行时发布操作退出，再清理 app state、客户端和数据库 engine；不能只等待内层 runtime 启动锁。
+- [x] registry 永久拒绝重新发布已接管或已关闭的 bundle；并发/重复 `close()` 必须等待同一个关闭完成结果。
+- [x] `swap()` 发布成功后立即返回，退役清理由 registry 强跟踪任务完成；发布后的清理取消/失败不得被上层误判为候选未发布并补偿数据库。
+- [x] bundle 通过自身不可逆 claimed 状态拒绝重复所有权；registry 不得永久强引用所有已成功关闭的历史 bundle，以免内存和秘密对象生命周期无界增长。
+- [x] 运行 runtime、worker、callback、webhook、消息流和完整 phase-one 测试。
+- [x] 提交 `feat: hot-swap integration clients safely`。
+
+**批次 6 Review：** `2a59526`、`20c1a28`、`17ab243`、`5bda063`、`c70578a`；全量 `770 passed, 15 skipped`，批次定向 `136 passed`，Ruff、mypy（97 个源码文件）、compileall、pip check、diff-check 与敏感日志扫描通过；独立 Spec 与最终质量/并发复审均 APPROVED。回滚点为 `4560fb2`。
 
 ### 批次 7：AI 调试台、系统诊断与操作记录
 
@@ -2606,20 +2646,44 @@ class AdminDiagnosticsService:
     async def snapshot(self) -> DiagnosticsSnapshot
 ```
 
-- [ ] 先写失败测试：调试结果包含意图/FAQ/工具/房间/日期/最终回复，但不写会话、不发微信、不建任务、不执行百居易写操作。
-- [ ] 用只读测试仓储和 no-op 出站端口构造调试上下文；限制频率、输入长度和日期范围。
-- [ ] 诊断页只展示组件状态、心跳、数量、版本和脱敏错误码；不展示原始响应、Query、UID、消息正文或密钥。
-- [ ] 操作记录按时间倒序分页，只展示安全 details；配置审计展示字段名称和版本，不展示密文摘要之外的数据。
-- [ ] “复制诊断报告”由服务端返回已脱敏 view model，前端不得自行过滤原始对象。
-- [ ] 运行 debug、diagnostics、audit、health 和日志脱敏测试。
-- [ ] 提交 `feat: add safe admin debugging tools`。
+- [x] 先写失败测试：调试结果包含意图/FAQ/工具/房间/日期/最终回复，但不写会话、不发微信、不建任务、不执行百居易写操作。
+- [x] 用只读测试仓储和 no-op 出站端口构造调试上下文；限制频率、输入长度和日期范围。
+- [x] 诊断页只展示组件状态、心跳、数量、版本和脱敏错误码；不展示原始响应、Query、UID、消息正文或密钥。
+- [x] 操作记录按时间倒序分页，只展示安全 details；配置审计展示字段名称和版本，不展示密文摘要之外的数据。
+- [x] “复制诊断报告”由服务端返回已脱敏 view model，前端不得自行过滤原始对象。
+- [x] 运行 debug、diagnostics、audit、health 和日志脱敏测试。
+- [x] 提交 `feat: add safe admin debugging tools`。
+
+Review（批次 7）：调试台、诊断页与操作记录已交付，操作记录模板实际命名为 `admin/audits.html`（计划写作 `admin/audit.html`），另新增 `admin/config_versions.html` 承载配置版本审计。提交 `33d54a0`（功能）、`f489528`（元数据加固）、`178c361`（失败边界加固：`AdminDebugSafeRoute` 兜底普通异常为 no-store 503 且只记异常类型，并补生产 bundle→真实 assistant→service→SQLite 纵向只读链路测试）。定向组 50 passed；全量禁 live 794 passed、15 skipped；ruff、mypy（101 files）、compileall、pip check、diff check 全部通过。已验证撤回加固后两项 503 测试转红，确认测试真实驱动实现。未推送、未合并 `main`、未部署。
 
 ### 批次 8：全量验证、UI 验收与云端部署
 
-- [ ] 执行 `pytest -q`，要求全部非 live 测试通过；真实 DeepSeek/百居易/企业微信 contract 仍只在显式开启时运行。
-- [ ] 执行 `ruff check .`、`mypy src/homestay_bot`、`python -m compileall -q src tests migrations`、`pip check`、`git diff --check`。
-- [ ] 对临时 SQLite 执行 `alembic upgrade head`、允许的 downgrade、再次 upgrade；生成 PostgreSQL 离线 SQL并检查单头为 `0015_admin_runtime_config`。
-- [ ] 运行模板 smoke；使用浏览器验证 375/768/1024/1440、键盘焦点、抽屉 ESC、危险确认、无 JS 表单和无横向溢出，并保存截图证据但不提交含数据截图。
+- [x] 执行 `pytest -q`，要求全部非 live 测试通过；真实 DeepSeek/百居易/企业微信 contract 仍只在显式开启时运行。
+- [x] 执行 `ruff check .`、`mypy src/homestay_bot`、`python -m compileall -q src tests migrations`、`pip check`、`git diff --check`。
+- [x] 对临时 SQLite 执行 `alembic upgrade head`、允许的 downgrade、再次 upgrade；生成 PostgreSQL 离线 SQL并检查单头为 `0015_admin_runtime_config`。
+- [x] 运行模板 smoke；使用浏览器验证 375/768/1024/1440、键盘焦点、抽屉 ESC、危险确认、无 JS 表单和无横向溢出，并保存截图证据但不提交含数据截图。
+- [ ] 使用 `requesting-code-review` 做 Spec 一致性和安全复审，修正后重复定向及全量验证。
+- [ ] 提交并推送功能分支，经确认无未合并分支和敏感文件后合并 `main`。
+- [ ] 云端先备份 PostgreSQL 和运行配置，再拉取主干、构建镜像、运行迁移、启动服务。
+- [ ] 公网验收：未登录跳转、错误密码拒绝、首次改密、总览、业务编辑、候选配置失败保旧值、成功热切换、回滚、AI 调试无副作用、HTTPS 和健康检查。
+- [ ] 在本节末尾添加 Review：提交号、测试数量、跳过项、云端容器状态、证书状态、残余风险和可回滚点。
+
+进展记录（批次 8，本地只读部分）：
+
+- 全量禁 live：794 passed、15 skipped（skip 全部为 DeepSeek/百居易/企业微信 contract，需显式开启）。
+- 静态门禁：ruff 全通过；mypy 101 files 无问题；compileall、pip check、diff check 均通过。
+- 迁移往返（临时 SQLite）：`upgrade head` → `downgrade 0014_query_indexes`（本任务基线）→ 再次 `upgrade head`，三步均干净，终态回到单头。
+- PostgreSQL 离线 SQL：683 行生成成功，终态单头为 `0017_runtime_config_lifecycle`；无 AUTOINCREMENT 等 SQLite 专用语法残留；本任务 5 张表（`admin_credentials`、`admin_csrf_nonces`、`admin_csrf_quota`、`runtime_config_versions`、`runtime_config_state`）均已建。
+  注意：计划此处写的单头 `0015_admin_runtime_config` 已过时——批次 3 追加了 `0016_admin_dashboard_indexes`、批次 6 追加了 `0017_runtime_config_lifecycle`。链条线性无分叉，属计划陈旧而非缺陷。
+- 模板与交互自动化：`tests/integration` + `tests/browser` 共 282 passed；Playwright `test_admin_interactions.py` 3 passed，覆盖抽屉开关与 ESC、焦点管理、未保存离页提示；`test_admin_assets.py` 4 passed。
+- 真实浏览器多分辨率验收：以真实路由、模板、CSS 和 `admin.js` 装配只读 stub 服务（不连数据库、不接外部 API）在 127.0.0.1 起本地实例，用 Chromium 遍历 375×812 / 768×1024 / 1024×768 / 1440×900 四档 × 总览/诊断/操作记录/调试台四页，共 16 张截图，证据留在仓库外的 `/tmp/yumi_ui_acceptance/shots`（未提交，且仅含 stub 房源名与空数据，无真实客户信息）。
+  - 横向溢出：16 组全部 `scrollWidth == clientWidth`，无横向滚动。
+  - 键盘焦点：首个 Tab 均落在"跳到主要内容"skip-link，具备 `solid 3px` 可见焦点环。
+  - 抽屉：375 与 768 两档 × 四页共 8 组，打开后 `aria-expanded=true`、移除 `inert`、焦点进入抽屉内；ESC 后 `aria-expanded=false`、恢复 `inert` 与 `aria-hidden=true`、焦点回到触发按钮。
+  - 无 JS：`java_script_enabled=False` 下登录表单与提交按钮仍然存在可用。
+  - 已知遗留（未修）：总览"查看任务/查看审批"、诊断"系统诊断"、操作记录"返回系统诊断/下一页"等裸文字链接高度仅 18–25px，低于计划的 44px 点击区域要求。这些是 `<a>` 而非 `.button`，未命中 `app.css` 的 `min-height: 44px` 规则。实测与最近可点目标间距 21–46px，留白充足不易误触，故判为轻微可访问性缺口而非阻塞项；修复面很小（给行内链接补命中区的若干 CSS 规则，无需改模板），是否修复待用户决定。
+  - 说明：验收脚本首轮因先按 Tab 使 skip-link 获得焦点而遮挡抽屉触发按钮，已确认未聚焦时其 `bottom` 为 −19px 完全移出视口、汉堡按钮命中测试正常，属脚本顺序问题而非缺陷，已在脚本中于抽屉检查前清除焦点。
+- 尚未执行：`requesting-code-review` 复审、推送、合并 `main`、云端备份与部署、公网验收。这些需用户逐项确认后再进行。
 - [ ] 使用 `requesting-code-review` 做 Spec 一致性和安全复审，修正后重复定向及全量验证。
 - [ ] 提交并推送功能分支，经确认无未合并分支和敏感文件后合并 `main`。
 - [ ] 云端先备份 PostgreSQL 和运行配置，再拉取主干、构建镜像、运行迁移、启动服务。

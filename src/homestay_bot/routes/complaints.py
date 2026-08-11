@@ -1,16 +1,14 @@
 import secrets
-from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from homestay_bot.repositories.complaints import ComplaintVersionConflict
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/complaints")
-templates = Jinja2Templates(directory=Path(__file__).resolve().parent.parent / "templates")
 
 
 class ComplaintAdminServicePort(Protocol):
@@ -61,13 +59,7 @@ async def complaint_detail(
     before_message_id: Annotated[int | None, Query(gt=0)] = None,
 ) -> Response:
     """展示客诉分页对话、分析和可编辑回复草稿。"""
-    try:
-        employee_id, role = await require_employee_session(request)
-    except HTTPException:
-        return RedirectResponse(
-            f"/employee/login?next=/employee/complaints/{review_id}",
-            status_code=303,
-        )
+    employee_id, role = await require_employee_session(request)
     detail = await _service(request).get_detail(
         review_id,
         before_message_id=before_message_id,
@@ -75,7 +67,13 @@ async def complaint_detail(
     return templates.TemplateResponse(
         request=request,
         name="complaints/edit.html",
-        context={**detail, "employee_id": employee_id, "csrf_token": _csrf(request, review_id)},
+        context={
+            **detail,
+            "employee_id": employee_id,
+            "csrf_token": _csrf(request, review_id),
+            "page_title": f"客诉复核 #{review_id}",
+            "active_nav": None,
+        },
     )
 
 

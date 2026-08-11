@@ -1,0 +1,76 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+{% block title %}接口与模型设置 · {{ app_name }}{% endblock %}
+{% block page_actions %}<a class="button button--secondary" href="/employee/admin/settings/versions">查看版本记录</a>{% endblock %}
+{% block content %}
+<div class="alert alert--warning" role="note">
+  <span>版本通过测试后会安全保存。当前进程将在安全切换完成后使用；在此之前，正在处理的消息继续使用原配置。</span>
+</div>
+{% if not page.writable %}<div class="alert alert--danger" role="alert">当前为只读模式：请先在服务器环境中配置独立的配置加密主密钥，再保存接口设置。</div>{% endif %}
+
+<section class="panel">
+  <div class="panel__header">
+    <div><p class="eyebrow">加密快照</p><h2>外部接口配置</h2></div>
+    {% if page.source == "database" %}{{ ui.badge("数据库版本", "info") }}
+    {% elif page.source == "environment" %}{{ ui.badge("环境配置", "gold") }}
+    {% else %}{{ ui.badge("尚未配置", "danger") }}{% endif %}
+  </div>
+  <p class="muted">密钥留空表示保留原值；页面只显示配置状态和尾号。数据库、域名、会话和主加密密钥不能在这里修改。</p>
+  <form method="post" action="/employee/admin/settings/activate" class="form-grid config-form" data-unsaved-warning>
+    <input type="hidden" name="csrf_token" value="{{ activate_csrf_token }}">
+    <input type="hidden" name="expected_revision" value="{{ page.revision }}">
+
+    <fieldset class="config-group">
+      <legend>DeepSeek</legend>
+      <label>API Key <small>{{ page.view.deepseek_api_key }}</small><input type="password" name="deepseek_api_key" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+      <label>接口地址<input type="url" name="deepseek_base_url" maxlength="2048" value="{{ page.view.deepseek_base_url }}" required></label>
+      <label>模型名称<input type="text" name="deepseek_model" maxlength="256" value="{{ page.view.deepseek_model }}" required></label>
+    </fieldset>
+
+    <fieldset class="config-group">
+      <legend>百居易</legend>
+      <label>Access Token <small>{{ page.view.hostex_access_token }}</small><input type="password" name="hostex_access_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+      <label>Webhook Secret <small>{{ page.view.hostex_webhook_secret_token }}</small><input type="password" name="hostex_webhook_secret_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+      <label>对账间隔（秒）<input type="number" name="hostex_reconcile_interval_seconds" min="60" max="86400" step="1" value="{{ page.view.hostex_reconcile_interval_seconds|int }}" required></label>
+    </fieldset>
+
+    <fieldset class="config-group config-group--wide">
+      <legend>企业微信</legend>
+      <div class="form-grid">
+        <label>企业 ID <small>{{ page.view.wecom_corp_id }}</small><input type="password" name="wecom_corp_id" maxlength="256" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>微信客服 Secret <small>{{ page.view.wecom_kf_secret }}</small><input type="password" name="wecom_kf_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>回调 Token <small>{{ page.view.wecom_callback_token }}</small><input type="password" name="wecom_callback_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>EncodingAESKey <small>{{ page.view.wecom_encoding_aes_key }}</small><input type="password" name="wecom_encoding_aes_key" maxlength="43" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>应用 AgentId<input type="number" name="wecom_agent_id" min="1" {% if page.view.wecom_agent_id > 0 %}value="{{ page.view.wecom_agent_id }}"{% endif %} required></label>
+        <label>应用 Secret <small>{{ page.view.wecom_agent_secret }}</small><input type="password" name="wecom_agent_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>Contact Secret <small>{{ page.view.wecom_contact_secret }}</small><input type="password" name="wecom_contact_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>值班成员 <small>{{ page.view.wecom_duty_userids }}</small><input type="password" name="wecom_duty_userids" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>消息补拉间隔（秒）<input type="number" name="wecom_poll_interval_seconds" min="5" max="300" step="1" value="{{ page.view.wecom_poll_interval_seconds|int }}" required></label>
+      </div>
+      <label class="check-row"><input type="checkbox" name="clear_wecom_contact_secret" value="true">明确清除 Contact Secret（将停用客户联系标签同步）</label>
+    </fieldset>
+
+    <fieldset class="config-confirm config-group--wide">
+      <legend>测试并保存</legend>
+      <label>当前管理员密码<input type="password" name="password" maxlength="128" autocomplete="current-password" required></label>
+      <p class="muted">系统会先建立候选并测试连接，再以页面修订号安全激活。测试不发送客人消息、不修改订单；会产生两次极小模型调用，并可能保留供应商日志或产生少量费用。测试失败不会替换旧版本。</p>
+      <p class="muted">企业微信回调 Token 与 EncodingAESKey 仅本地校验，未验证真实回调投递；客服、应用和可选通讯录凭据使用只读接口检查。</p>
+      <button class="button" type="submit" {% if not page.writable %}disabled aria-disabled="true"{% endif %}>测试并保存新版本</button>
+    </fieldset>
+  </form>
+</section>
+
+{% if page.previous_version_id %}
+<section class="panel danger-panel">
+  <div class="panel__header"><div><p class="eyebrow">高风险操作</p><h2>回滚上一有效版本</h2></div>{{ ui.badge("需二次验证", "danger") }}</div>
+  <p>目标版本 #{{ page.previous_version_id }} 已在首次激活前验证。页面过期时操作会被拒绝；安全热切换会在构造客户端成功后再完成。</p>
+  <form method="post" action="/employee/admin/settings/rollback" class="inline-form" data-danger-confirm="确认回滚到上一配置版本吗？">
+    <input type="hidden" name="csrf_token" value="{{ rollback_csrf_token }}">
+    <input type="hidden" name="expected_revision" value="{{ page.revision }}">
+    <input type="hidden" name="expected_previous_version_id" value="{{ page.previous_version_id }}">
+    <label>当前管理员密码<input type="password" name="password" maxlength="128" autocomplete="current-password" required></label>
+    <button class="button button--danger" type="submit">验证并回滚</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

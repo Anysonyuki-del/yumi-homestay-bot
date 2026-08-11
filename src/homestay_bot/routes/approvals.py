@@ -1,20 +1,16 @@
 import secrets
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/approvals")
-templates = Jinja2Templates(
-    directory=Path(__file__).resolve().parent.parent / "templates"
-)
 
 
 class ApprovalPageServicePort(Protocol):
@@ -54,13 +50,7 @@ async def approval_index(
     page: int = Query(1, ge=1, le=10_000),
 ) -> Response:
     """只向管理员展示待处理审批列表。"""
-    try:
-        _, role = await require_employee_session(request)
-    except HTTPException:
-        return RedirectResponse(
-            "/employee/login?next=/employee/approvals",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+    _, role = await require_employee_session(request)
     if role is not EmployeeRole.ADMIN:
         raise HTTPException(status_code=403, detail="只有管理员可以查看预订审批")
     approvals = await _get_page_service(request).list_pending(
@@ -72,8 +62,11 @@ async def approval_index(
         name="approvals/index.html",
         context={
             "approvals": approvals[:50],
+            "page": page,
             "previous_page": page - 1 if page > 1 else None,
             "next_page": page + 1 if len(approvals) > 50 else None,
+            "page_title": "待处理预订",
+            "active_nav": "approvals",
         },
     )
 
@@ -81,13 +74,7 @@ async def approval_index(
 @router.get("/{approval_id}", response_class=HTMLResponse)
 async def approval_detail(request: Request, approval_id: int) -> Response:
     """展示脱敏审批详情，并签发一次性确认令牌。"""
-    try:
-        _, role = await require_employee_session(request)
-    except HTTPException:
-        return RedirectResponse(
-            f"/employee/login?next=/employee/approvals/{approval_id}",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+    _, role = await require_employee_session(request)
     if role is not EmployeeRole.ADMIN:
         raise HTTPException(status_code=403, detail="只有管理员可以查看预订审批")
 
@@ -99,7 +86,13 @@ async def approval_detail(request: Request, approval_id: int) -> Response:
     return templates.TemplateResponse(
         request=request,
         name="approvals/detail.html",
-        context={**detail, "confirmation_nonce": nonce, "employee_role": role},
+        context={
+            **detail,
+            "confirmation_nonce": nonce,
+            "employee_role": role,
+            "page_title": f"预订审批 {detail['approval'].approval_code}",
+            "active_nav": "approvals",
+        },
     )
 
 

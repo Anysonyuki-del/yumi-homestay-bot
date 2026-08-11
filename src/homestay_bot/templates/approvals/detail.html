@@ -1,65 +1,9 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>预订审批 {{ approval.approval_code }}</title>
-    <link rel="stylesheet" href="/static/app.css">
-  </head>
-  <body>
-    <main class="card">
-      <h1>预订审批</h1>
-      <dl class="detail-grid">
-        <dt>状态</dt><dd>{{ approval.status.value }}</dd>
-        <dt>客人</dt><dd>{{ approval.guest_name }}</dd>
-        <dt>手机号</dt><dd>{{ masked_mobile }}</dd>
-        <dt>入住日期</dt><dd>{{ approval.check_in_date }}</dd>
-        <dt>退房日期</dt><dd>{{ approval.check_out_date }}</dd>
-        <dt>入住人数</dt><dd>{{ approval.number_of_guests }}</dd>
-        <dt>房型偏好</dt><dd>{{ approval.room_type_preference }}</dd>
-        <dt>备注</dt><dd>{{ approval.special_requests or "无" }}</dd>
-      </dl>
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
 
-      <section>
-        <h2>渠道日历参考价</h2>
-        <p>仅供人工参考，最终成交金额以本页确认值为准（人民币）。</p>
-        <ul>
-          {% for item in reference_prices %}
-          <li>{{ item.date }}：¥{{ item.price }}</li>
-          {% else %}
-          <li>暂无参考价</li>
-          {% endfor %}
-        </ul>
-      </section>
-
-      <form method="post" action="/employee/approvals/{{ approval.id }}/confirm">
-        <input type="hidden" name="confirmation_nonce" value="{{ confirmation_nonce }}">
-        <label>具体房间
-          <select name="property_id" required>
-            {% for item in properties %}
-            <option value="{{ item.id }}">{{ item.title }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>最终房费（人民币）
-          <input name="final_rate_amount" type="number" min="1" required>
-        </label>
-        <label>已收金额（人民币）
-          <input name="received_amount" type="number" min="0" required>
-        </label>
-        <label>收款方式
-          <select name="income_method_id" required>
-            {% for item in income_methods %}
-            <option value="{{ item.id }}">{{ item.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label class="checkbox">
-          <input name="payment_confirmed" type="checkbox" value="true" required>
-          我已核对房态、金额并确认收款
-        </label>
-        <button type="submit">确认并创建百居易订单</button>
-      </form>
-    </main>
-  </body>
-</html>
+{% block page_actions %}<a class="button button--secondary" href="/employee/approvals">返回审批列表</a>{% endblock %}
+{% block content %}
+<section class="detail-section panel panel--padded"><div class="section-heading"><h2>预订资料</h2>{{ ui.badge(approval.status | status_zh, "warning") }}</div><dl class="detail-grid"><dt>客人</dt><dd>{{ approval.guest_name }}</dd><dt>手机号</dt><dd>{{ masked_mobile }}</dd><dt>入住日期</dt><dd>{{ approval.check_in_date | date_zh }}</dd><dt>退房日期</dt><dd>{{ approval.check_out_date | date_zh }}</dd><dt>入住人数</dt><dd>{{ approval.number_of_guests }}</dd><dt>房型偏好</dt><dd>{{ approval.room_type_preference }}</dd><dt>备注</dt><dd class="long-text">{{ approval.special_requests or "无" }}</dd></dl></section>
+<section class="detail-section panel panel--padded"><h2>渠道日历参考价</h2><p>仅供人工参考，最终成交金额以确认值为准（人民币）。</p><ul class="price-list">{% for item in reference_prices %}<li><span>{{ item.date }}</span><strong>¥{{ item.price }}</strong></li>{% else %}<li>暂无参考价</li>{% endfor %}</ul></section>
+<section class="decision-panel panel panel--padded"><p class="eyebrow">高风险确认</p><h2>金额与收款确认</h2><form method="post" action="/employee/approvals/{{ approval.id }}/confirm" data-confirm="确定房态、成交金额与收款均已核对，并创建百居易订单吗？" data-unsaved-warning><input type="hidden" name="confirmation_nonce" value="{{ confirmation_nonce }}"><div class="form-grid"><label>具体房间<select name="property_id" required>{% for item in properties %}<option value="{{ item.id }}">{{ item.title }}</option>{% endfor %}</select></label><label>收款方式<select name="income_method_id" required>{% for item in income_methods %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label><label>最终房费（人民币）<input name="final_rate_amount" type="number" min="1" required></label><label>已收金额（人民币）<input name="received_amount" type="number" min="0" required></label></div><label class="confirmation-check"><input name="payment_confirmed" type="checkbox" value="true" required><span><strong>我已核对房态、金额并确认收款</strong><small>提交后将进入真实订单创建流程。</small></span></label><button class="button button--danger" type="submit">确认并创建百居易订单</button></form></section>
+{% endblock %}

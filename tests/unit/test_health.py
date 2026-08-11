@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from admin_auth_helpers import configure_admin_auth
 from fastapi import FastAPI, Request
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -9,6 +10,7 @@ from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.main import app
 from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.health import router as health_router
+from homestay_bot.services.runtime_clients import RuntimeClientStatus
 
 
 @pytest.mark.asyncio
@@ -48,8 +50,13 @@ async def test_health_details_require_admin_and_return_component_statuses() -> N
     @test_app.get("/test/session/{role}")
     async def seed_session(request: Request, role: EmployeeRole) -> dict[str, str]:
         """仅供测试写入签名员工会话。"""
-        request.session["employee_id"] = 1
+        request.session["employee_id"] = (
+            1 if role is EmployeeRole.ADMIN else 2
+        )
         request.session["employee_role"] = role.value
+        request.session["admin_id"] = 1
+        request.session["admin_session_version"] = 1
+        request.session["last_activity_at"] = datetime.now(UTC).isoformat()
         return {"status": "seeded"}
 
     transport = httpx.ASGITransport(app=test_app)
@@ -58,8 +65,10 @@ async def test_health_details_require_admin_and_return_component_statuses() -> N
         base_url="http://test",
     ) as client:
         public_response = await client.get("/employee/health")
+        configure_admin_auth(test_app, EmployeeRole.STAFF)
         await client.get("/test/session/staff")
         staff_response = await client.get("/employee/health")
+        configure_admin_auth(test_app, EmployeeRole.ADMIN)
         await client.get("/test/session/admin")
         admin_response = await client.get("/employee/health")
 
@@ -260,3 +269,94 @@ async def test_future_heartbeat_is_not_considered_healthy() -> None:
 
     assert result["status"] == "degraded"
     assert result["wecom_polling"] == "stale"
+@pytest.mark.asyncio
+async def test_runtime_configuration_health_can_degrade_after_startup() -> None:
+    """激活补偿冲突后动态配置标志应立即让健康状态降级。"""
+    configuration = {"ok": True}
+    now = datetime.now(UTC)
+
+    async def database_probe() -> bool:
+        """模拟健康数据库连接。"""
+        return True
+
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: now,
+        hostex_heartbeat_getter=lambda: now,
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
+        configuration_ok=lambda: configuration["ok"],
+        web_search_status_getter=lambda: "ok",
+    )
+
+    assert (await service.check())["configuration"] == "ok"
+    configuration["ok"] = False
+    result = await service.check()
+    assert result["configuration"] == "incomplete"
+    assert result["status"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_runtime_health_reads_current_revision_contact_and_intervals() -> None:
+    """每次检查异步读取当前registry状态，并与DB revision核对。"""
+    now = datetime.now(UTC)
+    status = RuntimeClientStatus(
+        revision=1,
+        has_duty=True,
+        contact_configured=False,
+        wecom_poll_interval_seconds=60.0,
+        hostex_reconcile_interval_seconds=200.0,
+        resources_healthy=True,
+    )
+    database_revision = 2
+
+    async def database_probe() -> bool:
+        """模拟健康数据库连接。"""
+        return True
+
+    async def runtime_status_provider() -> RuntimeClientStatus:
+        """返回测试当前运行状态。"""
+        return status
+
+    async def runtime_revision_provider() -> int:
+        """返回数据库激活指针revision。"""
+        return database_revision
+
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: now - timedelta(seconds=100),
+        hostex_heartbeat_getter=lambda: now - timedelta(seconds=300),
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
+        configuration_ok=True,
+        web_search_status_getter=lambda: "ok",
+        runtime_status_provider=runtime_status_provider,
+        runtime_revision_provider=runtime_revision_provider,
+    )
+
+    mismatched = await service.check()
+    assert mismatched["configuration"] == "incomplete"
+
+    database_revision = 1
+    initial = await service.check()
+    assert initial["configuration"] == "ok"
+    assert initial["wecom_contact_sync"] == "not_configured"
+    assert initial["wecom_polling"] == "ok"
+    assert initial["hostex_webhook_sync"] == "ok"
+
+    status = RuntimeClientStatus(
+        revision=2,
+        has_duty=True,
+        contact_configured=True,
+        wecom_poll_interval_seconds=5.0,
+        hostex_reconcile_interval_seconds=20.0,
+        resources_healthy=True,
+    )
+    database_revision = 2
+    current = await service.check()
+    assert current["configuration"] == "ok"
+    assert current["wecom_contact_sync"] == "ok"
+    assert current["wecom_polling"] == "stale"
+    assert current["hostex_webhook_sync"] == "stale"

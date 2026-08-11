@@ -1,0 +1,64 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+{% block title %}配置版本记录 · {{ app_name }}{% endblock %}
+{% block page_actions %}<a class="button button--secondary" href="/employee/admin/settings">返回设置</a>{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel__header"><div><p class="eyebrow">只读审计视图</p><h2>最近配置版本</h2></div><span class="muted">修订 {{ page.revision }}</span></div>
+  <p class="muted">这里只展示版本状态、时间和凭据尾号，不提供密文下载或明文查看。</p>
+  {% if versions %}
+  <div class="stack-list">
+    {% for version in versions %}
+    <article class="list-card">
+      <div><strong>版本 #{{ version.version_id }}</strong>
+        {% if version.is_active %}{{ ui.badge("当前数据库版本", "info") }}{% endif %}
+        {% if version.is_previous %}{{ ui.badge("可回滚", "gold") }}{% endif %}
+        {{ ui.badge(version.status, "neutral") }}
+      </div>
+      <small>{{ version.created_at|datetime_zh }} · {{ version.created_by_label }}</small>
+      {% if version.failure_code %}<p class="muted">结果码：{{ version.failure_code }}</p>{% endif %}
+      {% if version.provider_results %}
+      <div class="config-test-results" aria-label="接口分项测试结果">
+        {% for provider_name, provider_label in (("deepseek", "DeepSeek"), ("hostex", "百居易"), ("wecom", "企业微信")) %}
+          {% set provider = version.provider_results.get(provider_name) %}
+          {% if provider %}
+          <div class="config-test-result">
+            <strong>{{ provider_label }}</strong>
+            {% if provider.succeeded %}{{ ui.badge("连接通过", "success") }}
+            {% else %}{{ ui.badge("测试未通过", "danger") }}{% endif %}
+            {% if provider.error_code %}<small>结果码：{{ provider.error_code }}</small>{% endif %}
+            {% if provider.checks %}
+              <ul class="config-check-list">
+              {% for check_name, check in provider.checks.items() %}
+                <li>
+                  {% if check_name == "openai" %}OpenAI 兼容接口
+                  {% elif check_name == "anthropic" %}Anthropic 兼容接口
+                  {% elif check_name == "properties" %}房源列表（只读）
+                  {% elif check_name == "kf" %}客服 Secret
+                  {% elif check_name == "agent" %}应用 AgentId
+                  {% elif check_name == "contact" %}通讯录权限
+                  {% elif check_name == "callback" %}回调 Token / AESKey
+                  {% endif %}
+                  {% if check.succeeded %}<span>通过</span>{% else %}<span>未通过</span>{% endif %}
+                  {% if check.error_code %}<small>（{{ check.error_code }}）</small>{% endif %}
+                </li>
+              {% endfor %}
+              </ul>
+            {% endif %}
+            {% if provider_name == "wecom" and provider.callback_verification == "local_only" %}
+              <small>回调 Token / AESKey：仅本地校验，未验证真实回调投递</small>
+            {% endif %}
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      <dl class="config-summary">
+        {% for field, value in version.masked_summary.items() %}<div><dt>{{ field }}</dt><dd>{{ value }}</dd></div>{% endfor %}
+      </dl>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}{{ ui.empty("还没有数据库配置版本", "首次测试并保存后会显示在这里。") }}{% endif %}
+</section>
+{% endblock %}

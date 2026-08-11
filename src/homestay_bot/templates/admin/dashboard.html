@@ -1,0 +1,39 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+{% block title %}运营总览 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="metric-grid" aria-label="今日运营摘要">
+  <article class="metric-card"><span>今日入住</span><strong>{{ snapshot.check_in_count }}</strong><small>{{ snapshot.local_date|date_zh }}</small></article>
+  <article class="metric-card"><span>今日退房</span><strong>{{ snapshot.check_out_count }}</strong><small>请及时确认房态</small></article>
+  <article class="metric-card"><span>待办任务</span><strong>{{ snapshot.pending_task_count }}</strong><a href="/employee/tasks">查看任务</a></article>
+  <article class="metric-card"><span>待审批</span><strong>{{ snapshot.pending_approval_count }}</strong><a href="/employee/approvals">查看审批</a></article>
+  <article class="metric-card metric-card--attention"><span>需人工关注</span><strong>{{ snapshot.manual_attention_count }}</strong><small>客诉、凭证与提醒</small></article>
+</section>
+
+<div class="dashboard-grid">
+  <section class="panel">
+    <div class="panel__header"><div><p class="eyebrow">今日动线</p><h2>入住与退房</h2></div></div>
+    <div class="stay-columns">
+      <div><h3>入住 · {{ snapshot.check_in_count }}</h3>
+        {% if snapshot.arrivals %}<ul class="clean-list">{% for stay in snapshot.arrivals %}<li><strong>{{ stay.room_title }}</strong>{{ ui.badge("今日入住", "info") }}</li>{% endfor %}</ul>
+        {% else %}{{ ui.empty("今日暂无入住", "新订单同步后会显示在这里。") }}{% endif %}
+      </div>
+      <div><h3>退房 · {{ snapshot.check_out_count }}</h3>
+        {% if snapshot.departures %}<ul class="clean-list">{% for stay in snapshot.departures %}<li><strong>{{ stay.room_title }}</strong>{{ ui.badge("今日退房", "gold") }}</li>{% endfor %}</ul>
+        {% else %}{{ ui.empty("今日暂无退房", "可以继续关注房态和待办任务。") }}{% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel__header"><div><p class="eyebrow">7 间房一眼看清</p><h2>当前房态</h2></div><span class="panel__total">{{ snapshot.active_room_count }} 间启用</span></div>
+    {% if snapshot.active_room_count %}
+    <ul class="room-status-list">
+      {% for status, count in snapshot.room_status_counts.items() %}
+      <li><span class="status-dot status-dot--{{ status.value }}"></span><span>{{ status|status_zh }}</span><strong>{{ count }}</strong></li>
+      {% endfor %}
+    </ul>
+    {% else %}{{ ui.empty("尚无启用房源", "房源同步完成后，这里会展示当前房态。") }}{% endif %}
+  </section>
+</div>
+{% endblock %}
