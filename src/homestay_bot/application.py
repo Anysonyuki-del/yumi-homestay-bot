@@ -11,6 +11,7 @@ from typing import Any, BinaryIO, cast
 
 import httpx
 from anthropic import AsyncAnthropic
+from cryptography.fernet import InvalidToken
 from fastapi import FastAPI
 from openai import AsyncOpenAI
 from pydantic import ValidationError
@@ -20,7 +21,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from homestay_bot.config import Settings
+from homestay_bot.config import BootstrapSettings, RuntimeEnvironmentSettings, Settings
 from homestay_bot.db import create_engine, create_session_factory
 from homestay_bot.domain.enums import ComplaintReviewStatus, EmployeeRole, MessageOrigin
 from homestay_bot.domain.models import (
@@ -30,6 +31,7 @@ from homestay_bot.domain.models import (
     Employee,
     Message,
 )
+from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot, RuntimeConfigView
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
@@ -77,6 +79,10 @@ from homestay_bot.repositories.lifecycle_reminders import (
 )
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
+from homestay_bot.repositories.runtime_config import (
+    RuntimeConfigConflictError,
+    SQLAlchemyRuntimeConfigRepository,
+)
 from homestay_bot.routes.employee_auth import AdminLoginRateLimiter
 from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.hostex_webhook import HostexWebhookService
@@ -135,6 +141,20 @@ from homestay_bot.services.property_admin_service import (
     PropertyFields,
 )
 from homestay_bot.services.room_readiness_service import RoomReadinessService
+from homestay_bot.services.runtime_config_cipher import (
+    RuntimeConfigCipher,
+    RuntimeConfigPayloadError,
+)
+from homestay_bot.services.runtime_config_service import (
+    ActivationResult,
+    RuntimeConfigPage,
+    RuntimeConfigService,
+    RuntimeConfigTestError,
+    RuntimeConfigTestResult,
+    RuntimeConfigUnavailableError,
+    RuntimeConfigVersionView,
+    UpdateRuntimeConfig,
+)
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 from homestay_bot.services.task_page_service import TaskPageService
 from homestay_bot.worker import (
@@ -550,6 +570,245 @@ class SessionAdminAuthService:
                 raise
             await session.commit()
             return version
+
+
+class LocalRuntimeConfigTester:
+    """批次四只做本地结构校验，真实外联探针由后续批次替换。"""
+
+    async def test(self, snapshot: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+        """验证完整快照边界，不发送消息、不创建订单也不访问网络。"""
+        try:
+            snapshot.validate()
+        except ValueError:
+            return RuntimeConfigTestResult(
+                succeeded=False,
+                error_code="runtime_config_invalid",
+            )
+        return RuntimeConfigTestResult(succeeded=True)
+
+
+class UnavailableAdminReverify:
+    """在管理员认证未装配时拒绝所有运行配置写操作。"""
+
+    async def reverify_at_version(
+        self,
+        admin_id: int,
+        password: str,
+        expected_session_version: int,
+    ) -> None:
+        """显式报告服务不可写，绝不伪造密码复核成功。"""
+        raise RuntimeConfigUnavailableError("管理员认证不可用，运行配置只读")
+
+
+class EnvironmentFallbackRuntimeConfigRepository:
+    """保留真实 CAS 状态，同时让损坏 active 以环境快照作为修复基线。"""
+
+    def __init__(self, repository: SQLAlchemyRuntimeConfigRepository) -> None:
+        """保存真实仓储，除 active 密文读取外全部原样委托。"""
+        self._repository = repository
+
+    def __getattr__(self, name: str) -> Any:
+        """把候选、激活、审计和清理操作委托给真实仓储。"""
+        return getattr(self._repository, name)
+
+    async def get_active_version(self) -> None:
+        """屏蔽已确认损坏的 active 密文，避免设置页再次解密失败。"""
+        return None
+
+    async def get_activation_context(self) -> tuple[Any, None]:
+        """返回真实 revision 和指针，但以空版本触发完整环境修复基线。"""
+        state, _ = await self._repository.get_activation_context()
+        return state, None
+
+
+class SessionRuntimeConfigService:
+    """为每次配置操作创建短会话，并保持外联测试不占用数据库事务。"""
+
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        *,
+        cipher: RuntimeConfigCipher | None,
+        environment_snapshot: RuntimeConfigSnapshot | None,
+        password_hasher: PasswordHasherPort,
+        dummy_hash: str | None,
+        argon2_semaphore: asyncio.Semaphore | None,
+        argon2_executor: ThreadPoolExecutor | None,
+        writable: bool,
+    ) -> None:
+        """固定进程启动时环境快照，并保存可写所需的认证边界。"""
+        self._factory = factory
+        self._cipher = cipher
+        self._environment_snapshot = environment_snapshot
+        self._password_hasher = password_hasher
+        self._dummy_hash = dummy_hash
+        self._argon2_semaphore = argon2_semaphore
+        self._argon2_executor = argon2_executor
+        self._writable = writable
+
+    async def _repository_for(
+        self,
+        session: AsyncSession,
+    ) -> SQLAlchemyRuntimeConfigRepository | EnvironmentFallbackRuntimeConfigRepository:
+        """仅对无法解密的 active 使用环境修复视图，数据库错误继续上抛。"""
+        repository = SQLAlchemyRuntimeConfigRepository(session)
+        if self._cipher is None:
+            return repository
+        _, active = await repository.get_activation_context()
+        if active is None:
+            return repository
+        try:
+            self._cipher.decrypt(bytes(active.encrypted_payload))
+        except (InvalidToken, RuntimeConfigPayloadError, ValueError):
+            return EnvironmentFallbackRuntimeConfigRepository(repository)
+        return repository
+
+    async def _service(self, session: AsyncSession) -> RuntimeConfigService:
+        """按当前 active 健康度创建绑定同一短会话的核心服务。"""
+        if self._cipher is None:
+            raise RuntimeConfigUnavailableError("CONFIG_ENCRYPTION_KEY 未配置")
+        auth: Any = UnavailableAdminReverify()
+        if (
+            self._writable
+            and self._dummy_hash is not None
+            and self._argon2_semaphore is not None
+            and self._argon2_executor is not None
+        ):
+            auth = AdminAuthService(
+                SQLAlchemyAdminCredentialRepository(session),
+                password_hasher=self._password_hasher,
+                dummy_hash=self._dummy_hash,
+                argon2_semaphore=self._argon2_semaphore,
+                argon2_executor=self._argon2_executor,
+            )
+        return RuntimeConfigService(
+            repository=cast(Any, await self._repository_for(session)),
+            cipher=self._cipher,
+            auth=auth,
+            tester=LocalRuntimeConfigTester(),
+            environment_snapshot=self._environment_snapshot,
+            # 候选落库后先提交，后续测试阶段不能长期持有事务或数据库锁。
+            before_test=session.commit,
+        )
+
+    async def page_data(self) -> RuntimeConfigPage:
+        """返回可读设置页；缺主密钥时回退环境掩码或空白修复投影。"""
+        async with self._factory() as session:
+            if self._cipher is not None:
+                page = await (await self._service(session)).page_data()
+            else:
+                repository = SQLAlchemyRuntimeConfigRepository(session)
+                state = await repository.get_state()
+                page = RuntimeConfigPage(
+                    view=(
+                        self._environment_snapshot.masked_view()
+                        if self._environment_snapshot is not None
+                        else RuntimeConfigView.empty()
+                    ),
+                    revision=int(state.revision),
+                    active_version_id=state.active_version_id,
+                    previous_version_id=state.previous_version_id,
+                    source=(
+                        "environment"
+                        if self._environment_snapshot is not None
+                        else "unconfigured"
+                    ),
+                )
+            await session.commit()
+            return page
+
+    async def list_version_views(
+        self,
+        *,
+        limit: int = 20,
+    ) -> list[RuntimeConfigVersionView]:
+        """返回不解密历史密文的安全版本列表。"""
+        async with self._factory() as session:
+            repository = SQLAlchemyRuntimeConfigRepository(session)
+            state = await repository.get_state()
+            versions = await repository.list_versions(limit=limit)
+            result = [
+                RuntimeConfigVersionView(
+                    version_id=int(version.id),
+                    created_at=version.created_at,
+                    created_by_label=(
+                        "YuMi 管理员" if version.created_by is not None else "系统"
+                    ),
+                    status=version.status.value,
+                    failure_code=version.failure_code,
+                    is_active=version.id == state.active_version_id,
+                    is_previous=version.id == state.previous_version_id,
+                    masked_summary=dict(version.masked_summary),
+                )
+                for version in versions
+            ]
+            await session.commit()
+            return result
+
+    async def create_and_test(
+        self,
+        command: UpdateRuntimeConfig,
+        *,
+        actor_id: int,
+        admin_id: int,
+        password: str,
+        expected_session_version: int,
+        expected_revision: int,
+    ) -> ActivationResult:
+        """用单会话保存候选，并在测试前释放事务、激活后原子提交审计。"""
+        if not self._writable:
+            raise RuntimeConfigUnavailableError("运行配置当前只读")
+        async with self._factory() as session:
+            try:
+                result = await (await self._service(session)).create_and_test(
+                    command,
+                    actor_id=actor_id,
+                    admin_id=admin_id,
+                    password=password,
+                    expected_session_version=expected_session_version,
+                    expected_revision=expected_revision,
+                )
+            except (AuthenticationError, RuntimeConfigConflictError, RuntimeConfigTestError):
+                # 认证失败计数、失败候选和冲突审计都属于应持久化的安全结果。
+                await session.commit()
+                raise
+            except Exception:
+                await session.rollback()
+                raise
+            await session.commit()
+            return result
+
+    async def rollback(
+        self,
+        *,
+        actor_id: int,
+        admin_id: int,
+        password: str,
+        expected_session_version: int,
+        expected_revision: int,
+        expected_previous_version_id: int,
+    ) -> ActivationResult:
+        """在单一事务中原子提交回滚指针和安全审计。"""
+        if not self._writable:
+            raise RuntimeConfigUnavailableError("运行配置当前只读")
+        async with self._factory() as session:
+            try:
+                result = await (await self._service(session)).rollback(
+                    actor_id=actor_id,
+                    admin_id=admin_id,
+                    password=password,
+                    expected_session_version=expected_session_version,
+                    expected_revision=expected_revision,
+                    expected_previous_version_id=expected_previous_version_id,
+                )
+            except (AuthenticationError, RuntimeConfigConflictError, RuntimeConfigTestError):
+                await session.commit()
+                raise
+            except Exception:
+                await session.rollback()
+                raise
+            await session.commit()
+            return result
 
 
 class SessionAdminCsrfService:
@@ -1764,28 +2023,227 @@ async def _bootstrap_admin_auth(
         return await _has_valid_existing_admin(session)
 
 
+async def _resolve_runtime_snapshot(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    cipher: RuntimeConfigCipher | None,
+    environment_snapshot: RuntimeConfigSnapshot | None,
+) -> tuple[RuntimeConfigSnapshot | None, str, bool]:
+    """按数据库优先规则解析启动快照，并把安全回退标为降级。"""
+    async with factory() as session:
+        _, active = await SQLAlchemyRuntimeConfigRepository(session).get_activation_context()
+        await session.commit()
+    if active is None:
+        source = "environment" if environment_snapshot is not None else "unconfigured"
+        return environment_snapshot, source, cipher is None
+    if cipher is not None:
+        try:
+            return cipher.decrypt(bytes(active.encrypted_payload)), "database", False
+        except (InvalidToken, RuntimeConfigPayloadError, ValueError) as error:
+            logger.warning("激活运行配置不可解密，已进入安全修复模式：%s", type(error).__name__)
+    else:
+        logger.warning("配置主密钥缺失，激活运行配置不可读取，已进入安全修复模式")
+    source = "environment_fallback" if environment_snapshot is not None else "repair_only"
+    return environment_snapshot, source, True
+
+
+def _clear_lifespan_state(app: FastAPI) -> None:
+    """清除生命周期注入对象，避免同进程测试重启复用已关闭资源。"""
+    for state_name in (
+        "admin_auth_service",
+        "admin_auth_available",
+        "admin_login_rate_limiter",
+        "admin_argon2_semaphore",
+        "admin_csrf_service",
+        "employee_access_verifier",
+        "approval_page_service",
+        "admin_dashboard_service",
+        "task_page_service",
+        "private_file_service",
+        "property_admin_service",
+        "customer_admin_service",
+        "knowledge_admin_service",
+        "complaint_admin_service",
+        "runtime_config_service",
+        "runtime_config_source",
+        "runtime_config_writes_available",
+        "wecom_callback_service",
+        "hostex_webhook_service",
+        "health_service",
+        "started_at",
+        "worker_last_heartbeat",
+        "wecom_poll_last_success",
+        "hostex_sync_last_success",
+        "context_maintenance_last_success",
+        "lifecycle_scheduler_last_success",
+    ):
+        if hasattr(app.state, state_name):
+            delattr(app.state, state_name)
+
+
 @asynccontextmanager
 async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """在配置完整时装配外部客户端、数据库服务和后台 worker。"""
+    """先装配安全后台，再按数据库优先来源启用外部客户端和 worker。"""
     try:
-        settings = Settings()  # type: ignore[call-arg]
+        bootstrap = BootstrapSettings()  # type: ignore[call-arg]
     except ValidationError:
-        # 未配置时仍允许启动健康页，便于本地发现缺失项。
+        # 基础配置不完整时数据库和登录都不可安全构造，只保留公开降级健康页。
         yield
         return
 
-    engine = create_engine(settings.database_url)
+    try:
+        runtime_environment = RuntimeEnvironmentSettings()  # type: ignore[call-arg]
+    except ValidationError:
+        environment_snapshot = None
+    else:
+        # 环境只在启动时捕获一次，后续页面操作不得重新读取变化中的进程环境。
+        environment_snapshot = RuntimeConfigSnapshot.from_settings(runtime_environment)
+
+    runtime_cipher: RuntimeConfigCipher | None = None
+    if bootstrap.config_encryption_key is not None:
+        try:
+            runtime_cipher = RuntimeConfigCipher(bootstrap.config_encryption_key)
+        except ValueError as error:
+            logger.warning("配置主密钥不可用，设置页已切换只读：%s", type(error).__name__)
+
+    engine = create_engine(bootstrap.database_url)
     factory = create_session_factory(engine)
     try:
         admin_auth_available = await _bootstrap_admin_auth(
             factory,
-            username=settings.admin_bootstrap_username,
-            password_hash=settings.admin_bootstrap_password_hash,
+            username=bootstrap.admin_bootstrap_username,
+            password_hash=bootstrap.admin_bootstrap_password_hash,
         )
     except Exception as error:
         # 后台引导失败不能阻断企业微信、客服和 worker 主链路，且日志不含秘密正文。
         admin_auth_available = False
         logger.warning("管理员后台引导不可用：%s", type(error).__name__)
+
+    runtime_snapshot, runtime_source, runtime_degraded = await _resolve_runtime_snapshot(
+        factory,
+        cipher=runtime_cipher,
+        environment_snapshot=environment_snapshot,
+    )
+    app.state.runtime_config_source = runtime_source
+    app.state.admin_auth_available = admin_auth_available
+    app.state.admin_login_rate_limiter = AdminLoginRateLimiter()
+    argon2_executor: ThreadPoolExecutor | None = None
+    argon2_semaphore: asyncio.Semaphore | None = None
+    dummy_hash: str | None = None
+    if admin_auth_available:
+        # 虚拟哈希在应用生命周期仅生成一次，登录和设置复核共享有界线程池。
+        argon2_semaphore = asyncio.Semaphore(2)
+        argon2_executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="admin-argon2",
+        )
+        async with argon2_semaphore:
+            dummy_hash = await asyncio.get_running_loop().run_in_executor(
+                argon2_executor,
+                ADMIN_PASSWORD_HASHER.hash,
+                "admin-auth-dummy-password",
+            )
+        app.state.admin_argon2_semaphore = argon2_semaphore
+        app.state.admin_auth_service = SessionAdminAuthService(
+            factory,
+            password_hasher=ADMIN_PASSWORD_HASHER,
+            dummy_hash=dummy_hash,
+            argon2_semaphore=argon2_semaphore,
+            argon2_executor=argon2_executor,
+        )
+        app.state.admin_csrf_service = SessionAdminCsrfService(factory)
+        app.state.employee_access_verifier = SessionEmployeeAccessVerifier(factory)
+
+    runtime_writable = runtime_cipher is not None and admin_auth_available
+    app.state.runtime_config_writes_available = runtime_writable
+    app.state.runtime_config_service = SessionRuntimeConfigService(
+        factory,
+        cipher=runtime_cipher,
+        environment_snapshot=environment_snapshot,
+        password_hasher=ADMIN_PASSWORD_HASHER,
+        dummy_hash=dummy_hash,
+        argon2_semaphore=argon2_semaphore,
+        argon2_executor=argon2_executor,
+        writable=runtime_writable,
+    )
+
+    sensitive_data = SensitiveDataCipher(bootstrap.data_encryption_key)
+    private_file_storage = PrivateFileStorage(bootstrap.private_upload_dir)
+    app.state.admin_dashboard_service = SessionAdminDashboardService(factory)
+    app.state.task_page_service = SessionTaskPageService(
+        factory,
+        private_file_storage,
+        bootstrap.private_upload_max_bytes,
+    )
+    app.state.private_file_service = app.state.task_page_service
+    app.state.property_admin_service = SessionPropertyAdminService(
+        factory,
+        sensitive_data,
+        private_file_storage,
+        bootstrap.private_upload_max_bytes,
+    )
+    app.state.customer_admin_service = SessionCustomerAdminService(
+        factory,
+        sensitive_data,
+        tag_sync_enabled=(
+            runtime_snapshot is not None and runtime_snapshot.wecom_contact_secret is not None
+        ),
+    )
+    app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory)
+    app.state.complaint_admin_service = SessionComplaintAdminService(factory)
+
+    async def database_probe() -> bool:
+        """执行无副作用 SELECT 1 检查数据库连接。"""
+        try:
+            async with factory() as session:
+                await session.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+
+    startup_time = datetime.now(UTC)
+    app.state.started_at = startup_time
+    app.state.worker_last_heartbeat = startup_time
+    app.state.wecom_poll_last_success = startup_time
+    app.state.hostex_sync_last_success = startup_time
+    app.state.context_maintenance_last_success = startup_time
+    app.state.lifecycle_scheduler_last_success = startup_time
+    web_search_state = WebSearchState()
+    app.state.health_service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: app.state.worker_last_heartbeat,
+        poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
+        hostex_heartbeat_getter=lambda: app.state.hostex_sync_last_success,
+        context_heartbeat_getter=lambda: app.state.context_maintenance_last_success,
+        lifecycle_heartbeat_getter=lambda: app.state.lifecycle_scheduler_last_success,
+        configuration_ok=False,
+        web_search_status_getter=web_search_state.get,
+        contact_sync_configured=False,
+    )
+
+    if runtime_snapshot is None:
+        # repair-only 仅运行数据库后台，不构造任何带空凭据的外部客户端或 worker。
+        try:
+            yield
+        finally:
+            _clear_lifespan_state(app)
+            if argon2_executor is not None:
+                await asyncio.to_thread(
+                    argon2_executor.shutdown,
+                    wait=True,
+                    cancel_futures=True,
+                )
+            await engine.dispose()
+        return
+
+    runtime_values = runtime_snapshot.to_dict()
+    runtime_values.pop("schema_version")
+    settings = Settings.model_validate(
+        {
+            **bootstrap.model_dump(),
+            **runtime_values,
+        }
+    )
     hostex = HostexClient(settings.hostex_access_token)
     wecom = WeComApiClient(
         settings.wecom_corp_id,
@@ -1811,7 +2269,6 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     queue = DurableJobQueue(factory)
     knowledge = KnowledgeService(SessionKnowledgeRepository(factory))
     faq_candidate_context = FaqCandidateContextService(SessionFaqCandidateRepository(factory))
-    web_search_state = WebSearchState()
     tourism_searcher = DeepSeekTourismSearcher(
         client=deepseek_anthropic,
         model=settings.deepseek_model,
@@ -1840,7 +2297,6 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.deepseek_model,
     )
     duty_userids = [item.strip() for item in settings.wecom_duty_userids.split(",") if item.strip()]
-    sensitive_data = SensitiveDataCipher(settings.data_encryption_key)
 
     async def handle_message(
         message: IncomingMessage,
@@ -2052,66 +2508,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         return service.handle
 
-    async def database_probe() -> bool:
-        """执行无副作用 SELECT 1 检查数据库连接。"""
-        try:
-            async with factory() as session:
-                await session.execute(text("SELECT 1"))
-            return True
-        except Exception:
-            return False
-
-    app.state.admin_auth_available = admin_auth_available
-    app.state.admin_login_rate_limiter = AdminLoginRateLimiter()
-    argon2_executor: ThreadPoolExecutor | None = None
-    if admin_auth_available:
-        # 虚拟哈希在应用生命周期仅生成一次，登录请求只在线程中复用校验。
-        argon2_semaphore = asyncio.Semaphore(2)
-        argon2_executor = ThreadPoolExecutor(
-            max_workers=2,
-            thread_name_prefix="admin-argon2",
-        )
-        async with argon2_semaphore:
-            dummy_hash = await asyncio.get_running_loop().run_in_executor(
-                argon2_executor,
-                ADMIN_PASSWORD_HASHER.hash,
-                "admin-auth-dummy-password",
-            )
-        app.state.admin_argon2_semaphore = argon2_semaphore
-        app.state.admin_auth_service = SessionAdminAuthService(
-            factory,
-            password_hasher=ADMIN_PASSWORD_HASHER,
-            dummy_hash=dummy_hash,
-            argon2_semaphore=argon2_semaphore,
-            argon2_executor=argon2_executor,
-        )
-        app.state.admin_csrf_service = SessionAdminCsrfService(factory)
-        app.state.employee_access_verifier = SessionEmployeeAccessVerifier(factory)
     app.state.approval_page_service = SessionApprovalPageService(
         factory=factory,
         hostex=hostex,
     )
-    app.state.admin_dashboard_service = SessionAdminDashboardService(factory)
-    private_file_storage = PrivateFileStorage(settings.private_upload_dir)
-    app.state.task_page_service = SessionTaskPageService(
-        factory,
-        private_file_storage,
-        settings.private_upload_max_bytes,
-    )
-    app.state.private_file_service = app.state.task_page_service
-    app.state.property_admin_service = SessionPropertyAdminService(
-        factory,
-        sensitive_data,
-        private_file_storage,
-        settings.private_upload_max_bytes,
-    )
-    app.state.customer_admin_service = SessionCustomerAdminService(
-        factory,
-        sensitive_data,
-        tag_sync_enabled=contact_client is not None,
-    )
-    app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory)
-    app.state.complaint_admin_service = SessionComplaintAdminService(factory)
     app.state.wecom_callback_service = WeComCallbackService.from_credentials(
         settings.wecom_callback_token,
         settings.wecom_encoding_aes_key,
@@ -2122,14 +2522,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.hostex_webhook_secret_token,
         SessionHostexEventRecorder(factory),
     )
-    startup_time = datetime.now(UTC)
-    app.state.started_at = startup_time
-    app.state.worker_last_heartbeat = startup_time
     # 启动宽限期避免首次补拉前被误报；一次成功后由真实心跳覆盖。
-    app.state.wecom_poll_last_success = startup_time
-    app.state.hostex_sync_last_success = startup_time
-    app.state.context_maintenance_last_success = startup_time
-    app.state.lifecycle_scheduler_last_success = startup_time
     app.state.health_service = OperationalHealthService(
         database_probe=database_probe,
         heartbeat_getter=lambda: app.state.worker_last_heartbeat,
@@ -2137,7 +2530,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         hostex_heartbeat_getter=(lambda: app.state.hostex_sync_last_success),
         context_heartbeat_getter=(lambda: app.state.context_maintenance_last_success),
         lifecycle_heartbeat_getter=(lambda: app.state.lifecycle_scheduler_last_success),
-        configuration_ok=bool(duty_userids) and admin_auth_available,
+        configuration_ok=(
+            bool(duty_userids) and admin_auth_available and not runtime_degraded
+        ),
         web_search_status_getter=web_search_state.get,
         contact_sync_configured=contact_client is not None,
         poll_max_age=timedelta(
@@ -2253,33 +2648,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         for task in background_tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        # 测试重启或同进程重新装配时不得沿用已关闭的客户端与会话服务。
-        for state_name in (
-            "admin_auth_service",
-            "admin_auth_available",
-            "admin_login_rate_limiter",
-            "admin_argon2_semaphore",
-            "admin_csrf_service",
-            "employee_access_verifier",
-            "approval_page_service",
-            "admin_dashboard_service",
-            "task_page_service",
-            "private_file_service",
-            "property_admin_service",
-            "customer_admin_service",
-            "knowledge_admin_service",
-            "wecom_callback_service",
-            "hostex_webhook_service",
-            "health_service",
-            "started_at",
-            "worker_last_heartbeat",
-            "wecom_poll_last_success",
-            "hostex_sync_last_success",
-            "context_maintenance_last_success",
-            "lifecycle_scheduler_last_success",
-        ):
-            if hasattr(app.state, state_name):
-                delattr(app.state, state_name)
+        _clear_lifespan_state(app)
         await deepseek_chat.close()
         await deepseek_anthropic.close()
         await hostex.aclose()
