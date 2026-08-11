@@ -1,0 +1,28 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+{% block title %}配置版本记录 · {{ app_name }}{% endblock %}
+{% block page_actions %}<a class="button button--secondary" href="/employee/admin/settings">返回设置</a>{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel__header"><div><p class="eyebrow">只读审计视图</p><h2>最近配置版本</h2></div><span class="muted">修订 {{ page.revision }}</span></div>
+  <p class="muted">这里只展示版本状态、时间和凭据尾号，不提供密文下载或明文查看。</p>
+  {% if versions %}
+  <div class="stack-list">
+    {% for version in versions %}
+    <article class="list-card">
+      <div><strong>版本 #{{ version.version_id }}</strong>
+        {% if version.is_active %}{{ ui.badge("当前数据库版本", "info") }}{% endif %}
+        {% if version.is_previous %}{{ ui.badge("可回滚", "gold") }}{% endif %}
+        {{ ui.badge(version.status, "neutral") }}
+      </div>
+      <small>{{ version.created_at|datetime_zh }} · {{ version.created_by_label }}</small>
+      {% if version.failure_code %}<p class="muted">结果码：{{ version.failure_code }}</p>{% endif %}
+      <dl class="config-summary">
+        {% for field, value in version.masked_summary.items() %}<div><dt>{{ field }}</dt><dd>{{ value }}</dd></div>{% endfor %}
+      </dl>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}{{ ui.empty("还没有数据库配置版本", "首次测试并保存后会显示在这里。") }}{% endif %}
+</section>
+{% endblock %}

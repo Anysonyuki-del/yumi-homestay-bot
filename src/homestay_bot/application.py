@@ -715,7 +715,14 @@ class SessionRuntimeConfigService:
                     ),
                 )
             await session.commit()
-            return page
+            return RuntimeConfigPage(
+                view=page.view,
+                revision=page.revision,
+                active_version_id=page.active_version_id,
+                previous_version_id=page.previous_version_id,
+                source=page.source,
+                writable=self._writable,
+            )
 
     async def list_version_views(
         self,

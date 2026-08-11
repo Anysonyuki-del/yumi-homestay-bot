@@ -77,9 +77,7 @@ class UpdateRuntimeConfig:
 
     def changed_fields(self) -> tuple[str, ...]:
         """只返回明确提供的安全字段名，供审计记录。"""
-        return tuple(
-            sorted(name for name, value in self.normalized_updates().items() if value is not None)
-        )
+        return tuple(sorted(self.normalized_updates()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +110,9 @@ class RuntimeConfigVersionView:
 
     version_id: int
     created_at: datetime | None
-    created_by: int | None
+    created_by_label: str
+    status: str
+    failure_code: str | None
     is_active: bool
     is_previous: bool
     masked_summary: dict[str, object]
@@ -127,6 +127,7 @@ class RuntimeConfigPage:
     active_version_id: int | None
     previous_version_id: int | None
     source: str
+    writable: bool = True
 
 
 class RuntimeConfigTestError(RuntimeError):
@@ -307,7 +308,15 @@ class RuntimeConfigService:
             RuntimeConfigVersionView(
                 version_id=int(version.id),
                 created_at=getattr(version, "created_at", None),
-                created_by=getattr(version, "created_by", None),
+                created_by_label=(
+                    "YuMi 管理员" if getattr(version, "created_by", None) is not None else "系统"
+                ),
+                status=(
+                    version.status.value
+                    if hasattr(version.status, "value")
+                    else str(version.status)
+                ),
+                failure_code=getattr(version, "failure_code", None),
                 is_active=version.id == state.active_version_id,
                 is_previous=version.id == state.previous_version_id,
                 masked_summary=dict(version.masked_summary),
@@ -416,7 +425,7 @@ class RuntimeConfigService:
         expected_revision: int,
         expected_previous_version_id: int,
     ) -> ActivationResult:
-        """复核并重新测试上一版本后，按 revision 原子交换两个有效指针。"""
+        """复核后恢复上一已验证版本，并按 revision 原子交换两个有效指针。"""
         await self._auth.reverify_at_version(
             admin_id,
             password,
@@ -435,18 +444,6 @@ class RuntimeConfigService:
         if previous is None:
             raise LookupError("上一配置版本不存在")
         snapshot = self._cipher.decrypt(bytes(previous.encrypted_payload))
-        test_result = await self._tester.test(snapshot)
-        if not test_result.succeeded:
-            error_code = self._safe_error_code(test_result.error_code)
-            await self._repository.add_audit(
-                actor_id=actor_id,
-                action="runtime_config.rollback_test",
-                version_id=int(previous_id),
-                fields=(),
-                result="failed",
-                error_code=error_code,
-            )
-            raise RuntimeConfigTestError(error_code)
         rolled_back = await self._repository.rollback(
             expected_revision=expected_revision,
             expected_previous_version_id=expected_previous_version_id,

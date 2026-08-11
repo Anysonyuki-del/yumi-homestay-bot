@@ -292,6 +292,9 @@ async def test_environment_baseline_blank_secret_and_explicit_optional_clear() -
     assert after.deepseek_model == "deepseek-new-model"
     assert result.revision == 1
     assert auth.calls == [(1, "correct-password", 4)]
+    assert UpdateRuntimeConfig(clear_wecom_contact_secret=True).changed_fields() == (
+        "wecom_contact_secret",
+    )
 
 
 @pytest.mark.asyncio
@@ -394,6 +397,27 @@ async def test_rollback_binds_session_revision_and_previous_version() -> None:
     assert result.revision == 3
     assert (await service.load_active_or_environment()).deepseek_model == "model-one"
     assert auth.calls == [(1, "correct-password", 4)] * 3
+    assert len(tester.snapshots) == 2
+
+
+@pytest.mark.asyncio
+async def test_version_views_only_expose_safe_lifecycle_and_actor_label() -> None:
+    """版本页面只能看到安全状态、稳定错误码和管理员显示名。"""
+    repository = RepositoryStub()
+    service = build_service(repository, AuthStub(), CandidateTesterStub(), build_snapshot())
+    await activate(
+        service,
+        UpdateRuntimeConfig(deepseek_model="model-one"),
+        expected_revision=0,
+    )
+    repository.versions[1].failure_code = "safe_failure_code"
+
+    views = await service.list_version_views()
+
+    assert views[0].status == "test_passed"
+    assert views[0].failure_code == "safe_failure_code"
+    assert views[0].created_by_label == "YuMi 管理员"
+    assert not hasattr(views[0], "created_by")
 
 
 @pytest.mark.asyncio

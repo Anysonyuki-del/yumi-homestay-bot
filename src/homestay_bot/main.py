@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.application import application_lifespan
-from homestay_bot.config import Settings
+from homestay_bot.config import BootstrapSettings
 from homestay_bot.logging import configure_logging_redaction
 from homestay_bot.routes.admin import router as admin_router
 from homestay_bot.routes.approvals import router as approvals_router
@@ -20,14 +20,15 @@ from homestay_bot.routes.hostex_webhook import router as hostex_webhook_router
 from homestay_bot.routes.knowledge import router as knowledge_router
 from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.properties import router as properties_router
+from homestay_bot.routes.runtime_config import router as runtime_config_router
 from homestay_bot.routes.tasks import router as tasks_router
 from homestay_bot.routes.wecom_callback import router as wecom_callback_router
 
 
 def _session_configuration() -> tuple[str, bool]:
-    """优先读取完整配置；未配置时使用进程级随机密钥而非公开默认值。"""
+    """优先读取稳定启动配置；基础项缺失时才使用进程级随机密钥。"""
     try:
-        settings = Settings()  # type: ignore[call-arg]
+        settings = BootstrapSettings()  # type: ignore[call-arg]
     except ValidationError:
         secret = os.environ.get("SESSION_SECRET") or secrets.token_urlsafe(48)
         https_only = os.environ.get("SESSION_COOKIE_HTTPS_ONLY", "0") == "1"
@@ -58,6 +59,7 @@ app.include_router(wecom_callback_router)
 app.include_router(hostex_webhook_router)
 app.include_router(employee_auth_router)
 app.include_router(admin_router)
+app.include_router(runtime_config_router)
 app.include_router(approvals_router)
 app.include_router(knowledge_router)
 app.include_router(tasks_router)
