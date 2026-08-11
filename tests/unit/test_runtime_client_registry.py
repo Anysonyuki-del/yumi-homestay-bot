@@ -1,4 +1,6 @@
 import asyncio
+import gc
+import weakref
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -23,10 +25,12 @@ class CloseProbe:
     def __init__(self) -> None:
         """初始化关闭计数。"""
         self.calls = 0
+        self.called = asyncio.Event()
 
     async def aclose(self) -> None:
         """记录一次异步关闭。"""
         self.calls += 1
+        self.called.set()
 
 
 class OrderedCloseProbe(CloseProbe):
@@ -228,23 +232,29 @@ async def test_double_cancellation_cannot_interrupt_lease_release() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_retired_close_finishes_cleanup_then_propagates_cancel() -> None:
-    """swap清理被取消时仍完成旧bundle关闭，并在记录健康后传播取消。"""
+async def test_swap_returns_after_publish_and_close_waits_for_retirement() -> None:
+    """swap发布后立即返回，shutdown则必须等待已跟踪的退役清理。"""
     old_probe = GatedCloseProbe()
+    second_probe = GatedCloseProbe()
     registry = RuntimeClientRegistry(build_bundle(1, old_probe))
-    swap_task = asyncio.create_task(registry.swap(build_bundle(2, CloseProbe())))
+    swap_task = asyncio.create_task(registry.swap(build_bundle(2, second_probe)))
     await old_probe.started.wait()
 
-    swap_task.cancel()
-    await asyncio.sleep(0)
-    swap_task.cancel()
+    returned_while_retirement_blocked = swap_task.done()
     old_probe.proceed.set()
+    await swap_task
+    assert returned_while_retirement_blocked is True
 
-    with pytest.raises(asyncio.CancelledError):
-        await swap_task
+    # 再次制造退役清理，证明shutdown会等待后台task而不是提前返回。
+    await registry.swap(build_bundle(3, CloseProbe()))
+    await second_probe.started.wait()
+    close_task = asyncio.create_task(registry.close())
+    await asyncio.sleep(0)
+    assert close_task.done() is False
+
+    second_probe.proceed.set()
+    await asyncio.wait_for(close_task, timeout=0.1)
     assert old_probe.completed.is_set()
-    assert (await registry.status()).resources_healthy is True
-    await registry.close()
 
 
 @pytest.mark.asyncio
@@ -324,6 +334,62 @@ async def test_failed_retired_bundle_cannot_be_published_again() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bundle_cannot_be_claimed_by_two_registries() -> None:
+    """同bundle的claim属于对象自身，不得被另一registry重复接管。"""
+    bundle = build_bundle(1, CloseProbe())
+    registry = RuntimeClientRegistry(bundle)
+
+    with pytest.raises(ValueError, match="已发布"):
+        RuntimeClientRegistry(bundle)
+
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_successfully_retired_bundles_are_garbage_collectable() -> None:
+    """成功退役后registry不得为身份去重长期保留bundle及其秘密。"""
+    initial = build_bundle(0, CloseProbe())
+    registry = RuntimeClientRegistry(initial)
+    retired_refs = [weakref.ref(initial)]
+    del initial
+
+    for revision in range(1, 101):
+        candidate = build_bundle(revision, CloseProbe())
+        await registry.swap(candidate)
+        if revision < 100:
+            retired_refs.append(weakref.ref(candidate))
+        del candidate
+    for _ in range(3):
+        await asyncio.sleep(0)
+    gc.collect()
+
+    assert all(reference() is None for reference in retired_refs)
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_in_progress_retirement_holds_bundle_only_until_cleanup_finishes() -> None:
+    """进行中的退役task强持有bundle，成功结束后应立即允许回收。"""
+    old_probe = GatedCloseProbe()
+    retired = build_bundle(1, old_probe)
+    retired_ref = weakref.ref(retired)
+    registry = RuntimeClientRegistry(retired)
+    del retired
+
+    await registry.swap(build_bundle(2, CloseProbe()))
+    await old_probe.started.wait()
+    gc.collect()
+    assert retired_ref() is not None
+
+    old_probe.proceed.set()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    gc.collect()
+    assert retired_ref() is None
+    await registry.close()
+
+
+@pytest.mark.asyncio
 async def test_retired_close_failure_does_not_turn_published_swap_into_failure() -> None:
     """发布点之后的旧资源清理异常不得诱发DB补偿并关闭当前candidate。"""
     old_probe = FailingCloseProbe()
@@ -361,9 +427,11 @@ async def test_resource_health_recovers_only_after_failed_bundle_is_retried() ->
     )
 
     await registry.swap(build_bundle(2, closed_b))
+    await failed_a.called.wait()
     assert health[-1] is False
 
     await registry.swap(build_bundle(3, current_c))
+    await closed_b.called.wait()
     assert closed_b.calls == 1
     assert health[-1] is False
 
@@ -383,6 +451,7 @@ async def test_shutdown_retries_failed_bundle_without_reclosing_successes() -> N
     registry = RuntimeClientRegistry(bundle)
 
     await registry.swap(build_bundle(2, CloseProbe()))
+    await failed_then_ok.called.wait()
     assert (failed_then_ok.calls, already_closed.calls) == (1, 1)
 
     await registry.close()

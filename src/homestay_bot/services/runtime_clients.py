@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import inspect
 import logging
+import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -41,11 +42,13 @@ class _BundleCloseState:
     """保存不可变 bundle 内部唯一允许变化的关闭状态。"""
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    claim_lock: threading.Lock = field(default_factory=threading.Lock)
+    claimed: bool = False
     closed_resource_ids: set[int] = field(default_factory=set)
     fully_closed: bool = False
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class RuntimeClientBundle:
     """固定一个 revision 的全部外部客户端、校验器和调度参数。"""
 
@@ -98,6 +101,13 @@ class RuntimeClientBundle:
             if first_error is not None:
                 raise first_error
 
+    def _claim_for_registry(self) -> None:
+        """原子且不可逆地把bundle所有权交给唯一registry。"""
+        with self._close_state.claim_lock:
+            if self._close_state.claimed or self._close_state.fully_closed:
+                raise ValueError("运行客户端候选已发布或关闭")
+            self._close_state.claimed = True
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeClientStatus:
@@ -132,6 +142,7 @@ class RuntimeClientRegistry:
         configuration_healthy: bool = True,
     ) -> None:
         """发布初始运行快照。"""
+        initial._claim_for_registry()
         self._lock = asyncio.Lock()
         self._entries = {id(initial): _RegistryEntry(initial)}
         self._current_id = id(initial)
@@ -140,7 +151,7 @@ class RuntimeClientRegistry:
         self._resource_health_setter = resource_health_setter
         self._failed_retired: dict[int, RuntimeClientBundle] = {}
         self._configuration_healthy = configuration_healthy
-        self._known_bundles = {id(initial): initial}
+        self._retirement_tasks: set[asyncio.Task[None]] = set()
         self._close_attempt: asyncio.Task[None] | None = None
 
     @asynccontextmanager
@@ -166,25 +177,20 @@ class RuntimeClientRegistry:
             await complete_cleanup(self._release(entry))
 
     async def swap(self, candidate: RuntimeClientBundle) -> None:
-        """立即发布候选；旧快照无租约时在锁外关闭，避免阻塞新请求。"""
-        retired_bundle: RuntimeClientBundle | None = None
+        """锁内原子发布候选，退役清理交给强跟踪后台task。"""
+        candidate._claim_for_registry()
         async with self._lock:
             if self._closed:
                 raise RuntimeError("运行客户端注册表已关闭")
-            if id(candidate) in self._known_bundles:
-                raise ValueError("运行客户端候选已发布")
             previous = self._entries[self._current_id]
             previous.retired = True
-            self._known_bundles[id(candidate)] = candidate
             self._entries[id(candidate)] = _RegistryEntry(candidate)
             self._current_id = id(candidate)
             # 候选成功发布后解除启动期损坏配置降级；健康服务还会核对DB revision。
             self._configuration_healthy = True
             if previous.leases == 0:
                 self._entries.pop(id(previous.bundle), None)
-                retired_bundle = previous.bundle
-        if retired_bundle is not None:
-            await self._close_retired(retired_bundle)
+                self._schedule_retirement_locked(previous.bundle)
 
     async def status(self) -> RuntimeClientStatus:
         """在注册表锁内读取一致且不含凭证的当前运行状态。"""
@@ -209,7 +215,6 @@ class RuntimeClientRegistry:
         async with self._lock:
             attempt = self._close_attempt
             if attempt is None or attempt.done():
-                bundles_to_close: list[RuntimeClientBundle] = []
                 if self._closed:
                     wait_for_releases = bool(self._entries)
                 else:
@@ -217,28 +222,25 @@ class RuntimeClientRegistry:
                     for entry in self._entries.values():
                         entry.retired = True
                         if entry.leases == 0:
-                            bundles_to_close.append(entry.bundle)
-                    for bundle in bundles_to_close:
-                        self._entries.pop(id(bundle), None)
+                            self._schedule_retirement_locked(entry.bundle)
+                    for entry_id, entry in tuple(self._entries.items()):
+                        if entry.leases == 0:
+                            self._entries.pop(entry_id, None)
                     wait_for_releases = bool(self._entries)
                     if not wait_for_releases:
                         self._all_released.set()
-                attempt = asyncio.create_task(
-                    self._close_once(bundles_to_close, wait_for_releases)
-                )
+                attempt = asyncio.create_task(self._close_once(wait_for_releases))
                 self._close_attempt = attempt
         await complete_cleanup(attempt)
 
     async def _close_once(
         self,
-        bundles_to_close: list[RuntimeClientBundle],
         wait_for_releases: bool,
     ) -> None:
         """执行一次有界关闭attempt，并让同期调用方共享同一结果。"""
-        for bundle in bundles_to_close:
-            await self._close_retired(bundle)
         if wait_for_releases:
             await self._all_released.wait()
+        await self._wait_for_retirements()
         await self.retry_failed_closes()
 
     async def retry_failed_closes(self) -> None:
@@ -255,21 +257,38 @@ class RuntimeClientRegistry:
 
     async def _release(self, entry: _RegistryEntry) -> None:
         """释放一个租约，并在退役 bundle 的最后租约退出时关闭它。"""
-        bundle_to_close: RuntimeClientBundle | None = None
         async with self._lock:
             entry.leases -= 1
             if entry.leases < 0:
                 raise RuntimeError("运行客户端租约计数无效")
             if entry.retired and entry.leases == 0:
                 self._entries.pop(id(entry.bundle), None)
-                bundle_to_close = entry.bundle
-        try:
-            if bundle_to_close is not None:
-                await self._close_retired(bundle_to_close)
-        finally:
-            async with self._lock:
-                if self._closed and not self._entries:
-                    self._all_released.set()
+                self._schedule_retirement_locked(entry.bundle)
+            if self._closed and not self._entries:
+                self._all_released.set()
+
+    def _schedule_retirement_locked(self, bundle: RuntimeClientBundle) -> None:
+        """在registry锁内启动退役task，并在完成前强持有task及bundle。"""
+        task = asyncio.create_task(self._record_retired_close(bundle))
+        self._retirement_tasks.add(task)
+        task.add_done_callback(self._consume_retirement_result)
+
+    def _consume_retirement_result(self, task: asyncio.Task[None]) -> None:
+        """消费后台task结果并解除已完成task的强引用。"""
+        self._retirement_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            # 关闭异常已在_record_retired_close脱敏记录，此处只消费。
+            return
+
+    async def _wait_for_retirements(self) -> None:
+        """等待所有已安排退役task，不让shutdown提前返回。"""
+        async with self._lock:
+            tasks = tuple(self._retirement_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _close_retired(self, bundle: RuntimeClientBundle) -> None:
         """把实际关闭与健康记账作为一个取消安全的完整清理单元。"""

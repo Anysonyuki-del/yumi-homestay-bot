@@ -854,6 +854,148 @@ async def test_corrupt_startup_health_recovers_after_current_process_swap(
         assert health["wecom_contact_sync"] == "ok"
 
 
+@pytest.mark.asyncio
+async def test_cancel_after_runtime_publish_keeps_database_and_registry_current(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """旧资源退役阶段取消请求不得补偿已发布的新revision或关闭当前bundle。"""
+    config_key = Fernet.generate_key().decode()
+    initial_snapshot = _runtime_snapshot(deepseek_model="initial-model")
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'published-cancel.db'}"
+    await _create_runtime_database(
+        database_url,
+        active_payload=RuntimeConfigCipher(config_key).encrypt(initial_snapshot),
+    )
+    password = _set_bootstrap_environment(
+        monkeypatch,
+        database_url=database_url,
+        config_encryption_key=config_key,
+    )
+    _clear_runtime_environment(monkeypatch)
+    old_close_started = asyncio.Event()
+    old_close_proceed = asyncio.Event()
+    old_close_completed = asyncio.Event()
+    successful_audit_started = asyncio.Event()
+    candidate_close_calls = 0
+    build_calls = 0
+
+    class PassingTester:
+        """让候选配置进入真实DB激活与runtime发布。"""
+
+        async def test(self, candidate: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+            """校验候选完整并返回成功。"""
+            candidate.validate()
+            return RuntimeConfigTestResult(succeeded=True)
+
+    class OldCloseProbe:
+        """阻塞旧bundle关闭，暴露发布与退役的时序。"""
+
+        async def aclose(self) -> None:
+            """等待测试放行后完成旧资源关闭。"""
+            old_close_started.set()
+            await old_close_proceed.wait()
+            old_close_completed.set()
+
+    class CandidateCloseProbe:
+        """记录新bundle是否被错误当作失败候选关闭。"""
+
+        async def aclose(self) -> None:
+            """记录当前bundle关闭次数。"""
+            nonlocal candidate_close_calls
+            candidate_close_calls += 1
+
+    async def build_bundle(
+        snapshot: RuntimeConfigSnapshot,
+        *,
+        revision: int,
+        **kwargs,
+    ) -> RuntimeClientBundle:
+        """首次构造阻塞退役的旧bundle，后续构造可观测候选。"""
+        nonlocal build_calls
+        build_calls += 1
+        closeable: object = OldCloseProbe() if build_calls == 1 else CandidateCloseProbe()
+        return _runtime_bundle(snapshot, revision, closeable)
+
+    async def blocked_loop(*args, **kwargs) -> None:
+        """保持后台循环存活直到生命周期取消。"""
+        await asyncio.Event().wait()
+
+    original_add_audit = application.SQLAlchemyRuntimeConfigRepository.add_audit
+
+    async def gated_add_audit(self, **kwargs) -> None:
+        """发布成功后暂停外层请求，保证取消发生在可观测窗口。"""
+        if kwargs.get("action") == "runtime_config.activate" and kwargs.get(
+            "result"
+        ) == "ok":
+            successful_audit_started.set()
+            await asyncio.Event().wait()
+        await original_add_audit(self, **kwargs)
+
+    monkeypatch.setattr(application, "RuntimeConfigTester", PassingTester)
+    monkeypatch.setattr(application, "build_runtime_client_bundle", build_bundle)
+    monkeypatch.setattr(
+        application.SQLAlchemyRuntimeConfigRepository,
+        "add_audit",
+        gated_add_audit,
+    )
+    for loop_name in (
+        "_run_worker_loop",
+        "_run_wecom_poll_loop",
+        "_run_faq_maintenance_loop",
+        "_run_retention_loop",
+        "_run_context_maintenance_loop",
+        "_run_hostex_reconcile_loop",
+    ):
+        monkeypatch.setattr(application, loop_name, blocked_loop)
+
+    test_app = FastAPI()
+    async with application_lifespan(test_app):
+        engine = create_async_engine(database_url)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            credential = await session.scalar(select(AdminCredential))
+            assert credential is not None
+            actor_id = int(credential.employee_id)
+            admin_id = int(credential.id)
+            session_version = int(credential.session_version)
+
+        activation = asyncio.create_task(
+            test_app.state.runtime_config_service.create_and_test(
+                UpdateRuntimeConfig(deepseek_model="published-model"),
+                actor_id=actor_id,
+                admin_id=admin_id,
+                password=password,
+                expected_session_version=session_version,
+                expected_revision=1,
+            )
+        )
+        await old_close_started.wait()
+        # 新实现会到达成功审计门闩；旧实现仍阻塞在swap。
+        await asyncio.sleep(0)
+        activation.cancel()
+        old_close_proceed.set()
+        with pytest.raises(asyncio.CancelledError):
+            await activation
+        await asyncio.wait_for(old_close_completed.wait(), timeout=0.1)
+
+        async with factory() as session:
+            state = await session.get(RuntimeConfigState, 1)
+            active = (
+                await session.get(RuntimeConfigVersion, state.active_version_id)
+                if state is not None and state.active_version_id is not None
+                else None
+            )
+        assert state is not None
+        assert state.revision == 2
+        assert active is not None
+        assert active.status is RuntimeConfigVersionStatus.TEST_PASSED
+        assert (await test_app.state.runtime_client_registry.status()).revision == 2
+        assert candidate_close_calls == 0
+        assert successful_audit_started.is_set()
+        await engine.dispose()
+
+
 @pytest.mark.parametrize(
     ("admin_username", "admin_password_hash"),
     [(None, None), ("admin", "invalid-plaintext")],
