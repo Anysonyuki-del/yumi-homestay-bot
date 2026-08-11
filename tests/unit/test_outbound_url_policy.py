@@ -114,6 +114,49 @@ async def test_policy_rejects_one_private_answer_among_public_dns_answers() -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "address",
+    [
+        "224.0.0.1",
+        "239.1.1.1",
+        "ff02::1",
+        "ff0e::1",
+        "::ffff:127.0.0.1",
+        "64:ff9b::7f00:1",
+    ],
+)
+async def test_policy_rejects_multicast_and_embedded_non_public_addresses(
+    address: str,
+) -> None:
+    """多播及 IPv4-mapped/NAT64 中嵌入的非公网地址必须拒绝。"""
+    policy = OutboundUrlPolicy(resolver=resolver_for(address))
+
+    with pytest.raises(OutboundUrlRejected):
+        await policy.resolve("https://api.deepseek.example/v1")
+
+
+@pytest.mark.asyncio
+async def test_policy_accepts_public_ipv4_ipv6_mapped_and_nat64_addresses() -> None:
+    """合法公网 IPv4、IPv6、IPv4-mapped 和 RFC6052 NAT64 不应被过度拒绝。"""
+    addresses = (
+        "8.8.8.8",
+        "2606:4700:4700::1111",
+        "::ffff:8.8.8.8",
+        "64:ff9b::808:808",
+    )
+    policy = OutboundUrlPolicy(resolver=resolver_for(*addresses))
+
+    target = await policy.resolve("https://api.deepseek.example/v1")
+
+    assert target.addresses == (
+        "8.8.8.8",
+        "2606:4700:4700::1111",
+        "::ffff:8.8.8.8",
+        "64:ff9b::808:808",
+    )
+
+
+@pytest.mark.asyncio
 async def test_policy_maps_dns_timeout_without_echoing_hostname_or_query() -> None:
     """DNS 解析超时必须成为受控异常，不能无限等待或回显候选地址。"""
 

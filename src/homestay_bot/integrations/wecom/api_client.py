@@ -84,13 +84,13 @@ class WeComApiClient:
         self._raise_for_error(agent_response.json())
 
     async def probe_contact_permissions(self) -> None:
-        """只读验证可选通讯录 Secret 至少具备部门读取权限。"""
+        """只读验证可选客户联系 Secret 是否具备跟进成员读取权限。"""
         if not self._contact_secret:
             raise WeComApiError(-1, "通讯录 Secret 未配置")
         contact_token = await self._get_access_token(self._contact_secret)
         contact_response = await self._client.get(
-            "/cgi-bin/department/simplelist",
-            params={"access_token": contact_token, "id": 1},
+            "/cgi-bin/externalcontact/get_follow_user_list",
+            params={"access_token": contact_token},
         )
         contact_response.raise_for_status()
         self._raise_for_error(contact_response.json())

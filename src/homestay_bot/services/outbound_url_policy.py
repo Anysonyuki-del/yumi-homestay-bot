@@ -17,6 +17,7 @@ _METADATA_ADDRESSES = {
     ipaddress.ip_address("169.254.169.254"),
     ipaddress.ip_address("100.100.100.200"),
 }
+_RFC6052_WELL_KNOWN_NAT64 = ipaddress.ip_network("64:ff9b::/96")
 _BLOCKED_HOSTNAMES = {
     "localhost",
     "metadata",
@@ -141,9 +142,33 @@ class OutboundUrlPolicy:
 
     @staticmethod
     def _is_public_address(address: str) -> bool:
-        """使用正向公网判定并额外封禁云厂商元数据地址。"""
+        """显式拒绝特殊地址，并检查 IPv6 内嵌 IPv4 的真实可达范围。"""
         parsed = ipaddress.ip_address(address)
-        return parsed.is_global and parsed not in _METADATA_ADDRESSES
+        if isinstance(parsed, ipaddress.IPv6Address):
+            if parsed.ipv4_mapped is not None:
+                return OutboundUrlPolicy._is_direct_public_address(parsed.ipv4_mapped)
+            if parsed in _RFC6052_WELL_KNOWN_NAT64:
+                embedded = ipaddress.IPv4Address(int(parsed) & 0xFFFFFFFF)
+                return OutboundUrlPolicy._is_direct_public_address(embedded)
+        return OutboundUrlPolicy._is_direct_public_address(parsed)
+
+    @staticmethod
+    def _is_direct_public_address(
+        address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    ) -> bool:
+        """正向允许普通公网地址，同时显式拒绝所有特殊用途类别。"""
+        if address in _METADATA_ADDRESSES:
+            return False
+        if (
+            address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_private
+        ):
+            return False
+        return address.is_global
 
 
 class PublicHttpsTransport(httpx.AsyncBaseTransport):

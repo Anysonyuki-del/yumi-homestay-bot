@@ -49,7 +49,7 @@ async def test_list_kf_account_ids_uses_customer_service_secret() -> None:
 
 @pytest.mark.asyncio
 async def test_credential_probe_only_reads_kf_agent_and_optional_contact_permissions() -> None:
-    """候选探针只读客服列表、指定 AgentId 和通讯录权限，并可证明已关闭。"""
+    """候选探针只读客服列表、指定 AgentId 和客户联系权限，并可证明已关闭。"""
     requests: list[httpx.Request] = []
 
     def responder(request: httpx.Request) -> httpx.Response:
@@ -66,9 +66,8 @@ async def test_credential_probe_only_reads_kf_agent_and_optional_contact_permiss
         if request.url.path.endswith("/agent/get"):
             assert request.url.params["agentid"] == "1000002"
             return httpx.Response(200, json={"errcode": 0, "agentid": 1000002})
-        assert request.url.path.endswith("/department/simplelist")
-        assert request.url.params["id"] == "1"
-        return httpx.Response(200, json={"errcode": 0, "department_id": [1]})
+        assert request.url.path.endswith("/externalcontact/get_follow_user_list")
+        return httpx.Response(200, json={"errcode": 0, "follow_user": []})
 
     client = WeComApiClient(
         "corp-id",
@@ -83,8 +82,21 @@ async def test_credential_probe_only_reads_kf_agent_and_optional_contact_permiss
     await client.aclose()
 
     assert [request.method for request in requests] == ["GET"] * 6
+    assert [request.url.path for request in requests] == [
+        "/cgi-bin/gettoken",
+        "/cgi-bin/kf/account/list",
+        "/cgi-bin/gettoken",
+        "/cgi-bin/agent/get",
+        "/cgi-bin/gettoken",
+        "/cgi-bin/externalcontact/get_follow_user_list",
+    ]
+    assert requests[4].url.params["corpsecret"] == "contact-secret"
     assert client.is_closed is True
-    assert not any("message/send" in request.url.path for request in requests)
+    assert not any(
+        forbidden in request.url.path
+        for request in requests
+        for forbidden in ("department/", "mark_tag", "message/send")
+    )
 
 
 @pytest.mark.asyncio
