@@ -33,6 +33,28 @@ class StopRetentionLoop(RuntimeError):
     """表示测试已观察到一次历史记录清理。"""
 
 
+def test_deferred_payload_restores_fast_ack_delivery_metadata() -> None:
+    """worker 载荷必须完整恢复安抚摘要和 outbox 编号。"""
+    message = application._deferred_message_from_payload(
+        {
+            "msgid": "msg-1",
+            "open_kfid": "wk-1",
+            "external_userid": "wm-1",
+            "origin": "guest",
+            "msgtype": "text",
+            "content": "灯坏了修一下",
+            "sent_at": "2026-08-14T02:23:51+08:00",
+            "fast_ack_sha256": "a" * 64,
+            "fast_ack_outbox_id": "outbox:fast-ack",
+        }
+    )
+
+    assert message.metadata == {
+        "fast_ack_sha256": "a" * 64,
+        "fast_ack_outbox_id": "outbox:fast-ack",
+    }
+
+
 @pytest.mark.asyncio
 async def test_retention_loop_purges_and_commits_daily(monkeypatch) -> None:
     """历史记录维护应每天清理一次，并在独立事务提交。"""

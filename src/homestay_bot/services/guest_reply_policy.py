@@ -99,8 +99,15 @@ def sanitize_guest_reply(
 ) -> str:
     """清除客人侧执行承诺，并在需要人工时追加唯一管家收尾。"""
     if requires_human:
-        safe_content = "".join(_safe_human_sentences(content, language)).strip()
         handoff = human_contact_reply(language)
+        # 同一文本可能依次经过模型适配器和会话出口；先移除既有固定收尾，
+        # 再统一过滤并追加，保证重复清洗不改变正文或误删前置歉意。
+        content_without_handoff = content.strip()
+        if content_without_handoff.endswith(handoff):
+            content_without_handoff = content_without_handoff[: -len(handoff)].rstrip()
+        safe_content = "".join(
+            _safe_human_sentences(content_without_handoff, language)
+        ).strip()
         if not safe_content:
             acknowledgement = (
                 "Thanks for letting us know."

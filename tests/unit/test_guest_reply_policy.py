@@ -133,3 +133,17 @@ def test_english_handoff_is_promise_free() -> None:
     assert reply.endswith(human_contact_reply(Language.EN))
     assert "technician will" not in reply.lower()
     assert "fix it" not in reply.lower()
+
+
+@pytest.mark.parametrize("language", [Language.ZH, Language.EN])
+def test_human_reply_sanitization_is_idempotent(language: Language) -> None:
+    """已经过客人策略处理的安抚再次进入出口时，正文不得发生变化。"""
+    raw = (
+        "抱歉给您添麻烦了"
+        if language is Language.ZH
+        else "Sorry for the inconvenience."
+    )
+    first = sanitize_guest_reply(raw, language=language, requires_human=True)
+    second = sanitize_guest_reply(first, language=language, requires_human=True)
+
+    assert second == first

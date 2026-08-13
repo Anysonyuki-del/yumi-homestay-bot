@@ -20,6 +20,37 @@ from homestay_bot.worker import Worker
 
 
 @pytest.mark.asyncio
+async def test_job_status_lookup_uses_dedupe_key_without_payload() -> None:
+    """最终回复可按 outbox 幂等键确认安抚状态，且无需读取敏感载荷。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        repository = SQLAlchemyJobRepository(session)
+        job = await repository.enqueue(
+            "wecom_send_text",
+            {"content": "不应依赖这段正文"},
+            dedupe_key="outbox:fast-ack",
+        )
+
+        assert (
+            await repository.status_for_dedupe_key("outbox:fast-ack")
+            is JobStatus.PENDING
+        )
+        await repository.mark_completed(job)
+        assert job.payload == {}
+        assert (
+            await repository.status_for_dedupe_key("outbox:fast-ack")
+            is JobStatus.COMPLETED
+        )
+        assert await repository.status_for_dedupe_key("outbox:missing") is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_stale_running_job_is_recovered_and_claimed_after_restart() -> None:
     """进程中断遗留的超时 RUNNING 任务应恢复为可领取状态。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

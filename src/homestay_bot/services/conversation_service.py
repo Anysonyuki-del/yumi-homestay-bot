@@ -1,6 +1,8 @@
+import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, Protocol
 
@@ -9,6 +11,7 @@ from pydantic import ValidationError
 from homestay_bot.domain.enums import (
     BusinessTaskType,
     ConversationMode,
+    JobStatus,
     Language,
     MessageOrigin,
 )
@@ -38,6 +41,7 @@ from homestay_bot.services.emergency_service import (
 )
 from homestay_bot.services.guest_reply_policy import sanitize_guest_reply
 from homestay_bot.services.message_service import IncomingMessage
+from homestay_bot.worker import DeferredRetryJobError
 
 _MAX_ASSISTANT_REPLY_CHARACTERS = 1500
 logger = logging.getLogger(__name__)
@@ -239,6 +243,17 @@ class ConversationJobPort(Protocol):
     ) -> object:
         """登记可恢复的后台任务。"""
 
+    async def status_for_dedupe_key(self, dedupe_key: str) -> JobStatus | None:
+        """返回指定任务状态，供最终阶段确认快速安抚已经投递。"""
+
+
+@dataclass(frozen=True)
+class GuestReplyReceipt:
+    """记录客人出口实际正文和发送端返回的消息编号。"""
+
+    content: str
+    message_id: str | None
+
 
 class ComplaintClassifierPort(Protocol):
     """定义本地客诉识别和固定安抚接口。"""
@@ -428,6 +443,7 @@ class ConversationService:
     async def process_recorded_message(self, message: IncomingMessage) -> None:
         """处理已完成入站提交的消息，供后台最终回复任务调用。"""
         conversation = await self._conversations.get_or_create(message)
+        message = await self._resolve_fast_ack_delivery(message)
         # 人工接管期间只丢弃当前高风险事项；房态、旅游等独立问题仍应回复，
         # 同时保留人工模式，让正在处理的客诉继续由管家跟进。
         if (
@@ -445,6 +461,26 @@ class ConversationService:
             message,
             discard_if_stale=True,
         )
+
+    async def _resolve_fast_ack_delivery(
+        self,
+        message: IncomingMessage,
+    ) -> IncomingMessage:
+        """确认快速安抚已被企业微信接受；仍在发送时延迟最终任务。"""
+
+        metadata = message.metadata or {}
+        outbox_id = str(metadata.get("fast_ack_outbox_id", ""))
+        if not outbox_id or self._jobs is None:
+            return message
+        status = await self._jobs.status_for_dedupe_key(outbox_id)
+        if status in {JobStatus.PENDING, JobStatus.RUNNING}:
+            raise DeferredRetryJobError("快速安抚仍在发送中")
+        if status is not JobStatus.COMPLETED:
+            # 未找到或发送失败时，最终回复必须承担客人兜底，不能按摘要抑制。
+            mutable_metadata = dict(metadata)
+            mutable_metadata.pop("fast_ack_sha256", None)
+            return replace(message, metadata=mutable_metadata)
+        return message
 
     async def _enter_complaint_mode(
         self,
@@ -492,29 +528,39 @@ class ConversationService:
         jobs = self._jobs
         if jobs is None:
             return
+        fast_ack_sha256: str | None = None
         if self._should_send_fast_ack(message.content):
             ack = await self._assistant.respond_ack(
                 guest_identifier=message.external_userid,
                 language=conversation.language,
                 question=message.content,
             )
-            await self._send_guest_reply(
+            sent_ack = await self._send_guest_reply(
                 conversation,
                 ack,
                 message_type="ack",
                 requires_human=True,
             )
+            # 最终阶段只携带摘要，避免在任务载荷中复制一份安抚正文。
+            fast_ack_sha256 = hashlib.sha256(
+                sent_ack.content.encode("utf-8")
+            ).hexdigest()
+        payload: dict[str, object] = {
+            "msgid": message.msgid,
+            "open_kfid": message.open_kfid,
+            "external_userid": message.external_userid,
+            "origin": message.origin.value,
+            "msgtype": message.msgtype,
+            "content": message.content,
+            "sent_at": message.sent_at.isoformat(),
+        }
+        if fast_ack_sha256 is not None and sent_ack.message_id is not None:
+            payload["fast_ack_sha256"] = fast_ack_sha256
+            if sent_ack.message_id and sent_ack.message_id.startswith("outbox:"):
+                payload["fast_ack_outbox_id"] = sent_ack.message_id
         await jobs.enqueue(
             "wecom_process_message",
-            {
-                "msgid": message.msgid,
-                "open_kfid": message.open_kfid,
-                "external_userid": message.external_userid,
-                "origin": message.origin.value,
-                "msgtype": message.msgtype,
-                "content": message.content,
-                "sent_at": message.sent_at.isoformat(),
-            },
+            payload,
             dedupe_key=f"final:{message.msgid}",
         )
         if self._commit_boundary is not None:
@@ -583,11 +629,19 @@ class ConversationService:
             self._limit_assistant_reply(decision.reply_text),
             question=message.content,
         )
-        await self._send_guest_reply(
-            conversation,
+        prepared_reply = sanitize_guest_reply(
             reply_text,
+            language=conversation.language,
             requires_human=requires_human,
         )
+        fast_ack_sha256 = str((message.metadata or {}).get("fast_ack_sha256", ""))
+        prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
+        # 快速安抚已经包含全部最终内容时不重复发送；后续业务副作用仍照常执行。
+        if fast_ack_sha256 != prepared_sha256:
+            await self._send_prepared_guest_reply(
+                conversation,
+                prepared_reply,
+            )
         await self._track_frequent_faq(message, decision)
         await self._record_task_suggestion(conversation, message, decision)
         if local_handoff_reason or decision.handoff_reason:
@@ -756,13 +810,28 @@ class ConversationService:
         *,
         message_type: str = "text",
         requires_human: bool = False,
-    ) -> None:
-        """经过统一承诺过滤后，发送并持久化机器人文本。"""
+    ) -> GuestReplyReceipt:
+        """经过统一承诺过滤后发送并持久化，同时返回实际客人文本。"""
         content = sanitize_guest_reply(
             content,
             language=conversation.language,
             requires_human=requires_human,
         )
+        return await self._send_prepared_guest_reply(
+            conversation,
+            content,
+            message_type=message_type,
+        )
+
+    async def _send_prepared_guest_reply(
+        self,
+        conversation: Conversation,
+        content: str,
+        *,
+        message_type: str = "text",
+    ) -> GuestReplyReceipt:
+        """发送已经过统一客人侧策略处理的文本，并记录真实消息编号。"""
+
         message_id = await self._wecom.send_text(
             conversation.open_kfid,
             conversation.external_userid,
@@ -770,7 +839,7 @@ class ConversationService:
             message_type=message_type,
         )
         if message_id is None or message_id.startswith("outbox:"):
-            return
+            return GuestReplyReceipt(content=content, message_id=message_id)
         if message_type == "text":
             await self._messages.record_bot(conversation.id, message_id, content)
         else:
@@ -780,6 +849,7 @@ class ConversationService:
                 content,
                 message_type=message_type,
             )
+        return GuestReplyReceipt(content=content, message_id=message_id)
 
     @staticmethod
     def _warm_guest_reply(content: str, *, question: str = "") -> str:

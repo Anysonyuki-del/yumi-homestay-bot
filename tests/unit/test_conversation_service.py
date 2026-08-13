@@ -3,7 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from homestay_bot.domain.enums import BusinessTaskType, ConversationMode, Language, MessageOrigin
+from homestay_bot.domain.enums import (
+    BusinessTaskType,
+    ConversationMode,
+    JobStatus,
+    Language,
+    MessageOrigin,
+)
 from homestay_bot.domain.models import Conversation, Customer
 from homestay_bot.integrations.deepseek_client import (
     AssistantDecision,
@@ -215,6 +221,22 @@ class WeComStub:
         self.internal_messages.append(content)
 
 
+class OutboxWeComStub(WeComStub):
+    """模拟生产事务 outbox，只登记消息而不代表企业微信已接受。"""
+
+    async def send_text(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        content: str,
+        *,
+        message_type: str = "text",
+    ) -> str:
+        """记录待发送正文并返回稳定 outbox 编号。"""
+        self.guest_messages.append(content)
+        return "outbox:fast-ack"
+
+
 class IdentityResolverStub:
     """返回员工通知中使用的客服账号和客人显示名。"""
 
@@ -308,11 +330,17 @@ class DeferredJobStub:
 
     def __init__(self) -> None:
         self.jobs: list[tuple[str, dict[str, object], str | None]] = []
+        self.delivery_status: JobStatus | None = None
 
     async def enqueue(self, job_type, payload, *, dedupe_key=None):
         """保存任务类型和稳定去重键。"""
         self.jobs.append((job_type, payload, dedupe_key))
         return SimpleNamespace()
+
+    async def status_for_dedupe_key(self, dedupe_key: str) -> JobStatus | None:
+        """返回测试配置的快速安抚投递任务状态。"""
+        assert dedupe_key == "outbox:fast-ack"
+        return self.delivery_status
 
 
 class ApprovalServiceStub:
@@ -400,6 +428,7 @@ def incoming(
 def build_service(
     *,
     assistant: AssistantStub | None = None,
+    wecom: WeComStub | None = None,
     messages: MessageServiceStub | None = None,
     approvals: ApprovalServiceStub | None = None,
     frequent_faq: FrequentFaqStub | None = None,
@@ -418,13 +447,13 @@ def build_service(
     """创建注入固定依赖的会话服务。"""
     conversations = ConversationRepositoryStub()
     selected_assistant = assistant or AssistantStub()
-    wecom = WeComStub()
+    selected_wecom = wecom or WeComStub()
     service = ConversationService(
         conversations=conversations,
         messages=messages or MessageServiceStub(),
         assistant=selected_assistant,
         emergency_service=EmergencyService(),
-        wecom=wecom,
+        wecom=selected_wecom,
         agent_id=100001,
         duty_employee_userids=["staff-1"],
         approvals=approvals,
@@ -441,7 +470,7 @@ def build_service(
         complaint_service=complaint_service,
         complaint_reviews=complaint_reviews,
     )
-    return service, conversations, selected_assistant, wecom
+    return service, conversations, selected_assistant, selected_wecom
 
 
 @pytest.mark.asyncio
@@ -469,7 +498,165 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
     ]
     assert jobs.jobs[0][0] == "wecom_process_message"
     assert jobs.jobs[0][2] == "final:msg-1"
+    assert len(str(jobs.jobs[0][1]["fast_ack_sha256"])) == 64
     assert commits == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_final_skips_exact_duplicate_of_fast_ack() -> None:
+    """最终安全回复与已发安抚完全相同时，只允许客人收到一次。"""
+    jobs = DeferredJobStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="我已收到您的诉求。",
+            language=Language.ZH,
+            intent="maintenance",
+            confidence=0.96,
+        )
+    )
+    message = incoming(content="灯坏了修一下")
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        jobs=jobs,
+        defer_model=True,
+    )
+
+    await service.handle_message(message)
+    payload = jobs.jobs[0][1]
+    deferred_message = IncomingMessage(
+        msgid=message.msgid,
+        open_kfid=message.open_kfid,
+        external_userid=message.external_userid,
+        origin=message.origin,
+        msgtype=message.msgtype,
+        content=message.content,
+        sent_at=message.sent_at,
+        metadata={"fast_ack_sha256": str(payload["fast_ack_sha256"])},
+    )
+
+    await service.process_recorded_message(deferred_message)
+
+    assert wecom.guest_messages == [
+        "我已收到您的诉求。我会立即联系管家来处理，请您稍等。"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deferred_final_keeps_new_advice_after_fast_ack() -> None:
+    """最终回复含有新的安全排障建议时，仍应在快速安抚后发送。"""
+    jobs = DeferredJobStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="很抱歉给您添麻烦了，请先关闭故障灯具的电源。",
+            language=Language.ZH,
+            intent="maintenance",
+            confidence=0.96,
+        )
+    )
+    message = incoming(content="灯坏了修一下")
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        jobs=jobs,
+        defer_model=True,
+    )
+
+    await service.handle_message(message)
+    payload = jobs.jobs[0][1]
+    deferred_message = IncomingMessage(
+        msgid=message.msgid,
+        open_kfid=message.open_kfid,
+        external_userid=message.external_userid,
+        origin=message.origin,
+        msgtype=message.msgtype,
+        content=message.content,
+        sent_at=message.sent_at,
+        metadata={"fast_ack_sha256": str(payload["fast_ack_sha256"])},
+    )
+
+    await service.process_recorded_message(deferred_message)
+
+    assert len(wecom.guest_messages) == 2
+    assert "关闭故障灯具的电源" in wecom.guest_messages[1]
+
+
+@pytest.mark.asyncio
+async def test_deferred_final_waits_until_fast_ack_delivery_finishes() -> None:
+    """快速安抚仍在 outbox 发送中时，最终任务不得提前调用模型。"""
+    jobs = DeferredJobStub()
+    jobs.delivery_status = JobStatus.PENDING
+    wecom = OutboxWeComStub()
+    assistant = AssistantStub()
+    message = incoming(content="灯坏了修一下")
+    service, _, _, _ = build_service(
+        assistant=assistant,
+        jobs=jobs,
+        wecom=wecom,
+        defer_model=True,
+    )
+
+    await service.handle_message(message)
+    payload = jobs.jobs[0][1]
+    deferred_message = IncomingMessage(
+        msgid=message.msgid,
+        open_kfid=message.open_kfid,
+        external_userid=message.external_userid,
+        origin=message.origin,
+        msgtype=message.msgtype,
+        content=message.content,
+        sent_at=message.sent_at,
+        metadata={
+            "fast_ack_sha256": str(payload["fast_ack_sha256"]),
+            "fast_ack_outbox_id": str(payload["fast_ack_outbox_id"]),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="快速安抚仍在发送中"):
+        await service.process_recorded_message(deferred_message)
+
+    assert assistant.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_deferred_final_is_not_suppressed_when_fast_ack_delivery_failed() -> None:
+    """快速安抚投递失败时必须发送最终回复，不能让客人收不到任何内容。"""
+    jobs = DeferredJobStub()
+    jobs.delivery_status = JobStatus.FAILED
+    wecom = OutboxWeComStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="我已收到您的诉求。",
+            language=Language.ZH,
+            intent="maintenance",
+            confidence=0.96,
+        )
+    )
+    message = incoming(content="灯坏了修一下")
+    service, _, _, _ = build_service(
+        assistant=assistant,
+        jobs=jobs,
+        wecom=wecom,
+        defer_model=True,
+    )
+
+    await service.handle_message(message)
+    payload = jobs.jobs[0][1]
+    deferred_message = IncomingMessage(
+        msgid=message.msgid,
+        open_kfid=message.open_kfid,
+        external_userid=message.external_userid,
+        origin=message.origin,
+        msgtype=message.msgtype,
+        content=message.content,
+        sent_at=message.sent_at,
+        metadata={
+            "fast_ack_sha256": str(payload["fast_ack_sha256"]),
+            "fast_ack_outbox_id": str(payload["fast_ack_outbox_id"]),
+        },
+    )
+
+    await service.process_recorded_message(deferred_message)
+
+    assert len(wecom.guest_messages) == 2
 
 
 @pytest.mark.parametrize(

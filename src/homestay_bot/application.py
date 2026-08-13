@@ -333,6 +333,25 @@ class TransactionalOutboxWeCom:
         )
 
 
+def _deferred_message_from_payload(payload: dict[str, Any]) -> IncomingMessage:
+    """把最终回复任务载荷恢复为统一消息，并保留安抚投递元数据。"""
+
+    message_metadata: dict[str, str] = {}
+    for key in ("fast_ack_sha256", "fast_ack_outbox_id"):
+        if payload.get(key):
+            message_metadata[key] = str(payload[key])
+    return IncomingMessage(
+        msgid=str(payload["msgid"]),
+        open_kfid=str(payload["open_kfid"]),
+        external_userid=str(payload["external_userid"]),
+        origin=MessageOrigin(str(payload["origin"])),
+        msgtype=str(payload["msgtype"]),
+        content=str(payload.get("content", "")),
+        sent_at=datetime.fromisoformat(str(payload["sent_at"])),
+        metadata=message_metadata,
+    )
+
+
 async def _record_complaint_delivery(
     session: AsyncSession,
     source_message_id: str,
@@ -2701,15 +2720,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         bundle: RuntimeClientBundle,
     ) -> None:
         """执行已提交入站消息的最终模型回复。"""
-        message = IncomingMessage(
-            msgid=str(payload["msgid"]),
-            open_kfid=str(payload["open_kfid"]),
-            external_userid=str(payload["external_userid"]),
-            origin=MessageOrigin(str(payload["origin"])),
-            msgtype=str(payload["msgtype"]),
-            content=str(payload.get("content", "")),
-            sent_at=datetime.fromisoformat(str(payload["sent_at"])),
-        )
+        message = _deferred_message_from_payload(payload)
         await handle_message(message, bundle, deferred=True)
 
     def build_lifecycle_service(

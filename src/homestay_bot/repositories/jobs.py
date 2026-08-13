@@ -44,6 +44,16 @@ class SQLAlchemyJobRepository:
         statement = select(Job.id).where(Job.dedupe_key == dedupe_key)
         return await self._session.scalar(statement) is not None
 
+    async def status_for_dedupe_key(self, dedupe_key: str) -> JobStatus | None:
+        """按幂等键只读返回任务状态，不读取已经清空或可能敏感的载荷。"""
+
+        return cast(
+            JobStatus | None,
+            await self._session.scalar(
+                select(Job.status).where(Job.dedupe_key == dedupe_key)
+            ),
+        )
+
     async def enqueue(
         self,
         job_type: str,
