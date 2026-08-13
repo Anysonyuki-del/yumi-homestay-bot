@@ -3,7 +3,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -40,10 +40,11 @@ from homestay_bot.services.emergency_service import (
     EmergencyService,
 )
 from homestay_bot.services.guest_reply_policy import sanitize_guest_reply
-from homestay_bot.services.message_service import IncomingMessage
+from homestay_bot.services.message_service import GuestMessageBatch, IncomingMessage
 from homestay_bot.worker import DeferredRetryJobError
 
 _MAX_ASSISTANT_REPLY_CHARACTERS = 1500
+_GUEST_MESSAGE_DEBOUNCE_SECONDS = 3
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +56,9 @@ class ConversationRepository(Protocol):
 
     async def save(self, conversation: Conversation) -> None:
         """保存会话状态。"""
+
+    async def lock_activity(self, conversation_id: int) -> None:
+        """锁定会话行，串行化入站活动与静默任务消费。"""
 
 
 class ConversationMessageService(Protocol):
@@ -80,8 +84,22 @@ class ConversationMessageService(Protocol):
         conversation_id: int,
         limit: int = 20,
         through_external_message_id: str | None = None,
+        *,
+        merged_guest_content: str | None = None,
+        merged_guest_count: int = 1,
     ) -> list[dict[str, str]]:
         """返回有限的客人与机器人历史上下文。"""
+
+    async def build_guest_batch(
+        self,
+        conversation_id: int,
+        through_external_message_id: str,
+        *,
+        quiet_window_seconds: int = 3,
+        max_messages: int = 10,
+        max_characters: int = 2000,
+    ) -> GuestMessageBatch:
+        """返回来源边界前、静默窗口内的连续客人文本。"""
 
     async def has_newer_guest_message(
         self,
@@ -89,6 +107,13 @@ class ConversationMessageService(Protocol):
         external_message_id: str,
     ) -> bool:
         """判断来源消息后是否已经有更新的客人问题。"""
+
+    async def has_newer_conversation_activity(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源消息后是否出现客人或员工的新活动。"""
 
 
 class GuestAssistantPort(Protocol):
@@ -239,6 +264,7 @@ class ConversationJobPort(Protocol):
         job_type: str,
         payload: dict[str, object],
         *,
+        available_at: datetime | None = None,
         dedupe_key: str | None = None,
     ) -> object:
         """登记可恢复的后台任务。"""
@@ -364,6 +390,7 @@ class ConversationService:
     async def handle_message(self, message: IncomingMessage) -> None:
         """处理单条已去重消息，确保人工回复不会形成机器人回环。"""
         conversation = await self._conversations.get_or_create(message)
+        await self._conversations.lock_activity(conversation.id)
         if self._customer_profiles is not None:
             customer = await self._customer_profiles.ensure_for_message(message)
             if conversation.customer_id != customer.id:
@@ -407,7 +434,7 @@ class ConversationService:
         # 独立低风险问题时继续由机器人回答，避免一次投诉永久阻塞客服。
         if (
             conversation.mode is ConversationMode.HUMAN_ACTIVE
-            and determine_handoff_reason(message.content) is not None
+            and self._determine_handoff_reason(message.content) is not None
         ):
             await self._send_guest_reply(
                 conversation,
@@ -424,21 +451,87 @@ class ConversationService:
         if message.msgtype != "text" or self._handoff_pattern.search(message.content):
             await self._escalate_regular(conversation, message)
             return
-        if not is_homestay_related(message.content):
-            await self._send_guest_reply(
-                conversation,
-                (
-                    "我主要协助民宿入住或武汉旅行相关问题，"
-                    "这类问题暂时无法回答。"
-                ),
-            )
+        if self._defer_model and self._jobs is not None:
+            await self._enqueue_debounce(message)
             return
 
-        if self._defer_model and self._jobs is not None:
-            await self._stage_fast_ack(conversation, message)
+        if not is_homestay_related(message.content):
+            await self._send_unrelated_reply(conversation)
             return
 
         await self._process_model_reply(conversation, message)
+
+    async def process_debounced_message(self, message: IncomingMessage) -> None:
+        """静默窗口结束后合并当前批次，再决定安抚和最终处理。"""
+        conversation = await self._conversations.get_or_create(message)
+        await self._conversations.lock_activity(conversation.id)
+        if await self._messages.has_newer_conversation_activity(
+            conversation.id,
+            message.msgid,
+        ):
+            return
+        batch = await self._messages.build_guest_batch(
+            conversation.id,
+            message.msgid,
+            quiet_window_seconds=_GUEST_MESSAGE_DEBOUNCE_SECONDS,
+            max_messages=10,
+            max_characters=2000,
+        )
+        if not batch.content or batch.message_count < 1:
+            return
+        merged_message = replace(
+            message,
+            content=batch.content,
+            metadata={
+                **(message.metadata or {}),
+                "merged_guest_count": str(batch.message_count),
+            },
+        )
+        rule_contents = self._policy_questions(merged_message.content)
+        emergency = EmergencyClassification(False)
+        for rule_content in rule_contents:
+            emergency = self._emergency.classify(rule_content)
+            if emergency.is_emergency:
+                break
+        if emergency.is_emergency:
+            await self._escalate_emergency(conversation, merged_message, emergency)
+            return
+        if self._complaint_service is not None:
+            classification = self._complaint_service.classify(rule_contents[0])
+            for rule_content in rule_contents[1:]:
+                if classification.is_complaint:
+                    break
+                classification = self._complaint_service.classify(rule_content)
+            if classification.is_complaint:
+                await self._enter_complaint_mode(
+                    conversation,
+                    merged_message,
+                    classification,
+                )
+                return
+        handoff_reason = self._determine_handoff_reason(merged_message.content)
+        if (
+            conversation.mode is ConversationMode.HUMAN_ACTIVE
+            and handoff_reason is not None
+        ):
+            await self._send_guest_reply(
+                conversation,
+                "我已收到您的诉求。",
+                requires_human=True,
+            )
+            await self._notify_employee(
+                conversation,
+                merged_message,
+                "人工接待会话收到新的高风险消息",
+            )
+            return
+        if any(self._handoff_pattern.search(value) for value in rule_contents):
+            await self._escalate_regular(conversation, merged_message)
+            return
+        if not is_homestay_related(merged_message.content):
+            await self._send_unrelated_reply(conversation)
+            return
+        await self._stage_fast_ack(conversation, merged_message)
 
     async def process_recorded_message(self, message: IncomingMessage) -> None:
         """处理已完成入站提交的消息，供后台最终回复任务调用。"""
@@ -448,10 +541,10 @@ class ConversationService:
         # 同时保留人工模式，让正在处理的客诉继续由管家跟进。
         if (
             conversation.mode is ConversationMode.HUMAN_ACTIVE
-            and determine_handoff_reason(message.content) is not None
+            and self._determine_handoff_reason(message.content) is not None
         ):
             return
-        if await self._messages.has_newer_guest_message(
+        if await self._messages.has_newer_conversation_activity(
             conversation.id,
             message.msgid,
         ):
@@ -546,6 +639,7 @@ class ConversationService:
                 sent_ack.content.encode("utf-8")
             ).hexdigest()
         payload: dict[str, object] = {
+            "phase": "final",
             "msgid": message.msgid,
             "open_kfid": message.open_kfid,
             "external_userid": message.external_userid,
@@ -554,6 +648,11 @@ class ConversationService:
             "content": message.content,
             "sent_at": message.sent_at.isoformat(),
         }
+        merged_guest_count = str(
+            (message.metadata or {}).get("merged_guest_count", "")
+        )
+        if merged_guest_count.isdigit() and int(merged_guest_count) > 1:
+            payload["merged_guest_count"] = int(merged_guest_count)
         if fast_ack_sha256 is not None and sent_ack.message_id is not None:
             payload["fast_ack_sha256"] = fast_ack_sha256
             if sent_ack.message_id and sent_ack.message_id.startswith("outbox:"):
@@ -565,6 +664,37 @@ class ConversationService:
         )
         if self._commit_boundary is not None:
             await self._commit_boundary()
+
+    async def _enqueue_debounce(self, message: IncomingMessage) -> None:
+        """为普通客人文本登记三秒后的静默检查，不提前生成安抚。"""
+        jobs = self._jobs
+        if jobs is None:
+            return
+        await jobs.enqueue(
+            "wecom_process_message",
+            {
+                "phase": "debounce",
+                "msgid": message.msgid,
+                "open_kfid": message.open_kfid,
+                "external_userid": message.external_userid,
+                "origin": message.origin.value,
+                "msgtype": message.msgtype,
+                "content": message.content,
+                "sent_at": message.sent_at.isoformat(),
+            },
+            available_at=datetime.now(UTC)
+            + timedelta(seconds=_GUEST_MESSAGE_DEBOUNCE_SECONDS),
+            dedupe_key=f"debounce:{message.msgid}",
+        )
+        if self._commit_boundary is not None:
+            await self._commit_boundary()
+
+    async def _send_unrelated_reply(self, conversation: Conversation) -> None:
+        """发送固定的非民宿问题边界说明。"""
+        await self._send_guest_reply(
+            conversation,
+            "我主要协助民宿入住或武汉旅行相关问题，这类问题暂时无法回答。",
+        )
 
     @staticmethod
     def _should_send_fast_ack(question: str) -> bool:
@@ -578,7 +708,30 @@ class ConversationService:
             r"提前入住|延迟退房|特殊服务",
             r"help.{0,20}(?:water|towel|blanket|repair)|maintenance|housekeeping",
         )
-        return any(re.search(pattern, question, re.IGNORECASE) for pattern in patterns)
+        return any(
+            re.search(pattern, policy_question, re.IGNORECASE)
+            for policy_question in ConversationService._policy_questions(question)
+            for pattern in patterns
+        )
+
+    @staticmethod
+    def _policy_questions(question: str) -> tuple[str, ...]:
+        """生成确定性规则候选文本，不改变交给模型和员工的原始合并正文。"""
+        flattened = " ".join(question.split())
+        compact = re.sub(r"\s+", "", question)
+        return tuple(dict.fromkeys((question, flattened, compact)))
+
+    @classmethod
+    def _determine_handoff_reason(cls, question: str) -> str | None:
+        """在原文及跨消息空白归一化文本中识别人工接管原因。"""
+        return next(
+            (
+                reason
+                for policy_question in cls._policy_questions(question)
+                if (reason := determine_handoff_reason(policy_question)) is not None
+            ),
+            None,
+        )
 
     async def _process_model_reply(
         self,
@@ -595,6 +748,14 @@ class ConversationService:
                 model_context = await self._customer_context.load_model_context(
                     conversation.customer_id
                 )
+            merged_guest_count_text = str(
+                (message.metadata or {}).get("merged_guest_count", "1")
+            )
+            merged_guest_count = (
+                int(merged_guest_count_text)
+                if merged_guest_count_text.isdigit()
+                else 1
+            )
             decision = await self._assistant.respond(
                 guest_identifier=message.external_userid,
                 language=conversation.language,
@@ -602,21 +763,35 @@ class ConversationService:
                     conversation.id,
                     limit=3,
                     through_external_message_id=message.msgid,
+                    merged_guest_content=(
+                        message.content if merged_guest_count > 1 else None
+                    ),
+                    merged_guest_count=merged_guest_count,
                 ),
                 customer_context=model_context,
             )
         except TourismSearchError as error:
+            if discard_if_stale and await self._discard_stale_final(
+                conversation,
+                message,
+            ):
+                return
             await self._escalate_tourism_failure(conversation, message, error)
             return
         except AssistantUnavailableError:
+            if discard_if_stale and await self._discard_stale_final(
+                conversation,
+                message,
+            ):
+                return
             await self._escalate_assistant_failure(conversation, message)
             return
-        if discard_if_stale and await self._messages.has_newer_guest_message(
-            conversation.id,
-            message.msgid,
+        if discard_if_stale and await self._discard_stale_final(
+            conversation,
+            message,
         ):
             return
-        local_handoff_reason = determine_handoff_reason(message.content)
+        local_handoff_reason = self._determine_handoff_reason(message.content)
         requires_human = bool(
             local_handoff_reason
             or decision.handoff_reason
@@ -668,6 +843,18 @@ class ConversationService:
                 ),
             )
             return
+
+    async def _discard_stale_final(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+    ) -> bool:
+        """模型完成后锁定会话并复查活动，锁由外层事务保持到提交。"""
+        await self._conversations.lock_activity(conversation.id)
+        return await self._messages.has_newer_conversation_activity(
+            conversation.id,
+            message.msgid,
+        )
 
     async def _record_task_suggestion(
         self,

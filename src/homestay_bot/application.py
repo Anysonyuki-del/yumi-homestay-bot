@@ -337,7 +337,11 @@ def _deferred_message_from_payload(payload: dict[str, Any]) -> IncomingMessage:
     """把最终回复任务载荷恢复为统一消息，并保留安抚投递元数据。"""
 
     message_metadata: dict[str, str] = {}
-    for key in ("fast_ack_sha256", "fast_ack_outbox_id"):
+    for key in (
+        "fast_ack_sha256",
+        "fast_ack_outbox_id",
+        "merged_guest_count",
+    ):
         if payload.get(key):
             message_metadata[key] = str(payload[key])
     return IncomingMessage(
@@ -350,6 +354,28 @@ def _deferred_message_from_payload(payload: dict[str, Any]) -> IncomingMessage:
         sent_at=datetime.fromisoformat(str(payload["sent_at"])),
         metadata=message_metadata,
     )
+
+
+async def _dispatch_deferred_message(
+    service: ConversationService,
+    message: IncomingMessage,
+    *,
+    phase: str,
+) -> None:
+    """按任务阶段分发静默合并或最终模型处理。"""
+    if phase == "debounce":
+        await service.process_debounced_message(message)
+        return
+    await service.process_recorded_message(message)
+
+
+def _guest_delivery_phase(*, deferred: bool, deferred_phase: str) -> str | None:
+    """为静默安抚和最终回复选择互不冲突的 outbox 幂等阶段。"""
+    if not deferred:
+        return None
+    if deferred_phase == "debounce":
+        return "ack"
+    return "final"
 
 
 async def _record_complaint_delivery(
@@ -2669,6 +2695,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         bundle: RuntimeClientBundle,
         *,
         deferred: bool = False,
+        deferred_phase: str = "final",
     ) -> None:
         """在独立事务中处理入站消息或执行已提交的最终回复任务。"""
         async with factory() as session:
@@ -2683,7 +2710,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 wecom=TransactionalOutboxWeCom(
                     session,
                     source_message_id=message.msgid,
-                    delivery_phase="final" if deferred else None,
+                    delivery_phase=_guest_delivery_phase(
+                        deferred=deferred,
+                        deferred_phase=deferred_phase,
+                    ),
                 ),
                 agent_id=bundle.agent_id,
                 duty_employee_userids=list(bundle.duty_userids),
@@ -2710,7 +2740,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 commit_boundary=session.commit if not deferred else None,
             )
             if deferred:
-                await service.process_recorded_message(message)
+                await _dispatch_deferred_message(
+                    service,
+                    message,
+                    phase=deferred_phase,
+                )
             else:
                 await service.handle_message(message)
             await session.commit()
@@ -2721,7 +2755,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     ) -> None:
         """执行已提交入站消息的最终模型回复。"""
         message = _deferred_message_from_payload(payload)
-        await handle_message(message, bundle, deferred=True)
+        await handle_message(
+            message,
+            bundle,
+            deferred=True,
+            deferred_phase=str(payload.get("phase", "final")),
+        )
 
     def build_lifecycle_service(
         session: AsyncSession,

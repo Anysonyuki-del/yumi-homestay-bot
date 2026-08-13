@@ -46,13 +46,74 @@ def test_deferred_payload_restores_fast_ack_delivery_metadata() -> None:
             "sent_at": "2026-08-14T02:23:51+08:00",
             "fast_ack_sha256": "a" * 64,
             "fast_ack_outbox_id": "outbox:fast-ack",
+            "merged_guest_count": 3,
         }
     )
 
     assert message.metadata == {
         "fast_ack_sha256": "a" * 64,
         "fast_ack_outbox_id": "outbox:fast-ack",
+        "merged_guest_count": "3",
     }
+
+
+@pytest.mark.asyncio
+async def test_deferred_dispatch_separates_debounce_and_final_phases() -> None:
+    """同一 worker 必须把静默任务和最终回复任务分发到不同服务入口。"""
+    calls: list[tuple[str, str]] = []
+
+    class ConversationServiceStub:
+        """记录延迟任务选择的会话服务入口。"""
+
+        async def process_debounced_message(self, message) -> None:
+            """记录静默阶段调用。"""
+            calls.append(("debounce", message.msgid))
+
+        async def process_recorded_message(self, message) -> None:
+            """记录最终阶段调用。"""
+            calls.append(("final", message.msgid))
+
+    message = application._deferred_message_from_payload(
+        {
+            "msgid": "msg-1",
+            "open_kfid": "wk-1",
+            "external_userid": "wm-1",
+            "origin": "guest",
+            "msgtype": "text",
+            "content": "灯坏了",
+            "sent_at": "2026-08-14T02:23:51+08:00",
+        }
+    )
+    service = ConversationServiceStub()
+
+    await application._dispatch_deferred_message(
+        service,
+        message,
+        phase="debounce",
+    )
+    await application._dispatch_deferred_message(
+        service,
+        message,
+        phase="final",
+    )
+
+    assert calls == [("debounce", "msg-1"), ("final", "msg-1")]
+
+
+def test_deferred_ack_and_final_use_distinct_outbox_delivery_phases() -> None:
+    """静默阶段安抚与最终回复必须生成不同的事务 outbox 幂等键。"""
+    assert application._guest_delivery_phase(
+        deferred=True,
+        deferred_phase="debounce",
+    ) == "ack"
+    assert application._guest_delivery_phase(
+        deferred=True,
+        deferred_phase="final",
+    ) == "final"
+    assert application._guest_delivery_phase(
+        deferred=False,
+        deferred_phase="final",
+    ) is None
 
 
 @pytest.mark.asyncio

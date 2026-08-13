@@ -3173,3 +3173,46 @@ git diff --check
 - 投递状态：最终任务在调用模型前只读查询快速安抚 outbox；`PENDING/RUNNING` 使用长期低频重排，`FAILED/缺失` 清除摘要并发送最终兜底，只有 `COMPLETED` 才允许去重。任务只保存摘要和 outbox 编号，不复制安抚正文。
 - 验证：相关 `146 passed`；禁 live 全量 `917 passed, 15 skipped`；Ruff、mypy（105 个源码文件）、compileall、pip check、diff check全部通过。独立复审最终 APPROVED，无 Critical/Important。
 - 提交与部署：修复提交 `e7487ef` 已推送并部署；备份 `/opt/yumi-backups/duplicate-reply-20260814-024817` 包含旧提交 `fa0b1de`、权限收紧的 `.env` 和 PostgreSQL 导出（270594 bytes）。云端迁移保持 `0018 (head)`，本机与公网 `/health` 均为 `ok`，启动日志无新增错误。
+
+### 连续客人消息三秒合并（2026-08-14）
+
+#### 已确认 Spec
+
+- 现状依据：`src/homestay_bot/services/conversation_service.py::handle_message()` 当前在普通消息入库后立即调用 `_stage_fast_ack()`；`src/homestay_bot/application.py::handle_deferred_message()` 随后逐条恢复消息并执行最终模型回复，所以连续片段会分别触发阶段任务。
+- 普通客人文本先等待 3 秒静默；静默期内同一会话出现新文本时，旧任务只做过期退出，以最新一条消息自己的 3 秒截止时间为准。
+- 静默结束后，按系统实际入库顺序合并同一连续片段，最多 10 条、合并正文最多 2000 字符；数据库仍逐条保存原始消息，不改写历史。
+- 合并后的完整问题才执行民宿相关性和快速安抚判断：服务、补给、维修等请求只发一次安抚；房态、旅游、设施介绍等信息问题不发安抚，直接等待一次最终回复。
+- 合并问题只调用一次正式模型、只产生一组业务副作用；模型上下文把本轮连续客人片段折叠为一条完整 user 消息，避免三条上下文上限遗漏开头。
+- 单条即可识别的紧急事件、明确客诉、明确转人工、非文本消息和员工消息继续绕过静默窗口立即处理；若风险语义只有合并片段后才完整，静默结束后必须再次执行紧急、客诉和人工规则，禁止把合并出的高风险内容送入普通模型。
+- 延续既有投递门控：快速安抚只有企业微信 outbox 完成后才允许抑制相同最终回复；发送失败仍由最终回复兜底。
+- 并发线性化：所有新入站活动和静默任务消费都先对同一 `Conversation` 行执行数据库 `FOR UPDATE`；静默任务持锁完成“检查是否过期 → 合并 → 写 ACK/final outbox”，新消息若先取得锁则旧任务退出，静默任务若先取得锁则视为该三秒批次已正式关闭。
+- 旧静默任务应被任何后续非机器人活动取消，包括客人图片/语音和员工回复，不能只检查后续客人文本。
+- 确定性规则统一对原文、单空格归一化文本和去空白紧凑文本判断；该归一化只用于紧急、客诉、转人工、快速安抚和最终人工原因，不替换交给模型或员工通知的合并原文。
+- 最终阶段在模型前快速检查任意后续非机器人活动；模型完成后、任何客人出站或业务副作用前必须取得同一会话行锁并再次检查。模型调用期间出现图片、语音或员工回复时，旧 final 任务应无出站、无业务副作用退出。
+
+#### 精确执行计划
+
+- [x] RED 1：在 `tests/unit/test_conversation_service.py` 证明普通服务请求入站后不立即安抚，只登记 `phase=debounce`、`available_at=now+3s` 的任务；旧来源检测到更新消息时不安抚、不调用模型。
+- [x] GREEN 1：修改 `src/homestay_bot/services/conversation_service.py::ConversationJobPort` 和 `handle_message()`，新增三秒静默任务登记；普通文本的民宿相关性判断移到静默结束后，立即处理分支保持不变。
+- [x] RED 2：在 `tests/unit/test_message_service.py` 与 `tests/integration/test_message_flow.py` 覆盖按入库顺序合并、间隔超过三秒断开、最多十条、最多 2000 字符及原始消息不变。
+- [x] GREEN 2：在 `src/homestay_bot/services/message_service.py` 新增不可变 `GuestMessageBatch` 和 `build_guest_batch()`；复用 `MessageRepository.list_recent()`，不增加逐条数据库查询。
+- [x] RED 3：覆盖静默结束后合并问题再判断安抚、信息问题零安抚、最终任务只登记一次、模型上下文把本轮片段折叠为一条且保留此前对话。
+- [x] GREEN 3：新增 `ConversationService.process_debounced_message()`；扩展 `_stage_fast_ack()` 任务阶段和合并计数；`MessageService.build_context()` 仅在显式合并元数据存在时折叠本轮客人片段。
+- [x] RED 4：在 `tests/unit/test_application.py` 覆盖 debounce/final 任务载荷往返和 handler 阶段分发，防止部署装配漏传合并计数或误把静默任务直接当最终任务。
+- [x] GREEN 4：修改 `src/homestay_bot/application.py::_deferred_message_from_payload()` 与 `handle_deferred_message()`，同一 `wecom_process_message` worker 按 `phase` 分发，不新增后台循环和迁移。
+- [x] 回归：验证单条紧急、客诉、明确人工、非文本仍立即，拆分后才完整的紧急/客诉在合并阶段进入固定安全流程；快速安抚 outbox PENDING/FAILED/COMPLETED 门控、最终正文去重和 worker 重试语义不回归。
+- [x] 复审修复 RED：覆盖“补”+“矿泉水”跨行仍安抚、“提”+“前入住”最终转人工、后续图片/员工回复取消旧任务，以及新入站和静默消费都先取得同一会话锁。
+- [x] 复审修复 GREEN：新增会话活动行锁和任意后续非机器人活动查询；集中确定性规则候选文本，贯穿合并安抚和最终人工判断。
+- [x] 最终竞态 RED：覆盖 ACK 后出现图片/员工回复时 final 模型零调用，以及模型运行中员工回复后 final 无客人出站和副作用。
+- [x] 最终竞态 GREEN：最终模型前查任意活动，模型后取得会话锁并复查；锁保持至 handler 事务提交。
+- [x] 验收：运行相关 pytest、禁 live 全量 pytest、Ruff、mypy、compileall、pip check、diff check；更新本节 Review 和 `tasks/lessons.md`，独立复审后再决定合并、推送与云端部署。
+
+#### 连续消息三秒合并 Review
+
+- RED→GREEN：旧实现对第一条服务片段立即安抚，且没有 `process_debounced_message()`；新增测试先观察 4 项失败，再实现 `phase=debounce` 三秒任务、静默过期退出、合并后单次安抚和单个 final。消息服务的顺序、三秒断点、10 条/2000 字符和模型上下文折叠也均先因接口缺失失败再转绿。
+- 合并边界：原始 `messages` 行逐条保留；只读批次按 `created_at` 与主键顺序计算，超过三秒即断开，超长时优先保留最新 2000 字符。本轮连续 user 片段在模型上下文中折叠成一条，上一轮问答仍保留。
+- 并发与人工边界：入站和 debounce 对同一 Conversation 行加 `FOR UPDATE`；任何后续客人活动（含图片/语音）或员工回复使旧任务过期。final 在模型前快速检查，模型后锁行复查，故模型运行期间出现人工回复也不会再产生客人出站、FAQ、任务或员工通知副作用。
+- 安全规则：单条紧急、客诉、明确人工和非文本继续立即处理；合并后再次用原文、空格归一化和去空白文本复核紧急、客诉、人工及快速安抚，覆盖跨消息拆开的“补/矿泉水”“提/前入住”“human/agent”。原始合并正文仍用于模型和审计展示。
+- 出站与恢复：debounce 阶段安抚使用 `ack` outbox 阶段，最终使用 `final`，幂等键互不覆盖；已有 ACK PENDING/RUNNING 延迟、FAILED 兜底、COMPLETED 正文去重保持不变。
+- 验证：相关回归 `161 passed`；最终禁 live 全量 `941 passed, 15 skipped`，仅有既有 Starlette 弃用警告；Ruff、mypy（105 个源码文件）、compileall、pip check、diff check 全部通过。独立复审两轮发现并验证修复竞态后最终 APPROVED，无 Critical/Important/Minor。
+- 当前仅提交到隔离功能分支；尚未合并、推送或部署生产，等待用户选择集成方式。

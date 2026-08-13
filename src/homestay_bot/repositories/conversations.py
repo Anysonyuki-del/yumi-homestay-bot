@@ -46,6 +46,14 @@ class SQLAlchemyConversationRepository:
         self._session.add(conversation)
         await self._session.flush()
 
+    async def lock_activity(self, conversation_id: int) -> None:
+        """锁定会话活动行，串行化新入站与静默任务的检查和出站写入。"""
+        await self._session.scalar(
+            select(Conversation.id)
+            .where(Conversation.id == conversation_id)
+            .with_for_update()
+        )
+
 
 class SQLAlchemyMessageRepository:
     """使用 SQLAlchemy 持久化并查询已去重消息。"""
@@ -117,6 +125,24 @@ class SQLAlchemyMessageRepository:
                 Message.id > boundary,
                 Message.origin == MessageOrigin.GUEST,
                 Message.message_type == "text",
+            )
+        )
+        return bool(await self._session.scalar(statement))
+
+    async def has_newer_conversation_activity(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源边界后是否出现任意客人或员工活动。"""
+        boundary = select(Message.id).where(
+            Message.external_message_id == external_message_id
+        ).scalar_subquery()
+        statement = select(
+            exists().where(
+                Message.conversation_id == conversation_id,
+                Message.id > boundary,
+                Message.origin != MessageOrigin.BOT,
             )
         )
         return bool(await self._session.scalar(statement))

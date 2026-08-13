@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -597,5 +597,135 @@ async def test_context_is_bounded_by_source_message_and_ack_does_not_consume_lim
         assert context == [
             {"role": "user", "content": "今天入住明天退房"}
         ]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_real_repository_builds_one_contiguous_guest_batch_without_rewriting_rows() -> None:
+    """真实消息仓储应按入库时间合并本轮片段，并保持每条原文独立保存。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 14, 2, 0, tzinfo=UTC)
+
+    async with factory() as session:
+        conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+        session.add(conversation)
+        await session.flush()
+        session.add_all(
+            [
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="old",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content="上一轮问题",
+                    sent_at=now,
+                    created_at=now,
+                ),
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="msg-1",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content="房间里的灯",
+                    sent_at=now + timedelta(seconds=5),
+                    created_at=now + timedelta(seconds=5),
+                ),
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="msg-2",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content="一直闪",
+                    sent_at=now + timedelta(seconds=7),
+                    created_at=now + timedelta(seconds=7),
+                ),
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="msg-3",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content="麻烦维修",
+                    sent_at=now + timedelta(seconds=10),
+                    created_at=now + timedelta(seconds=10),
+                ),
+            ]
+        )
+        await session.commit()
+        messages = MessageService(SQLAlchemyMessageRepository(session))
+
+        batch = await messages.build_guest_batch(conversation.id, "msg-3")
+        stored_contents = list(
+            await session.scalars(
+                select(Message.content)
+                .where(Message.conversation_id == conversation.id)
+                .order_by(Message.id)
+            )
+        )
+
+        assert batch.content == "房间里的灯\n一直闪\n麻烦维修"
+        assert batch.message_count == 3
+        assert stored_contents == ["上一轮问题", "房间里的灯", "一直闪", "麻烦维修"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,message_type",
+    [
+        (MessageOrigin.GUEST, "image"),
+        (MessageOrigin.SERVICER, "text"),
+    ],
+)
+async def test_new_non_bot_activity_invalidates_older_debounce_boundary(
+    origin: MessageOrigin,
+    message_type: str,
+) -> None:
+    """真实仓储应把客人非文本和员工回复都视为更新会话活动。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 14, 2, 0, tzinfo=UTC)
+
+    async with factory() as session:
+        conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+        session.add(conversation)
+        await session.flush()
+        session.add_all(
+            [
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="msg-1",
+                    origin=MessageOrigin.GUEST,
+                    message_type="text",
+                    content="请补矿泉水",
+                    sent_at=now,
+                ),
+                Message(
+                    conversation_id=conversation.id,
+                    external_message_id="msg-2",
+                    origin=origin,
+                    message_type=message_type,
+                    content="new activity",
+                    sent_at=now + timedelta(seconds=1),
+                ),
+            ]
+        )
+        await session.commit()
+
+        repository = SQLAlchemyMessageRepository(session)
+
+        assert (
+            await repository.has_newer_conversation_activity(
+                conversation.id,
+                "msg-1",
+            )
+            is True
+        )
 
     await engine.dispose()

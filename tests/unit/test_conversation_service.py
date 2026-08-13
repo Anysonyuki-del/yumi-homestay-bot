@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +33,7 @@ class ConversationRepositoryStub:
     """在内存中维护单个会话。"""
 
     def __init__(self) -> None:
+        self.locked_ids: list[int] = []
         self.conversation = Conversation(
             id=1,
             open_kfid="wk-1",
@@ -48,14 +50,25 @@ class ConversationRepositoryStub:
         """保留更新后的会话。"""
         self.conversation = conversation
 
+    async def lock_activity(self, conversation_id: int) -> None:
+        """记录会话活动锁，并验证锁定当前会话。"""
+        assert conversation_id == self.conversation.id
+        self.locked_ids.append(conversation_id)
+
 
 class MessageServiceStub:
     """记录消息并支持模拟重复消息。"""
 
-    def __init__(self, *, is_new: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        is_new: bool = True,
+        activity_after_boundary: bool | None = None,
+    ) -> None:
         self.is_new = is_new
         self.recorded: list[IncomingMessage] = []
         self.bot_messages: list[tuple[int, str, str]] = []
+        self.activity_after_boundary = activity_after_boundary
 
     async def record_incoming(
         self, conversation_id: int, message: IncomingMessage
@@ -80,6 +93,9 @@ class MessageServiceStub:
         conversation_id: int,
         limit: int = 20,
         through_external_message_id: str | None = None,
+        *,
+        merged_guest_content: str | None = None,
+        merged_guest_count: int = 1,
     ) -> list[dict[str, str]]:
         """把测试中已记录的客人文本转换为模型历史。"""
         recorded = self.recorded
@@ -93,18 +109,61 @@ class MessageServiceStub:
                 len(recorded),
             )
             recorded = recorded[:boundary]
-        return [
+        context = [
             {"role": "user", "content": item.content}
             for item in recorded[-limit:]
             if item.origin is MessageOrigin.GUEST and item.msgtype == "text"
         ]
+        if merged_guest_content is not None and merged_guest_count > 1:
+            context = context[:-merged_guest_count]
+            context.append({"role": "user", "content": merged_guest_content})
+        return context[-limit:]
+
+    async def build_guest_batch(
+        self,
+        conversation_id: int,
+        through_external_message_id: str,
+        *,
+        quiet_window_seconds: int = 3,
+        max_messages: int = 10,
+        max_characters: int = 2000,
+    ):
+        """把测试记录中截至来源边界的连续客人文本合并为一批。"""
+        boundary = next(
+            index + 1
+            for index, item in enumerate(self.recorded)
+            if item.msgid == through_external_message_id
+        )
+        selected = [
+            item
+            for item in self.recorded[:boundary]
+            if item.origin is MessageOrigin.GUEST and item.msgtype == "text"
+        ][-max_messages:]
+        content = "\n".join(item.content for item in selected)[-max_characters:]
+        return SimpleNamespace(content=content, message_count=len(selected))
+
+    async def has_newer_conversation_activity(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源消息之后是否已有客人或员工活动。"""
+        if self.activity_after_boundary is not None:
+            return self.activity_after_boundary
+        for index, item in enumerate(self.recorded):
+            if item.msgid == external_message_id:
+                return any(
+                    newer.origin is not MessageOrigin.BOT
+                    for newer in self.recorded[index + 1 :]
+                )
+        return False
 
     async def has_newer_guest_message(
         self,
         conversation_id: int,
         external_message_id: str,
     ) -> bool:
-        """判断来源消息之后是否已有更新客人消息。"""
+        """兼容最终阶段已有接口，只检查后续客人文本。"""
         guest_messages = [
             item for item in self.recorded if item.origin is MessageOrigin.GUEST
         ]
@@ -151,6 +210,7 @@ class AssistantStub:
         self.handoff_reason = handoff_reason
         self.decision = decision
         self.last_kwargs = None
+        self.last_ack_kwargs = None
 
     async def respond(self, **kwargs) -> AssistantDecision:
         """生成固定中文回复。"""
@@ -169,6 +229,7 @@ class AssistantStub:
     async def respond_ack(self, **kwargs) -> str:
         """返回固定温暖安抚。"""
         self.ack_calls += 1
+        self.last_ack_kwargs = kwargs
         return "收到啦，我来帮您看看。"
 
 
@@ -193,6 +254,33 @@ class FailingAssistantStub(AssistantStub):
         """抛出统一模型不可用异常。"""
         self.calls += 1
         raise AssistantUnavailableError()
+
+
+class BlockingAssistantStub(AssistantStub):
+    """让正式模型停在门闩处，复现模型运行中出现员工回复。"""
+
+    def __init__(self) -> None:
+        """初始化开始和释放事件。"""
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def respond(self, **kwargs) -> AssistantDecision:
+        """标记模型已开始，等待测试并发写入新活动后返回。"""
+        self.calls += 1
+        self.last_kwargs = kwargs
+        self.started.set()
+        await self.release.wait()
+        return AssistantDecision(
+            reply_text="我们会处理。",
+            language=Language.ZH,
+            intent="maintenance",
+            confidence=0.95,
+            task_suggestion=TaskSuggestion(
+                task_type=BusinessTaskType.MAINTENANCE,
+                description="检查灯具",
+            ),
+        )
 
 
 class WeComStub:
@@ -329,12 +417,21 @@ class DeferredJobStub:
     """记录快速安抚阶段登记的最终处理任务。"""
 
     def __init__(self) -> None:
-        self.jobs: list[tuple[str, dict[str, object], str | None]] = []
+        self.jobs: list[
+            tuple[str, dict[str, object], str | None, datetime | None]
+        ] = []
         self.delivery_status: JobStatus | None = None
 
-    async def enqueue(self, job_type, payload, *, dedupe_key=None):
+    async def enqueue(
+        self,
+        job_type,
+        payload,
+        *,
+        available_at=None,
+        dedupe_key=None,
+    ):
         """保存任务类型和稳定去重键。"""
-        self.jobs.append((job_type, payload, dedupe_key))
+        self.jobs.append((job_type, payload, dedupe_key, available_at))
         return SimpleNamespace()
 
     async def status_for_dedupe_key(self, dedupe_key: str) -> JobStatus | None:
@@ -474,8 +571,398 @@ def build_service(
 
 
 @pytest.mark.asyncio
+async def test_deferred_normal_message_waits_three_seconds_before_ack() -> None:
+    """普通文本先登记三秒静默任务，入站事务内不得提前发送安抚。"""
+    jobs = DeferredJobStub()
+    commits = 0
+
+    async def commit() -> None:
+        """记录静默任务与入站消息一起提交。"""
+        nonlocal commits
+        commits += 1
+
+    service, _, assistant, wecom = build_service(
+        jobs=jobs,
+        defer_model=True,
+        commit_boundary=commit,
+    )
+    before = datetime.now(UTC)
+
+    await service.handle_message(incoming(content="请补两瓶矿泉水"))
+
+    after = datetime.now(UTC)
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == []
+    assert len(jobs.jobs) == 1
+    job_type, payload, dedupe_key, available_at = jobs.jobs[0]
+    assert job_type == "wecom_process_message"
+    assert payload["phase"] == "debounce"
+    assert dedupe_key == "debounce:msg-1"
+    assert available_at is not None
+    assert before + timedelta(seconds=3) <= available_at <= after + timedelta(seconds=3)
+    assert commits == 1
+
+
+@pytest.mark.asyncio
+async def test_debounce_merges_fragments_before_single_ack_and_final_job() -> None:
+    """三秒静默后才按完整问题判断安抚，并只登记一次最终任务。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="你好，房间里的灯", msgid="msg-1"),
+        incoming(content="一直闪", msgid="msg-2"),
+        incoming(content="麻烦帮我安排维修", msgid="msg-3"),
+    ]
+    messages.recorded.extend(fragments)
+    service, _, assistant, wecom = build_service(
+        jobs=jobs,
+        messages=messages,
+        wecom=OutboxWeComStub(),
+    )
+
+    await service.process_debounced_message(fragments[-1])
+
+    merged = "你好，房间里的灯\n一直闪\n麻烦帮我安排维修"
+    assert assistant.ack_calls == 1
+    assert assistant.last_ack_kwargs["question"] == merged
+    assert len(wecom.guest_messages) == 1
+    assert len(jobs.jobs) == 1
+    _, payload, dedupe_key, available_at = jobs.jobs[0]
+    assert payload["phase"] == "final"
+    assert payload["content"] == merged
+    assert payload["merged_guest_count"] == 3
+    assert dedupe_key == "final:msg-3"
+    assert available_at is None
+
+
+@pytest.mark.asyncio
+async def test_outdated_debounce_task_exits_before_ack_or_model() -> None:
+    """同一会话已有更新片段时，旧静默任务不得产生任何客人输出。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    first = incoming(content="房间里的灯", msgid="msg-1")
+    second = incoming(content="一直闪", msgid="msg-2")
+    messages.recorded.extend([first, second])
+    service, _, assistant, wecom = build_service(
+        jobs=jobs,
+        messages=messages,
+    )
+
+    await service.process_debounced_message(first)
+
+    assert assistant.calls == 0
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == []
+    assert jobs.jobs == []
+
+
+@pytest.mark.asyncio
+async def test_debounced_information_fragments_skip_ack_but_enqueue_one_final() -> None:
+    """合并后的信息问题不发泛化安抚，只登记一次最终回答。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="想问一下", msgid="msg-1"),
+        incoming(content="明天入住后", msgid="msg-2"),
+        incoming(content="几点可以退房？", msgid="msg-3"),
+    ]
+    messages.recorded.extend(fragments)
+    service, _, assistant, wecom = build_service(jobs=jobs, messages=messages)
+
+    await service.process_debounced_message(fragments[-1])
+
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == []
+    assert len(jobs.jobs) == 1
+    assert jobs.jobs[0][1]["phase"] == "final"
+    assert jobs.jobs[0][1]["merged_guest_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_merged_batch_reaches_model_as_one_question_once() -> None:
+    """最终阶段只调用一次模型，并把本轮片段折叠为一个完整问题。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="想问一下", msgid="msg-1"),
+        incoming(content="明天入住后", msgid="msg-2"),
+        incoming(content="几点可以退房？", msgid="msg-3"),
+    ]
+    messages.recorded.extend(fragments)
+    service, _, assistant, _ = build_service(jobs=jobs, messages=messages)
+
+    await service.process_debounced_message(fragments[-1])
+    payload = jobs.jobs[-1][1]
+    final_message = IncomingMessage(
+        msgid="msg-3",
+        open_kfid="wk-1",
+        external_userid="wm-1",
+        origin=MessageOrigin.GUEST,
+        msgtype="text",
+        content=str(payload["content"]),
+        sent_at=fragments[-1].sent_at,
+        metadata={"merged_guest_count": str(payload["merged_guest_count"])},
+    )
+
+    await service.process_recorded_message(final_message)
+
+    assert assistant.calls == 1
+    assert assistant.last_kwargs["messages"] == [
+        {
+            "role": "user",
+            "content": "想问一下\n明天入住后\n几点可以退房？",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_merged_fragments_are_rechecked_for_emergency_before_ack() -> None:
+    """只有合并后才完整的门锁紧急语义必须进入固定安全流程。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="门锁现在", msgid="msg-1"),
+        incoming(content="完全坏了", msgid="msg-2"),
+    ]
+    messages.recorded.extend(fragments)
+    service, conversations, assistant, wecom = build_service(
+        jobs=jobs,
+        messages=messages,
+    )
+
+    await service.process_debounced_message(fragments[-1])
+
+    assert assistant.calls == 0
+    assert assistant.ack_calls == 0
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert "安全" in wecom.guest_messages[0]
+    assert jobs.jobs == []
+
+
+@pytest.mark.asyncio
+async def test_merged_fragments_are_rechecked_for_complaint_before_ack() -> None:
+    """拆开的激烈客诉语义合并后只允许固定客诉安抚。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="这也太", msgid="msg-1"),
+        incoming(content="离谱了", msgid="msg-2"),
+    ]
+    messages.recorded.extend(fragments)
+    service, conversations, assistant, wecom = build_service(
+        jobs=jobs,
+        messages=messages,
+        complaint_service=ComplaintService(),
+    )
+
+    await service.process_debounced_message(fragments[-1])
+
+    assert assistant.calls == 0
+    assert assistant.ack_calls == 0
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert wecom.guest_messages == [ComplaintService.guest_acknowledgement()]
+    assert jobs.jobs == []
+
+
+@pytest.mark.asyncio
+async def test_split_english_human_request_is_rechecked_after_merge() -> None:
+    """英文转人工短语被拆成两条时，合并后仍须立即进入人工流程。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="Please find a human", msgid="msg-1"),
+        incoming(content="agent for me", msgid="msg-2"),
+    ]
+    messages.recorded.extend(fragments)
+    service, conversations, assistant, wecom = build_service(
+        jobs=jobs,
+        messages=messages,
+    )
+
+    await service.process_debounced_message(fragments[-1])
+
+    assert assistant.calls == 0
+    assert assistant.ack_calls == 0
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert len(wecom.guest_messages) == 1
+    assert jobs.jobs == []
+
+
+@pytest.mark.asyncio
+async def test_split_supply_request_triggers_one_ack_after_merge() -> None:
+    """服务动作和物品被拆成两条时，跨行合并仍须发送一次安抚。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="请帮我补", msgid="msg-1"),
+        incoming(content="两瓶矿泉水", msgid="msg-2"),
+    ]
+    messages.recorded.extend(fragments)
+    service, _, assistant, wecom = build_service(jobs=jobs, messages=messages)
+
+    await service.process_debounced_message(fragments[-1])
+
+    assert assistant.ack_calls == 1
+    assert len(wecom.guest_messages) == 1
+    assert len(jobs.jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_split_early_check_in_uses_normalized_final_handoff_reason() -> None:
+    """跨消息拆词的提前入住必须在最终阶段通知员工并切人工。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="想申请提", msgid="msg-1"),
+        incoming(content="前入住", msgid="msg-2"),
+    ]
+    messages.recorded.extend(fragments)
+    service, conversations, assistant, wecom = build_service(
+        jobs=jobs,
+        messages=messages,
+    )
+
+    await service.process_debounced_message(fragments[-1])
+    payload = jobs.jobs[-1][1]
+    await service.process_recorded_message(
+        IncomingMessage(
+            msgid="msg-2",
+            open_kfid="wk-1",
+            external_userid="wm-1",
+            origin=MessageOrigin.GUEST,
+            msgtype="text",
+            content=str(payload["content"]),
+            sent_at=fragments[-1].sent_at,
+            metadata={"merged_guest_count": "2"},
+        )
+    )
+
+    assert assistant.calls == 1
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert len(wecom.internal_messages) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "newer_origin,newer_type",
+    [
+        (MessageOrigin.GUEST, "image"),
+        (MessageOrigin.SERVICER, "text"),
+    ],
+)
+async def test_non_text_or_servicer_activity_cancels_old_debounce(
+    newer_origin: MessageOrigin,
+    newer_type: str,
+) -> None:
+    """图片、语音或员工回复出现后，旧文本静默任务不得继续出站。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    first = incoming(content="请补矿泉水", msgid="msg-1")
+    newer = incoming(
+        content="media-or-reply",
+        msgid="msg-2",
+        origin=newer_origin,
+        msgtype=newer_type,
+    )
+    messages.recorded.extend([first, newer])
+    service, _, assistant, wecom = build_service(jobs=jobs, messages=messages)
+
+    await service.process_debounced_message(first)
+
+    assert assistant.calls == 0
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == []
+    assert jobs.jobs == []
+
+
+@pytest.mark.asyncio
+async def test_incoming_and_debounce_paths_lock_conversation_before_activity_checks() -> None:
+    """入站和静默消费必须共用会话行锁，闭合检查到写 outbox 的竞态。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub(activity_after_boundary=True)
+    service, conversations, _, _ = build_service(
+        jobs=jobs,
+        messages=messages,
+        defer_model=True,
+    )
+    message = incoming(content="请补矿泉水")
+
+    await service.handle_message(message)
+    await service.process_debounced_message(message)
+
+    assert conversations.locked_ids == [1, 1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "newer_origin,newer_type",
+    [
+        (MessageOrigin.GUEST, "image"),
+        (MessageOrigin.SERVICER, "text"),
+    ],
+)
+async def test_final_exits_before_model_after_non_bot_activity(
+    newer_origin: MessageOrigin,
+    newer_type: str,
+) -> None:
+    """ACK 后出现图片或员工回复时，旧 final 不得再调用模型。"""
+    messages = MessageServiceStub()
+    final_message = incoming(content="请补矿泉水", msgid="msg-1")
+    messages.recorded.extend(
+        [
+            final_message,
+            incoming(
+                content="new activity",
+                msgid="msg-2",
+                origin=newer_origin,
+                msgtype=newer_type,
+            ),
+        ]
+    )
+    service, _, assistant, wecom = build_service(messages=messages)
+
+    await service.process_recorded_message(final_message)
+
+    assert assistant.calls == 0
+    assert wecom.guest_messages == []
+
+
+@pytest.mark.asyncio
+async def test_servicer_reply_during_model_cancels_final_and_side_effects() -> None:
+    """模型运行中员工已回复时，旧 final 必须在锁内复查后无副作用退出。"""
+    messages = MessageServiceStub()
+    source = incoming(content="请补矿泉水", msgid="msg-1")
+    messages.recorded.append(source)
+    assistant = BlockingAssistantStub()
+    tasks = BusinessTaskStub()
+    service, conversations, _, wecom = build_service(
+        assistant=assistant,
+        messages=messages,
+        business_tasks=tasks,
+    )
+    conversations.conversation.customer_id = 42
+
+    final_task = asyncio.create_task(service.process_recorded_message(source))
+    await assistant.started.wait()
+    await service.handle_message(
+        incoming(
+            content="人工已经回复",
+            msgid="msg-2",
+            origin=MessageOrigin.SERVICER,
+        )
+    )
+    assistant.release.set()
+    await final_task
+
+    assert assistant.calls == 1
+    assert wecom.guest_messages == []
+    assert tasks.calls == []
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+
+
+@pytest.mark.asyncio
 async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> None:
-    """阶段一应先发送模型安抚，再登记最终处理任务。"""
+    """静默结束后应先发送模型安抚，再登记最终处理任务。"""
     jobs = DeferredJobStub()
     commits = 0
 
@@ -490,16 +977,19 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
     )
 
     await service.handle_message(incoming(content="请补两瓶矿泉水吗？"))
+    assert assistant.ack_calls == 0
+
+    await service.process_debounced_message(incoming(content="请补两瓶矿泉水吗？"))
 
     assert assistant.calls == 0
     assert assistant.ack_calls == 1
     assert wecom.guest_messages == [
         "我已收到您的诉求。我会立即联系管家来处理，请您稍等。"
     ]
-    assert jobs.jobs[0][0] == "wecom_process_message"
-    assert jobs.jobs[0][2] == "final:msg-1"
-    assert len(str(jobs.jobs[0][1]["fast_ack_sha256"])) == 64
-    assert commits == 1
+    assert jobs.jobs[-1][0] == "wecom_process_message"
+    assert jobs.jobs[-1][2] == "final:msg-1"
+    assert len(str(jobs.jobs[-1][1]["fast_ack_sha256"])) == 64
+    assert commits == 2
 
 
 @pytest.mark.asyncio
@@ -522,7 +1012,8 @@ async def test_deferred_final_skips_exact_duplicate_of_fast_ack() -> None:
     )
 
     await service.handle_message(message)
-    payload = jobs.jobs[0][1]
+    await service.process_debounced_message(message)
+    payload = jobs.jobs[-1][1]
     deferred_message = IncomingMessage(
         msgid=message.msgid,
         open_kfid=message.open_kfid,
@@ -561,7 +1052,8 @@ async def test_deferred_final_keeps_new_advice_after_fast_ack() -> None:
     )
 
     await service.handle_message(message)
-    payload = jobs.jobs[0][1]
+    await service.process_debounced_message(message)
+    payload = jobs.jobs[-1][1]
     deferred_message = IncomingMessage(
         msgid=message.msgid,
         open_kfid=message.open_kfid,
@@ -595,7 +1087,8 @@ async def test_deferred_final_waits_until_fast_ack_delivery_finishes() -> None:
     )
 
     await service.handle_message(message)
-    payload = jobs.jobs[0][1]
+    await service.process_debounced_message(message)
+    payload = jobs.jobs[-1][1]
     deferred_message = IncomingMessage(
         msgid=message.msgid,
         open_kfid=message.open_kfid,
@@ -639,7 +1132,8 @@ async def test_deferred_final_is_not_suppressed_when_fast_ack_delivery_failed() 
     )
 
     await service.handle_message(message)
-    payload = jobs.jobs[0][1]
+    await service.process_debounced_message(message)
+    payload = jobs.jobs[-1][1]
     deferred_message = IncomingMessage(
         msgid=message.msgid,
         open_kfid=message.open_kfid,
@@ -698,12 +1192,14 @@ async def test_deferred_room_information_skips_unnecessary_ack() -> None:
     )
 
     await service.handle_message(incoming(content="介绍一下这间房"))
+    await service.process_debounced_message(incoming(content="介绍一下这间房"))
 
     assert assistant.calls == 0
     assert assistant.ack_calls == 0
     assert wecom.guest_messages == []
-    assert jobs.jobs[0][0] == "wecom_process_message"
-    assert commits == 1
+    assert jobs.jobs[-1][0] == "wecom_process_message"
+    assert jobs.jobs[-1][1]["phase"] == "final"
+    assert commits == 2
 
 
 @pytest.mark.asyncio
