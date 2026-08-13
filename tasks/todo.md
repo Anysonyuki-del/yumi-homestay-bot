@@ -2786,14 +2786,14 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 - [x] 使用百居易只读 `/properties` 与 `/availabilities` 复核回复中的库存事实。
 - [x] 为 Uvicorn 结构化访问日志补充稳定复现测试，确认脱敏过滤器不会破坏五元参数。
 - [x] 最小修复访问日志脱敏，同时保持敏感查询参数不进入日志。
-- [ ] 运行定向测试、全量测试、Ruff、mypy，并在云端复验异常 URL 不再触发 `Logging error`。
+- [x] 运行定向测试、全量测试、Ruff、mypy，并在云端复验异常 URL 不再触发 `Logging error`。
 
 #### Review
 
 - 真实企业微信消息“今天入住明天退房，还有空房吗”已完成接收、DeepSeek/百居易处理和企业微信发送；数据库出站任务一次完成，从收到到发送约 9 秒。
 - 百居易只读复核返回 7 间房在 2026-08-13 与 2026-08-14 均不可用，客人回复中的满房结论有实时库存依据。
 - Uvicorn 日志根因测试先稳定复现 `ValueError: not enough values to unpack`，修复后定向 9 项通过；禁 live 全量回归为 817 passed、15 skipped，Ruff、mypy、compileall、pip check 与 diff check 均通过。
-- 云端部署与异常 URL 复验完成后再关闭本小节。
+- 修复已部署到云端提交 `204679c`；原异常 URL 返回 404，日志中的测试 token 已脱敏，近 3 分钟 `Logging error=0`，公网与本机健康检查均为 `ok`，API 仍仅监听 `127.0.0.1:8000`。
 
 ### 批次 1-7 安全复审（2026-08-12）
 
