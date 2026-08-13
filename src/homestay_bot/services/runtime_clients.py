@@ -356,7 +356,12 @@ async def build_runtime_client_bundle(
     owned: list[Any] = []
     try:
         # SDK 成功构造后接管注入的 HTTP 客户端；构造失败时 builder 直接关闭裸客户端。
-        openai_http = build_public_https_client(policy)
+        # 生产模型与网页搜索可能需要数十秒；候选配置探针仍使用构造器默认的
+        # 5 秒短超时，避免配置测试长期占用后台请求。
+        openai_http = build_public_https_client(
+            policy,
+            timeout_seconds=45.0,
+        )
         owned.append(openai_http)
         deepseek_chat = AsyncOpenAI(
             api_key=snapshot.deepseek_api_key,
@@ -366,7 +371,10 @@ async def build_runtime_client_bundle(
         )
         owned[-1] = deepseek_chat
 
-        anthropic_http = build_public_https_client(policy)
+        anthropic_http = build_public_https_client(
+            policy,
+            timeout_seconds=45.0,
+        )
         owned.append(anthropic_http)
         deepseek_anthropic = AsyncAnthropic(
             api_key=snapshot.deepseek_api_key,

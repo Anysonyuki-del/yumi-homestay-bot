@@ -544,9 +544,11 @@ async def test_production_bundle_uses_controlled_http_clients_for_both_sdks(
     pending_http_clients = list(created_http_clients)
     sdk_clients: list[CloseProbe] = []
     sdk_kwargs: list[dict[str, object]] = []
+    http_client_kwargs: list[dict[str, object]] = []
 
-    def build_http_client(policy):
-        """依次返回两个可识别的受控客户端。"""
+    def build_http_client(policy, **kwargs):
+        """依次返回两个可识别客户端，并记录生产超时配置。"""
+        http_client_kwargs.append(kwargs)
         return pending_http_clients.pop(0)
 
     def build_sdk(**kwargs):
@@ -580,6 +582,10 @@ async def test_production_bundle_uses_controlled_http_clients_for_both_sdks(
     assert all("http_client" in kwargs for kwargs in sdk_kwargs)
     assert sdk_kwargs[0]["http_client"] is not sdk_kwargs[1]["http_client"]
     assert all(kwargs["max_retries"] == 0 for kwargs in sdk_kwargs)
+    assert http_client_kwargs == [
+        {"timeout_seconds": 45.0},
+        {"timeout_seconds": 45.0},
+    ]
 
     await bundle.aclose()
     assert all(client.calls == 1 for client in sdk_clients)
@@ -607,7 +613,7 @@ async def test_bundle_constructor_failure_closes_partial_resources(monkeypatch) 
     monkeypatch.setattr(
         runtime_clients,
         "build_public_https_client",
-        lambda policy: pending_http_clients.pop(0),
+        lambda policy, **kwargs: pending_http_clients.pop(0),
     )
     sdk_clients: list[SdkProbe] = []
 

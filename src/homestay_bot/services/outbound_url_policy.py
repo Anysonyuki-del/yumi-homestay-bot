@@ -290,8 +290,8 @@ def build_public_https_client(
     max_response_bytes: int = 1024 * 1024,
 ) -> httpx.AsyncClient:
     """构造可供候选探针和后续生产 SDK 复用的受控 HTTP 客户端。"""
-    if not 1.0 <= timeout_seconds <= 15.0:
-        raise ValueError("外联测试超时时间无效")
+    if not 1.0 <= timeout_seconds <= 60.0:
+        raise ValueError("外联超时时间无效")
     timeout = httpx.Timeout(
         timeout_seconds,
         connect=min(timeout_seconds, 3.0),
