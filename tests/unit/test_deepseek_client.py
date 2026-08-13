@@ -782,6 +782,40 @@ async def test_long_general_reply_is_semantically_refined_once() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("question", ["武汉有什么好玩的？", "最近玩啥？"])
+async def test_stable_tourism_uses_fast_knowledge_model(question: str) -> None:
+    """普通景点推荐不得触发联网搜索，并应明确关闭深度思考。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "reply_text": "第一次来武汉，可以先逛东湖和黄鹤楼，再去江汉路走走。",
+            "intent": "tourism",
+            "knowledge_gap": True,
+            "knowledge_gap_topic": "武汉经典景点推荐",
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": question}],
+    )
+
+    assert "东湖" in decision.reply_text
+    request = client.chat.completions.requests[0]
+    assert request["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "经典景点、美食和普通推荐" in request["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_tourism_reply_is_refined_for_guest_readability() -> None:
     """长旅游回复应精简排版，并保留查询日期和来源证据。"""
     refined_reply = (
@@ -800,7 +834,7 @@ async def test_tourism_reply_is_refined_for_guest_readability() -> None:
     decision = await assistant.respond(
         guest_identifier="wm-guest",
         language=Language.ZH,
-        messages=[{"role": "user", "content": "武汉最近有什么好玩的？"}],
+        messages=[{"role": "user", "content": "武汉近期有什么活动？"}],
     )
 
     assert decision.reply_text.startswith("精选建议：")
@@ -830,7 +864,7 @@ async def test_short_tourism_reply_is_also_refined_for_layout() -> None:
     decision = await assistant.respond(
         guest_identifier="wm-guest",
         language=Language.ZH,
-        messages=[{"role": "user", "content": "武汉有什么好玩的？"}],
+        messages=[{"role": "user", "content": "黄鹤楼门票多少钱？"}],
     )
 
     assert decision.reply_text.startswith("推荐：")
@@ -890,7 +924,7 @@ async def test_tourism_refinement_failure_preserves_validated_evidence(
     decision = await assistant.respond(
         guest_identifier="wm-guest",
         language=Language.ZH,
-        messages=[{"role": "user", "content": "武汉最近有什么好玩的？"}],
+        messages=[{"role": "user", "content": "武汉近期有什么活动？"}],
     )
 
     assert "查询日期：2026-07-30" in decision.reply_text

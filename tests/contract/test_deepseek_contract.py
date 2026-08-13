@@ -166,14 +166,14 @@ async def test_relative_dates_call_read_only_availability_tool() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wuhan_tourism_uses_web_search_evidence() -> None:
-    """旅游问题必须返回实时搜索来源名称。"""
+async def test_time_sensitive_wuhan_tourism_uses_web_search_evidence() -> None:
+    """时效旅游问题必须返回实时搜索来源名称。"""
     assistant, chat, anthropic = await build_assistant()
     try:
         decision = await assistant.respond(
             guest_identifier="deepseek-tourism",
             language=Language.ZH,
-            messages=[{"role": "user", "content": "武汉近期有什么好玩的？"}],
+            messages=[{"role": "user", "content": "武汉近期有什么活动？"}],
         )
     finally:
         await close_clients(chat, anthropic)

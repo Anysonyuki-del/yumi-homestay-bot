@@ -4,18 +4,42 @@ from typing import Literal
 from urllib.parse import urlparse
 
 WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
+TourismQueryMode = Literal["none", "stable", "live"]
 
-_TOURISM_PATTERN = re.compile(
+_STABLE_TOURISM_PATTERN = re.compile(
     r"景点|好玩|游玩|旅游|一日游|半日游|攻略|美食|小吃|餐厅|"
-    r"展览|演出|活动|门票|票价|开放时间|营业时间|怎么去|路线|"
-    r"地铁|公交|打车|距离|多远|公里|路程|怎么到|天气.*(?:玩|游)|"
-    r"attraction|sightseeing|itinerary|food|restaurant|exhibition|"
-    r"show|event|ticket|opening hours|how to get",
+    r"玩啥|玩什么|去哪玩|"
+    r"attraction|sightseeing|itinerary|food|restaurant|where to (?:go|visit)",
+    re.IGNORECASE,
+)
+_LIVE_TOURISM_PATTERN = re.compile(
+    r"展览|演出|活动|音乐会|演唱会|门票|票价|开放时间|营业时间|"
+    r"几点(?:开门|关门|开放|闭馆)|开到几点|开门吗|关门吗|营业吗|开放吗|"
+    r"怎么去|路线|地铁|公交|打车|距离|多远|远吗|公里|路程|要多久|怎么到|"
+    r"天气|封路|闭馆|堵不堵|路况|交通状况|"
+    r"exhibition|show|event|concert|ticket|opening hours|how to get|"
+    r"weather|distance|route|real[ -]?time transit",
+    re.IGNORECASE,
+)
+_TOURISM_BOOKING_OVERRIDE_PATTERN = re.compile(
+    r"门票|票务|景区|景点|展览|演出|活动|音乐会|演唱会|"
+    r"tickets?|concert|show|event|attraction",
+    re.IGNORECASE,
+)
+_DATED_TOURISM_PATTERN = re.compile(
+    r"(?:今天|今晚|明天|明日|后天|本周|这个周末|周末).*?(?:去哪|玩|游)|"
+    r"(?:today|tonight|tomorrow|this week|this weekend).*?"
+    r"(?:go|visit|play|tour)",
     re.IGNORECASE,
 )
 _BOOKING_PATTERN = re.compile(
     r"有房|房态|订房|预订|入住|退房|房间价格|房价|"
     r"availability|book|booking|check[- ]?in|check[- ]?out|room rate",
+    re.IGNORECASE,
+)
+_LODGING_OBJECT_PATTERN = re.compile(
+    r"房间|房源|房型|民宿|酒店|客房|住宿|"
+    r"room|property|homestay|hotel|accommodation",
     re.IGNORECASE,
 )
 _MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(https?://[^)]+\)")
@@ -65,12 +89,28 @@ def latest_user_question(messages: list[dict[str, str]]) -> dict[str, str]:
     return {"role": "user", "content": ""}
 
 
-def is_tourism_query(messages: list[dict[str, str]]) -> bool:
-    """以预订优先规则识别需要实时搜索的旅游问题。"""
+def classify_tourism_query(
+    messages: list[dict[str, str]],
+) -> TourismQueryMode:
+    """按信息时效分类旅游问题，并始终让预订查询优先。"""
     content = latest_user_question(messages)["content"]
     if _BOOKING_PATTERN.search(content):
-        return False
-    return _TOURISM_PATTERN.search(content) is not None
+        if _LODGING_OBJECT_PATTERN.search(content):
+            return "none"
+        # “预订门票/演出”属于旅游时效信息，不能被民宿预订关键词截走。
+        if _TOURISM_BOOKING_OVERRIDE_PATTERN.search(content):
+            return "live"
+        return "none"
+    if _LIVE_TOURISM_PATTERN.search(content) or _DATED_TOURISM_PATTERN.search(content):
+        return "live"
+    if _STABLE_TOURISM_PATTERN.search(content):
+        return "stable"
+    return "none"
+
+
+def is_tourism_query(messages: list[dict[str, str]]) -> bool:
+    """兼容既有调用：稳定或实时旅游问题均返回真。"""
+    return classify_tourism_query(messages) != "none"
 
 
 def _source_display_name(title: str, url: str) -> str:

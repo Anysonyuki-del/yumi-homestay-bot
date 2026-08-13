@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.tourism import (
-    is_tourism_query,
+    classify_tourism_query,
     latest_user_question,
 )
 from homestay_bot.services.answer_policy import (
@@ -893,7 +893,8 @@ class DeepSeekGuestAssistant:
         """调用 DeepSeek，并把连续失败收敛为统一领域异常。"""
         question_text = latest_user_question(messages)["content"]
         local_today = self._local_date_provider()
-        if is_tourism_query(messages):
+        # 经典景点、美食等稳定问题走快速模型；只有时效问题才承担联网深搜延迟。
+        if classify_tourism_query(messages) == "live":
             started = monotonic()
             try:
                 reply = await self._tourism_searcher.search(
@@ -962,7 +963,9 @@ class DeepSeekGuestAssistant:
             "先判断问题需要哪类信息：审核知识库用于已确认资料，"
             "房间介绍和房源名称必须调用百居易只读的 list_properties，"
             "实时房态和参考价必须调用百居易只读工具，"
-            "武汉近期活动和旅游推荐必须调用旅游联网搜索；能调用工具时直接调用，不要让客人替你判断来源。"
+            "武汉近期活动、天气、票价、开放时间、实时交通和精确路线必须调用旅游联网搜索；"
+            "经典景点、美食和普通推荐优先使用审核知识及谨慎常识，不得伪装为实时结果；"
+            "能调用工具时直接调用，不要让客人替你判断来源。"
             "仅当问题适合沉淀为固定 FAQ、审核知识确实缺失且 knowledge_gap=true 时，"
             "设置 faq_candidate=true；房态、价格、订单、退款、预订、实时旅游和"
             "紧急问题必须设置 faq_candidate=false。"
