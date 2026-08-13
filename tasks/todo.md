@@ -2935,3 +2935,29 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 
 - 响应头遗漏问题与批次 8 发现的一致（批次 8 已用中间件统一覆盖 `/employee` 前缀，这 6 项也同时修复）。本次复审单独记录以备将来回溯。
 - 知识库授权问题当前不可达（只有管理员能登录），但建议在下一轮修复时一并加固。
+
+### 客人回复零承诺与统一管家接管（2026-08-13）
+
+#### 已确认 Spec
+
+- 机器人不得向客人承诺任何尚未由人工确认的结果，包括“已安排”“马上安排师傅”“师傅会上门”“一定解决”“彻底解决”“保证”“马上送到”“会尽快处理好”等直接或变体表达。
+- 凡退款、投诉、人工请求、媒体消息、模型/联网失败、维修、补给、保洁、特殊服务以及其他需要员工确认或形成待确认任务的场景，必须先温暖安抚，再明确表达：`我会立即联系管家来处理，请您稍等。`
+- 可保留“长按童锁键”等低风险自助建议，但不得声称建议一定有效；紧急事件继续优先显示撤离、断电、拨打 119 等安全指令，随后使用同一管家联系表述，不得声称值班人员已经收到或一定会联系。
+- 普通信息、房态和旅游等无需人工的问题不强行追加管家话术，但仍经过全局承诺检测，禁止模型夹带服务结果承诺。
+- 企业微信内部员工通知、任务状态和真实人工发送内容不受客人侧措辞过滤影响。
+
+#### 实施计划
+
+- [ ] 新建 `src/homestay_bot/services/guest_reply_policy.py`，集中定义中英文管家接管话术、禁用承诺模式、按句保留安全建议和最终兜底；所有函数与关键分支写中文注释。
+- [ ] 先在 `tests/unit/test_guest_reply_policy.py` 写 RED，覆盖洗衣机原始违规回复、全部违规句、普通信息误带承诺、固定管家话术只出现一次和中英文结果。
+- [ ] 修改 `src/homestay_bot/services/conversation_service.py::_process_model_reply()`，在发送前根据本地接管理由、模型接管理由、`staff_confirmation_required`、`task_suggestion` 和本地服务意图决定是否追加固定管家收尾；`_send_guest_reply()` 保留最终全局防线。
+- [ ] 修改 `ConversationService` 的快速安抚、普通人工接管、旅游/模型失败和紧急回复路径，确保所有需要人工的客人回复使用统一策略，同时保留紧急安全指令。
+- [ ] 修改 `src/homestay_bot/integrations/deepseek_client.py::respond_ack()` 提示与固定兜底，删除“一定会解决”等承诺；输出即使违规也由客人侧中央策略兜底。
+- [ ] 修改 `src/homestay_bot/services/complaint_service.py::guest_acknowledgement()` 和 `src/homestay_bot/services/emergency_service.py::safety_reply()`，移除结果承诺和“已通知”事实声明。
+- [ ] 扩充 `tests/unit/test_conversation_service.py`、`test_deepseek_client.py`、`test_complaint_service.py`、`test_emergency_service.py`，先观察原行为 RED，再验证所有客人可见路径 GREEN；断言员工内部通知仍正常产生。
+- [ ] 运行相关定向测试、禁 live 全量 pytest、Ruff、mypy、compileall、pip check、diff check，并进行独立代码复审。
+- [ ] 合并推送主干，云端先备份再部署；重放“洗衣机显示锁/打不开怎么办”的无消息发送模拟，随后用新企业微信消息验收回复无承诺、包含固定管家收尾、员工通知正常、健康与错误日志正常。
+
+#### 实施 Review
+
+- 实施结束时在本节记录提交号、RED→GREEN、全量测试、云端备份、真实对话和回滚证据，并逐项核对上述 Spec。
