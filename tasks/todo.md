@@ -2862,7 +2862,7 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 - [x] 在 `DeepSeekGuestAssistant.respond()` 构造请求前裁剪独立房态问题上下文，并保持工具强制选择与日期换算行为不变。
 - [x] 运行房态、DeepSeek、ConversationService 定向测试，确认 RED→GREEN（101 passed）。
 - [x] 运行禁 live 全量 pytest、Ruff、mypy、compileall、pip check、diff check并完成独立代码复审（851 passed、15 skipped；复审 APPROVED）。
-- [ ] 合并并推送 `main`，部署云端；用百居易真实 8 月 14–15 日数据确认结果为 0 间，不附带旅游内容，检查健康和错误日志。
+- [x] 合并并推送 `main`，部署云端；用百居易真实 8 月 14–15 日数据确认结果为 0 间，不附带旅游内容，检查健康和错误日志。
 
 #### 实施 Review
 
@@ -2870,6 +2870,9 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 - 独立房态问题同时清空消息历史与客户摘要；带“那/改到/换到”等承接语气的追问保留历史并继续强制房态工具。
 - 日期识别覆盖相对日期、`M月D日/号`、`M/D`、完整 ISO 日期与本周星期表达。
 - 独立审查指出并修复两项上下文边界及原测试盲区，最终结论 APPROVED。
+- 主干修复提交 `efb47f9` 已推送并部署；云端更新前备份位于 `/opt/yumi-backups/availability-20260813T1502Z`，包含 PostgreSQL、`.env` 和旧提交号。
+- 生产百居易只读验收返回 7 个房源、整段可住 0 间，`days` 只含 8 月 14 日而不含退房日 15 日；真实 DeepSeek 模拟回复明确 7 间均满房，未夹带东湖、黄鹤楼或“两间可住”等矛盾内容，且未发送企业微信消息、未创建或修改订单。
+- 部署后运行配置保持 revision 1 / `TEST_PASSED`，API 与 PostgreSQL 容器正常，内外网 `/health` 均为 `ok`，近 10 分钟错误筛查无 `ERROR`、Traceback、ValidationError 或补拉/同步失败。
 
 ### 批次 1-7 安全复审（2026-08-12）
 
