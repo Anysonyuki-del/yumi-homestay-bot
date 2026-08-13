@@ -1,5 +1,7 @@
 import logging
+from collections.abc import Callable
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -35,14 +37,34 @@ from homestay_bot.services.latest_stay_note import (
 )
 
 logger = logging.getLogger(__name__)
+WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def _wuhan_today() -> date:
+    """返回武汉自然日，供员工通知选择当前入住备注。"""
+
+    return datetime.now(WUHAN_TIMEZONE).date()
+
+
+def _notification_label(value: object) -> str | None:
+    """把通知定位文字收敛为单行短文本，避免破坏企业微信排版。"""
+
+    cleaned = " ".join(str(value or "").split())[:200].strip()
+    return cleaned or None
 
 
 class SQLAlchemyCustomerRepository:
     """使用同一数据库事务维护客户身份、合并建议和关联记录。"""
 
-    def __init__(self, session: AsyncSession) -> None:
-        """绑定当前消息或管理员请求的数据库会话。"""
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        local_date_provider: Callable[[], date] | None = None,
+    ) -> None:
+        """绑定当前数据库会话和可测试的武汉日期提供器。"""
         self._session = session
+        self._local_date_provider = local_date_provider or _wuhan_today
 
     async def ensure_identity(
         self,
@@ -296,6 +318,27 @@ class SQLAlchemyCustomerRepository:
                     },
                 )
         return notes
+
+    async def get_customer_notification_note(
+        self,
+        customer_id: int,
+    ) -> str | None:
+        """优先返回自动入住备注，没有入住记录时回退员工备注。"""
+
+        latest = await self.latest_stay_notes(
+            [customer_id],
+            today=self._local_date_provider(),
+        )
+        stay_note = _notification_label(latest.get(customer_id))
+        if stay_note:
+            return stay_note
+        employee_note = await self._session.scalar(
+            select(Customer.note).where(
+                Customer.id == customer_id,
+                Customer.merged_into_customer_id.is_(None),
+            )
+        )
+        return _notification_label(employee_note)
 
     async def customer_detail(self, customer_id: int) -> dict[str, object]:
         """返回管理员 CRM 需要的标签、摘要和待合并建议。"""

@@ -147,11 +147,14 @@ class WeComIdentityPort(Protocol):
         """返回微信客服客人昵称。"""
 
 
-class RoomAssignmentPort(Protocol):
-    """定义从客户有效订单解析房间号的接口。"""
+class CustomerNotificationPort(Protocol):
+    """定义员工通知所需的 CRM 客人备注接口。"""
 
-    async def get_customer_room_number(self, customer_id: int) -> str | None:
-        """返回客户唯一有效订单对应的房间号。"""
+    async def get_customer_notification_note(
+        self,
+        customer_id: int,
+    ) -> str | None:
+        """优先返回自动入住备注，再回退员工手写备注。"""
 
 
 class PendingApprovalPort(Protocol):
@@ -265,11 +268,35 @@ class ComplaintReviewPort(Protocol):
 class ConversationService:
     """按来源、会话状态和风险规则编排机器人与人工处理。"""
 
+    _EMPLOYEE_NOTIFICATION_MAX_BYTES = 2048
+
     _handoff_pattern = re.compile(
         r"人工客服|转人工|找人工|工作人员接待|"
         r"human agent|live agent|staff member",
         re.IGNORECASE,
     )
+
+    @staticmethod
+    def _employee_notification_label(
+        value: object,
+        *,
+        fallback: str | None = None,
+        max_bytes: int = 600,
+    ) -> str | None:
+        """把员工通知中的外部展示值压成单行，并按 UTF-8 字节安全限长。"""
+
+        cleaned = " ".join(str(value or "").split())[:200].strip()
+        cleaned = ConversationService._truncate_utf8(cleaned, max_bytes=max_bytes)
+        return cleaned or fallback
+
+    @staticmethod
+    def _truncate_utf8(value: str, *, max_bytes: int) -> str:
+        """在不切断多字节字符的前提下，把文本限制在指定 UTF-8 字节数内。"""
+
+        encoded = value.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return value
+        return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
     def __init__(
         self,
@@ -290,7 +317,7 @@ class ConversationService:
         audit_events: ConversationAuditPort | None = None,
         jobs: ConversationJobPort | None = None,
         identity_resolver: WeComIdentityPort | None = None,
-        room_assignment: RoomAssignmentPort | None = None,
+        customer_notification: CustomerNotificationPort | None = None,
         complaint_service: ComplaintClassifierPort | None = None,
         complaint_reviews: ComplaintReviewPort | None = None,
         defer_model: bool = False,
@@ -313,7 +340,7 @@ class ConversationService:
         self._audit_events = audit_events
         self._jobs = jobs
         self._identity_resolver = identity_resolver
-        self._room_assignment = room_assignment
+        self._customer_notification = customer_notification
         self._complaint_service = complaint_service
         self._complaint_reviews = complaint_reviews
         self._defer_model = defer_model
@@ -954,25 +981,70 @@ class ConversationService:
                     "企业微信展示名称读取失败，使用友好名称：error_type=%s",
                     type(error).__name__,
                 )
-        # 员工端优先看到房间号；没有唯一有效订单时再显示企业微信客人名称。
-        room_number = None
-        if self._room_assignment is not None and conversation.customer_id is not None:
+        customer_service_name = (
+            self._employee_notification_label(
+                customer_service_name,
+                fallback="微信客服",
+                max_bytes=240,
+            )
+            or "微信客服"
+        )
+        guest_name = (
+            self._employee_notification_label(
+                guest_name,
+                fallback="客人",
+            )
+            or "客人"
+        )
+        # 员工端优先看到 CRM 备注；没有任何备注时再显示企业微信客人名称。
+        customer_note = None
+        if (
+            self._customer_notification is not None
+            and conversation.customer_id is not None
+        ):
             try:
-                room_number = await self._room_assignment.get_customer_room_number(
-                    conversation.customer_id
+                customer_note = (
+                    await self._customer_notification.get_customer_notification_note(
+                        conversation.customer_id
+                    )
                 )
             except Exception as error:
-                # 房间号查询失败不应阻塞人工通知，继续使用客人名称兜底。
+                # CRM 备注查询失败不应阻塞人工通知，继续使用客人名称兜底。
                 logger.warning(
-                    "客户房间号读取失败，使用客人名称兜底：error_type=%s",
+                    "客户通知备注读取失败，使用客人名称兜底：error_type=%s",
                     type(error).__name__,
                 )
-        display_identity = f"房间：{room_number}" if room_number else f"客人：{guest_name}"
+        customer_note = self._employee_notification_label(customer_note)
+        display_identity = (
+            f"客人备注：{customer_note}"
+            if customer_note
+            else f"客人：{guest_name}"
+        )
+        reason_label = (
+            self._employee_notification_label(
+                reason,
+                fallback="新任务待确认",
+                max_bytes=300,
+            )
+            or "新任务待确认"
+        )
+        # 固定字段和客人定位信息优先保留，剩余字节全部分配给真实消息。
+        notification_prefix = (
+            f"{reason_label}\n客服账号：{customer_service_name}\n"
+            f"{display_identity}\n消息："
+        )
+        remaining_bytes = max(
+            0,
+            self._EMPLOYEE_NOTIFICATION_MAX_BYTES
+            - len(notification_prefix.encode("utf-8")),
+        )
+        message_text = " ".join(str(message.content or "").split())
+        message_text = self._truncate_utf8(
+            message_text,
+            max_bytes=remaining_bytes,
+        )
         await self._wecom.send_internal_text(
             agent_id=self._agent_id,
             employee_userids=self._duty_employee_userids,
-            content=(
-                f"{reason}\n客服账号：{customer_service_name}\n"
-                f"{display_identity}\n消息：{message.content[:500]}"
-            ),
+            content=f"{notification_prefix}{message_text}",
         )

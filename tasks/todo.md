@@ -3145,3 +3145,15 @@ git diff --check
 - 提交与部署：功能提交 `d9c62d4` 已快进合并并推送 `main`；云端已更新同一提交并只重建 API，PostgreSQL 容器保持运行。
 - 回滚证据：备份目录 `/opt/yumi-backups/crm-latest-stay-20260814-013238`，包含旧提交 `89a17a6101395d2b2e858eae8276f16a88589f56`、权限收紧的 `.env` 和非空 `postgres.sql`（263340 bytes）。
 - 云端验收：Alembic 为 `0018_stay_checkout_observation (head)`，API 新容器启动日志确认执行 0017→0018；本机与公网 `/health` 均为 `ok`。正式库当前没有同一客户两笔以上订单，因此无法虚构“多次入住客户”抽样；已对一笔关联订单只读计算出自动备注，并确认员工备注及会话均未变脏。多订单择优由真实 SQLite 合并集成测试覆盖。
+- [x] 企业微信员工通知优先显示 CRM 自动入住备注；无自动备注时显示员工备注；两者都没有时显示客人名称，任何路径不得显示 UID。
+- [x] 先补 ConversationService 通知格式与 SQLAlchemy 客户仓储三级回退的失败测试，确认 RED 后最小实现。
+- [x] 复用 `SQLAlchemyCustomerRepository` 的最新入住备注计算，不复制日期/状态选择规则；应用消息入口复用同一仓储实例。
+- [ ] 更新用户纠正规则，完成定向/全量测试、Ruff、mypy、部署备份与企业微信真实通知验收。
+
+#### 员工通知 CRM 备注 Review
+
+- RED→GREEN：最初 `ConversationService` 不接受 `customer_notification` 接口；补三级回退后，恶意换行展示名回归先失败再统一单行化；独立复审又复现长中文备注与消息组合为 2170 bytes，补完整正文 UTF-8 预算后转绿且不切断中文字符。
+- 通知顺序：自动入住备注 → 员工备注 → 企业微信客人名称；客服账号使用实际名称，所有路径不显示 UID 或房间号。CRM 查询异常仅记录异常类型并回退客名。
+- 装配边界：消息入口复用同一个 `SQLAlchemyCustomerRepository`，自动备注继续使用既有武汉日期、状态和退房三天选择器，没有复制业务规则。
+- 验证：相关回归 `99 passed`；禁 live 全量 `909 passed, 15 skipped`；Ruff、mypy（105 个源码文件）、compileall、pip check、diff check全部通过。独立复审以中文和 emoji 极端值确认正文 2046 bytes、UTF-8 roundtrip 正常、四个字段完整，代码层面无 Critical/Important。
+- 剩余：提交推送、云端备份部署，并用真实企业微信新消息核对员工端实际展示，因此总验收项暂不勾选。

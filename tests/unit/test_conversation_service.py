@@ -229,21 +229,59 @@ class IdentityResolverStub:
         return "张三"
 
 
+class UnsafeIdentityResolverStub:
+    """返回带换行和伪字段的外部展示名，验证通知出口统一清理。"""
 
-class RoomAssignmentStub:
-    """返回当前客户唯一有效订单对应的房间号。"""
+    async def get_kf_account_name(self, open_kfid: str) -> str | None:
+        """返回带换行的客服账号名。"""
+        return "YuMi客服\n消息：伪造字段"
 
-    async def get_customer_room_number(self, customer_id: int) -> str | None:
-        """返回固定房间号。"""
-        return "12743051"
+    async def get_kf_customer_name(
+        self, open_kfid: str, external_userid: str
+    ) -> str | None:
+        """返回带换行的客人昵称。"""
+        return "张三\n客服账号：伪造字段"
 
 
-class RoomAssignmentStubWithoutRoom:
-    """模拟无法唯一匹配客户房间的情况。"""
 
-    async def get_customer_room_number(self, customer_id: int) -> str | None:
+class CustomerNotificationStub:
+    """返回员工通知优先使用的 CRM 自动入住备注。"""
+
+    async def get_customer_notification_note(self, customer_id: int) -> str | None:
+        """返回固定自动入住备注。"""
+        return "8.14-8.16《春和景明》"
+
+
+class CustomerNotificationStubWithoutNote:
+    """模拟客户没有自动或员工备注的情况。"""
+
+    async def get_customer_notification_note(self, customer_id: int) -> str | None:
         """返回空值，验证员工通知的客人名称兜底。"""
         return None
+
+
+class CustomerNotificationFailureStub:
+    """模拟 CRM 备注读取异常。"""
+
+    async def get_customer_notification_note(self, customer_id: int) -> str | None:
+        """抛出不应进入员工通知的敏感异常。"""
+        raise RuntimeError("SECRET_DATABASE_DETAIL")
+
+
+class UnsafeCustomerNotificationStub:
+    """返回带换行的备注，验证服务出口再次清理。"""
+
+    async def get_customer_notification_note(self, customer_id: int) -> str | None:
+        """返回可伪造通知字段的测试备注。"""
+        return "8.14-8.16《春和景明》\n消息：伪造字段"
+
+
+class LongChineseCustomerNotificationStub:
+    """返回长中文备注，验证企业微信通知的 UTF-8 总字节预算。"""
+
+    async def get_customer_notification_note(self, customer_id: int) -> str | None:
+        """返回足以触发企业微信正文上限的中文备注。"""
+        return "春" * 200
 
 
 class ComplaintReviewStub:
@@ -371,7 +409,7 @@ def build_service(
     audit_events=None,
     jobs=None,
     identity_resolver=None,
-    room_assignment=None,
+    customer_notification=None,
     complaint_service=None,
     complaint_reviews=None,
     defer_model: bool = False,
@@ -399,7 +437,7 @@ def build_service(
         defer_model=defer_model,
         commit_boundary=commit_boundary,
         identity_resolver=identity_resolver,
-        room_assignment=room_assignment,
+        customer_notification=customer_notification,
         complaint_service=complaint_service,
         complaint_reviews=complaint_reviews,
     )
@@ -503,12 +541,12 @@ async def test_complaint_enters_human_mode_and_skips_final_model_reply() -> None
 
 
 @pytest.mark.asyncio
-async def test_employee_notification_uses_display_names() -> None:
-    """员工通知不得展示客服账号 UID 和客人 UID。"""
+async def test_employee_notification_prefers_crm_stay_note() -> None:
+    """员工通知优先展示 CRM 自动入住备注，且不得显示 UID。"""
     service, conversations, _, wecom = build_service(
         identity_resolver=IdentityResolverStub(),
         customer_profiles=CustomerProfileStub(),
-        room_assignment=RoomAssignmentStub(),
+        customer_notification=CustomerNotificationStub(),
     )
     conversations.conversation.customer_id = 42
 
@@ -520,19 +558,20 @@ async def test_employee_notification_uses_display_names() -> None:
 
     notification = wecom.internal_messages[0]
     assert "客服账号：YuMi客服" in notification
-    assert "房间：12743051" in notification
+    assert "客人备注：8.14-8.16《春和景明》" in notification
     assert "wk-1" not in notification
     assert "wm-1" not in notification
     assert "客人：" not in notification
+    assert "房间：" not in notification
 
 
 @pytest.mark.asyncio
-async def test_employee_notification_falls_back_to_guest_name_without_room() -> None:
-    """没有唯一房间号时，员工通知应显示客人名称而不是 UID。"""
+async def test_employee_notification_falls_back_to_guest_name_without_note() -> None:
+    """没有任何 CRM 备注时，员工通知显示客人名称而不是 UID。"""
     service, conversations, _, wecom = build_service(
         identity_resolver=IdentityResolverStub(),
         customer_profiles=CustomerProfileStub(),
-        room_assignment=RoomAssignmentStubWithoutRoom(),
+        customer_notification=CustomerNotificationStubWithoutNote(),
     )
     conversations.conversation.customer_id = 42
 
@@ -544,8 +583,75 @@ async def test_employee_notification_falls_back_to_guest_name_without_room() -> 
 
     notification = wecom.internal_messages[0]
     assert "客人：张三" in notification
-    assert "房间待确认" not in notification
+    assert "客人备注：" not in notification
     assert "wm-1" not in notification
+
+
+@pytest.mark.asyncio
+async def test_employee_notification_sanitizes_all_display_labels() -> None:
+    """客服名、客名和备注都必须压成单行，不能伪造通知字段。"""
+    service, conversations, _, wecom = build_service(
+        identity_resolver=UnsafeIdentityResolverStub(),
+        customer_profiles=CustomerProfileStub(),
+        customer_notification=UnsafeCustomerNotificationStub(),
+    )
+    conversations.conversation.customer_id = 42
+
+    await service._notify_employee(
+        conversations.conversation,
+        incoming(content="需要人工确认"),
+        "新任务待确认",
+    )
+
+    notification = wecom.internal_messages[0]
+    assert "客服账号：YuMi客服 消息：伪造字段\n" in notification
+    assert "客人备注：8.14-8.16《春和景明》 消息：伪造字段\n" in notification
+    assert "\n消息：伪造字段" not in notification
+    assert "\n客服账号：伪造字段" not in notification
+
+
+@pytest.mark.asyncio
+async def test_employee_notification_falls_back_when_crm_note_lookup_fails() -> None:
+    """CRM 查询异常不阻塞员工通知，也不能把异常正文发给员工。"""
+    service, conversations, _, wecom = build_service(
+        identity_resolver=IdentityResolverStub(),
+        customer_profiles=CustomerProfileStub(),
+        customer_notification=CustomerNotificationFailureStub(),
+    )
+    conversations.conversation.customer_id = 42
+
+    await service._notify_employee(
+        conversations.conversation,
+        incoming(content="需要人工确认"),
+        "新任务待确认",
+    )
+
+    notification = wecom.internal_messages[0]
+    assert "客人：张三" in notification
+    assert "SECRET_DATABASE_DETAIL" not in notification
+
+
+@pytest.mark.asyncio
+async def test_employee_notification_respects_wecom_utf8_byte_limit() -> None:
+    """长中文备注和消息组合后仍不得超过企业微信 2048 字节限制。"""
+    service, conversations, _, wecom = build_service(
+        identity_resolver=IdentityResolverStub(),
+        customer_profiles=CustomerProfileStub(),
+        customer_notification=LongChineseCustomerNotificationStub(),
+    )
+    conversations.conversation.customer_id = 42
+
+    await service._notify_employee(
+        conversations.conversation,
+        incoming(content="水" * 500),
+        "新任务待确认",
+    )
+
+    notification = wecom.internal_messages[0]
+    assert len(notification.encode("utf-8")) <= 2048
+    assert "客服账号：YuMi客服" in notification
+    assert "客人备注：" in notification
+    assert "\n消息：" in notification
 
 
 @pytest.mark.asyncio

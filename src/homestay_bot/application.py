@@ -2655,6 +2655,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with factory() as session:
             faq_candidates = SQLAlchemyFaqCandidateRepository(session)
             context_repository = SQLAlchemyContextRepository(session)
+            customer_repository = SQLAlchemyCustomerRepository(session)
             service = ConversationService(
                 conversations=SQLAlchemyConversationRepository(session),
                 messages=MessageService(SQLAlchemyMessageRepository(session)),
@@ -2675,11 +2676,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                     savepoint_factory=session.begin_nested,
                 ),
                 customer_profiles=CustomerService(
-                    SQLAlchemyCustomerRepository(session),
+                    customer_repository,
                     sensitive_data,
                 ),
                 customer_context=context_repository,
-                room_assignment=context_repository,
+                customer_notification=customer_repository,
                 business_tasks=BusinessTaskService(SQLAlchemyOperationsRepository(session)),
                 audit_events=SQLAlchemyOperationsRepository(session),
                 jobs=SQLAlchemyJobRepository(session),

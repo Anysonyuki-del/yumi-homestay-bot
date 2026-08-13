@@ -385,6 +385,54 @@ async def test_latest_stay_notes_empty_customer_ids_skips_database() -> None:
 
 
 @pytest.mark.asyncio
+async def test_customer_notification_note_uses_stay_then_employee_note() -> None:
+    """员工通知优先使用自动入住备注，没有订单时回退员工备注。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        with_stay = Customer(display_name="入住客户", note="员工手写备注")
+        employee_only = Customer(
+            display_name="备注客户",
+            note="  需重点\n关注  ",
+        )
+        empty = Customer(display_name="普通客户", note="   ")
+        property_profile = PropertyProfile(id=398, title="《春和景明》")
+        session.add_all([with_stay, employee_only, empty, property_profile])
+        await session.flush()
+        session.add(
+            StayOrder(
+                hostex_reservation_code="NOTIFY-STAY",
+                stay_code="NOTIFY-STAY",
+                customer_id=with_stay.id,
+                property_id=property_profile.id,
+                check_in_date=date(2026, 8, 14),
+                check_out_date=date(2026, 8, 16),
+                status="accepted",
+            )
+        )
+        await session.commit()
+        repository = SQLAlchemyCustomerRepository(
+            session,
+            local_date_provider=lambda: date(2026, 8, 14),
+        )
+
+        assert (
+            await repository.get_customer_notification_note(with_stay.id)
+            == "8.14-8.16《春和景明》"
+        )
+        assert (
+            await repository.get_customer_notification_note(employee_only.id)
+            == "需重点 关注"
+        )
+        assert await repository.get_customer_notification_note(empty.id) is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_latest_stay_notes_uses_one_query_for_fifty_customers() -> None:
     """客户数量增长到五十人时，自动入住备注仍只能执行一条 SQL。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
