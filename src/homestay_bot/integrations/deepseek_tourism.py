@@ -310,40 +310,56 @@ class DeepSeekTourismSearcher:
                 "recommendations and keep the answer concise at 120-180 words."
             )
         )
-        try:
-            response = await self._client.messages.create(
-                model=self._model,
-                # 兼容 DeepSeek 思考块与多轮搜索工具结果，避免正文在预算耗尽前缺失。
-                max_tokens=3000,
-                system=system,
-                messages=[{"role": "user", "content": question}],
-                tools=[
-                    {
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": 2,
-                        "user_location": {
-                            "type": "approximate",
-                            "country": "CN",
-                            "city": "Wuhan",
-                            "region": "Hubei",
-                        },
-                    }
-                ],
-            )
-        except Exception as error:
-            status_code = getattr(error, "status_code", None)
-            status: WebSearchStatus = (
-                "unsupported" if status_code in {400, 404, 422} else "degraded"
-            )
-            self._set_status(status)
-            logger.info(
-                "旅游搜索完成：cache_hit=false success=false duration_ms=%d",
-                round((self._clock() - started_at) * 1000),
-            )
-            raise TourismSearchError(status) from error
+        text = ""
+        citations: list[tuple[str, str]] = []
+        for attempt in range(2):
+            try:
+                response = await self._client.messages.create(
+                    model=self._model,
+                    # 保留 DeepSeek 思考块与原生搜索过程；只对已有证据但遗漏正文
+                    # 的间歇响应做一次有限重试。
+                    max_tokens=3000,
+                    system=(
+                        system
+                        + "完成搜索后，结束前必须输出一段客人可见的最终正文。"
+                    ),
+                    messages=[{"role": "user", "content": question}],
+                    tools=[
+                        {
+                            "type": "web_search_20250305",
+                            "name": "web_search",
+                            "max_uses": 2,
+                            "user_location": {
+                                "type": "approximate",
+                                "country": "CN",
+                                "city": "Wuhan",
+                                "region": "Hubei",
+                            },
+                        }
+                    ],
+                )
+            except Exception as error:
+                status_code = getattr(error, "status_code", None)
+                status: WebSearchStatus = (
+                    "unsupported"
+                    if status_code in {400, 404, 422}
+                    else "degraded"
+                )
+                self._set_status(status)
+                logger.info(
+                    "旅游搜索完成：cache_hit=false success=false duration_ms=%d",
+                    round((self._clock() - started_at) * 1000),
+                )
+                raise TourismSearchError(status) from error
 
-        text, citations = self._extract_content(response)
+            text, citations = self._extract_content(response)
+            if text and citations:
+                break
+            if citations and not text and attempt == 0:
+                logger.info("旅游搜索已有证据但缺少正文，执行有限重试：attempt=2")
+                continue
+            break
+
         if not text or not citations:
             self._set_status("degraded")
             logger.info(

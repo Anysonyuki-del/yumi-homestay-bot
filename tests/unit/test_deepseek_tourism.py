@@ -52,6 +52,39 @@ class AnthropicClientStub:
         self.messages = MessagesStub(include_sources=include_sources)
 
 
+class EvidenceThenTextMessagesStub(MessagesStub):
+    """首轮只有搜索证据，第二轮才返回最终正文。"""
+
+    async def create(self, **kwargs):
+        """模拟 DeepSeek 偶发完成搜索却漏掉客人可见正文。"""
+        if not self.requests:
+            self.requests.append(kwargs)
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(type="server_tool_use", name="web_search"),
+                    SimpleNamespace(
+                        type="web_search_tool_result",
+                        content=[
+                            SimpleNamespace(
+                                type="web_search_result",
+                                title="武汉市文化和旅游局",
+                                url="https://wlj.wuhan.gov.cn/example",
+                            )
+                        ],
+                    ),
+                ]
+            )
+        return await super().create(**kwargs)
+
+
+class EvidenceThenTextClientStub:
+    """暴露首次无正文、第二次成功的搜索消息资源。"""
+
+    def __init__(self) -> None:
+        """初始化可记录两次请求的 Messages 资源。"""
+        self.messages = EvidenceThenTextMessagesStub()
+
+
 class EventMessagesStub:
     """返回可配置的演出正文与搜索来源。"""
 
@@ -206,6 +239,33 @@ async def test_deepseek_tourism_rejects_answer_without_search_evidence() -> None
 
     assert error.value.status == "degraded"
     assert statuses == ["degraded"]
+
+
+@pytest.mark.asyncio
+async def test_deepseek_tourism_retries_evidence_without_final_text() -> None:
+    """已有搜索证据但无正文时应保留思考并限重试一次。"""
+    client = EvidenceThenTextClientStub()
+    statuses: list[str] = []
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+        status_setter=statuses.append,
+    )
+
+    result = await searcher.search(
+        question="武汉近期有啥好玩的",
+        language=Language.ZH,
+        queried_on=date(2026, 8, 13),
+    )
+
+    assert len(client.messages.requests) == 2
+    assert all("extra_body" not in item for item in client.messages.requests)
+    assert all(
+        "结束前必须输出一段客人可见的最终正文" in item["system"]
+        for item in client.messages.requests
+    )
+    assert "参考来源：武汉市文化和旅游局" in result
+    assert statuses == ["ok"]
 
 
 @pytest.mark.asyncio
