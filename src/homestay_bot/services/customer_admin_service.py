@@ -1,5 +1,8 @@
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
@@ -8,6 +11,14 @@ from homestay_bot.services.customer_errors import (
     CustomerPermissionError,
 )
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
+
+WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def _wuhan_today() -> date:
+    """返回武汉自然日，避免服务器 UTC 日期污染 CRM 展示。"""
+
+    return datetime.now(WUHAN_TIMEZONE).date()
 
 
 @dataclass(frozen=True)
@@ -18,6 +29,7 @@ class CustomerCard:
     display_name: str
     note: str
     masked_phone: str
+    latest_stay_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -32,7 +44,7 @@ class MergeCustomerCard:
     task_count: int
 
 
-class CustomerAdminRepository(Protocol):
+class CustomerAdminRepositoryPort(Protocol):
     """定义管理员 CRM 页面所需的查询和写操作。"""
 
     async def list_customers(
@@ -46,6 +58,14 @@ class CustomerAdminRepository(Protocol):
 
     async def customer_detail(self, customer_id: int) -> dict[str, Any]:
         """返回客户关联标签、摘要和合并建议。"""
+
+    async def latest_stay_notes(
+        self,
+        customer_ids: list[int],
+        *,
+        today: date,
+    ) -> dict[int, str | None]:
+        """一次批量返回客户的只读最新入住备注。"""
 
     async def merge_detail(self, suggestion_id: int) -> dict[str, Any]:
         """返回待审核合并建议及两侧客户。"""
@@ -107,6 +127,10 @@ class CustomerAdminRepository(Protocol):
         """清除无需同步或已完成的标签待同步状态。"""
 
 
+# 保留旧协议名，避免现有扩展代码因类型端口更名而中断。
+CustomerAdminRepository = CustomerAdminRepositoryPort
+
+
 class CustomerAdminJobQueue(Protocol):
     """定义企业微信标签同步任务入队接口。"""
 
@@ -125,17 +149,19 @@ class CustomerAdminService:
 
     def __init__(
         self,
-        repository: CustomerAdminRepository,
+        repository: CustomerAdminRepositoryPort,
         cipher: SensitiveDataCipher,
         jobs: CustomerAdminJobQueue,
         *,
         tag_sync_enabled: bool,
+        local_date_provider: Callable[[], date] | None = None,
     ) -> None:
-        """注入 CRM 仓储、加密服务、任务队列和同步开关。"""
+        """注入 CRM 仓储、加密服务、任务队列、同步开关和武汉日期。"""
         self._repository = repository
         self._cipher = cipher
         self._jobs = jobs
         self._tag_sync_enabled = tag_sync_enabled
+        self._local_date_provider = local_date_provider or _wuhan_today
 
     async def list_customers(
         self,
@@ -152,7 +178,18 @@ class CustomerAdminService:
             offset=offset,
             limit=limit,
         )
-        return [self._card(item) for item in customers]
+        customer_ids = [int(item.id) for item in customers]
+        notes = await self._repository.latest_stay_notes(
+            customer_ids,
+            today=self._local_date_provider(),
+        )
+        return [
+            self._card(
+                item,
+                latest_stay_note=notes.get(int(item.id)),
+            )
+            for item in customers
+        ]
 
     async def get_detail(
         self,
@@ -163,9 +200,16 @@ class CustomerAdminService:
         self._require_admin(administrator)
         detail = await self._repository.customer_detail(customer_id)
         customer = detail["customer"]
+        notes = await self._repository.latest_stay_notes(
+            [int(customer.id)],
+            today=self._local_date_provider(),
+        )
         return {
             **detail,
-            "customer": self._card(customer),
+            "customer": self._card(
+                customer,
+                latest_stay_note=notes.get(int(customer.id)),
+            ),
             "masked_phone": self._masked_phone(customer.phone_ciphertext),
         }
 
@@ -307,13 +351,19 @@ class CustomerAdminService:
             accepted,
         )
 
-    def _card(self, customer: Any) -> CustomerCard:
+    def _card(
+        self,
+        customer: Any,
+        *,
+        latest_stay_note: str | None = None,
+    ) -> CustomerCard:
         """从 ORM 或测试对象提取无密文客户卡片。"""
         return CustomerCard(
             id=int(customer.id),
             display_name=str(customer.display_name),
             note=str(customer.note or ""),
             masked_phone=self._masked_phone(customer.phone_ciphertext),
+            latest_stay_note=latest_stay_note,
         )
 
     def _masked_phone(self, ciphertext: bytes | None) -> str:

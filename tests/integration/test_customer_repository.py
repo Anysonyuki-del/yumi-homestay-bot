@@ -246,6 +246,204 @@ async def test_customer_search_escapes_wildcards_and_limits_results() -> None:
 
 
 @pytest.mark.asyncio
+async def test_latest_stay_notes_batch_query_uses_property_title_and_fallback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """自动入住备注一次批量查询，使用房间名并安全降级缺失标题。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        named_customer = Customer(display_name="有房名客户")
+        fallback_customer = Customer(display_name="占位房名客户")
+        no_order_customer = Customer(display_name="无订单客户")
+        named_property = PropertyProfile(id=301, title="春和景明")
+        placeholder_property = PropertyProfile(
+            id=302,
+            title="百居易房间 302",
+        )
+        session.add_all(
+            [
+                named_customer,
+                fallback_customer,
+                no_order_customer,
+                named_property,
+                placeholder_property,
+            ]
+        )
+        await session.flush()
+        session.add_all(
+            [
+                StayOrder(
+                    hostex_reservation_code="CRM-NAMED",
+                    stay_code="CRM-NAMED",
+                    customer_id=named_customer.id,
+                    property_id=named_property.id,
+                    check_in_date=date(2026, 8, 14),
+                    check_out_date=date(2026, 8, 16),
+                    status="confirmed",
+                ),
+                StayOrder(
+                    hostex_reservation_code="CRM-FALLBACK",
+                    stay_code="CRM-FALLBACK",
+                    customer_id=fallback_customer.id,
+                    property_id=placeholder_property.id,
+                    check_in_date=date(2026, 8, 14),
+                    check_out_date=date(2026, 8, 15),
+                    status="confirmed",
+                ),
+                StayOrder(
+                    hostex_reservation_code="CRM-INVALID-DATE",
+                    stay_code="CRM-INVALID-DATE",
+                    customer_id=named_customer.id,
+                    property_id=named_property.id,
+                    check_in_date=date(2026, 8, 20),
+                    check_out_date=date(2026, 8, 19),
+                    status="confirmed",
+                ),
+            ]
+        )
+        await session.commit()
+
+        executed_sql: list[str] = []
+
+        def record_sql(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ) -> None:
+            """记录仓储方法实际提交的 SQL 数量。"""
+            executed_sql.append(str(statement))
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_sql)
+        try:
+            notes = await SQLAlchemyCustomerRepository(
+                session
+            ).latest_stay_notes(
+                [
+                    named_customer.id,
+                    fallback_customer.id,
+                    no_order_customer.id,
+                ],
+                today=date(2026, 8, 14),
+            )
+        finally:
+            event.remove(
+                engine.sync_engine,
+                "before_cursor_execute",
+                record_sql,
+            )
+
+        assert notes == {
+            named_customer.id: "8.14-8.16春和景明",
+            fallback_customer.id: "8.14-8.15房间 #302",
+            no_order_customer.id: None,
+        }
+        assert len(executed_sql) == 1
+        assert "latest_stay_note_invalid_candidate" in caplog.text
+        assert "CRM-INVALID-DATE" not in caplog.text
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_latest_stay_notes_empty_customer_ids_skips_database() -> None:
+    """空客户集合直接返回，避免发出无意义数据库查询。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        executed_sql: list[str] = []
+
+        def record_sql(*args) -> None:
+            """记录空集合分支是否访问数据库。"""
+            executed_sql.append(str(args[2]))
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_sql)
+        try:
+            notes = await SQLAlchemyCustomerRepository(
+                session
+            ).latest_stay_notes([], today=date(2026, 8, 14))
+        finally:
+            event.remove(
+                engine.sync_engine,
+                "before_cursor_execute",
+                record_sql,
+            )
+
+        assert notes == {}
+        assert executed_sql == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_latest_stay_notes_uses_one_query_for_fifty_customers() -> None:
+    """客户数量增长到五十人时，自动入住备注仍只能执行一条 SQL。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        property_profile = PropertyProfile(id=399, title="批量测试房间")
+        customers = [Customer(display_name=f"批量客户{i}") for i in range(50)]
+        session.add_all([property_profile, *customers])
+        await session.flush()
+        session.add_all(
+            [
+                StayOrder(
+                    hostex_reservation_code=f"CRM-BATCH-{index}",
+                    stay_code=f"CRM-BATCH-{index}",
+                    customer_id=customer.id,
+                    property_id=property_profile.id,
+                    check_in_date=date(2026, 8, 14),
+                    check_out_date=date(2026, 8, 16),
+                    status="confirmed",
+                )
+                for index, customer in enumerate(customers)
+            ]
+        )
+        await session.commit()
+        executed_sql: list[str] = []
+
+        def record_sql(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ) -> None:
+            """记录五十客户批量读取发出的 SQL。"""
+            executed_sql.append(str(statement))
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_sql)
+        try:
+            notes = await SQLAlchemyCustomerRepository(
+                session
+            ).latest_stay_notes(
+                [customer.id for customer in customers],
+                today=date(2026, 8, 14),
+            )
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", record_sql)
+
+        assert len(notes) == 50
+        assert set(notes.values()) == {"8.14-8.16批量测试房间"}
+        assert len(executed_sql) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_admin_can_edit_customer_crm_with_safe_audits() -> None:
     """CRM 写操作必须复核管理员身份，且审计不得复制备注或摘要正文。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -900,8 +1098,17 @@ async def test_confirm_merge_moves_existing_links_and_writes_safe_audit() -> Non
             stay_code="S-MERGE",
             customer_id=source.id,
             property_id=property_profile.id,
-            check_in_date=date(2026, 8, 1),
-            check_out_date=date(2026, 8, 2),
+            check_in_date=date(2026, 8, 14),
+            check_out_date=date(2026, 8, 16),
+            status="confirmed",
+        )
+        target_order = StayOrder(
+            hostex_reservation_code="R-MERGE-TARGET",
+            stay_code="S-MERGE-TARGET",
+            customer_id=target.id,
+            property_id=property_profile.id,
+            check_in_date=date(2026, 8, 20),
+            check_out_date=date(2026, 8, 22),
             status="confirmed",
         )
         task = BusinessTask(
@@ -913,7 +1120,7 @@ async def test_confirm_merge_moves_existing_links_and_writes_safe_audit() -> Non
             service_date=date(2026, 8, 1),
             description="补矿泉水",
         )
-        session.add_all([order, task])
+        session.add_all([order, target_order, task])
         await session.flush()
         source_summary = CustomerContextSummary(
             customer_id=source.id,
@@ -991,6 +1198,10 @@ async def test_confirm_merge_moves_existing_links_and_writes_safe_audit() -> Non
         audit = await session.scalar(
             select(AuditLog).where(AuditLog.action == "customer_merge")
         )
+        latest_notes = await repository.latest_stay_notes(
+            [source.id, target.id],
+            today=date(2026, 8, 14),
+        )
 
         assert merged.id == target.id
         assert repeated.id == target.id
@@ -1006,6 +1217,11 @@ async def test_confirm_merge_moves_existing_links_and_writes_safe_audit() -> Non
         assert suggestion.status is CustomerMergeStatus.ACCEPTED
         assert suggestion.reviewed_by == administrator.id
         assert order.customer_id == target.id
+        assert target_order.customer_id == target.id
+        assert latest_notes == {
+            source.id: None,
+            target.id: "8.14-8.16测试房间",
+        }
         assert task.customer_id == target.id
         assert target_summary.short_summary == (
             "目标短摘要\n\n来自合并档案：\n来源短摘要"

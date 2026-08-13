@@ -28,12 +28,14 @@ class CustomerAdminStub:
             display_name="测试客户",
             note="ROUTE_SOURCE_SECRET_NOTE",
             masked_phone="138****8000",
+            latest_stay_note="8.14-8.16春和景明",
         )
         self.target_card = CustomerCard(
             id=8,
             display_name="订单客户",
             note="ROUTE_TARGET_SECRET_NOTE",
             masked_phone="139****9000",
+            latest_stay_note=None,
         )
         self.tags = [
             SimpleNamespace(id=1, name="VIP"),
@@ -77,11 +79,12 @@ class CustomerAdminStub:
     async def get_detail(self, customer_id, administrator):
         """返回不包含手机号明文和密文的客户详情。"""
         self._require_admin(administrator)
-        if customer_id != 7:
+        if customer_id not in {7, 8}:
             raise CustomerNotFoundError("客户不存在")
+        customer = self.card if customer_id == 7 else self.target_card
         return {
-            "customer": self.card,
-            "masked_phone": self.card.masked_phone,
+            "customer": customer,
+            "masked_phone": customer.masked_phone,
             "tags": self.tags,
             "selected_tag_ids": [1],
             "summary": self.summary,
@@ -295,6 +298,54 @@ def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
         in merge.text
     )
     assert "13800138000" not in index.text + detail.text + merge.text
+
+
+def test_customer_pages_show_read_only_latest_stay_note() -> None:
+    """桌面、移动和详情均展示自动备注，且不污染员工备注输入框。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    index = client.get("/employee/customers?query=订单")
+    detail = client.get("/employee/customers/7")
+    empty_detail = client.get("/employee/customers/8")
+
+    assert index.status_code == 200
+    assert detail.status_code == 200
+    assert empty_detail.status_code == 200
+    assert index.text.count("8.14-8.16春和景明") == 2
+    assert index.text.count("暂无入住记录") == 2
+    assert "最新入住备注" in detail.text
+    assert "8.14-8.16春和景明" in detail.text
+    assert "最新入住备注" in empty_detail.text
+    assert "暂无入住记录" in empty_detail.text
+    assert (
+        '<textarea name="note" maxlength="2000">ROUTE_SOURCE_SECRET_NOTE</textarea>'
+        in detail.text
+    )
+    assert (
+        '<textarea name="note" maxlength="2000">8.14-8.16春和景明</textarea>'
+        not in detail.text
+    )
+    assert customers.note_calls == []
+
+
+def test_latest_stay_note_escapes_untrusted_property_title() -> None:
+    """平台房名作为不可信文本展示，不能在 CRM 页面执行 HTML。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    customers.card = CustomerCard(
+        id=7,
+        display_name="测试客户",
+        note="安全员工备注",
+        masked_phone="138****8000",
+        latest_stay_note='8.14-8.16<script>alert("x")</script>',
+    )
+    login(client)
+
+    detail = client.get("/employee/customers/7")
+
+    assert detail.status_code == 200
+    assert "<script>" not in detail.text
+    assert "&lt;script&gt;" in detail.text
 
 
 def test_admin_can_update_tags_note_and_summary_with_one_time_csrf() -> None:

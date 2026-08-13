@@ -646,6 +646,7 @@ class StayOrder(TimestampMixin, Base):
     check_in_date: Mapped[date] = mapped_column(Date, nullable=False)
     check_out_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    checkout_observed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     last_hostex_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

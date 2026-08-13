@@ -371,6 +371,144 @@ async def test_hostex_event_and_reservation_upsert_are_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reservation_upsert_records_first_checkout_observation_once() -> None:
+    """订单首次进入退房终态时记当天，重复同步不得漂移观察日。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    observed_dates = iter((date(2026, 8, 14), date(2026, 8, 15)))
+
+    async with factory() as session:
+        repository = SQLAlchemyOperationsRepository(
+            session,
+            local_date_provider=lambda: next(observed_dates),
+        )
+        checked_out = Reservation(
+            reservation_code="R-CHECKOUT-ONCE",
+            stay_code="S-CHECKOUT-ONCE",
+            property_id=201,
+            check_in_date=date(2026, 8, 12),
+            check_out_date=date(2026, 8, 14),
+            status=" Checked_Out ",
+            created_at="2026-08-12T00:00:00Z",
+        )
+
+        first = await repository.upsert_reservation(checked_out)
+        assert first.checkout_observed_on == date(2026, 8, 14)
+
+        second = await repository.upsert_reservation(
+            checked_out.model_copy(update={"status": "completed"})
+        )
+        assert second.checkout_observed_on == date(2026, 8, 14)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reservation_upsert_clears_and_rerecords_checkout_observation() -> None:
+    """订单恢复有效状态时清空观察日，再次退房时记录新的武汉日期。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    observed_dates = iter((date(2026, 8, 14), date(2026, 8, 18)))
+
+    async with factory() as session:
+        repository = SQLAlchemyOperationsRepository(
+            session,
+            local_date_provider=lambda: next(observed_dates),
+        )
+        reservation = Reservation(
+            reservation_code="R-CHECKOUT-AGAIN",
+            stay_code="S-CHECKOUT-AGAIN",
+            property_id=202,
+            check_in_date=date(2026, 8, 12),
+            check_out_date=date(2026, 8, 14),
+            status="checked_out",
+            created_at="2026-08-12T00:00:00Z",
+        )
+
+        first = await repository.upsert_reservation(reservation)
+        assert first.checkout_observed_on == date(2026, 8, 14)
+
+        restored = await repository.upsert_reservation(
+            reservation.model_copy(update={"status": "confirmed"})
+        )
+        assert restored.checkout_observed_on is None
+
+        completed_again = await repository.upsert_reservation(
+            reservation.model_copy(update={"status": "completed"})
+        )
+        assert completed_again.checkout_observed_on == date(2026, 8, 18)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_sync_does_not_erase_checkout_observation() -> None:
+    """取消等排除状态不是恢复入住，不得抹去已记录的退房观察日。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        repository = SQLAlchemyOperationsRepository(
+            session,
+            local_date_provider=lambda: date(2026, 8, 14),
+        )
+        reservation = Reservation(
+            reservation_code="R-CHECKOUT-CANCELLED",
+            stay_code="S-CHECKOUT-CANCELLED",
+            property_id=203,
+            check_in_date=date(2026, 8, 12),
+            check_out_date=date(2026, 8, 14),
+            status="completed",
+            created_at="2026-08-12T00:00:00Z",
+        )
+
+        await repository.upsert_reservation(reservation)
+        cancelled = await repository.upsert_reservation(
+            reservation.model_copy(update={"status": "cancelled"})
+        )
+
+        assert cancelled.checkout_observed_on == date(2026, 8, 14)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_future_completed_reservation_does_not_record_impossible_checkout() -> None:
+    """未来尚未入住的异常终态订单不得伪造当天为实际退房观察日。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        repository = SQLAlchemyOperationsRepository(
+            session,
+            local_date_provider=lambda: date(2026, 8, 14),
+        )
+        reservation = Reservation(
+            reservation_code="R-FUTURE-COMPLETED",
+            stay_code="S-FUTURE-COMPLETED",
+            property_id=204,
+            check_in_date=date(2026, 8, 20),
+            check_out_date=date(2026, 8, 22),
+            status="completed",
+            created_at="2026-08-12T00:00:00Z",
+        )
+
+        order = await repository.upsert_reservation(reservation)
+
+        assert order.checkout_observed_on is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_hostex_event_unique_race_preserves_outer_transaction(monkeypatch) -> None:
     """Webhook 事件与任务竞争应整体回滚候选写入，并保留外层事务。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

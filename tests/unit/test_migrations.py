@@ -35,6 +35,7 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "CREATE INDEX ix_admin_csrf_nonces_expires_at" in result.stdout
     assert "CREATE INDEX ix_stay_orders_check_in_status" in result.stdout
     assert "CREATE INDEX ix_stay_orders_check_out_status" in result.stdout
+    assert "checkout_observed_on" in result.stdout
     assert "FOREIGN KEY(employee_id) REFERENCES employees (id) ON DELETE CASCADE" in (result.stdout)
 
 
@@ -92,6 +93,9 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
         admin_indexes = connection.execute("PRAGMA index_list('admin_credentials')").fetchall()
         csrf_indexes = connection.execute("PRAGMA index_list('admin_csrf_nonces')").fetchall()
         stay_indexes = connection.execute("PRAGMA index_list('stay_orders')").fetchall()
+        stay_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info('stay_orders')")
+        }
         csrf_foreign_keys = connection.execute(
             "PRAGMA foreign_key_list('admin_csrf_nonces')"
         ).fetchall()
@@ -122,6 +126,7 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert any(row[1] == "ix_admin_csrf_nonces_expires_at" for row in csrf_indexes)
     assert any(row[1] == "ix_stay_orders_check_in_status" for row in stay_indexes)
     assert any(row[1] == "ix_stay_orders_check_out_status" for row in stay_indexes)
+    assert "checkout_observed_on" in stay_columns
     assert any(row[2] == "employees" and row[3] == "employee_id" for row in admin_foreign_keys)
     assert any(row[2] == "admin_credentials" and row[3] == "admin_id" for row in csrf_foreign_keys)
     assert sum(row[2] == "runtime_config_versions" for row in state_foreign_keys) == 2
@@ -135,8 +140,12 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
         version_columns = {
             row[1] for row in connection.execute("PRAGMA table_info('runtime_config_versions')")
         }
+        stay_columns_after_lifecycle_downgrade = {
+            row[1] for row in connection.execute("PRAGMA table_info('stay_orders')")
+        }
     assert "status" not in version_columns
     assert "based_on_revision" not in version_columns
+    assert "checkout_observed_on" not in stay_columns_after_lifecycle_downgrade
 
     dashboard_downgrade = run_alembic("downgrade", "0015_admin_runtime_config")
     assert dashboard_downgrade.returncode == 0, dashboard_downgrade.stderr
@@ -166,7 +175,7 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0017_runtime_config_lifecycle (head)" in current.stdout
+    assert "0018_stay_checkout_observation (head)" in current.stdout
 
 
 def test_runtime_config_lifecycle_backfills_existing_versions_with_orm_enum_name(
@@ -211,3 +220,66 @@ def test_runtime_config_lifecycle_backfills_existing_versions_with_orm_enum_name
         ).fetchone()[0]
 
     assert status_value == "CANDIDATE"
+
+
+def test_checkout_observation_migration_backfills_existing_finished_orders(
+    tmp_path: Path,
+) -> None:
+    """0018 必须按计划退房日回填历史退房订单，并保留其他订单为空。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "checkout-observation-existing-orders.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+    alembic = str(project_root / ".venv/bin/alembic")
+
+    before = subprocess.run(
+        [alembic, "upgrade", "0017_runtime_config_lifecycle"],
+        cwd=project_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert before.returncode == 0, before.stderr
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO property_profiles "
+            "(id, title, is_active, created_at, updated_at) "
+            "VALUES (1, '测试房间', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        rows = (
+            ("R-FINISHED-1", "S-1", "2026-08-10", "2026-08-12", " Checked_Out "),
+            ("R-FINISHED-2", "S-2", "2026-08-11", "2026-08-13", "COMPLETED"),
+            ("R-ACTIVE", "S-3", "2026-08-14", "2026-08-16", "confirmed"),
+        )
+        connection.executemany(
+            "INSERT INTO stay_orders "
+            "(hostex_reservation_code, stay_code, property_id, check_in_date, "
+            "check_out_date, status, created_at, updated_at) "
+            "VALUES (?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            rows,
+        )
+        connection.commit()
+
+    after = subprocess.run(
+        [alembic, "upgrade", "head"],
+        cwd=project_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert after.returncode == 0, after.stderr
+    with sqlite3.connect(database_path) as connection:
+        observations = dict(
+            connection.execute(
+                "SELECT hostex_reservation_code, checkout_observed_on "
+                "FROM stay_orders ORDER BY hostex_reservation_code"
+            ).fetchall()
+        )
+
+    assert observations == {
+        "R-ACTIVE": None,
+        "R-FINISHED-1": "2026-08-12",
+        "R-FINISHED-2": "2026-08-13",
+    }

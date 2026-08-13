@@ -1,3 +1,4 @@
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +32,7 @@ class CustomerAdminRepositoryStub:
         self.merge_calls: list[tuple[int, int, bool]] = []
         self.manual_merge_calls: list[tuple[int, int, int]] = []
         self.sync_completed: list[int] = []
+        self.latest_stay_note_calls: list[tuple[list[int], date]] = []
 
     async def list_customers(self, query, *, offset: int, limit: int):
         """返回固定客户列表。"""
@@ -46,6 +48,11 @@ class CustomerAdminRepositoryStub:
             "summary": None,
             "merge_suggestions": [],
         }
+
+    async def latest_stay_notes(self, customer_ids, *, today):
+        """记录批量备注读取，并返回固定自动入住备注。"""
+        self.latest_stay_note_calls.append((list(customer_ids), today))
+        return {7: "8.14-8.16春和景明"}
 
     async def merge_detail(self, suggestion_id):
         """返回不含电话、备注或 ORM 对象的复核安全投影。"""
@@ -166,17 +173,72 @@ class ManualMergeRepositoryStub:
 async def test_detail_masks_phone_and_never_returns_plaintext() -> None:
     """CRM 页面只能得到脱敏手机号。"""
     cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
     service = CustomerAdminService(
-        CustomerAdminRepositoryStub(cipher),
+        repository,
         cipher,
         JobQueueStub(),
         tag_sync_enabled=False,
+        local_date_provider=lambda: date(2026, 8, 14),
     )
 
     detail = await service.get_detail(7, employee())
 
     assert detail["masked_phone"] == "138****8000"
+    assert detail["customer"].latest_stay_note == "8.14-8.16春和景明"
+    assert detail["customer"].note == "老客户"
+    assert repository.latest_stay_note_calls == [
+        ([7], date(2026, 8, 14))
+    ]
     assert "13800138000" not in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_list_loads_latest_stay_notes_in_one_batch() -> None:
+    """CRM 列表只批量读取一次自动入住备注，并保留人工备注。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    second_customer = SimpleNamespace(
+        id=8,
+        display_name="第二位客户",
+        phone_ciphertext=None,
+        note="人工备注二",
+    )
+
+    async def list_two_customers(query, *, offset, limit):
+        """返回两个客户，验证服务不会逐客查询订单。"""
+        return [repository.customer, second_customer]
+
+    async def latest_stay_notes(customer_ids, *, today):
+        """记录完整编号集合并返回其中一位客户的备注。"""
+        repository.latest_stay_note_calls.append((list(customer_ids), today))
+        return {7: "8.14-8.16春和景明", 8: None}
+
+    repository.list_customers = list_two_customers
+    repository.latest_stay_notes = latest_stay_notes
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+        local_date_provider=lambda: date(2026, 8, 14),
+    )
+
+    cards = await service.list_customers(
+        None,
+        employee(),
+        offset=0,
+        limit=50,
+    )
+
+    assert [card.latest_stay_note for card in cards] == [
+        "8.14-8.16春和景明",
+        None,
+    ]
+    assert [card.note for card in cards] == ["老客户", "人工备注二"]
+    assert repository.latest_stay_note_calls == [
+        ([7, 8], date(2026, 8, 14))
+    ]
 
 
 @pytest.mark.asyncio

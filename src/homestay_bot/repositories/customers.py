@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import logging
+from datetime import UTC, date, datetime
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +21,7 @@ from homestay_bot.domain.models import (
     CustomerTag,
     CustomerTagLink,
     Employee,
+    PropertyProfile,
     StayOrder,
 )
 from homestay_bot.services.customer_errors import (
@@ -27,6 +29,12 @@ from homestay_bot.services.customer_errors import (
     CustomerNotFoundError,
     CustomerPermissionError,
 )
+from homestay_bot.services.latest_stay_note import (
+    LatestStayCandidate,
+    select_latest_stay_note,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class SQLAlchemyCustomerRepository:
@@ -221,6 +229,73 @@ class SQLAlchemyCustomerRepository:
                 )
             ).all()
         )
+
+    async def latest_stay_notes(
+        self,
+        customer_ids: list[int],
+        *,
+        today: date,
+    ) -> dict[int, str | None]:
+        """一次查询并计算多个客户的只读最新入住备注。"""
+
+        # 保留调用方编号全集，让没有订单的客户也得到明确的 None。
+        unique_customer_ids = list(dict.fromkeys(customer_ids))
+        if not unique_customer_ids:
+            return {}
+
+        statement = (
+            select(
+                StayOrder.id.label("order_id"),
+                StayOrder.customer_id,
+                StayOrder.property_id,
+                PropertyProfile.title.label("property_title"),
+                StayOrder.check_in_date,
+                StayOrder.check_out_date,
+                StayOrder.status,
+                StayOrder.checkout_observed_on,
+            )
+            .select_from(StayOrder)
+            .outerjoin(
+                PropertyProfile,
+                PropertyProfile.id == StayOrder.property_id,
+            )
+            .where(StayOrder.customer_id.in_(unique_customer_ids))
+        )
+        rows = (await self._session.execute(statement)).mappings().all()
+        candidates_by_customer: dict[int, list[LatestStayCandidate]] = {
+            customer_id: [] for customer_id in unique_customer_ids
+        }
+        for row in rows:
+            customer_id = int(row["customer_id"])
+            candidates_by_customer[customer_id].append(
+                LatestStayCandidate(
+                    order_id=int(row["order_id"]),
+                    customer_id=customer_id,
+                    property_id=int(row["property_id"]),
+                    property_title=row["property_title"],
+                    check_in_date=row["check_in_date"],
+                    check_out_date=row["check_out_date"],
+                    status=row["status"],
+                    checkout_observed_on=row["checkout_observed_on"],
+                )
+            )
+
+        notes: dict[int, str | None] = {}
+        for customer_id, candidates in candidates_by_customer.items():
+            result = select_latest_stay_note(candidates, today=today)
+            notes[customer_id] = result.note
+            if result.invalid_candidate_count:
+                # 只记录稳定错误码和计数，不泄露订单、客户或房源信息。
+                logger.warning(
+                    "latest_stay_note_invalid_candidate",
+                    extra={
+                        "error_codes": result.error_codes,
+                        "invalid_candidate_count": (
+                            result.invalid_candidate_count
+                        ),
+                    },
+                )
+        return notes
 
     async def customer_detail(self, customer_id: int) -> dict[str, object]:
         """返回管理员 CRM 需要的标签、摘要和待合并建议。"""

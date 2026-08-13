@@ -1,5 +1,7 @@
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
@@ -27,15 +29,32 @@ from homestay_bot.domain.models import (
     StayOrder,
     TaskAttachment,
 )
+from homestay_bot.domain.stay_status import (
+    is_checked_out_stay_status,
+    is_excluded_stay_status,
+)
 from homestay_bot.integrations.hostex_client import Reservation
+
+WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def _wuhan_today() -> date:
+    """返回武汉本地日期，避免 UTC 跨日导致退房观察日偏移。"""
+    return datetime.now(WUHAN_TIMEZONE).date()
 
 
 class SQLAlchemyOperationsRepository:
     """提供运营模型的最小幂等写入入口。"""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        local_date_provider: Callable[[], date] | None = None,
+    ) -> None:
         """绑定当前运营事务。"""
         self._session = session
+        self._local_date_provider = local_date_provider or _wuhan_today
 
     async def _add_business_task_once(
         self,
@@ -665,6 +684,11 @@ class SQLAlchemyOperationsRepository:
             )
         )
         if order is None:
+            checkout_observed_on = None
+            if is_checked_out_stay_status(reservation.status):
+                observed_on = self._local_date_provider()
+                if reservation.check_in_date <= observed_on:
+                    checkout_observed_on = observed_on
             order = StayOrder(
                 hostex_reservation_code=reservation.reservation_code,
                 stay_code=reservation.stay_code,
@@ -673,6 +697,7 @@ class SQLAlchemyOperationsRepository:
                 check_in_date=reservation.check_in_date,
                 check_out_date=reservation.check_out_date,
                 status=reservation.status,
+                checkout_observed_on=checkout_observed_on,
             )
             self._session.add(order)
         else:
@@ -682,6 +707,15 @@ class SQLAlchemyOperationsRepository:
             order.check_in_date = reservation.check_in_date
             order.check_out_date = reservation.check_out_date
             order.status = reservation.status
+            # 仅在首次观察到退房终态时落日；恢复有效后清空，以便再次退房重记。
+            if is_checked_out_stay_status(reservation.status):
+                observed_on = self._local_date_provider()
+                if reservation.check_in_date > observed_on:
+                    order.checkout_observed_on = None
+                elif order.checkout_observed_on is None:
+                    order.checkout_observed_on = observed_on
+            elif not is_excluded_stay_status(reservation.status):
+                order.checkout_observed_on = None
         order.last_hostex_sync_at = datetime.now(UTC)
         await self._session.flush()
         return order

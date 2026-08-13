@@ -88,6 +88,7 @@ def test_operations_models_define_required_unique_keys() -> None:
     assert BusinessTask.__table__.c.dedupe_key.unique is True
     assert BusinessTask.__table__.c.source_message_id.unique is True
     assert RoomOperationalState.__table__.c.property_id.primary_key is True
+    assert StayOrder.__table__.c.checkout_observed_on.nullable is True
 
     part_unique_columns = {
         tuple(constraint.columns.keys())
