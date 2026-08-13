@@ -2832,15 +2832,17 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 - [x] 在 `tests/unit/test_deepseek_client.py` 先写路由 RED：稳定旅游走知识库快速模型且 `thinking=disabled`，实时旅游走联网搜索且不关闭思考。
 - [x] 修改 `src/homestay_bot/integrations/deepseek_client.py::respond()` 与系统提示词，仅实时旅游提前进入 `DeepSeekTourismSearcher`。
 - [x] 运行旅游、DeepSeek、会话定向测试，确认 RED→GREEN（114 passed）。
-- [ ] 备份云端 `.env`，把 `WECOM_POLL_INTERVAL_SECONDS=60` 精确改为 `10`，重启 API 后跨过至少两个补拉周期并检查错误日志。
+- [x] 备份云端 `.env`，把 `WECOM_POLL_INTERVAL_SECONDS=60` 精确改为 `10`，重启 API 后跨过至少两个补拉周期并检查错误日志。
 - [x] 运行禁 live 全量 pytest、Ruff、mypy、compileall、pip check 与 diff check（843 passed、15 skipped；其余全部通过）。
-- [ ] 提交、推送、部署，分别用稳定推荐和实时旅游做真实验收，检查内容、来源、链接、重复回复与端到端耗时。
+- [x] 提交、推送、部署，分别用稳定推荐和实时旅游做真实验收，检查内容、来源、链接、重复回复与端到端耗时。
 
 #### 实施 Review
 
 - 三态分类保持民宿预订优先；门票/演出票务预订走实时搜索，明确房间、房源、房型、酒店或住宿对象的预订不会被旅游规则抢走。
 - 稳定旅游由快速模型处理并关闭深度思考；实时旅游继续使用联网搜索和深度思考。
 - 独立代码复审两轮发现并修复票务预订与自然表达覆盖、住宿对象组合句误判，最终结论 APPROVED。
+- 云端部署提交 `8dff796`；`.env` 已备份到权限为 600 的独立目录，容器实际读取 `WECOM_POLL_INTERVAL_SECONDS=10`，跨过多个周期无错误日志，内外网健康均为 `ok`。
+- 生产受控客户端真实验收：稳定推荐约 3.03 秒、无来源和链接；实时活动约 23.34 秒、联网状态 `ok`、有来源且无链接。端到端企业微信接收耗时仍需用下一条真实客人消息测量。
 
 ### 批次 1-7 安全复审（2026-08-12）
 
