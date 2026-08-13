@@ -2844,6 +2844,26 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 - 云端部署提交 `8dff796`；`.env` 已备份到权限为 600 的独立目录，容器实际读取 `WECOM_POLL_INTERVAL_SECONDS=10`，跨过多个周期无错误日志，内外网健康均为 `ok`。
 - 生产受控客户端真实验收：稳定推荐约 3.03 秒、无来源和链接；实时活动约 23.34 秒、联网状态 `ok`、有来源且无链接。端到端企业微信接收耗时仍需用下一条真实客人消息测量。
 
+### 房态住宿晚归一化与跨话题隔离（2026-08-13）
+
+#### 已确认 Spec
+
+- 百居易返回的日期范围可能同时包含入住日和退房日；可住判断采用酒店夜晚语义 `[入住日, 退房日)`，退房日绝不计入本次住宿晚。
+- `HostexReadOnlyToolExecutor.execute("search_availability")` 在交给模型前只保留实际住宿晚，并为每个房源提供确定性的整段可住结果；任一住宿晚不可用即不可住。
+- 当前问题同时包含房态意图与明确日期时，视为独立房态问题，只把当前客人问题交给模型，避免上一轮旅游回复污染；缺少日期的简短追问继续保留最多三条上下文，以继承上一轮住宿日期。
+- 不改变百居易 API、不自动建单、不修改订单，不影响旅游、客诉和任务流程。
+- 首次模型 JSON 校验失败的既有有限重试保留，本批不扩大模型重试策略。
+
+#### 实施计划
+
+- [ ] 在 `tests/unit/test_deepseek_client.py` 写 RED：8 月 14 日入住、15 日退房时过滤 15 日，只按 14 日计算 `stay_available`。
+- [ ] 在 `src/homestay_bot/integrations/deepseek_client.py::HostexReadOnlyToolExecutor.execute()` 实现退房日排除和整段可住投影。
+- [ ] 在 `tests/unit/test_deepseek_client.py` 写 RED：独立房态问题不携带上一轮旅游回复；缺日期的追问仍保留相关历史。
+- [ ] 在 `DeepSeekGuestAssistant.respond()` 构造请求前裁剪独立房态问题上下文，并保持工具强制选择与日期换算行为不变。
+- [ ] 运行房态、DeepSeek、ConversationService 定向测试，确认 RED→GREEN。
+- [ ] 运行禁 live 全量 pytest、Ruff、mypy、compileall、pip check、diff check并完成独立代码复审。
+- [ ] 合并并推送 `main`，部署云端；用百居易真实 8 月 14–15 日数据确认结果为 0 间，不附带旅游内容，检查健康和错误日志。
+
 ### 批次 1-7 安全复审（2026-08-12）
 
 复审范围 `565b6a8..dc4bef1`，31 个提交、118 文件、净增约 18,500 行。发现 7 个问题（6 medium、1 low），无高危漏洞。核心安全机制（认证、CSRF、权限、加密、SSRF、热切换、模板安全）验证通过。
