@@ -3009,6 +3009,133 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 - [ ] 完成迁移、仓储、服务、路由、模板及客户合并回归测试。
 - [ ] 完成全量验证、独立复审、主干合并、云端备份迁移和页面验收。
 
+##### 精确执行计划
+
+**执行前隔离**
+
+- [ ] 使用 `using-git-worktrees` 创建 `fix/crm-latest-stay-note-20260814` 隔离 worktree，并确认主工作区两份未跟踪资料不会进入提交。
+- [ ] 在隔离 worktree 运行以下基线，预期全部通过且不访问真实外部接口：
+
+```bash
+env -u RUN_LIVE_CONTRACT_TESTS -u RUN_DEEPSEEK_CONTRACT \
+  .venv/bin/pytest -q tests/integration/test_operations_repository.py \
+  tests/integration/test_customer_repository.py \
+  tests/unit/test_customer_admin_service.py \
+  tests/integration/test_customer_routes.py tests/unit/test_migrations.py
+```
+
+**任务 1：集中订单状态与纯计算器**
+
+文件：新建 `src/homestay_bot/domain/stay_status.py`、`src/homestay_bot/services/latest_stay_note.py` 和 `tests/unit/test_latest_stay_note.py`。
+
+- [ ] 先写 RED，定义以下不可变输入，并覆盖当前入住、重叠订单、退房第 0～3 天、第 4 天切未来、无未来保留最近、取消回退、无订单、异常日期、占位房名和格式化：
+
+```python
+@dataclass(frozen=True)
+class LatestStayCandidate:
+    order_id: int
+    customer_id: int
+    property_id: int
+    property_title: str | None
+    check_in_date: date
+    check_out_date: date
+    status: str
+    checkout_observed_on: date | None
+
+def select_latest_stay_note(
+    candidates: Sequence[LatestStayCandidate], *, today: date
+) -> LatestStayNoteResult:
+    """按武汉日期和已确认优先级选择一条只读入住备注。"""
+```
+
+- [ ] 运行 `.venv/bin/pytest -q tests/unit/test_latest_stay_note.py`，预期因模块缺失而 RED。
+- [ ] 最小实现集中状态函数；排除集合固定为 `cancelled/canceled/declined/expired/deleted`，已退房集合固定为 `checked_out/completed`。
+- [ ] 实现选择器：当前入住用 `check_in <= today < check_out`；保留窗口用 `today <= (checkout_observed_on or check_out_date) + 3 days`；窗口外未来订单按入住日和 ID 升序，历史订单按退房日、入住日和 ID 降序；无效日期只返回稳定 `invalid_stay_dates` 计数。
+- [ ] 空标题或 `百居易房间 <ID>` 显示 `房间 #<ID>`，其他标题原样使用；格式固定为 `M.D-M.D标题`。
+- [ ] 复跑单测至 GREEN；提交 `feat: add latest stay note selector`。
+
+**任务 2：迁移与退房观察日期**
+
+文件：修改 `src/homestay_bot/domain/models.py::StayOrder`、`src/homestay_bot/repositories/operations.py::SQLAlchemyOperationsRepository`、`tests/unit/test_models.py`、`tests/unit/test_migrations.py`、`tests/integration/test_operations_repository.py`；新建 `migrations/versions/0018_stay_checkout_observation.py`。
+
+- [ ] 先写 RED：模型存在可空日期；历史完成订单回填计划退房日；其他状态为空；upsert 首次完成写武汉日期、重复同步不覆盖、恢复有效清空、再次完成重写。
+- [ ] 运行上述模型、迁移和仓储用例，确认因字段和迁移缺失而 RED。
+- [ ] 模型新增：
+
+```python
+checkout_observed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+```
+
+- [ ] `0018` 用 `batch_alter_table("stay_orders")` 添加列，并在线执行可跨 SQLite/PostgreSQL 的回填；降级删除列：
+
+```sql
+UPDATE stay_orders
+SET checkout_observed_on = check_out_date
+WHERE lower(trim(status)) IN ('checked_out', 'completed')
+```
+
+- [ ] 仓储构造函数增加可注入 `local_date_provider: Callable[[], date]`，默认武汉今日；upsert 只在首次进入完成状态写日期，保持完成不改写，恢复其他有效状态清空，取消类状态不伪造退房日期。
+- [ ] 迁移测试检查 SQLite 升级→降到 `0017`→再升级，以及 PostgreSQL 离线 SQL；当前迁移头更新为 `0018_stay_checkout_observation`。
+- [ ] 复跑至 GREEN；提交 `feat: track observed checkout dates`。
+
+**任务 3：CRM 批量派生查询**
+
+文件：修改 `src/homestay_bot/services/customer_admin_service.py`、`src/homestay_bot/repositories/customers.py`、`tests/unit/test_customer_admin_service.py` 和 `tests/integration/test_customer_repository.py`。
+
+- [ ] 先写 RED：`CustomerCard.latest_stay_note` 返回派生值或 `None`；列表无论 1 人还是 50 人只调用一次批量查询；详情复用相同逻辑；员工备注原值不变。
+- [ ] 仓储协议新增：
+
+```python
+async def latest_stay_notes(
+    self, customer_ids: list[int], *, today: date
+) -> dict[int, str | None]:
+    """一次批量查询并返回客户编号到自动入住备注的映射。"""
+```
+
+- [ ] 仓储一次查询显式选择 `StayOrder` 计算字段并左连接 `PropertyProfile.title`，以客户 ID 集合执行单次 `IN` 查询；空 ID 列表直接返回空映射。
+- [ ] `CustomerAdminService` 注入默认武汉今日的日期提供器；列表取得客户后只调用一次批量方法，详情传单个 ID；`CustomerCard` 增加 `latest_stay_note`。
+- [ ] 使用 SQLAlchemy 查询计数断言客户数量增长不会增加入住备注 SQL；加入客户合并后来源与目标全部订单重新计算的集成回归。
+- [ ] 复跑客户服务和仓储测试至 GREEN；提交 `feat: derive CRM stay notes in batches`。
+
+**任务 4：CRM 页面接入**
+
+文件：修改 `src/homestay_bot/templates/customers/index.html`、`src/homestay_bot/templates/customers/detail.html` 和 `tests/integration/test_customer_routes.py`。
+
+- [ ] 先写 RED：桌面列表、移动卡片和详情均显示“最新入住备注”；无值显示“暂无入住记录”；自动值不出现在员工备注 textarea。
+- [ ] 列表模板使用 `customer.latest_stay_note or "暂无入住记录"`，不增加搜索或写操作；详情在员工备注表单上方增加只读面板。
+- [ ] 回归员工备注保存和清空仍为 303，审计仍为 `customer_note_updated` 且不含备注正文。
+- [ ] 复跑路由测试至 GREEN；提交 `feat: show latest stays in CRM`。
+
+**任务 5：全量验证、复审与部署**
+
+- [ ] 运行定向测试：
+
+```bash
+.venv/bin/pytest -q tests/unit/test_latest_stay_note.py tests/unit/test_models.py \
+  tests/unit/test_migrations.py tests/integration/test_operations_repository.py \
+  tests/unit/test_customer_admin_service.py \
+  tests/integration/test_customer_repository.py \
+  tests/integration/test_customer_routes.py
+```
+
+- [ ] 运行禁 live 全量与静态验证：
+
+```bash
+env -u RUN_LIVE_CONTRACT_TESTS -u RUN_DEEPSEEK_CONTRACT \
+  -u RUN_HOSTEX_CONTRACT -u RUN_WECOM_CONTRACT .venv/bin/pytest -q
+.venv/bin/ruff check .
+.venv/bin/mypy src
+.venv/bin/python -m compileall -q src
+.venv/bin/pip check
+git diff --check
+```
+
+- [ ] 独立只读复审状态转换、三天边界、历史回填、客户合并、批量查询次数、员工备注隔离和模板转义；发现 Important/Critical 时先补 RED 再修复。
+- [ ] 更新本节 Review，显式暂存目标文件并排除两份用户资料和 `.venv`；快进合并 `main` 并推送 GitHub。
+- [ ] 云端先备份旧提交、`.env` 和非空 PostgreSQL `pg_dump`，再同步代码并只重建 API；确认迁移头为 `0018_stay_checkout_observation`。
+- [ ] 云端只读核对一名有多次入住的客户：列表和详情一致、员工备注未变化、自动值符合武汉今日规则；本机与公网 `/health` 为 `ok`、部署后无新增错误。
+- [ ] 保存备份路径和旧提交作为回滚证据，完成后清理隔离 worktree。
+
 #### 实施 Review
 
 - 实施完成后在本节补充提交号、RED→GREEN、全量验证、查询次数、迁移回放、云端备份路径和页面验收证据。
