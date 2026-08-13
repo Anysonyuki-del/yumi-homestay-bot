@@ -1,6 +1,8 @@
 import logging
 from io import StringIO
 
+from uvicorn.logging import AccessFormatter
+
 from homestay_bot.logging import (
     SensitiveDataFilter,
     configure_logging_redaction,
@@ -59,6 +61,38 @@ def test_access_log_filter_redacts_oauth_and_callback_query_values() -> None:
 
     assert "secret-code" not in rendered
     assert "secret-state" not in rendered
+
+
+def test_access_log_filter_preserves_uvicorn_structured_arguments() -> None:
+    """异常查询串脱敏后仍须保留 Uvicorn 格式化器需要的五元参数。"""
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        (
+            "203.0.113.5:1234",
+            "GET",
+            (
+                "/wp-admin/install.php?step=1+HTTP%2F1.1%22+404"
+                "&token=secret-token"
+            ),
+            "1.1",
+            404,
+        ),
+        None,
+    )
+
+    SensitiveDataFilter().filter(record)
+    output = AccessFormatter(
+        '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+    ).format(record)
+
+    assert len(record.args) == 5
+    assert "secret-token" not in output
+    assert "token=%5BREDACTED%5D" in output
+    assert "/wp-admin/install.php" in output
 
 
 def test_configure_logging_redaction_protects_child_logger_records() -> None:

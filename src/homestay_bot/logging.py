@@ -98,7 +98,18 @@ class SensitiveDataFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         """修改消息、参数和 extra 副本并允许记录继续输出。"""
-        if isinstance(record.args, tuple):
+        if (
+            record.name == "uvicorn.access"
+            and isinstance(record.args, tuple)
+            and len(record.args) == 5
+        ):
+            # Uvicorn 的 AccessFormatter 会再次解包固定五元参数；只在原参数中
+            # 脱敏字符串，不能像普通日志一样预渲染后清空 args。
+            record.args = tuple(
+                _redact_url(item) if isinstance(item, str) else item
+                for item in record.args
+            )
+        elif isinstance(record.args, tuple):
             # 令牌名称通常位于格式字符串而不是参数键中，先渲染整条消息，
             # 再替换并冻结参数，避免子 logger 的 handler 漏掉令牌正文。
             try:
