@@ -26,6 +26,10 @@ from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
 )
+from homestay_bot.services.guest_reply_policy import (
+    human_contact_reply,
+    sanitize_guest_reply,
+)
 from homestay_bot.services.knowledge_service import KnowledgeService
 
 logger = logging.getLogger(__name__)
@@ -371,9 +375,9 @@ class DeepSeekGuestAssistant:
             "你是武汉民宿的温暖管家。请用自然、亲切、有人情味的中文回复客人，"
             "像认真接待住客的民宿老板，不要生硬、官僚或机械。"
             "这只是收到消息后的即时安抚，不要回答事实，不要承诺房态、价格、"
-            "物品已经送达或服务已经完成，不要提员工确认、模型、数据库、接口、"
-            "内部任务或等待流程。优先使用‘我已收到您的诉求，正在火速通知管家，"
-            "麻烦您稍作等待’这类温暖表达。控制在60字以内，只输出 JSON："
+            "物品已经送达、人员已经通知、师傅已经安排或问题一定能解决；不要提"
+            "模型、数据库、接口或内部任务。只能表示会立即联系管家，不能声称"
+            "管家或师傅一定上门。控制在60字以内，只输出 JSON："
             '{"reply_text":"温暖安抚"}。'
             if language is Language.ZH
             else (
@@ -402,9 +406,11 @@ class DeepSeekGuestAssistant:
             ).reply_text.strip()
             if re.search(r"https?://|员工|模型|数据库|接口|已送达|已完成", reply):
                 raise ValueError("快速安抚包含内部流程或结果承诺")
-            if not re.search(r"管家", reply) or not re.search(r"稍作等待|稍等", reply):
-                raise ValueError("快速安抚未使用统一管家话术")
-            return reply
+            return sanitize_guest_reply(
+                reply,
+                language=language,
+                requires_human=True,
+            )
         except Exception as error:
             logger.info(
                 "DeepSeek 快速安抚失败，使用温暖模板：error_type=%s",
@@ -415,18 +421,8 @@ class DeepSeekGuestAssistant:
     @staticmethod
     def _fast_ack_fallback(language: Language, question: str) -> str:
         """快速模型超时或协议异常时提供不承诺结果的温暖模板。"""
-        if language is Language.EN:
-            return "Thanks for letting us know. I’m checking this for you now."
-        if re.search(r"矿泉水|补水|保洁|维修|加被子|加枕头|麻将", question):
-            return (
-                "我已收到您的诉求，正在火速通知管家，麻烦您稍作等待，"
-                "我们的管家了解情况后一定会为您解决问题"
-            )
-        if re.search(r"武汉|好玩|景点|哪里|推荐", question):
-            return "我已收到您的诉求，正在火速通知管家，麻烦您稍作等待。"
-        if re.search(r"房态|预订|入住|退房|有房|房间", question):
-            return "我已收到您的诉求，正在火速通知管家，麻烦您稍作等待。"
-        return "我已收到您的诉求，正在火速通知管家，麻烦您稍作等待。"
+        del question
+        return human_contact_reply(language)
 
     @staticmethod
     def tool_definitions() -> list[dict[str, Any]]:

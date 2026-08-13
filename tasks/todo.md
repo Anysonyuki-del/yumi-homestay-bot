@@ -2948,16 +2948,19 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 
 #### 实施计划
 
-- [ ] 新建 `src/homestay_bot/services/guest_reply_policy.py`，集中定义中英文管家接管话术、禁用承诺模式、按句保留安全建议和最终兜底；所有函数与关键分支写中文注释。
-- [ ] 先在 `tests/unit/test_guest_reply_policy.py` 写 RED，覆盖洗衣机原始违规回复、全部违规句、普通信息误带承诺、固定管家话术只出现一次和中英文结果。
-- [ ] 修改 `src/homestay_bot/services/conversation_service.py::_process_model_reply()`，在发送前根据本地接管理由、模型接管理由、`staff_confirmation_required`、`task_suggestion` 和本地服务意图决定是否追加固定管家收尾；`_send_guest_reply()` 保留最终全局防线。
-- [ ] 修改 `ConversationService` 的快速安抚、普通人工接管、旅游/模型失败和紧急回复路径，确保所有需要人工的客人回复使用统一策略，同时保留紧急安全指令。
-- [ ] 修改 `src/homestay_bot/integrations/deepseek_client.py::respond_ack()` 提示与固定兜底，删除“一定会解决”等承诺；输出即使违规也由客人侧中央策略兜底。
-- [ ] 修改 `src/homestay_bot/services/complaint_service.py::guest_acknowledgement()` 和 `src/homestay_bot/services/emergency_service.py::safety_reply()`，移除结果承诺和“已通知”事实声明。
-- [ ] 扩充 `tests/unit/test_conversation_service.py`、`test_deepseek_client.py`、`test_complaint_service.py`、`test_emergency_service.py`，先观察原行为 RED，再验证所有客人可见路径 GREEN；断言员工内部通知仍正常产生。
-- [ ] 运行相关定向测试、禁 live 全量 pytest、Ruff、mypy、compileall、pip check、diff check，并进行独立代码复审。
+- [x] 新建 `src/homestay_bot/services/guest_reply_policy.py`，集中定义中英文管家接管话术、禁用承诺模式、按句保留安全建议和最终兜底；所有函数与关键分支写中文注释。
+- [x] 先在 `tests/unit/test_guest_reply_policy.py` 写 RED，覆盖洗衣机原始违规回复、全部违规句、普通信息误带承诺、固定管家话术只出现一次和中英文结果。
+- [x] 修改 `src/homestay_bot/services/conversation_service.py::_process_model_reply()`，在发送前根据本地接管理由、模型接管理由、`staff_confirmation_required`、`task_suggestion` 和本地服务意图决定是否追加固定管家收尾；`_send_guest_reply()` 保留最终全局防线。
+- [x] 修改 `ConversationService` 的快速安抚、普通人工接管、旅游/模型失败和紧急回复路径，确保所有需要人工的客人回复使用统一策略，同时保留紧急安全指令。
+- [x] 修改 `src/homestay_bot/integrations/deepseek_client.py::respond_ack()` 提示与固定兜底，删除“一定会解决”等承诺；输出即使违规也由客人侧中央策略兜底。
+- [x] 修改 `src/homestay_bot/services/complaint_service.py::guest_acknowledgement()` 和 `src/homestay_bot/services/emergency_service.py::safety_reply()`，移除结果承诺和“已通知”事实声明。
+- [x] 扩充 `tests/unit/test_conversation_service.py`、`test_deepseek_client.py`、`test_complaint_service.py`、`test_emergency_service.py`，先观察原行为 RED，再验证所有客人可见路径 GREEN；断言员工内部通知仍正常产生。
+- [x] 运行相关定向测试、禁 live 全量 pytest、Ruff、mypy、compileall、pip check、diff check，并进行独立代码复审。
 - [ ] 合并推送主干，云端先备份再部署；重放“洗衣机显示锁/打不开怎么办”的无消息发送模拟，随后用新企业微信消息验收回复无承诺、包含固定管家收尾、员工通知正常、健康与错误日志正常。
 
 #### 实施 Review
 
-- 实施结束时在本节记录提交号、RED→GREEN、全量测试、云端备份、真实对话和回滚证据，并逐项核对上述 Spec。
+- 本地 RED 首先因中央策略模块缺失而收集失败；随后独立复审补充复现普通信息误判、六种中英文调度承诺绕过、安全指令误删和 `booking_confirmed` 漏接管，均先加入失败测试再修复。
+- 本地 GREEN：客人回复策略及相关服务定向 `128 passed`；禁 live 全量 `878 passed, 15 skipped`；Ruff、mypy（103 个源码文件）、compileall、pip check 和 diff check 全部通过。
+- 独立只读复审最终 `APPROVED`：普通信息不误触发、真实服务仍触发、承诺变体被过滤、燃气/安全区域提示保留、`booking_confirmed` 统一接管；员工通知仍走独立内部通道。
+- 提交号、云端备份、部署重放、健康检查和真实企业微信验收将在部署后补充。

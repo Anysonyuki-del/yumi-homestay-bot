@@ -426,10 +426,34 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
 
     assert assistant.calls == 0
     assert assistant.ack_calls == 1
-    assert wecom.guest_messages == ["收到啦，我来帮您看看。"]
+    assert wecom.guest_messages == [
+        "我已收到您的诉求。我会立即联系管家来处理，请您稍等。"
+    ]
     assert jobs.jobs[0][0] == "wecom_process_message"
     assert jobs.jobs[0][2] == "final:msg-1"
     assert commits == 1
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "武汉三日游怎么安排？",
+        "房间加湿器怎么用？",
+        "有什么伴手礼可以送朋友？",
+    ],
+)
+def test_information_questions_do_not_trigger_fast_service_ack(question: str) -> None:
+    """旅游、设施用法和送礼咨询不能被裸动作词误判为人工服务。"""
+    assert ConversationService._should_send_fast_ack(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["请补两瓶矿泉水", "洗衣机一直显示锁，打不开", "想申请提前入住"],
+)
+def test_operational_requests_still_trigger_fast_service_ack(question: str) -> None:
+    """收窄识别后，补给、维修和提前入住仍须快速安抚。"""
+    assert ConversationService._should_send_fast_ack(question) is True
 
 
 @pytest.mark.asyncio
@@ -697,7 +721,11 @@ async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
 
     await service.handle_message(incoming(content="我要退款"))
 
-    assert "工作人员" in wecom.guest_messages[0]
+    assert wecom.guest_messages[0].endswith(
+        "我会立即联系管家来处理，请您稍等。"
+    )
+    assert "工作人员" not in wecom.guest_messages[0]
+    assert "已通知" not in wecom.guest_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
     assert "YuMi 接管：refund" in wecom.internal_messages[0]
     assert audit.calls == [
@@ -734,7 +762,9 @@ async def test_ai_task_is_recorded_after_guest_reply_and_notifies_staff() -> Non
 
     await service.handle_message(incoming(content="请补两瓶矿泉水"))
 
-    assert wecom.guest_messages == ["好的，我先帮您记录补水需求。"]
+    assert wecom.guest_messages == [
+        "好的，我先帮您记录补水需求。我会立即联系管家来处理，请您稍等。"
+    ]
     assert tasks.calls[0]["customer_id"] == 42
     assert tasks.calls[0]["source_message_id"] == "msg-1"
     assert "新任务待确认" in wecom.internal_messages[0]
@@ -761,9 +791,9 @@ async def test_guest_task_reply_hides_natural_staff_confirmation_wording() -> No
     await service.handle_message(incoming(content="可以帮我补两瓶矿泉水吗？"))
 
     reply = wecom.guest_messages[0]
-    assert "两瓶矿泉水" in reply
-    assert "进一步核实" in reply
-    assert "有结果后马上告诉您" in reply
+    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
+    assert "进一步核实" not in reply
+    assert "有结果后马上告诉您" not in reply
     assert "员工" not in reply
     assert "工作人员" not in reply
 
@@ -787,7 +817,8 @@ async def test_guest_task_reply_does_not_invent_unrequested_services() -> None:
     await service.handle_message(incoming(content="床单、被子脏了，帮我换一床被子"))
 
     reply = wecom.guest_messages[0]
-    assert "被子" in reply
+    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
+    assert "安排" not in reply
     assert "退款" not in reply
     assert "矿泉水" not in reply
     assert "纸巾" not in reply
@@ -852,7 +883,46 @@ async def test_guest_task_reply_hides_staff_delivery_wording() -> None:
 
     reply = wecom.guest_messages[0]
     assert "工作人员" not in reply
-    assert "已联系管家" in reply
+    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
+    assert "马上" not in reply
+
+
+@pytest.mark.asyncio
+async def test_washer_task_keeps_safe_advice_without_promising_a_technician() -> None:
+    """复现生产洗衣机对话：保留童锁建议，但不得承诺师傅上门或解决。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text=(
+                "别急哈，我会尽快安排师傅上门帮您查看处理。"
+                "您可以先长按童锁键三秒试试看；"
+                "要是还不行，师傅到了会帮您彻底解决好。"
+            ),
+            language=Language.ZH,
+            intent="maintenance",
+            confidence=0.96,
+            task_suggestion=TaskSuggestion(
+                task_type=BusinessTaskType.MAINTENANCE,
+                description="检查洗衣机童锁状态",
+            ),
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="房间洗衣机一直显示锁，打不开怎么办"))
+
+    reply = wecom.guest_messages[0]
+    assert "长按童锁键三秒试试看" in reply
+    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
+    assert "师傅" not in reply
+    assert "上门" not in reply
+    assert "彻底解决" not in reply
+    assert tasks.calls
+    assert "新任务待确认" in wecom.internal_messages[0]
 
 
 @pytest.mark.asyncio
@@ -879,7 +949,9 @@ async def test_ai_task_failure_does_not_rollback_guest_reply(caplog) -> None:
 
     await service.handle_message(incoming(content="请补两瓶矿泉水"))
 
-    assert wecom.guest_messages == ["好的，我先帮您记录补水需求。"]
+    assert wecom.guest_messages == [
+        "好的，我先帮您记录补水需求。我会立即联系管家来处理，请您稍等。"
+    ]
     assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
     assert any("AI 待确认任务记录失败" in item.getMessage() for item in caplog.records)
 
@@ -1098,7 +1170,10 @@ async def test_refund_request_notifies_staff_and_switches_to_human() -> None:
 
     await service.handle_message(incoming(content="这个订单能退款多少？"))
 
-    assert "已为您发起确认" in wecom.guest_messages[0]
+    assert wecom.guest_messages[0].endswith(
+        "我会立即联系管家来处理，请您稍等。"
+    )
+    assert "已为您发起确认" not in wecom.guest_messages[0]
     assert len(wecom.internal_messages) == 1
     assert "YuMi 接管：refund" in wecom.internal_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE

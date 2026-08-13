@@ -177,7 +177,7 @@ async def test_fast_ack_uses_warm_no_tool_model_prompt() -> None:
     )
 
     assert "管家" in reply
-    assert "稍作等待" in reply
+    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
     request = client.chat.completions.requests[0]
     assert "温暖管家" in request["messages"][0]["content"]
     assert "内部任务" in request["messages"][0]["content"]
@@ -1666,6 +1666,8 @@ async def test_fast_ack_uses_standard_warm_host_wording_and_short_timeout() -> N
 
     assert "管家" in reply
     assert "稍作等待" in reply
+    assert "一定" not in reply
+    assert "解决" not in reply
     assert client.chat.completions.requests[0]["timeout"] <= 1.5
 
 

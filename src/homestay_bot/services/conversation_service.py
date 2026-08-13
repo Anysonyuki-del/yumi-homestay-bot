@@ -36,6 +36,7 @@ from homestay_bot.services.emergency_service import (
     EmergencyClassification,
     EmergencyService,
 )
+from homestay_bot.services.guest_reply_policy import sanitize_guest_reply
 from homestay_bot.services.message_service import IncomingMessage
 
 _MAX_ASSISTANT_REPLY_CHARACTERS = 1500
@@ -366,6 +367,11 @@ class ConversationService:
             conversation.mode is ConversationMode.HUMAN_ACTIVE
             and determine_handoff_reason(message.content) is not None
         ):
+            await self._send_guest_reply(
+                conversation,
+                "我已收到您的诉求。",
+                requires_human=True,
+            )
             await self._notify_employee(
                 conversation,
                 message,
@@ -429,6 +435,7 @@ class ConversationService:
                 conversation,
                 self._complaint_service.guest_acknowledgement(),
                 message_type="complaint_ack",
+                requires_human=True,
             )
         if self._complaint_reviews is None:
             return
@@ -464,7 +471,12 @@ class ConversationService:
                 language=conversation.language,
                 question=message.content,
             )
-            await self._send_guest_reply(conversation, ack, message_type="ack")
+            await self._send_guest_reply(
+                conversation,
+                ack,
+                message_type="ack",
+                requires_human=True,
+            )
         await jobs.enqueue(
             "wecom_process_message",
             {
@@ -484,13 +496,16 @@ class ConversationService:
     @staticmethod
     def _should_send_fast_ack(question: str) -> bool:
         """只为需要后台处理的服务请求发送安抚，普通查询直接等待最终答案。"""
-        return re.search(
-            r"补|加|送|安排|维修|保洁|收房|收垃圾|耗材|矿泉水|纸巾|"
-            r"被子|枕头|麻将|布置|提前入住|延迟退房|特殊服务|求婚|生日|"
-            r"help.*(water|towel|blanket|repair)|maintenance|housekeeping",
-            question,
-            re.IGNORECASE,
-        ) is not None
+        supply = r"矿泉水|饮用水|纸巾|被子|枕头|床单|毛巾|拖鞋|牙刷|耗材"
+        patterns = (
+            rf"(?:补|送|拿|更换|换|加).{{0,8}}(?:{supply})",
+            rf"(?:{supply}).{{0,8}}(?:补|送|拿|更换|换|加)",
+            r"维修|报修|修理|保洁|打扫|收房|收垃圾|调麻将机|生日布置|求婚布置",
+            r"坏了|故障|打不开|无法使用|不能用|漏水|没热水|不制冷|显示锁|锁住",
+            r"提前入住|延迟退房|特殊服务",
+            r"help.{0,20}(?:water|towel|blanket|repair)|maintenance|housekeeping",
+        )
+        return any(re.search(pattern, question, re.IGNORECASE) for pattern in patterns)
 
     async def _process_model_reply(
         self,
@@ -528,14 +543,26 @@ class ConversationService:
             message.msgid,
         ):
             return
+        local_handoff_reason = determine_handoff_reason(message.content)
+        requires_human = bool(
+            local_handoff_reason
+            or decision.handoff_reason
+            or decision.staff_confirmation_required
+            or decision.task_suggestion is not None
+            or decision.intent == "booking_confirmed"
+            or self._should_send_fast_ack(message.content)
+        )
         reply_text = self._warm_guest_reply(
             self._limit_assistant_reply(decision.reply_text),
             question=message.content,
         )
-        await self._send_guest_reply(conversation, reply_text)
+        await self._send_guest_reply(
+            conversation,
+            reply_text,
+            requires_human=requires_human,
+        )
         await self._track_frequent_faq(message, decision)
         await self._record_task_suggestion(conversation, message, decision)
-        local_handoff_reason = determine_handoff_reason(message.content)
         if local_handoff_reason or decision.handoff_reason:
             reason = local_handoff_reason or decision.handoff_reason
             await self._activate_human(
@@ -701,8 +728,14 @@ class ConversationService:
         content: str,
         *,
         message_type: str = "text",
+        requires_human: bool = False,
     ) -> None:
-        """发送并持久化机器人文本。"""
+        """经过统一承诺过滤后，发送并持久化机器人文本。"""
+        content = sanitize_guest_reply(
+            content,
+            language=conversation.language,
+            requires_human=requires_human,
+        )
         message_id = await self._wecom.send_text(
             conversation.open_kfid,
             conversation.external_userid,
@@ -810,7 +843,7 @@ class ConversationService:
                     continue
                 filtered_sentences.append(sentence)
             content = "".join(filtered_sentences).strip()
-        return content or "我已经帮您记下啦，会尽快为您安排，稍后给您反馈。"
+        return content or "我已收到您的诉求。"
 
     @staticmethod
     def _limit_assistant_reply(content: str) -> str:
@@ -827,7 +860,7 @@ class ConversationService:
     ) -> None:
         """发送固定安全提示、切人工并通知值班员工。"""
         reply = self._emergency.safety_reply(emergency, conversation.language)
-        await self._send_guest_reply(conversation, reply)
+        await self._send_guest_reply(conversation, reply, requires_human=True)
         await self._activate_human(
             conversation,
             message,
@@ -840,11 +873,11 @@ class ConversationService:
     ) -> None:
         """对媒体、投诉和客人主动要求人工等情况执行普通接管。"""
         reply = (
-            "Thanks for letting us know. I’ve asked our host team to help you shortly."
+            "Thanks for letting us know."
             if conversation.language is Language.EN
-            else "收到啦，我已经帮您联系管家，很快会来协助您。"
+            else "我已收到您的诉求。"
         )
-        await self._send_guest_reply(conversation, reply)
+        await self._send_guest_reply(conversation, reply, requires_human=True)
         await self._activate_human(
             conversation,
             message,
@@ -860,12 +893,11 @@ class ConversationService:
     ) -> None:
         """明确告知联网失败，再切人工并通知值班员工。"""
         reply = (
-            "Sorry, I couldn’t finish the live search just now. "
-            "I’ve noted it and will continue checking for you."
+            "Sorry, I couldn’t finish the live search just now."
             if conversation.language is Language.EN
-            else "抱歉，实时信息刚才没能查完整。我已经帮您记下，会继续为您查清楚。"
+            else "抱歉，实时信息刚才没能查完整。"
         )
-        await self._send_guest_reply(conversation, reply)
+        await self._send_guest_reply(conversation, reply, requires_human=True)
         await self._activate_human(
             conversation,
             message,
@@ -880,12 +912,11 @@ class ConversationService:
     ) -> None:
         """告知普通模型暂不可用，再切人工并通知值班员工。"""
         reply = (
-            "Sorry, I couldn’t finish checking this just now. "
-            "I’ve noted it and will continue helping you."
+            "Sorry, I couldn’t finish checking this just now."
             if conversation.language is Language.EN
-            else "抱歉，刚才查询没有顺利完成。我已经帮您记下，会继续为您处理。"
+            else "抱歉，刚才查询没有顺利完成。"
         )
-        await self._send_guest_reply(conversation, reply)
+        await self._send_guest_reply(conversation, reply, requires_human=True)
         await self._activate_human(
             conversation,
             message,
