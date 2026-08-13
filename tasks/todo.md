@@ -2757,7 +2757,7 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 - 备份路径：`~/Library/Application Support/HomestayBot-backup-20260812-025712`（含旧数据库 960KB、`.env`、`data/private_uploads/`）。
 - 迁移执行：`0014_query_indexes` → `0015_admin_runtime_config` → `0016_admin_dashboard_indexes` → `0017_runtime_config_lifecycle`，验证头正确。
 - 代码同步：rsync 7.7MB，关键文件哈希与工作区 `baa4903` 完全一致。
-- 配置补充：运行目录 `.env` 新增 `CONFIG_ENCRYPTION_KEY`、`ADMIN_BOOTSTRAP_USERNAME=admin`、`ADMIN_BOOTSTRAP_PASSWORD_HASH`（Argon2id）。首次登录密码 `jpRZEeynJl9v9KlXuos32w`（登录后强制修改）。
+- 配置补充：运行目录 `.env` 新增 `CONFIG_ENCRYPTION_KEY`、`ADMIN_BOOTSTRAP_USERNAME=admin`、`ADMIN_BOOTSTRAP_PASSWORD_HASH`（Argon2id）。首次登录凭据已在本机交付并完成强制修改；任务记录和 Git 中不得保存明文密码。
 - LaunchAgent 修复：`start.sh` 改用 `python -m uvicorn` 绕过外部卷权限问题；`.env` 的 `ADMIN_BOOTSTRAP_PASSWORD_HASH` 改用单引号避免 shell 变量展开；删除运行目录的 `.venv`，直接复用工作区 venv（系统 Python 3.9.6 不满足 >=3.12 要求）。
 - 验证结果：
   - 健康检查：`http://127.0.0.1:8010/health` 返回 `{"status":"ok"}`。
