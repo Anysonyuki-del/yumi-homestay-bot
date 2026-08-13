@@ -2856,13 +2856,20 @@ Review（批次 7）：调试台、诊断页与操作记录已交付，操作记
 
 #### 实施计划
 
-- [ ] 在 `tests/unit/test_deepseek_client.py` 写 RED：8 月 14 日入住、15 日退房时过滤 15 日，只按 14 日计算 `stay_available`。
-- [ ] 在 `src/homestay_bot/integrations/deepseek_client.py::HostexReadOnlyToolExecutor.execute()` 实现退房日排除和整段可住投影。
-- [ ] 在 `tests/unit/test_deepseek_client.py` 写 RED：独立房态问题不携带上一轮旅游回复；缺日期的追问仍保留相关历史。
-- [ ] 在 `DeepSeekGuestAssistant.respond()` 构造请求前裁剪独立房态问题上下文，并保持工具强制选择与日期换算行为不变。
-- [ ] 运行房态、DeepSeek、ConversationService 定向测试，确认 RED→GREEN。
-- [ ] 运行禁 live 全量 pytest、Ruff、mypy、compileall、pip check、diff check并完成独立代码复审。
+- [x] 在 `tests/unit/test_deepseek_client.py` 写 RED：8 月 14 日入住、15 日退房时过滤 15 日，只按 14 日计算 `stay_available`。
+- [x] 在 `src/homestay_bot/integrations/deepseek_client.py::HostexReadOnlyToolExecutor.execute()` 实现退房日排除和整段可住投影。
+- [x] 在 `tests/unit/test_deepseek_client.py` 写 RED：独立房态问题不携带上一轮旅游回复；缺日期的追问仍保留相关历史。
+- [x] 在 `DeepSeekGuestAssistant.respond()` 构造请求前裁剪独立房态问题上下文，并保持工具强制选择与日期换算行为不变。
+- [x] 运行房态、DeepSeek、ConversationService 定向测试，确认 RED→GREEN（101 passed）。
+- [x] 运行禁 live 全量 pytest、Ruff、mypy、compileall、pip check、diff check并完成独立代码复审（851 passed、15 skipped；复审 APPROVED）。
 - [ ] 合并并推送 `main`，部署云端；用百居易真实 8 月 14–15 日数据确认结果为 0 间，不附带旅游内容，检查健康和错误日志。
+
+#### 实施 Review
+
+- 工具层以 `[check_in, check_out)` 生成住宿晚并输出 `stay_available`；缺少任一住宿晚也视为不可住，模型提示明确禁止用退房日或参考价推断。
+- 独立房态问题同时清空消息历史与客户摘要；带“那/改到/换到”等承接语气的追问保留历史并继续强制房态工具。
+- 日期识别覆盖相对日期、`M月D日/号`、`M/D`、完整 ISO 日期与本周星期表达。
+- 独立审查指出并修复两项上下文边界及原测试盲区，最终结论 APPROVED。
 
 ### 批次 1-7 安全复审（2026-08-12）
 

@@ -308,10 +308,25 @@ class ToolExecutorStub:
         """初始化调用记录。"""
         self.calls: list[tuple[str, dict[str, str]]] = []
 
-    async def execute(self, name: str, arguments: dict[str, str]) -> dict[str, object]:
+    async def execute(self, name: str, arguments: dict[str, str]) -> list[dict[str, object]]:
         """返回固定房态。"""
         self.calls.append((name, arguments))
-        return {"available": True, "rooms": 1}
+        return [
+            {
+                "property_id": 101,
+                "property_title": "江景房",
+                "check_in_date": arguments["check_in_date"],
+                "check_out_date": arguments["check_out_date"],
+                "stay_available": True,
+                "days": [
+                    {
+                        "date": arguments["check_in_date"],
+                        "available": True,
+                        "remarks": "",
+                    }
+                ],
+            }
+        ]
 
 
 class PropertyCatalogCompletionsStub:
@@ -401,6 +416,33 @@ class HostexCatalogStub:
         ]
 
 
+class HostexInclusiveCheckoutStub(HostexCatalogStub):
+    """复现百居易同时返回入住日和退房日的真实房态范围。"""
+
+    async def list_availabilities(self, property_ids, start_date, end_date):
+        """入住日晚可用、退房日不可用，必须仍判本次可住。"""
+        return [
+            SimpleNamespace(
+                property_id=12743051,
+                model_dump=lambda mode: {
+                    "property_id": 12743051,
+                    "days": [
+                        {
+                            "date": "2026-08-14",
+                            "available": True,
+                            "remarks": "",
+                        },
+                        {
+                            "date": "2026-08-15",
+                            "available": False,
+                            "remarks": "",
+                        },
+                    ],
+                },
+            )
+        ]
+
+
 @pytest.mark.asyncio
 async def test_availability_result_includes_hostex_property_title() -> None:
     """房态工具结果必须同时提供百居易房间名称和编号。"""
@@ -415,7 +457,38 @@ async def test_availability_result_includes_hostex_property_title() -> None:
         {
             "property_id": 12743051,
             "property_title": "江景大床房",
+            "check_in_date": "2026-08-02",
+            "check_out_date": "2026-08-03",
+            "stay_available": False,
             "days": [],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_availability_excludes_checkout_day_from_stay_result() -> None:
+    """退房日不可用不能覆盖入住日晚可用，交给模型的数据只含住宿晚。"""
+    executor = HostexReadOnlyToolExecutor(HostexInclusiveCheckoutStub())
+
+    result = await executor.execute(
+        "search_availability",
+        {"check_in_date": "2026-08-14", "check_out_date": "2026-08-15"},
+    )
+
+    assert result == [
+        {
+            "property_id": 12743051,
+            "property_title": "江景大床房",
+            "check_in_date": "2026-08-14",
+            "check_out_date": "2026-08-15",
+            "stay_available": True,
+            "days": [
+                {
+                    "date": "2026-08-14",
+                    "available": True,
+                    "remarks": "",
+                }
+            ],
         }
     ]
 
@@ -1067,12 +1140,21 @@ async def test_deepseek_executes_read_only_tool_and_replays_result() -> None:
     assert client.chat.completions.requests[1]["messages"][-1] == {
         "role": "tool",
         "tool_call_id": "call-1",
-        "content": '{"available": true, "rooms": 1}',
+        "content": (
+            '[{"property_id": 101, "property_title": "江景房", '
+            '"check_in_date": "2026-07-30", "check_out_date": "2026-07-31", '
+            '"stay_available": true, "days": [{"date": "2026-07-30", '
+            '"available": true, "remarks": ""}]}]'
+        ),
     }
     assert client.chat.completions.requests[0]["tool_choice"] == {
         "type": "function",
         "function": {"name": "search_availability"},
     }
+    assert (
+        "房态只能以 stay_available 为准"
+        in client.chat.completions.requests[0]["messages"][0]["content"]
+    )
 
 
 @pytest.mark.asyncio
@@ -1174,7 +1256,109 @@ async def test_room_list_followup_reuses_previous_stay_dates() -> None:
         "type": "function",
         "function": {"name": "search_availability"},
     }
+    request_messages = client.chat.completions.requests[0]["messages"]
+    assert any(
+        item.get("content") == "今天入住明天退房还有房吗？"
+        for item in request_messages
+    )
     assert executor.calls[0][0] == "search_availability"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        "我准备明天入住，查一下有几间房",
+        "我准备8月15号入住，查一下房态",
+        "我准备8/15入住，查一下有几间房",
+        "本周五入住，有房吗？",
+    ],
+)
+async def test_standalone_availability_drops_unrelated_previous_topic(
+    question: str,
+) -> None:
+    """含日期的独立房态问题只携带当前问题，不得续写上一轮旅游回复。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "reply_text": "明晚暂无可住房间。",
+            "intent": "availability_query",
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {"role": "user", "content": "最近玩啥？"},
+            {"role": "assistant", "content": "可以去东湖和黄鹤楼。"},
+            {"role": "user", "content": question},
+        ],
+        customer_context=CustomerModelContext(
+            short_summary="刚咨询东湖和黄鹤楼",
+            long_summary="偏好武汉旅游路线",
+            unresolved_items=[],
+        ),
+    )
+
+    request_messages = client.chat.completions.requests[0]["messages"]
+    assert request_messages[1:] == [
+        {"role": "user", "content": question}
+    ]
+    assert client.chat.completions.requests[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "search_availability"},
+    }
+    system_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
+    assert "刚咨询东湖和黄鹤楼" not in system_prompt
+    assert "偏好武汉旅游路线" not in system_prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "followup",
+    ["那明天有房吗？", "改到8月16日呢，还有房吗？", "换到后天有房吗？"],
+)
+async def test_availability_date_followup_preserves_previous_stay_context(
+    followup: str,
+) -> None:
+    """带承接语气的日期房态追问仍需保留上一轮住宿日期和房型信息。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {"role": "user", "content": "今天入住明天退房，江景房有吗？"},
+            {"role": "assistant", "content": "今天江景房暂时满房。"},
+            {"role": "user", "content": followup},
+        ],
+    )
+
+    request_messages = client.chat.completions.requests[0]["messages"]
+    assert any(
+        item.get("content") == "今天入住明天退房，江景房有吗？"
+        for item in request_messages
+    )
+    assert client.chat.completions.requests[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "search_availability"},
+    }
 
 
 @pytest.mark.asyncio

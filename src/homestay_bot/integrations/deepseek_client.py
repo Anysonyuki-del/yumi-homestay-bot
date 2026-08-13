@@ -222,13 +222,38 @@ class HostexReadOnlyToolExecutor:
             return [item.model_dump(mode="json") for item in result]
         else:
             raise ValueError(f"不允许执行工具: {name}")
-        return [
-            {
-                **item.model_dump(mode="json"),
-                "property_title": property_titles.get(item.property_id),
+        check_in_date = date.fromisoformat(arguments["check_in_date"])
+        check_out_date = date.fromisoformat(arguments["check_out_date"])
+        stay_dates: list[date] = []
+        current_date = check_in_date
+        while current_date < check_out_date:
+            stay_dates.append(current_date)
+            current_date += timedelta(days=1)
+
+        normalized: list[dict[str, Any]] = []
+        for item in result:
+            payload = item.model_dump(mode="json")
+            days_by_date = {
+                date.fromisoformat(str(day["date"])): day
+                for day in payload.get("days", [])
             }
-            for item in result
-        ]
+            # 酒店住宿晚采用 [入住日, 退房日)，退房日库存不属于本次住宿。
+            stay_days = [days_by_date[item] for item in stay_dates if item in days_by_date]
+            stay_available = bool(stay_dates) and all(
+                days_by_date.get(item, {}).get("available") is True
+                for item in stay_dates
+            )
+            normalized.append(
+                {
+                    "property_id": item.property_id,
+                    "property_title": property_titles.get(item.property_id),
+                    "check_in_date": check_in_date.isoformat(),
+                    "check_out_date": check_out_date.isoformat(),
+                    "stay_available": stay_available,
+                    "days": stay_days,
+                }
+            )
+        return normalized
 
 
 def assistant_decision_schema() -> dict[str, Any]:
@@ -739,6 +764,8 @@ class DeepSeekGuestAssistant:
         previous_context: str = "",
     ) -> bool:
         """完整房态问题或承接日期的房源追问必须调用百居易。"""
+        if DeepSeekGuestAssistant._is_standalone_availability_query(question_text):
+            return True
         asks_current_status = re.search(
             r"(?:当前|现在|今日|今天).*"
             r"(?:预订状况|预订情况|房态|入住状况|入住情况)",
@@ -770,7 +797,8 @@ class DeepSeekGuestAssistant:
             question_text,
         )
         previous_asks_availability = re.search(
-            r"有房|几间房|房态|可订|可用房|availability",
+            r"有房|几间房|房态|可订|可用房|满房|"
+            r"房[^。！？\n]{0,12}有|有[^。！？\n]{0,12}房|availability",
             previous_context,
             re.IGNORECASE,
         )
@@ -786,10 +814,32 @@ class DeepSeekGuestAssistant:
             >= 2
         )
         return (
-            asks_room_followup is not None
+            (asks_room_followup is not None or asks_availability is not None)
             and previous_asks_availability is not None
             and previous_has_stay_range
         )
+
+    @staticmethod
+    def _is_standalone_availability_query(question_text: str) -> bool:
+        """识别含明确日期的独立房态问题，用于隔离上一轮无关话题。"""
+        follows_previous_turn = re.search(
+            r"^\s*(?:那|那么|改到|改成|换到|换成)|(?:改到|改成|换到|换成).*(?:呢|吗)",
+            question_text,
+        )
+        if follows_previous_turn is not None:
+            return False
+        asks_availability = re.search(
+            r"有房|几间房|房态|可订|可用房|availability",
+            question_text,
+            re.IGNORECASE,
+        )
+        has_explicit_date = re.search(
+            r"今天|今晚|今日|明天|明日|后天|"
+            r"本周[一二三四五六日天]|这周[一二三四五六日天]|周末|"
+            r"\d{1,2}月\d{1,2}[日号]|\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2}",
+            question_text,
+        )
+        return asks_availability is not None and has_explicit_date is not None
 
     @staticmethod
     def _should_force_property_catalog(question_text: str) -> bool:
@@ -938,7 +988,12 @@ class DeepSeekGuestAssistant:
         }
         tomorrow = local_today + timedelta(days=1)
         day_after = local_today + timedelta(days=2)
-        customer_context_payload = asdict(customer_context) if customer_context else {}
+        standalone_availability = self._is_standalone_availability_query(question_text)
+        customer_context_payload = (
+            {}
+            if standalone_availability or customer_context is None
+            else asdict(customer_context)
+        )
         debug_context = ""
         if request_context is not None:
             # 该片段只接受 AdminDebugService 已核验的安全投影；正式客服入口不传。
@@ -963,6 +1018,8 @@ class DeepSeekGuestAssistant:
             "先判断问题需要哪类信息：审核知识库用于已确认资料，"
             "房间介绍和房源名称必须调用百居易只读的 list_properties，"
             "实时房态和参考价必须调用百居易只读工具，"
+            "房态只能以 stay_available 为准；days 只表示实际住宿晚，"
+            "不得用退房日库存或参考价格推断可住，"
             "武汉近期活动、天气、票价、开放时间、实时交通和精确路线必须调用旅游联网搜索；"
             "经典景点、美食和普通推荐优先使用审核知识及谨慎常识，不得伪装为实时结果；"
             "能调用工具时直接调用，不要让客人替你判断来源。"
@@ -987,7 +1044,11 @@ class DeepSeekGuestAssistant:
             f"{debug_context}"
             f"输出结构：{json.dumps(assistant_decision_schema(), ensure_ascii=False)}"
         )
-        minimized_messages = self._minimize_personal_data(messages)
+        context_messages = messages
+        if standalone_availability:
+            # 当前问题已携带房态意图和日期时，上一轮旅游等话题没有补全价值。
+            context_messages = [latest_user_question(messages)]
+        minimized_messages = self._minimize_personal_data(context_messages)
         request: dict[str, Any] = {
             "model": self._model,
             "messages": [
