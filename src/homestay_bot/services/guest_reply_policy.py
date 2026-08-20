@@ -6,6 +6,19 @@ _ZH_HUMAN_CONTACT_REPLY = "我会立即联系管家来处理，请您稍等。"
 _EN_HUMAN_CONTACT_REPLY = (
     "I’ll contact our on-duty host immediately. Please wait a moment."
 )
+_ZH_HIGH_RISK_ACKNOWLEDGEMENT = "您的情况我已记录。"
+_ZH_HIGH_RISK_HANDOFF = "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
+_EN_HIGH_RISK_ACKNOWLEDGEMENT = "I’ve recorded the situation."
+_EN_HIGH_RISK_HANDOFF = (
+    "I’ll contact the on-duty host immediately to follow up. "
+    "Please keep your phone available."
+)
+
+_ZH_WEATHER_PATTERN = re.compile(r"天气|气温|温度|下雨|降雨|阵雨|雷雨|晴天")
+_EN_WEATHER_PATTERN = re.compile(
+    r"\b(?:weather|temperature|rain|storm|sunny|forecast)\b",
+    re.IGNORECASE,
+)
 
 # 这些模式只处理客人可见的、尚未由人工确认的执行结果承诺。
 # “请立即离开房间”“拨打 119”等安全指令不在匹配范围内。
@@ -55,6 +68,17 @@ _EN_SAFE_HUMAN_SENTENCE = re.compile(
     r"disconnect|turn off|stop|avoid|press|hold|try))",
     re.IGNORECASE,
 )
+_ZH_HIGH_RISK_SAFETY_SENTENCE = re.compile(
+    r"(?:请立即|请先|不要|避免|停止使用|离开|撤离|前往安全|"
+    r"拨打\s*(?:119|110|120)|远离明火|开窗通风|切断燃气|切断电源|"
+    r"不要触碰|保持距离|呼叫急救)"
+)
+_EN_HIGH_RISK_SAFETY_SENTENCE = re.compile(
+    r"(?:please\s+(?:leave|move|call|unplug|disconnect|turn off|stop|avoid)|"
+    r"call\s+(?:the\s+)?(?:police|fire department|emergency services)|"
+    r"stay away|do not touch)",
+    re.IGNORECASE,
+)
 
 
 def human_contact_reply(language: Language) -> str:
@@ -89,6 +113,101 @@ def _safe_human_sentences(content: str, language: Language) -> list[str]:
         for sentence in _safe_sentences(content)
         if safe_pattern.search(sentence)
     ]
+
+
+def _high_risk_reply(content: str, language: Language) -> str:
+    """生成不含道歉、责任判断或结果承诺的高危转人工回复。"""
+    if language is Language.EN:
+        acknowledgement = _EN_HIGH_RISK_ACKNOWLEDGEMENT
+        handoff = _EN_HIGH_RISK_HANDOFF
+        safe_pattern = _EN_HIGH_RISK_SAFETY_SENTENCE
+        separator = " "
+    else:
+        acknowledgement = _ZH_HIGH_RISK_ACKNOWLEDGEMENT
+        handoff = _ZH_HIGH_RISK_HANDOFF
+        safe_pattern = _ZH_HIGH_RISK_SAFETY_SENTENCE
+        separator = ""
+
+    # 固定确认和收尾可能已经由上游生成；先删除再提取安全动作，保证幂等。
+    content_without_fixed_text = content.strip()
+    for fixed_text in (acknowledgement, handoff):
+        content_without_fixed_text = content_without_fixed_text.replace(fixed_text, "")
+    safety_sentences: list[str] = []
+    for sentence in _safe_sentences(content_without_fixed_text):
+        if not safe_pattern.search(sentence):
+            continue
+        # 安全动作可能与道歉或责任判断写在同一句；仅删除态度片段，保留动作。
+        if language is Language.EN:
+            sentence = re.sub(
+                r"\b(?:sorry|we apologize)(?:\s+for[^,.!?]*)?[,.:;!?]*\s*",
+                "",
+                sentence,
+                flags=re.IGNORECASE,
+            )
+        else:
+            sentence = re.sub(
+                r"(?:真的|非常|十分|很)?(?:抱歉|对不起)(?:给您[^，。！？]*)?[，。！？]*",
+                "",
+                sentence,
+            )
+            sentence = re.sub(
+                r"(?:这|此事)?是(?:我们|民宿|店里)的责任[，。！？]*",
+                "",
+                sentence,
+            )
+        if sentence.strip():
+            safety_sentences.append(sentence.strip())
+    safety_text = "".join(safety_sentences).strip()
+    prefix = f"{safety_text}{separator}" if safety_text else ""
+    return f"{prefix}{acknowledgement}{separator}{handoff}"
+
+
+def _is_weather_question(question: str, language: Language) -> bool:
+    """判断当前问题是否明确询问天气，避免给其他回复误加天气开场。"""
+    pattern = _EN_WEATHER_PATTERN if language is Language.EN else _ZH_WEATHER_PATTERN
+    return pattern.search(question) is not None
+
+
+def _warm_weather_reply(content: str, language: Language) -> str:
+    """为已取得的天气事实增加简短管家表达，不改写任何查询字段。"""
+    if language is Language.EN:
+        opener = "I checked the forecast for you. "
+        if not content.startswith(opener):
+            content = f"{opener}{content}"
+        if re.search(r"\b(?:rain|shower|storm)\b", content, re.IGNORECASE) and not re.search(
+            r"umbrella", content, re.IGNORECASE
+        ):
+            content = f"{content.rstrip()} It’s a good idea to bring an umbrella."
+        return content
+
+    opener = "我帮您看了一下，"
+    if not content.startswith(opener):
+        content = f"{opener}{content}"
+    if re.search(r"下雨|降雨|阵雨|雷雨", content) and "带伞" not in content:
+        content = f"{content.rstrip()}出门记得带伞。"
+    return content
+
+
+def prepare_guest_reply(
+    content: str,
+    *,
+    language: Language,
+    requires_human: bool,
+    question: str = "",
+    high_risk: bool = False,
+) -> str:
+    """生成唯一客人可见正文，并统一风格、承诺过滤和高危边界。"""
+    if requires_human and high_risk:
+        return _high_risk_reply(content, language)
+
+    prepared = sanitize_guest_reply(
+        content,
+        language=language,
+        requires_human=requires_human,
+    )
+    if not requires_human and _is_weather_question(question, language):
+        return _warm_weather_reply(prepared, language)
+    return prepared
 
 
 def sanitize_guest_reply(

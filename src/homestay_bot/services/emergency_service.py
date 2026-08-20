@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 
 from homestay_bot.domain.enums import Language
-from homestay_bot.services.guest_reply_policy import human_contact_reply
+from homestay_bot.services.guest_reply_policy import prepare_guest_reply
 
 
 @dataclass(frozen=True)
@@ -64,18 +64,27 @@ class EmergencyService:
         """返回固定安全提示；火灾等生命危险明确提示联系公共急救服务。"""
         if language is Language.EN:
             if emergency.category == "fire":
-                return (
+                safety_text = (
                     "Please leave the room and move to a safe place immediately. "
-                    "Call 119 if there is fire or smoke. "
-                    f"{human_contact_reply(language)}"
+                    "Call 119 if there is fire or smoke."
                 )
-            return (
-                "Please move to a safe place and avoid handling the fault yourself. "
-                f"{human_contact_reply(language)}"
+            else:
+                safety_text = (
+                    "Please move to a safe place and avoid handling the fault yourself."
+                )
+            return prepare_guest_reply(
+                safety_text,
+                language=language,
+                requires_human=True,
+                high_risk=True,
             )
         if emergency.category == "fire":
-            return (
-                "请立即离开房间并前往安全区域，如有明火或浓烟请拨打119。"
-                f"{human_contact_reply(language)}"
-            )
-        return f"请先确保自身安全，不要自行处理故障。{human_contact_reply(language)}"
+            safety_text = "请立即离开房间并前往安全区域，如有明火或浓烟请拨打119。"
+        else:
+            safety_text = "请先确保自身安全，不要自行处理故障。"
+        return prepare_guest_reply(
+            safety_text,
+            language=language,
+            requires_human=True,
+            high_risk=True,
+        )

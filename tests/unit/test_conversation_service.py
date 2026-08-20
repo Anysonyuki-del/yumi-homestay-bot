@@ -1443,6 +1443,55 @@ async def test_emergency_message_sends_fixed_reply_and_escalates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fire_reply_puts_safety_steps_before_neutral_handoff() -> None:
+    """火灾等现实危险必须先指示撤离报警，再客观记录并联系值班管家。"""
+    service, conversations, assistant, wecom = build_service()
+
+    await service.handle_message(incoming(content="房间起火了，还有浓烟"))
+
+    reply = wecom.guest_messages[0]
+    assert assistant.calls == 0
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert reply.startswith("请立即离开房间并前往安全区域")
+    assert reply.index("拨打119") < reply.index("您的情况我已记录")
+    assert reply.endswith("我会立即联系值班管家跟进处理，请保持联系方式畅通。")
+    assert "抱歉" not in reply
+    assert "请稍等" not in reply
+
+
+@pytest.mark.asyncio
+async def test_weather_final_reply_uses_prepared_host_tone_and_factual_tip() -> None:
+    """最终天气正文必须经过统一管家策略，事实和实用提醒同时保留。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text=(
+                "武汉 2026-08-22：26～33℃，局部阵雨。"
+                "查询日期：2026-08-21。参考来源：武汉市气象服务。"
+            ),
+            language=Language.ZH,
+            intent="tourism",
+            confidence=0.98,
+        )
+    )
+    service, _, _, wecom = build_service(assistant=assistant)
+
+    await service.handle_message(incoming(content="明天天气如何？"))
+
+    reply = wecom.guest_messages[0]
+    assert reply.startswith("我帮您看了一下，")
+    for fact in (
+        "武汉",
+        "2026-08-22",
+        "26～33℃",
+        "局部阵雨",
+        "查询日期：2026-08-21",
+        "参考来源：武汉市气象服务",
+    ):
+        assert fact in reply
+    assert "出门记得带伞" in reply
+
+
+@pytest.mark.asyncio
 async def test_media_message_escalates_without_calling_model() -> None:
     """图片、语音等媒体消息应直接转人工，避免模型臆测内容。"""
     service, conversations, assistant, wecom = build_service()
@@ -1495,7 +1544,10 @@ async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
     """高风险事项应先给流程说明，再通知 YuMi 并锁定人工模式。"""
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="退款需结合订单由工作人员核实，我已通知工作人员。",
+            reply_text=(
+                "真的很抱歉，这是我们的责任。师傅已经出发，"
+                "今晚一定会给您处理好。"
+            ),
             language=Language.ZH,
             intent="refund",
             confidence=0.95,
@@ -1510,11 +1562,12 @@ async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
 
     await service.handle_message(incoming(content="我要退款"))
 
-    assert wecom.guest_messages[0].endswith(
-        "我会立即联系管家来处理，请您稍等。"
+    assert wecom.guest_messages[0] == (
+        "您的情况我已记录。"
+        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
     )
-    assert "工作人员" not in wecom.guest_messages[0]
-    assert "已通知" not in wecom.guest_messages[0]
+    for forbidden in ("抱歉", "责任", "师傅", "已经出发", "一定", "处理好"):
+        assert forbidden not in wecom.guest_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
     assert "YuMi 接管：refund" in wecom.internal_messages[0]
     assert audit.calls == [
@@ -1614,8 +1667,8 @@ async def test_guest_task_reply_does_not_invent_unrequested_services() -> None:
 
 
 @pytest.mark.asyncio
-async def test_guest_wording_filter_preserves_refund_facts() -> None:
-    """退款回复可隐藏内部角色，但不得删除金额核实对象和不确定性。"""
+async def test_high_risk_refund_question_uses_neutral_handoff_only() -> None:
+    """未确认退款金额属于高危人工事项，不得输出推断或内部流程。"""
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text=(
@@ -1632,9 +1685,12 @@ async def test_guest_wording_filter_preserves_refund_facts() -> None:
     await service.handle_message(incoming(content="这个订单能退款多少？"))
 
     reply = wecom.guest_messages[0]
-    assert "退款金额" in reply
-    assert "原支付记录" in reply
-    assert "进一步核实" in reply
+    assert reply == (
+        "您的情况我已记录。"
+        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
+    )
+    assert "退款金额" not in reply
+    assert "工作人员" not in reply
 
 
 @pytest.mark.asyncio
@@ -1959,8 +2015,9 @@ async def test_refund_request_notifies_staff_and_switches_to_human() -> None:
 
     await service.handle_message(incoming(content="这个订单能退款多少？"))
 
-    assert wecom.guest_messages[0].endswith(
-        "我会立即联系管家来处理，请您稍等。"
+    assert wecom.guest_messages[0] == (
+        "您的情况我已记录。"
+        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
     )
     assert "已为您发起确认" not in wecom.guest_messages[0]
     assert len(wecom.internal_messages) == 1

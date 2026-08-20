@@ -39,7 +39,7 @@ from homestay_bot.services.emergency_service import (
     EmergencyClassification,
     EmergencyService,
 )
-from homestay_bot.services.guest_reply_policy import sanitize_guest_reply
+from homestay_bot.services.guest_reply_policy import prepare_guest_reply
 from homestay_bot.services.message_service import GuestMessageBatch, IncomingMessage
 from homestay_bot.worker import DeferredRetryJobError
 
@@ -440,6 +440,7 @@ class ConversationService:
                 conversation,
                 "我已收到您的诉求。",
                 requires_human=True,
+                high_risk=True,
             )
             await self._notify_employee(
                 conversation,
@@ -518,6 +519,7 @@ class ConversationService:
                 conversation,
                 "我已收到您的诉求。",
                 requires_human=True,
+                high_risk=True,
             )
             await self._notify_employee(
                 conversation,
@@ -592,6 +594,7 @@ class ConversationService:
                 self._complaint_service.guest_acknowledgement(),
                 message_type="complaint_ack",
                 requires_human=True,
+                high_risk=True,
             )
         if self._complaint_reviews is None:
             return
@@ -800,14 +803,16 @@ class ConversationService:
             or decision.intent == "booking_confirmed"
             or self._should_send_fast_ack(message.content)
         )
-        reply_text = self._warm_guest_reply(
+        reply_text = self._clean_guest_reply_topics(
             self._limit_assistant_reply(decision.reply_text),
             question=message.content,
         )
-        prepared_reply = sanitize_guest_reply(
+        prepared_reply = prepare_guest_reply(
             reply_text,
             language=conversation.language,
             requires_human=requires_human,
+            question=message.content,
+            high_risk=bool(local_handoff_reason or decision.handoff_reason),
         )
         fast_ack_sha256 = str((message.metadata or {}).get("fast_ack_sha256", ""))
         prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
@@ -997,12 +1002,16 @@ class ConversationService:
         *,
         message_type: str = "text",
         requires_human: bool = False,
+        question: str = "",
+        high_risk: bool = False,
     ) -> GuestReplyReceipt:
-        """经过统一承诺过滤后发送并持久化，同时返回实际客人文本。"""
-        content = sanitize_guest_reply(
+        """经过统一风格与安全策略后发送，并返回真实客人可见正文。"""
+        content = prepare_guest_reply(
             content,
             language=conversation.language,
             requires_human=requires_human,
+            question=question,
+            high_risk=high_risk,
         )
         return await self._send_prepared_guest_reply(
             conversation,
@@ -1039,8 +1048,8 @@ class ConversationService:
         return GuestReplyReceipt(content=content, message_id=message_id)
 
     @staticmethod
-    def _warm_guest_reply(content: str, *, question: str = "") -> str:
-        """统一温暖文案，并删除模型对当前请求之外的服务承诺。"""
+    def _clean_guest_reply_topics(content: str, *, question: str = "") -> str:
+        """清理与当前问题无关的旧话题；风格和安全由统一策略负责。"""
         replacements = {
             (
                 "该需求会提交给工作人员确认并安排，最终是否安排成功需以员工确认为准，"
@@ -1144,7 +1153,12 @@ class ConversationService:
     ) -> None:
         """发送固定安全提示、切人工并通知值班员工。"""
         reply = self._emergency.safety_reply(emergency, conversation.language)
-        await self._send_guest_reply(conversation, reply, requires_human=True)
+        await self._send_guest_reply(
+            conversation,
+            reply,
+            requires_human=True,
+            high_risk=True,
+        )
         await self._activate_human(
             conversation,
             message,
@@ -1161,7 +1175,12 @@ class ConversationService:
             if conversation.language is Language.EN
             else "我已收到您的诉求。"
         )
-        await self._send_guest_reply(conversation, reply, requires_human=True)
+        await self._send_guest_reply(
+            conversation,
+            reply,
+            requires_human=True,
+            high_risk=True,
+        )
         await self._activate_human(
             conversation,
             message,
@@ -1181,7 +1200,11 @@ class ConversationService:
             if conversation.language is Language.EN
             else "抱歉，实时信息刚才没能查完整。"
         )
-        await self._send_guest_reply(conversation, reply, requires_human=True)
+        await self._send_guest_reply(
+            conversation,
+            reply,
+            requires_human=True,
+        )
         await self._activate_human(
             conversation,
             message,
@@ -1200,7 +1223,11 @@ class ConversationService:
             if conversation.language is Language.EN
             else "抱歉，刚才查询没有顺利完成。"
         )
-        await self._send_guest_reply(conversation, reply, requires_human=True)
+        await self._send_guest_reply(
+            conversation,
+            reply,
+            requires_human=True,
+        )
         await self._activate_human(
             conversation,
             message,

@@ -21,10 +21,13 @@ def test_complaint_service_ignores_normal_feedback() -> None:
     assert result.is_complaint is False
 
 
-def test_complaint_service_uses_fixed_warm_acknowledgement() -> None:
-    """客诉安抚必须使用已确认的固定文案。"""
+def test_complaint_service_uses_fixed_neutral_acknowledgement() -> None:
+    """高危客诉必须使用无道歉、无责任判断和无结果承诺的固定文案。"""
     reply = ComplaintService.guest_acknowledgement()
 
-    assert reply == "我已收到您的诉求。我会立即联系管家来处理，请您稍等。"
+    assert reply == (
+        "您的情况我已记录。"
+        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
+    )
     assert "一定" not in reply
     assert "解决" not in reply

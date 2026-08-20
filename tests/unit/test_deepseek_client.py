@@ -914,8 +914,38 @@ async def test_tourism_reply_is_refined_for_guest_readability() -> None:
     assert "查询日期：2026-07-30" in decision.reply_text
     assert "参考来源：武汉市文化和旅游局" in decision.reply_text
     assert len(client.chat.completions.requests) == 1
-    assert "不得新增事实" in client.chat.completions.requests[0]["messages"][0]["content"]
-    assert "短段落或项目符号" in client.chat.completions.requests[0]["messages"][0]["content"]
+    refinement_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
+    assert "不得新增事实" in refinement_prompt
+    assert "短段落或项目符号" in refinement_prompt
+    assert "温暖、简洁、可靠的民宿管家口吻" in refinement_prompt
+    assert "使用“您”" in refinement_prompt
+    assert "查询日期、温度、价格、房态和来源" in refinement_prompt
+
+
+@pytest.mark.asyncio
+async def test_general_prompt_requires_homestay_host_tone_without_promises() -> None:
+    """普通模型入口应直接生成亲和管家表达，且不得为亲和感编造承诺。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "几点入住？"}],
+    )
+
+    prompt = client.chat.completions.requests[0]["messages"][0]["content"]
+    assert "温暖、简洁、可靠的民宿管家口吻" in prompt
+    assert "使用“您”" in prompt
+    assert "不得使用“亲亲”" in prompt
+    assert "不得为了亲和而改变日期、数字、价格、房态或安全步骤" in prompt
+    assert "不得承诺处理结果、完成时间或人员已经出发" in prompt
 
 
 @pytest.mark.asyncio

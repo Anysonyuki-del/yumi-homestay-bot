@@ -241,6 +241,9 @@ async def test_weather_query_pins_wuhan_and_explicit_tomorrow_date() -> None:
     assert "2026-08-21" in user_query
     assert "明天天气如何" in user_query
     assert "天气问题必须明确回答目标日期" in request["system"]
+    assert "温暖、简洁、可靠的民宿管家口吻" in request["system"]
+    assert "我帮您看了一下" in request["system"]
+    assert "根据搜索结果给一条实用提醒" in request["system"]
 
 
 @pytest.mark.asyncio
@@ -644,5 +647,7 @@ async def test_english_tourism_prompt_stays_below_hard_reply_limit() -> None:
     system = client.messages.requests[0]["system"]
     assert "120-180 words" in system
     assert "700-900 words" not in system
+    assert "warm, concise, and reliable homestay host" in system
+    assert "Do not change dates, temperatures, prices, availability, or sources" in system
     assert "查询日期：" in result
     assert "参考来源：" in result

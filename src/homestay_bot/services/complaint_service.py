@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 
 from homestay_bot.domain.enums import Language
-from homestay_bot.services.guest_reply_policy import human_contact_reply
+from homestay_bot.services.guest_reply_policy import prepare_guest_reply
 
 
 @dataclass(frozen=True)
@@ -47,5 +47,10 @@ class ComplaintService:
 
     @staticmethod
     def guest_acknowledgement() -> str:
-        """返回客诉模式唯一固定安抚，不包含金额或责任承诺。"""
-        return f"我已收到您的诉求。{human_contact_reply(Language.ZH)}"
+        """返回客诉模式唯一中立话术，不包含道歉、责任或结果承诺。"""
+        return prepare_guest_reply(
+            "",
+            language=Language.ZH,
+            requires_human=True,
+            high_risk=True,
+        )

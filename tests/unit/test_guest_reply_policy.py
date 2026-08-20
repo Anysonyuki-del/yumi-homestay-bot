@@ -3,6 +3,7 @@ import pytest
 from homestay_bot.domain.enums import Language
 from homestay_bot.services.guest_reply_policy import (
     human_contact_reply,
+    prepare_guest_reply,
     sanitize_guest_reply,
 )
 
@@ -145,5 +146,107 @@ def test_human_reply_sanitization_is_idempotent(language: Language) -> None:
     )
     first = sanitize_guest_reply(raw, language=language, requires_human=True)
     second = sanitize_guest_reply(first, language=language, requires_human=True)
+
+    assert second == first
+
+
+def test_weather_reply_uses_warm_host_tone_without_changing_facts() -> None:
+    """天气回复应更亲和，但日期、温度、天气和来源必须原样保留。"""
+    raw = (
+        "武汉 2026-08-21：26～33℃，局部阵雨。"
+        "\n查询日期：2026-08-20\n参考来源：武汉市气象服务。"
+    )
+
+    reply = prepare_guest_reply(
+        raw,
+        language=Language.ZH,
+        question="明天天气如何？",
+        requires_human=False,
+    )
+
+    assert reply.startswith("我帮您看了一下，")
+    for fact in (
+        "武汉",
+        "2026-08-21",
+        "26～33℃",
+        "局部阵雨",
+        "查询日期：2026-08-20",
+        "参考来源：武汉市气象服务",
+    ):
+        assert fact in reply
+    assert "出门记得带伞" in reply
+    assert prepare_guest_reply(
+        reply,
+        language=Language.ZH,
+        question="明天天气如何？",
+        requires_human=False,
+    ) == reply
+
+
+@pytest.mark.parametrize(
+    "unsafe_reply",
+    [
+        "真的很抱歉给您添麻烦了，我们一定负责到底。",
+        "对不起，师傅已经出发，十分钟内一定到。",
+        "这是我们的责任，今晚保证给您处理好。",
+    ],
+)
+def test_high_risk_handoff_is_neutral_and_promise_free(unsafe_reply: str) -> None:
+    """高危转人工只客观记录并联系值班管家，不道歉、不定责、不承诺。"""
+    reply = prepare_guest_reply(
+        unsafe_reply,
+        language=Language.ZH,
+        requires_human=True,
+        high_risk=True,
+    )
+
+    assert reply == (
+        "您的情况我已记录。"
+        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
+    )
+    for forbidden in (
+        "抱歉",
+        "对不起",
+        "责任",
+        "一定",
+        "保证",
+        "已经出发",
+        "十分钟",
+        "处理好",
+    ):
+        assert forbidden not in reply
+
+
+def test_high_risk_emergency_keeps_safety_steps_before_neutral_handoff() -> None:
+    """火灾燃气等现实风险必须先保留撤离和报警，再执行中立转人工。"""
+    reply = prepare_guest_reply(
+        "很抱歉，请立即离开危险区域，并根据现场情况拨打 119。师傅马上到。",
+        language=Language.ZH,
+        requires_human=True,
+        high_risk=True,
+    )
+
+    assert reply == (
+        "请立即离开危险区域，并根据现场情况拨打 119。"
+        "您的情况我已记录。"
+        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
+    )
+    assert "抱歉" not in reply
+
+
+def test_high_risk_reply_policy_is_idempotent() -> None:
+    """高危固定话术重复经过所有客人出口时不得再次变化。"""
+    first = prepare_guest_reply(
+        "情况已经记录，我们正在安排人员。",
+        language=Language.ZH,
+        requires_human=True,
+        high_risk=True,
+    )
+    second = prepare_guest_reply(
+        first,
+        language=Language.ZH,
+        requires_human=True,
+        high_risk=True,
+    )
 
     assert second == first

@@ -41,7 +41,9 @@ def test_emergency_reply_uses_fixed_safety_message() -> None:
     en_reply = service.safety_reply(result, Language.EN)
 
     assert "119" in zh_reply
-    assert zh_reply.endswith("我会立即联系管家来处理，请您稍等。")
-    assert "已收到" not in zh_reply
+    assert zh_reply.endswith(
+        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
+    )
+    assert "抱歉" not in zh_reply
     assert "leave" in en_reply.lower()
     assert "has been alerted" not in en_reply.lower()
