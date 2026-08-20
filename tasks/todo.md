@@ -3348,7 +3348,8 @@ git diff --check
 - [x] GREEN：注册可恢复 worker 任务；重复回执、任务重试及二次异步失败不得形成发送循环
 - [x] VERIFY：运行定向测试、禁 live 全量测试、Ruff、mypy、compileall、pip check 与 diff check
 - [x] REVIEW：独立审查需求覆盖和代码质量，修正后复验
-- [ ] DEPLOY：提交推送、云端备份和滚动部署，再由企业微信真实天气消息完成最终验收
+- [x] DEPLOY：提交推送、云端备份和滚动部署
+- [ ] ACCEPT：由企业微信真实天气消息完成最终验收
 
 ### 当前验证结论
 
@@ -3396,3 +3397,12 @@ git diff --check
 - 定向扩大套件 235 项通过；覆盖事实错绑、否定迁移、多实体/单实体多主张、fallback、敏感信息、终态补偿、重复失败回执与实时旅游过滤。
 - 最终本地全量：1062 passed、15 skipped；跳过项均为需要显式凭据或开关的真实外部契约测试。
 - Ruff、mypy（107 个源文件）、compileall、pip check、git diff check 全部通过；仅保留既有 StarletteDeprecationWarning。
+
+### 部署记录
+
+- 业务提交 `c8354b2` 已推送至 GitHub `origin/main`，云端仓库已 fast-forward 到同一提交。
+- 部署前备份位于 `/opt/yumi-backups/guest-rewrite-20260820T200520Z`；PostgreSQL 自定义格式备份和 `.env` 副本均非空且权限为 600。
+- 云端 API 镜像重建并滚动替换成功，PostgreSQL 全程保持 healthy；Alembic 位于 `0018_stay_checkout_observation (head)`。
+- 运行时模型任务包含 `guest_delivery_rewrite` 和 `wecom_process_message`；四个关键源码的宿主机与容器 SHA-256 完全一致。
+- 本机与公网 `https://akros.icu/health` 均返回 `ok`；启动日志包含 `Application startup complete`，部署后错误计数为 0。
+- 尚待企业微信发送新的真实天气问题，核对客人最终收到的正文及失败回执/改写任务链路。
