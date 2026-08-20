@@ -151,10 +151,13 @@ def test_human_reply_sanitization_is_idempotent(language: Language) -> None:
 
 
 def test_weather_reply_uses_warm_host_tone_without_changing_facts() -> None:
-    """天气回复应更亲和，但日期、温度、天气和来源必须原样保留。"""
+    """天气回复应更亲和，并把显式 Markdown 转成客人可读纯文本。"""
     raw = (
-        "武汉 2026-08-21：26～33℃，局部阵雨。"
-        "\n查询日期：2026-08-20\n参考来源：武汉市气象服务。"
+        "**天气：**武汉 2026-08-21：26～33℃，局部阵雨，"
+        "建议您随身带把晴雨伞。\n\n"
+        "这是我今天（8月20日）帮您查到的最新预报，主要参考了"
+        "武汉市气象服务等公开信息。天气可能临时变化，"
+        "出门前可以再看一眼实时情况。"
     )
 
     reply = prepare_guest_reply(
@@ -170,17 +173,71 @@ def test_weather_reply_uses_warm_host_tone_without_changing_facts() -> None:
         "2026-08-21",
         "26～33℃",
         "局部阵雨",
-        "查询日期：2026-08-20",
-        "参考来源：武汉市气象服务",
+        "8月20日",
+        "武汉市气象服务",
     ):
         assert fact in reply
-    assert "出门记得带伞" in reply
+    assert "**" not in reply
+    assert "查询日期：" not in reply
+    assert "参考来源：" not in reply
+    assert "出门记得带伞" not in reply
+    assert reply.count("晴雨伞") == 1
     assert prepare_guest_reply(
         reply,
         language=Language.ZH,
         question="明天天气如何？",
         requires_human=False,
     ) == reply
+
+
+def test_guest_reply_normalizes_only_explicit_markdown_structures() -> None:
+    """纯文本转换只处理明确 Markdown，不误删合法星号与下划线。"""
+    reply = prepare_guest_reply(
+        "***提醒***\n- 带好证件\n* 提前十分钟出门\n"
+        "_天气会变_，房型 A* 与 code_value 保留。",
+        language=Language.ZH,
+        requires_human=False,
+    )
+
+    assert reply == (
+        "提醒\n• 带好证件\n• 提前十分钟出门\n"
+        "天气会变，房型 A* 与 code_value 保留。"
+    )
+
+
+@pytest.mark.parametrize(
+    "existing_tip",
+    [
+        "建议您拿一把伞。",
+        "下雨时记得打伞。",
+        "建议随身备好雨衣。",
+        "可以准备防雨用品。",
+    ],
+)
+def test_weather_rain_gear_advice_is_semantically_deduplicated(
+    existing_tip: str,
+) -> None:
+    """已有任一雨具建议时不得再追加第二条带伞提醒。"""
+    reply = prepare_guest_reply(
+        f"武汉明天有阵雨。{existing_tip}",
+        language=Language.ZH,
+        question="明天天气如何？",
+        requires_human=False,
+    )
+
+    assert "出门记得带伞" not in reply
+
+
+def test_english_raincoat_advice_prevents_duplicate_umbrella_tip() -> None:
+    """英文已有雨衣建议时不得再追加 umbrella 提醒。"""
+    reply = prepare_guest_reply(
+        "Showers are likely tomorrow. Please bring a raincoat.",
+        language=Language.EN,
+        question="What will the weather be tomorrow?",
+        requires_human=False,
+    )
+
+    assert "bring an umbrella" not in reply.lower()
 
 
 @pytest.mark.parametrize(

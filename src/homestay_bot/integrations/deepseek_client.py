@@ -14,6 +14,7 @@ from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.tourism import (
     classify_tourism_query,
     latest_user_question,
+    split_tourism_reply,
 )
 from homestay_bot.services.answer_policy import (
     handoff_reason as determine_handoff_reason,
@@ -858,6 +859,10 @@ class DeepSeekGuestAssistant:
         if not force and len(reply_text) <= 1000:
             return reply_text
 
+        # 搜索日期与来源收尾已经由本地证据校验生成，只把正文交给模型精炼，
+        # 完成后再原样拼回，避免模型删除、改写或暴露内部字段标签。
+        refinement_input, evidence_footer = split_tourism_reply(reply_text)
+
         try:
             response = await self._chat_client.chat.completions.create(
                 model=self._model,
@@ -869,8 +874,8 @@ class DeepSeekGuestAssistant:
                             "统一使用温暖、简洁、可靠的民宿管家口吻，使用“您”，"
                             "表达自然亲和但不过度聊天，不使用“亲亲”或堆叠语气词。"
                             "目标不超过1000个字符；保留关键事实、日期、"
-                            "房态、价格说明、风险提示、查询日期和来源名称。"
-                            "不得改动查询日期、温度、价格、房态和来源，"
+                            "房态、价格说明和风险提示。"
+                            "不得改动日期、温度、价格或房态，"
                             "天气回复可用“我帮您看了一下”自然开场，并且最多给一条"
                             "由原始天气事实直接支持的实用提醒。"
                             "使用短段落或项目符号，方便旅客快速阅读。"
@@ -878,7 +883,7 @@ class DeepSeekGuestAssistant:
                             "只输出 JSON：{\"reply_text\":\"精简后的完整回复\"}。"
                         ),
                     },
-                    {"role": "user", "content": reply_text},
+                    {"role": "user", "content": refinement_input},
                 ],
                 response_format={"type": "json_object"},
                 extra_body={"thinking": {"type": "disabled"}},
@@ -887,10 +892,16 @@ class DeepSeekGuestAssistant:
             refined = RefinedReply.model_validate_json(content).reply_text.strip()
             if re.search(r"https?://|\[[^\]]+\]\([^)]+\)", refined):
                 return reply_text
-            for evidence_label in ("查询日期：", "参考来源："):
-                if evidence_label in reply_text and evidence_label not in refined:
-                    return reply_text
-            return refined or reply_text
+            if evidence_footer and re.search(
+                r"查询日期：|参考来源：|Query date:|Sources:",
+                refined,
+            ):
+                return reply_text
+            if not refined:
+                return reply_text
+            if evidence_footer:
+                return f"{refined}\n\n{evidence_footer}"
+            return refined
         except Exception as error:
             # 精简是质量增强而非主回复边界；只记录类型并保留原文交给硬上限兜底。
             logger.warning(

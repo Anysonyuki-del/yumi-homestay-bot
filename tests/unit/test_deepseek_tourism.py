@@ -185,6 +185,55 @@ class SuccessThenFailureClientStub:
         self.messages = SuccessThenFailureMessagesStub()
 
 
+class UnreadableSourceMessagesStub(MessagesStub):
+    """返回只有未知网址标题的证据，验证客人侧不会暴露域名。"""
+
+    async def create(self, **kwargs):
+        """生成正文存在但来源名称不可读的搜索结果。"""
+        self.requests.append(kwargs)
+        return SimpleNamespace(
+            content=[
+                SimpleNamespace(type="server_tool_use", name="web_search"),
+                SimpleNamespace(
+                    type="web_search_tool_result",
+                    content=[
+                        SimpleNamespace(
+                            type="web_search_result",
+                            title="https://unknown.example/weather",
+                            url="https://unknown.example/weather",
+                        )
+                    ],
+                ),
+                SimpleNamespace(type="text", text="武汉明天局地有阵雨。"),
+            ]
+        )
+
+
+class UnreadableSourceClientStub:
+    """暴露不可读来源的 Messages 资源。"""
+
+    def __init__(self) -> None:
+        """初始化固定搜索响应。"""
+        self.messages = UnreadableSourceMessagesStub()
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("What attractions are close to the homestay?", "tourism"),
+        ("What events are open this weekend?", "event"),
+        ("What are the opening hours and ticket prices?", "ticket"),
+        ("Can I book admission to Yellow Crane Tower?", "ticket"),
+    ],
+)
+def test_reply_category_does_not_confuse_close_or_open_with_tickets(
+    question: str,
+    expected: str,
+) -> None:
+    """英文距离与活动表达不能被宽泛 open/close 误判为票务。"""
+    assert DeepSeekTourismSearcher._reply_category(question) == expected
+
+
 @pytest.mark.asyncio
 async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
     """旅游回答必须使用武汉搜索证据，并移除客人可见链接。"""
@@ -215,7 +264,9 @@ async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
     assert "优先选出最值得推荐的3项" in request["system"]
     assert "700至900字" in request["system"]
     assert request["max_tokens"] == 3000
-    assert "参考来源：武汉市文化和旅游局" in result
+    assert "主要参考了武汉市文化和旅游局等公开信息" in result
+    assert "查询日期：" not in result
+    assert "参考来源：" not in result
     assert "https://" not in result
     assert statuses == ["ok"]
 
@@ -312,6 +363,27 @@ async def test_deepseek_tourism_rejects_answer_without_search_evidence() -> None
 
 
 @pytest.mark.asyncio
+async def test_deepseek_tourism_rejects_evidence_without_readable_source() -> None:
+    """有搜索块但没有可读来源名称时仍应进入既有联网失败路径。"""
+    statuses: list[str] = []
+    searcher = DeepSeekTourismSearcher(
+        client=UnreadableSourceClientStub(),
+        model="deepseek-v4-flash",
+        status_setter=statuses.append,
+    )
+
+    with pytest.raises(TourismSearchError) as error:
+        await searcher.search(
+            question="明天天气如何？",
+            language=Language.ZH,
+            queried_on=date(2026, 8, 21),
+        )
+
+    assert error.value.status == "degraded"
+    assert statuses == ["degraded"]
+
+
+@pytest.mark.asyncio
 async def test_deepseek_tourism_retries_evidence_without_final_text() -> None:
     """已有搜索证据但无正文时应保留思考并限重试一次。"""
     client = EvidenceThenTextClientStub()
@@ -334,7 +406,7 @@ async def test_deepseek_tourism_retries_evidence_without_final_text() -> None:
         "结束前必须输出一段客人可见的最终正文" in item["system"]
         for item in client.messages.requests
     )
-    assert "参考来源：武汉市文化和旅游局" in result
+    assert "主要参考了武汉市文化和旅游局等公开信息" in result
     assert statuses == ["ok"]
 
 
@@ -541,7 +613,7 @@ async def test_failed_tourism_search_is_not_cached() -> None:
         queried_on=date(2026, 7, 30),
     )
 
-    assert "参考来源：" in result
+    assert "主要参考了武汉市文化和旅游局等公开信息" in result
     assert len(client.messages.requests) == 2
 
 
@@ -649,5 +721,7 @@ async def test_english_tourism_prompt_stays_below_hard_reply_limit() -> None:
     assert "700-900 words" not in system
     assert "warm, concise, and reliable homestay host" in system
     assert "Do not change dates, temperatures, prices, availability, or sources" in system
-    assert "查询日期：" in result
-    assert "参考来源：" in result
+    assert "I checked this latest travel information for you today" in result
+    assert "Wuhan Municipal Culture and Tourism Bureau" in result
+    assert "Query date:" not in result
+    assert "Sources:" not in result

@@ -19,6 +19,13 @@ _EN_WEATHER_PATTERN = re.compile(
     r"\b(?:weather|temperature|rain|storm|sunny|forecast)\b",
     re.IGNORECASE,
 )
+_ZH_UMBRELLA_PATTERN = re.compile(
+    r"伞|雨衣|雨具|防雨"
+)
+_EN_UMBRELLA_PATTERN = re.compile(
+    r"\b(?:umbrella|raincoat|rain[ -]?gear|waterproof)\b",
+    re.IGNORECASE,
+)
 
 # 这些模式只处理客人可见的、尚未由人工确认的执行结果承诺。
 # “请立即离开房间”“拨打 119”等安全指令不在匹配范围内。
@@ -174,18 +181,33 @@ def _warm_weather_reply(content: str, language: Language) -> str:
         opener = "I checked the forecast for you. "
         if not content.startswith(opener):
             content = f"{opener}{content}"
-        if re.search(r"\b(?:rain|shower|storm)\b", content, re.IGNORECASE) and not re.search(
-            r"umbrella", content, re.IGNORECASE
-        ):
+        if re.search(
+            r"\b(?:rain|shower|storm)\b",
+            content,
+            re.IGNORECASE,
+        ) and not _EN_UMBRELLA_PATTERN.search(content):
             content = f"{content.rstrip()} It’s a good idea to bring an umbrella."
         return content
 
     opener = "我帮您看了一下，"
     if not content.startswith(opener):
         content = f"{opener}{content}"
-    if re.search(r"下雨|降雨|阵雨|雷雨", content) and "带伞" not in content:
+    if re.search(r"下雨|降雨|阵雨|雷雨", content) and not _ZH_UMBRELLA_PATTERN.search(
+        content
+    ):
         content = f"{content.rstrip()}出门记得带伞。"
     return content
+
+
+def _plain_text_guest_reply(content: str) -> str:
+    """移除明确 Markdown 强调和列表符，保留合法星号与下划线。"""
+    cleaned = re.sub(r"\*{3}(?=\S)([^\n*]*?\S)\*{3}", r"\1", content)
+    cleaned = re.sub(r"_{3}(?=\S)([^\n_]*?\S)_{3}", r"\1", cleaned)
+    cleaned = re.sub(r"\*\*([^\n*]+?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__([^\n_]+?)__", r"\1", cleaned)
+    cleaned = re.sub(r"\*(?=\S)([^\n*]*?\S)\*", r"\1", cleaned)
+    cleaned = re.sub(r"_(?=\S)([^\n_]*?\S)_", r"\1", cleaned)
+    return re.sub(r"(?m)^(\s*)[-*+]\s+", r"\1• ", cleaned)
 
 
 def prepare_guest_reply(
@@ -197,6 +219,7 @@ def prepare_guest_reply(
     high_risk: bool = False,
 ) -> str:
     """生成唯一客人可见正文，并统一风格、承诺过滤和高危边界。"""
+    content = _plain_text_guest_reply(content)
     if requires_human and high_risk:
         return _high_risk_reply(content, language)
 

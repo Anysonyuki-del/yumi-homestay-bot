@@ -85,8 +85,9 @@ class LongTourismStub:
         """提供固定长回复用于验证旅游精简路径。"""
         return (
             "武汉旅游建议。" * 180
-            + "\n查询日期：2026-07-30"
-            + "\n参考来源：武汉市文化和旅游局"
+            + "\n\n这是我今天（7月30日）帮您查到的最新活动信息，主要参考了"
+            + "武汉市文化和旅游局等公开信息。活动安排可能临时调整，"
+            + "出发前可以再确认一下。"
         )
 
 
@@ -95,7 +96,11 @@ class ShortTourismStub:
 
     async def search(self, **kwargs) -> str:
         """提供带日期和来源的短回复。"""
-        return "东湖适合散步。\n查询日期：2026-07-30\n参考来源：武汉市文化和旅游局"
+        return (
+            "东湖适合散步。\n\n这是我今天（7月30日）帮您查到的最新票务与开放信息，"
+            "主要参考了武汉市文化和旅游局等公开信息。"
+            "票价和开放安排可能临时调整，出发前可以再确认一下。"
+        )
 
 
 def decision_payload() -> dict[str, object]:
@@ -890,10 +895,9 @@ async def test_stable_tourism_uses_fast_knowledge_model(question: str) -> None:
 
 @pytest.mark.asyncio
 async def test_tourism_reply_is_refined_for_guest_readability() -> None:
-    """长旅游回复应精简排版，并保留查询日期和来源证据。"""
+    """长旅游回复只精炼正文，并确定性重接自然证据收尾。"""
     refined_reply = (
-        "精选建议：\n1. 东湖适合散步。\n2. 黄鹤楼适合首次到访。\n"
-        "查询日期：2026-07-30\n参考来源：武汉市文化和旅游局"
+        "精选建议：\n1. 东湖适合散步。\n2. 黄鹤楼适合首次到访。"
     )
     client = ChatClientStub([json.dumps({"reply_text": refined_reply}, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
@@ -911,15 +915,20 @@ async def test_tourism_reply_is_refined_for_guest_readability() -> None:
     )
 
     assert decision.reply_text.startswith("精选建议：")
-    assert "查询日期：2026-07-30" in decision.reply_text
-    assert "参考来源：武汉市文化和旅游局" in decision.reply_text
+    assert "这是我今天（7月30日）帮您查到的最新活动信息" in decision.reply_text
+    assert "武汉市文化和旅游局等公开信息" in decision.reply_text
+    assert "查询日期：" not in decision.reply_text
+    assert "参考来源：" not in decision.reply_text
     assert len(client.chat.completions.requests) == 1
     refinement_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
     assert "不得新增事实" in refinement_prompt
     assert "短段落或项目符号" in refinement_prompt
     assert "温暖、简洁、可靠的民宿管家口吻" in refinement_prompt
     assert "使用“您”" in refinement_prompt
-    assert "查询日期、温度、价格、房态和来源" in refinement_prompt
+    assert "查询日期" not in refinement_prompt
+    refinement_input = client.chat.completions.requests[0]["messages"][1]["content"]
+    assert "这是我今天" not in refinement_input
+    assert "武汉市文化和旅游局" not in refinement_input
 
 
 @pytest.mark.asyncio
@@ -951,10 +960,7 @@ async def test_general_prompt_requires_homestay_host_tone_without_promises() -> 
 @pytest.mark.asyncio
 async def test_short_tourism_reply_is_also_refined_for_layout() -> None:
     """短旅游回复也应经过一次模型排版，保持旅客侧格式统一。"""
-    refined_reply = (
-        "推荐：东湖适合散步。\n查询日期：2026-07-30\n"
-        "参考来源：武汉市文化和旅游局"
-    )
+    refined_reply = "推荐：东湖适合散步。"
     client = ChatClientStub([json.dumps({"reply_text": refined_reply}, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
@@ -971,6 +977,9 @@ async def test_short_tourism_reply_is_also_refined_for_layout() -> None:
     )
 
     assert decision.reply_text.startswith("推荐：")
+    assert "最新票务与开放信息" in decision.reply_text
+    assert "查询日期：" not in decision.reply_text
+    assert "参考来源：" not in decision.reply_text
     assert len(client.chat.completions.requests) == 1
 
 
@@ -1014,7 +1023,7 @@ async def test_refinement_failure_keeps_original_reply_for_hard_limit_fallback(
 async def test_tourism_refinement_failure_preserves_validated_evidence(
     caplog,
 ) -> None:
-    """旅游精简失败时应保留搜索层附加的日期和来源证据。"""
+    """旅游精简失败时应保留搜索层生成的自然证据收尾。"""
     client = ChatClientStub(["{}"])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
@@ -1030,8 +1039,10 @@ async def test_tourism_refinement_failure_preserves_validated_evidence(
         messages=[{"role": "user", "content": "武汉近期有什么活动？"}],
     )
 
-    assert "查询日期：2026-07-30" in decision.reply_text
-    assert "参考来源：武汉市文化和旅游局" in decision.reply_text
+    assert "这是我今天（7月30日）帮您查到的最新活动信息" in decision.reply_text
+    assert "武汉市文化和旅游局等公开信息" in decision.reply_text
+    assert "查询日期：" not in decision.reply_text
+    assert "参考来源：" not in decision.reply_text
     assert len(client.chat.completions.requests) == 1
     assert any(
         "DeepSeek 回复精简失败" in record.getMessage()

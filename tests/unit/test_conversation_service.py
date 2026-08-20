@@ -1465,8 +1465,11 @@ async def test_weather_final_reply_uses_prepared_host_tone_and_factual_tip() -> 
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text=(
-                "武汉 2026-08-22：26～33℃，局部阵雨。"
-                "查询日期：2026-08-21。参考来源：武汉市气象服务。"
+                "**天气：**武汉 2026-08-22：26～33℃，局部阵雨，"
+                "建议您随身带把晴雨伞。\n\n"
+                "这是我今天（8月21日）帮您查到的最新预报，主要参考了"
+                "武汉市气象服务等公开信息。天气可能临时变化，"
+                "出门前可以再看一眼实时情况。"
             ),
             language=Language.ZH,
             intent="tourism",
@@ -1484,11 +1487,15 @@ async def test_weather_final_reply_uses_prepared_host_tone_and_factual_tip() -> 
         "2026-08-22",
         "26～33℃",
         "局部阵雨",
-        "查询日期：2026-08-21",
-        "参考来源：武汉市气象服务",
+        "8月21日",
+        "武汉市气象服务",
     ):
         assert fact in reply
-    assert "出门记得带伞" in reply
+    assert "**" not in reply
+    assert "查询日期：" not in reply
+    assert "参考来源：" not in reply
+    assert "出门记得带伞" not in reply
+    assert reply.count("晴雨伞") == 1
 
 
 @pytest.mark.asyncio

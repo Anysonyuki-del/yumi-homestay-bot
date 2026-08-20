@@ -7,6 +7,7 @@ from typing import Any
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.tourism import (
+    TourismReplyCategory,
     TourismSearchError,
     WebSearchStatus,
     format_tourism_reply,
@@ -28,6 +29,12 @@ _DISTANCE_PATTERN = re.compile(
 )
 _WEATHER_PATTERN = re.compile(
     r"天气|气温|温度|降雨|下雨|weather|forecast|temperature|rain",
+    re.IGNORECASE,
+)
+_TICKET_PATTERN = re.compile(
+    r"门票|票价|预订|开放时间|营业时间|开门|关门|闭馆|"
+    r"\btickets?\b|\bticket prices?\b|\badmission (?:fees?|prices?)\b|"
+    r"\bbook admission\b|\bopening hours?\b|\bclosing hours?\b",
     re.IGNORECASE,
 )
 _EXPLICIT_LOCATION_PATTERN = re.compile(
@@ -92,6 +99,17 @@ class DeepSeekTourismSearcher:
         """更新非敏感搜索能力状态。"""
         if self._status_setter is not None:
             self._status_setter(status)
+
+    @staticmethod
+    def _reply_category(question: str) -> TourismReplyCategory:
+        """按客人问题选择自然证据收尾，不改变搜索意图与证据校验。"""
+        if _WEATHER_PATTERN.search(question):
+            return "weather"
+        if _TICKET_PATTERN.search(question):
+            return "ticket"
+        if _EVENT_PATTERN.search(question):
+            return "event"
+        return "tourism"
 
     @staticmethod
     def _cache_key(
@@ -517,7 +535,22 @@ class DeepSeekTourismSearcher:
                     round((self._clock() - started_at) * 1000),
                 )
                 raise TourismSearchError("degraded")
-        reply = format_tourism_reply(text, citations, queried_on)
+        try:
+            reply = format_tourism_reply(
+                text,
+                citations,
+                queried_on,
+                language=language.value,
+                category=self._reply_category(question),
+            )
+        except ValueError as error:
+            # 没有可读来源名称时不能把域名或模型常识冒充客人侧实时依据。
+            self._set_status("degraded")
+            logger.info(
+                "旅游搜索完成：cache_hit=false success=false duration_ms=%d",
+                round((self._clock() - started_at) * 1000),
+            )
+            raise TourismSearchError("degraded") from error
         self._store_cached_reply(cache_key, reply)
         self._set_status("ok")
         logger.info(
