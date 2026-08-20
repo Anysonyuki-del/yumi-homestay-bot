@@ -3308,7 +3308,8 @@ git diff --check
 - [x] GREEN 3：修改 `src/homestay_bot/integrations/deepseek_client.py::DeepSeekGuestAssistant._refine_reply()`，只精炼正文后确定性重接自然证据收尾。
 - [x] GREEN 4：修改 `src/homestay_bot/services/guest_reply_policy.py::prepare_guest_reply()`，完成明确 Markdown 纯文本化和雨具语义去重。
 - [x] 验证：依次运行定向 pytest、禁用 live contract 的全量 pytest、Ruff、mypy、compileall、pip check 与 `git diff --check`；记录 RED→GREEN 证据。
-- [ ] 部署与实测：通过代码审查后部署云端，再用企业微信发送“明天天气如何”，核对单次回复、自然收尾、无 Markdown/技术标签且雨具建议只有一次。
+- [x] 云端部署：通过代码审查后提交并推送主干，完成云端备份、快进更新、API 重建、迁移、源码哈希与健康检查。
+- [ ] 企业微信实测：发送“明天天气如何”，核对单次回复、自然收尾、无 Markdown/技术标签且雨具建议只有一次。
 
 ### Review（本地实现）
 
@@ -3318,4 +3319,8 @@ git diff --check
 - 静态与环境检查：Ruff 全仓通过；mypy 检查 105 个源码文件通过；compileall、pip check 和 `git diff --check` 通过。
 - 真实失败正文回放：最终正文不含 Markdown、网址、域名、`查询日期：` 或 `参考来源：`，查询日期和两个主要来源以自然管家收尾保留，雨具词只出现一次。
 - 独立代码审查经过多轮边界复核，最终 Critical 0、Important 0；未增加模型调用，未改变联网搜索、日期窗口或来源真实性校验。
-- 尚未完成云端部署和企业微信真实天气复验，因此本任务暂不标记为完整验收通过。
+- Git 与部署：功能提交 `d841e70` 已推送 `origin/main` 并部署京东云；服务器功能代码为同一提交，Alembic 保持 `0018_stay_checkout_observation (head)`，只重建 API，PostgreSQL 容器保持连续运行。
+- 回滚备份：`/opt/yumi-backups/weather-reply-20260820T182047Z`，包含旧提交、权限 `600` 的 `.env` 和非空 PostgreSQL custom dump（164526 bytes）。
+- 云端验证：四个变更源码的宿主机与容器 SHA-256 全部一致；本机和公网 `/health` 均为 `ok`，启动日志包含 `Application startup complete`，部署后错误计数为 0。
+- 容器内真实缺陷正文回放不含 Markdown、技术标签、网址或域名，雨具词只出现一次，且只展示前两个主要来源。
+- 尚未完成企业微信真实天气复验，因此本任务暂不标记为完整验收通过。
