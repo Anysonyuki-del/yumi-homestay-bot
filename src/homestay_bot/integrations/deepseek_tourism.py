@@ -26,6 +26,13 @@ _DISTANCE_PATTERN = re.compile(
     r"距离|多远|公里|路程|怎么到|how far|distance|kilometer|km",
     re.IGNORECASE,
 )
+_WEATHER_PATTERN = re.compile(
+    r"天气|气温|温度|降雨|下雨|weather|forecast|temperature|rain",
+    re.IGNORECASE,
+)
+_TOMORROW_PATTERN = re.compile(r"明天|明日|tomorrow", re.IGNORECASE)
+_DAY_AFTER_TOMORROW_PATTERN = re.compile(r"后天|day after tomorrow", re.IGNORECASE)
+_TODAY_PATTERN = re.compile(r"今天|今日|today", re.IGNORECASE)
 _YEAR_PATTERN = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
 _CHINESE_DATE_PATTERN = re.compile(
     r"(?P<year>20\d{2})年"
@@ -112,6 +119,57 @@ class DeepSeekTourismSearcher:
             self._clock() + self._cache_ttl_seconds,
             reply,
         )
+
+    @staticmethod
+    def _prepare_weather_question(
+        question: str,
+        *,
+        queried_on: date,
+        language: Language,
+    ) -> tuple[str, str]:
+        """为天气搜索补齐默认地点、相对日期和只答目标日约束。"""
+        if _DAY_AFTER_TOMORROW_PATTERN.search(question):
+            target_date = queried_on + timedelta(days=2)
+        elif _TOMORROW_PATTERN.search(question):
+            target_date = queried_on + timedelta(days=1)
+        elif _TODAY_PATTERN.search(question):
+            target_date = queried_on
+        else:
+            target_date = None
+
+        # 民宿业务默认服务武汉；若客人已明确地点，保留原问题让搜索模型识别。
+        location_hint = "武汉" if not re.search(r"武汉|武昌|汉口|Wuhan", question, re.I) else ""
+        if language is Language.ZH:
+            if target_date is not None:
+                instruction = (
+                    f"请查询{location_hint or '问题中指定地点'}在"
+                    f"{target_date.isoformat()}的天气预报；"
+                    "只回答这个目标日期，不要用今天或其他日期替代。"
+                )
+            else:
+                instruction = (
+                    f"请查询{location_hint or '问题中指定地点'}的天气预报；"
+                    "先识别并明确回答客人要求的目标日期。"
+                )
+        else:
+            if target_date is not None:
+                instruction = (
+                    "Search the weather forecast for "
+                    f"{location_hint or 'the location in the question'} "
+                    f"on {target_date.isoformat()}; answer only that target date, not today."
+                )
+            else:
+                instruction = (
+                    "Search the weather forecast for "
+                    f"{location_hint or 'the location in the question'} "
+                    "and state the target date explicitly."
+                )
+        prepared_question = (
+            f"{instruction}\n原始问题：{question}"
+            if language is Language.ZH
+            else f"{instruction}\nOriginal question: {question}"
+        )
+        return prepared_question, instruction
 
     @staticmethod
     def _extract_content(
@@ -277,6 +335,15 @@ class DeepSeekTourismSearcher:
             logger.info("旅游搜索完成：cache_hit=true duration_ms=0")
             return cached_reply
 
+        search_question = question
+        weather_instruction = ""
+        if _WEATHER_PATTERN.search(question):
+            search_question, weather_instruction = self._prepare_weather_question(
+                question,
+                queried_on=queried_on,
+                language=language,
+            )
+
         started_at = self._clock()
         priority_end = queried_on + timedelta(days=15)
         system = (
@@ -298,6 +365,12 @@ class DeepSeekTourismSearcher:
                 else ""
             )
             + "不要在正文中输出网址或 Markdown 链接。"
+            + (
+                "天气问题必须明确回答目标日期、最高/最低气温和降雨概率；"
+                + weather_instruction
+                if weather_instruction
+                else ""
+            )
             if language is Language.ZH
             else (
                 "You are a Wuhan homestay travel assistant. Use Web Search "
@@ -308,6 +381,13 @@ class DeepSeekTourismSearcher:
                 "within this window, include the full year for every event "
                 "date, and label later events clearly. Select the three best "
                 "recommendations and keep the answer concise at 120-180 words."
+                + (
+                    " For weather questions, state the target date, high/low "
+                    "temperature, and precipitation probability explicitly. "
+                    + weather_instruction
+                    if weather_instruction
+                    else ""
+                )
             )
         )
         text = ""
@@ -323,7 +403,7 @@ class DeepSeekTourismSearcher:
                         system
                         + "完成搜索后，结束前必须输出一段客人可见的最终正文。"
                     ),
-                    messages=[{"role": "user", "content": question}],
+                    messages=[{"role": "user", "content": search_question}],
                     tools=[
                         {
                             "type": "web_search_20250305",

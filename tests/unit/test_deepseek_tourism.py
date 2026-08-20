@@ -221,6 +221,29 @@ async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
 
 
 @pytest.mark.asyncio
+async def test_weather_query_pins_wuhan_and_explicit_tomorrow_date() -> None:
+    """相对日期天气问题必须把地点和目标日期明确交给联网搜索。"""
+    client = AnthropicClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+    )
+
+    await searcher.search(
+        question="明天天气如何",
+        language=Language.ZH,
+        queried_on=date(2026, 8, 20),
+    )
+
+    request = client.messages.requests[0]
+    user_query = request["messages"][0]["content"]
+    assert "武汉" in user_query
+    assert "2026-08-21" in user_query
+    assert "明天天气如何" in user_query
+    assert "天气问题必须明确回答目标日期" in request["system"]
+
+
+@pytest.mark.asyncio
 async def test_deepseek_tourism_rejects_answer_without_search_evidence() -> None:
     """没有搜索证据时不得把模型常识冒充实时结果。"""
     statuses: list[str] = []
