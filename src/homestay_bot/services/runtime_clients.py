@@ -20,6 +20,7 @@ from homestay_bot.integrations.deepseek_client import (
 )
 from homestay_bot.integrations.deepseek_complaint import DeepSeekComplaintAnalyzer
 from homestay_bot.integrations.deepseek_context_summarizer import DeepSeekContextSummarizer
+from homestay_bot.integrations.deepseek_delivery_rewriter import DeepSeekDeliveryRewriter
 from homestay_bot.integrations.deepseek_faq_drafter import DeepSeekFaqDrafter
 from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
 from homestay_bot.integrations.hostex_client import HostexClient
@@ -57,6 +58,7 @@ class RuntimeClientBundle:
     wecom: Any
     contact_client: Any | None
     assistant: Any
+    delivery_rewriter: Any
     faq_drafter: Any
     tourism_searcher: Any
     reminder_weather: Any
@@ -431,6 +433,10 @@ async def build_runtime_client_bundle(
             wecom=wecom,
             contact_client=contact_client,
             assistant=assistant,
+            delivery_rewriter=DeepSeekDeliveryRewriter(
+                client=deepseek_chat,
+                model=snapshot.deepseek_model,
+            ),
             faq_drafter=DeepSeekFaqDrafter(
                 client=deepseek_chat,
                 model=snapshot.deepseek_model,

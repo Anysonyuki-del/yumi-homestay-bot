@@ -98,6 +98,40 @@ async def test_deferred_message_failure_is_retryable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_reports_failed_payload_for_terminal_compensation() -> None:
+    """handler 失败后应把清空前载荷交给业务终态补偿回调。"""
+    job = JobStub(
+        job_type="wecom_send_text",
+        payload={"retry_of_message_id": "11", "content": "二次回复"},
+    )
+    repository = RepositoryStub(job)
+    failures: list[tuple[str, str, dict]] = []
+
+    async def fail_send(payload):
+        """模拟企业微信同步终态失败。"""
+        raise RuntimeError("rejected")
+
+    async def record_failure(failed_job, error_code, payload):
+        """记录业务补偿需要的原任务信息。"""
+        failures.append((failed_job.job_type, error_code, payload))
+
+    worker = Worker(
+        repository=repository,
+        handlers={"wecom_send_text": fail_send},
+        on_job_failed=record_failure,
+    )
+
+    assert await worker.run_once() is True
+    assert failures == [
+        (
+            "wecom_send_text",
+            "RuntimeError",
+            {"retry_of_message_id": "11", "content": "二次回复"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_worker_reports_success_only_after_final_commit() -> None:
     """成功回调必须发生在任务完成状态真正提交之后。"""
     job = JobStub(job_type="hostex_event")

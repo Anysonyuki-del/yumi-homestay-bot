@@ -178,6 +178,88 @@ async def test_stale_external_send_is_not_replayed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stale_delivery_rewrite_is_requeued_for_local_fallback() -> None:
+    """遗留改写任务应恢复执行，由已持久化 started 标记阻止第二次模型调用。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+
+    async with factory() as session:
+        job = Job(
+            job_type="guest_delivery_rewrite",
+            payload={"message_id": 11},
+            status=JobStatus.RUNNING,
+            attempts=1,
+            available_at=now - timedelta(minutes=10),
+            locked_at=now - timedelta(minutes=10),
+        )
+        session.add(job)
+        await session.commit()
+
+        await SQLAlchemyJobRepository(session).recover_stale(
+            before=now - timedelta(minutes=5)
+        )
+        await session.refresh(job)
+
+        assert job.status is JobStatus.PENDING
+        assert job.payload == {"message_id": 11}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_type", "payload"),
+    [
+        ("guest_delivery_rewrite", {"message_id": 11}),
+        (
+            "wecom_send_text",
+            {
+                "content": "二次回复",
+                "retry_of_message_id": "11",
+            },
+        ),
+    ],
+)
+async def test_stale_terminal_delivery_job_enqueues_compensation(
+    job_type: str,
+    payload: dict[str, object],
+) -> None:
+    """改写重试耗尽或二次发送遗留时应登记去重人工补偿。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+
+    async with factory() as session:
+        job = Job(
+            job_type=job_type,
+            payload=payload,
+            status=JobStatus.RUNNING,
+            attempts=3,
+            available_at=now - timedelta(minutes=10),
+            locked_at=now - timedelta(minutes=10),
+        )
+        session.add(job)
+        await session.commit()
+
+        await SQLAlchemyJobRepository(session).recover_stale(
+            before=now - timedelta(minutes=5)
+        )
+        jobs = list((await session.scalars(select(Job).order_by(Job.id))).all())
+
+        assert jobs[0].status is JobStatus.FAILED
+        assert jobs[1].job_type == "guest_delivery_failure_compensate"
+        assert jobs[1].payload == {"message_id": 11}
+        assert jobs[1].dedupe_key == "delivery-compensate:11"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_external_send_commit_failure_becomes_uncertain_without_replay(
     tmp_path,
 ) -> None:

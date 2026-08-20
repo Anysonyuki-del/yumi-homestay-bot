@@ -30,6 +30,7 @@ def build_bundle(revision: int, probe: CloseProbe) -> RuntimeClientBundle:
         wecom=f"wecom-{revision}",
         contact_client=None,
         assistant=f"assistant-{revision}",
+        delivery_rewriter=f"delivery-rewriter-{revision}",
         faq_drafter=f"faq-{revision}",
         tourism_searcher=f"tourism-{revision}",
         reminder_weather=f"weather-{revision}",

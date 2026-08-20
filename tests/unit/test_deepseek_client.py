@@ -13,6 +13,7 @@ from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
     HostexReadOnlyToolExecutor,
 )
+from homestay_bot.integrations.tourism import TourismSearchError
 from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
@@ -100,6 +101,31 @@ class ShortTourismStub:
             "东湖适合散步。\n\n这是我今天（7月30日）帮您查到的最新票务与开放信息，"
             "主要参考了武汉市文化和旅游局等公开信息。"
             "票价和开放安排可能临时调整，出发前可以再确认一下。"
+        )
+
+
+class PropertyClaimTourismStub:
+    """返回夹带未经审核民宿自述的实时天气回复。"""
+
+    async def search(self, **kwargs) -> str:
+        """把天气事实、自述和自然证据收尾放在同一段中。"""
+        return (
+            "武汉明天有阵雨，气温25～31℃。我们民宿有伞可借用，"
+            "您出门前招呼一声即可。午后降雨概率较高，出门记得带伞。"
+            "\n\n这是我今天（8月21日）帮您查到的最新天气信息，主要参考了"
+            "武汉市气象台等公开信息。天气变化较快，出门前可以再确认一下。"
+        )
+
+
+class PropertyOnlyTourismStub:
+    """返回只有未经审核民宿自述的实时搜索正文。"""
+
+    async def search(self, **kwargs) -> str:
+        """提供不可发送正文和合法自然证据收尾。"""
+        return (
+            "我们民宿有伞可借用。"
+            "\n\n这是我今天（8月21日）帮您查到的最新天气信息，主要参考了"
+            "武汉市气象台等公开信息。"
         )
 
 
@@ -981,6 +1007,67 @@ async def test_short_tourism_reply_is_also_refined_for_layout() -> None:
     assert "查询日期：" not in decision.reply_text
     assert "参考来源：" not in decision.reply_text
     assert len(client.chat.completions.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_tourism_removes_only_ungrounded_property_sentence() -> None:
+    """实时旅游回复应逐句移除民宿自述，并保留天气事实和证据收尾。"""
+    refined_reply = (
+        "我帮您看了一下，武汉明天有阵雨，气温25～31℃。"
+        "我们民宿有伞可借用，您出门前招呼一声即可。"
+        "午后降雨概率较高，出门记得带伞。"
+    )
+    client = ChatClientStub(
+        [json.dumps({"reply_text": refined_reply}, ensure_ascii=False)]
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=PropertyClaimTourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        local_date_provider=lambda: date(2026, 8, 21),
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "明天天气"}],
+    )
+
+    assert "武汉明天有阵雨" in decision.reply_text
+    assert "25～31℃" in decision.reply_text
+    assert "午后降雨概率较高" in decision.reply_text
+    assert "我们民宿" not in decision.reply_text
+    assert "伞可借用" not in decision.reply_text
+    assert "武汉市气象台等公开信息" in decision.reply_text
+    refinement_input = client.chat.completions.requests[0]["messages"][1]["content"]
+    assert "我们民宿" not in refinement_input
+    assert "武汉明天有阵雨" in refinement_input
+
+
+@pytest.mark.asyncio
+async def test_live_tourism_rejects_footer_only_after_property_filter() -> None:
+    """过滤后无事实正文时应进入旅游失败路径，不能只发送证据收尾。"""
+    client = ChatClientStub([json.dumps({"reply_text": "不应调用"}, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=PropertyOnlyTourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        local_date_provider=lambda: date(2026, 8, 21),
+    )
+
+    with pytest.raises(TourismSearchError) as captured:
+        await assistant.respond(
+            guest_identifier="wm-guest",
+            language=Language.ZH,
+            messages=[{"role": "user", "content": "明天天气"}],
+        )
+
+    assert captured.value.status == "degraded"
+    assert client.chat.completions.requests == []
 
 
 @pytest.mark.asyncio

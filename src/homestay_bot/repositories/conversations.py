@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from sqlalchemy import exists, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,6 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from homestay_bot.domain.enums import MessageOrigin
 from homestay_bot.domain.models import Conversation, Message
 from homestay_bot.services.message_service import IncomingMessage
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryRewriteContext:
+    """保存一次安全改写所需的失败回复、原问题和会话。"""
+
+    failed_bot: Message
+    source_guest: Message
+    conversation: Conversation
 
 
 class SQLAlchemyConversationRepository:
@@ -185,3 +196,72 @@ class SQLAlchemyMessageRepository:
         message.message_metadata = metadata
         await self._session.flush()
         return message
+
+    async def get_delivery_rewrite_context(
+        self,
+        failed_bot_id: int,
+    ) -> DeliveryRewriteContext | None:
+        """读取首次安全拦截回复及其精确关联的客人问题。"""
+        failed_bot = await self._session.get(Message, failed_bot_id)
+        if (
+            failed_bot is None
+            or failed_bot.origin is not MessageOrigin.BOT
+            or not failed_bot.content
+        ):
+            return None
+        metadata = dict(failed_bot.message_metadata or {})
+        if (
+            metadata.get("delivery_status") != "failed"
+            or metadata.get("delivery_error_code") != "wecom_async_13"
+        ):
+            return None
+        conversation = await self._session.get(
+            Conversation,
+            failed_bot.conversation_id,
+        )
+        if conversation is None:
+            return None
+
+        source_guest: Message | None = None
+        source_external_id = str(metadata.get("source_guest_message_id", "")).strip()
+        if source_external_id:
+            source_guest = await self._session.scalar(
+                select(Message).where(
+                    Message.conversation_id == failed_bot.conversation_id,
+                    Message.external_message_id == source_external_id,
+                    Message.origin == MessageOrigin.GUEST,
+                    Message.message_type == "text",
+                    Message.content.is_not(None),
+                )
+            )
+        if source_guest is None:
+            # 兼容部署前没有精确关联字段的旧消息，只回退到失败回复之前的最近问题。
+            source_guest = await self._session.scalar(
+                select(Message)
+                .where(
+                    Message.conversation_id == failed_bot.conversation_id,
+                    Message.id < failed_bot.id,
+                    Message.origin == MessageOrigin.GUEST,
+                    Message.message_type == "text",
+                    Message.content.is_not(None),
+                )
+                .order_by(Message.id.desc())
+                .limit(1)
+            )
+        if source_guest is None or not source_guest.content:
+            return None
+        return DeliveryRewriteContext(
+            failed_bot=failed_bot,
+            source_guest=source_guest,
+            conversation=conversation,
+        )
+
+    async def save_delivery_rewrite_metadata(
+        self,
+        message: Message,
+        metadata: dict[str, object],
+    ) -> None:
+        """保存原失败回复的改写及二次投递审计字段。"""
+        # JSON 字段在模型调用前已经提交；每次赋新对象才能触发 SQLAlchemy 脏检查。
+        message.message_metadata = dict(metadata)
+        await self._session.flush()

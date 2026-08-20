@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.tourism import (
+    TourismSearchError,
     classify_tourism_query,
     latest_user_question,
     split_tourism_reply,
@@ -29,6 +30,7 @@ from homestay_bot.services.faq_candidate_context import (
 )
 from homestay_bot.services.guest_reply_policy import (
     human_contact_reply,
+    remove_ungrounded_property_claims,
     sanitize_guest_reply,
 )
 from homestay_bot.services.knowledge_service import KnowledgeService
@@ -667,46 +669,18 @@ class DeepSeekGuestAssistant:
     def _remove_property_promotion(
         reply_text: str,
         language: Language,
+        *,
+        fallback_on_empty: bool = True,
     ) -> str:
-        """从非专属问题的回答中移除模型主动添加的本店事实。"""
-        self_reference = re.compile(
-            r"我们民宿|本民宿|咱们民宿|我们客栈|本客栈|本店|"
-            r"\bour (?:homestay|property|guesthouse|hotel)\b",
-            re.IGNORECASE,
-        )
-        room_sales_cta = re.compile(
-            r"如果.{0,12}(?:我|我们).{0,16}(?:推荐|介绍).{0,24}房型|"
-            r"(?:我|我们).{0,12}(?:可以|能).{0,16}(?:推荐|介绍).{0,24}房型|"
-            r"帮您.{0,16}(?:推荐|介绍|挑选).{0,24}房型",
-            re.IGNORECASE,
-        )
-        safe_lines = [
-            line
-            for line in reply_text.splitlines()
-            if not self_reference.search(line)
-            and not room_sales_cta.search(line)
-        ]
-        numbered_line = re.compile(
-            r"^(?P<indent>\s*)(?P<number>\d{1,2})[.、．）)]\s*"
-            r"(?P<body>.+)$"
-        )
-        if sum(bool(numbered_line.match(line)) for line in safe_lines) >= 2:
-            sequence = 0
-            renumbered: list[str] = []
-            for line in safe_lines:
-                match = numbered_line.match(line)
-                if match is None:
-                    renumbered.append(line)
-                    continue
-                sequence += 1
-                renumbered.append(
-                    f"{match.group('indent')}{sequence}. "
-                    f"{match.group('body')}"
-                )
-            safe_lines = renumbered
-        cleaned = "\n".join(safe_lines).strip()
+        """逐句移除模型主动添加的本店事实，避免误删同段有效信息。"""
+        body, evidence_footer = split_tourism_reply(reply_text)
+        cleaned = remove_ungrounded_property_claims(body)
         if cleaned:
+            if evidence_footer:
+                return f"{cleaned}\n\n{evidence_footer}"
             return cleaned
+        if not fallback_on_empty:
+            return ""
         if language is Language.EN:
             return (
                 "Agree on the budget and priorities first, assign one person "
@@ -982,8 +956,23 @@ class DeepSeekGuestAssistant:
                         duration_ms=max(0, round((monotonic() - started) * 1000)),
                     )
                 )
-            # 联网搜索负责事实和来源校验，统一精简层负责旅客可读性与版式。
-            reply = await self._refine_reply(reply, force=True)
+            # 实时搜索不含审核民宿知识；精炼前后都过滤，防止模型重新引入自述。
+            safe_search_reply = self._remove_property_promotion(
+                reply,
+                language,
+                fallback_on_empty=False,
+            )
+            if not safe_search_reply:
+                raise TourismSearchError("degraded")
+            refined_reply = await self._refine_reply(safe_search_reply, force=True)
+            reply = self._remove_property_promotion(
+                refined_reply,
+                language,
+                fallback_on_empty=False,
+            )
+            if not reply:
+                # 精炼只是版式增强，不能因不安全改写而丢掉已验证搜索事实。
+                reply = safe_search_reply
             return AssistantDecision(
                 reply_text=reply,
                 language=language,

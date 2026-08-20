@@ -25,7 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.config import BootstrapSettings, RuntimeEnvironmentSettings
 from homestay_bot.db import create_engine, create_session_factory
-from homestay_bot.domain.enums import ComplaintReviewStatus, EmployeeRole, MessageOrigin
+from homestay_bot.domain.enums import (
+    ComplaintReviewStatus,
+    EmployeeRole,
+    JobStatus,
+    MessageOrigin,
+)
 from homestay_bot.domain.models import (
     AdminCredential,
     BookingApproval,
@@ -119,6 +124,9 @@ from homestay_bot.services.credential_delivery import (
 from homestay_bot.services.customer_admin_service import CustomerAdminService
 from homestay_bot.services.customer_service import CustomerService
 from homestay_bot.services.customer_tag_sync import CustomerTagSyncService
+from homestay_bot.services.delivery_rewrite_job import (
+    GuestDeliveryRewriteJobService,
+)
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
@@ -174,6 +182,8 @@ from homestay_bot.worker import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MODEL_JOB_TYPES = {"wecom_process_message", "guest_delivery_rewrite"}
 
 
 def _create_runtime_task(
@@ -244,12 +254,14 @@ class TransactionalOutboxWeCom:
         *,
         source_message_id: str,
         delivery_phase: str | None = None,
+        source_guest_message_id: str | None = None,
     ) -> None:
         """绑定来源消息及可选发送阶段，确保分阶段回复分别保持幂等。"""
         self._repository = SQLAlchemyJobRepository(session)
         self._source_message_id = (
             f"{source_message_id}:{delivery_phase}" if delivery_phase else source_message_id
         )
+        self._source_guest_message_id = source_guest_message_id
         self._sequence = 0
 
     def _outbox_id(self, kind: str) -> str:
@@ -272,18 +284,21 @@ class TransactionalOutboxWeCom:
         outbox_id = self._outbox_id("guest")
         if await self._repository.exists_dedupe_key(outbox_id):
             return None
+        payload: dict[str, Any] = {
+            "outbox_id": outbox_id,
+            "source_message_id": self._source_message_id,
+            "open_kfid": open_kfid,
+            "external_userid": external_userid,
+            "content": content,
+            "message_type": message_type,
+            "delivery_retry_count": delivery_retry_count,
+            "retry_of_message_id": retry_of_message_id,
+        }
+        if self._source_guest_message_id:
+            payload["source_guest_message_id"] = self._source_guest_message_id
         await self._repository.enqueue(
             "wecom_send_text",
-            {
-                "outbox_id": outbox_id,
-                "source_message_id": self._source_message_id,
-                "open_kfid": open_kfid,
-                "external_userid": external_userid,
-                "content": content,
-                "message_type": message_type,
-                "delivery_retry_count": delivery_retry_count,
-                "retry_of_message_id": retry_of_message_id,
-            },
+            payload,
             dedupe_key=outbox_id,
         )
         return outbox_id
@@ -431,20 +446,33 @@ async def _handle_guest_delivery_failure(
     except (TypeError, ValueError):
         retry_count = 0
     if retry_count >= 1:
+        # 原失败消息可能收到重复回执；真正的二次失败消息没有改写任务关联字段。
+        if metadata.get("delivery_rewrite_job_id") or metadata.get(
+            "delivery_retry_outbox_id"
+        ):
+            return True
         metadata["delivery_retry_pending"] = False
         message.message_metadata = metadata
         await session.flush()
         return False
+    if fail_type == 13:
+        if metadata.get("delivery_rewrite_pending"):
+            return False
+        job = await SQLAlchemyJobRepository(session).enqueue(
+            "guest_delivery_rewrite",
+            {"message_id": message.id},
+            dedupe_key=f"delivery-rewrite:{message.id}",
+        )
+        metadata["delivery_rewrite_pending"] = True
+        metadata["delivery_rewrite_job_id"] = job.id
+        # 失败通知必须等改写任务完成或失败，重复回执不能抢先通知员工。
+        metadata["delivery_retry_pending"] = True
+        message.message_metadata = metadata
+        await session.flush()
+        return True
     conversation = await session.get(Conversation, message.conversation_id)
     if conversation is None:
         return False
-    # 企业微信的安全限制通常针对正文内容；原文再次发送只会重复失败，
-    # 因此改发不含外链、地址和敏感细节的短消息，先保证客人收到回应。
-    retry_content = (
-        "我已收到您的问题，正在为您核实相关信息，请稍等片刻。"
-        if fail_type == 13
-        else message.content
-    )
     outbox = TransactionalOutboxWeCom(
         session,
         source_message_id=f"delivery-retry:{message.id}",
@@ -453,7 +481,7 @@ async def _handle_guest_delivery_failure(
     outbox_id = await outbox.send_text(
         conversation.open_kfid,
         conversation.external_userid,
-        retry_content,
+        message.content,
         delivery_retry_count=retry_count + 1,
         retry_of_message_id=str(message.id),
     )
@@ -462,8 +490,6 @@ async def _handle_guest_delivery_failure(
     metadata["delivery_retry_count"] = retry_count + 1
     metadata["delivery_retry_outbox_id"] = outbox_id
     metadata["delivery_retry_pending"] = True
-    if fail_type == 13:
-        metadata["delivery_fallback_used"] = True
     message.message_metadata = metadata
     await session.flush()
     return True
@@ -482,10 +508,37 @@ async def _notify_guest_delivery_failure(
     message = await session.scalar(
         select(Message).where(Message.external_message_id == external_message_id)
     )
+    return await _notify_failed_bot_message(
+        session,
+        message,
+        agent_id=agent_id,
+        employee_userids=employee_userids,
+        force=False,
+    )
+
+
+async def _notify_failed_bot_message(
+    session: AsyncSession,
+    message: Message | None,
+    *,
+    agent_id: int,
+    employee_userids: list[str],
+    force: bool,
+) -> bool:
+    """按消息对象登记去重员工通知；终态补偿可强制清除 pending。"""
     if message is None or message.origin is not MessageOrigin.BOT:
         return False
     metadata = dict(message.message_metadata or {})
-    if metadata.get("delivery_retry_pending") or metadata.get("delivery_failure_notified"):
+    if metadata.get("delivery_failure_notified"):
+        return False
+    if metadata.get("delivery_retry_pending") and not force:
+        return False
+    if force:
+        metadata["delivery_retry_pending"] = False
+        metadata["delivery_rewrite_pending"] = False
+    if not employee_userids:
+        message.message_metadata = metadata
+        await session.flush()
         return False
     outbox = TransactionalOutboxWeCom(
         session,
@@ -501,6 +554,23 @@ async def _notify_guest_delivery_failure(
     message.message_metadata = metadata
     await session.flush()
     return True
+
+
+async def _compensate_guest_delivery_failure(
+    session: AsyncSession,
+    message_id: int,
+    *,
+    agent_id: int,
+    employee_userids: list[str],
+) -> bool:
+    """为改写或二次发送终态失败清 pending 并登记一次人工跟进。"""
+    return await _notify_failed_bot_message(
+        session,
+        await session.get(Message, message_id),
+        agent_id=agent_id,
+        employee_userids=employee_userids,
+        force=True,
+    )
 
 
 class SessionKnowledgeRepository:
@@ -1988,6 +2058,13 @@ async def _run_worker_loop(
                         retry_of_message_id = payload.get("retry_of_message_id")
                         if retry_of_message_id:
                             metadata["retry_of_message_id"] = str(retry_of_message_id)
+                        source_guest_message_id = payload.get(
+                            "source_guest_message_id"
+                        )
+                        if source_guest_message_id:
+                            metadata["source_guest_message_id"] = str(
+                                source_guest_message_id
+                            )
                         await MessageService(SQLAlchemyMessageRepository(session)).record_bot(
                             conversation.id,
                             real_message_id,
@@ -2072,12 +2149,45 @@ async def _run_worker_loop(
                     session,
                     lifecycle_handler_factory,
                 )
+
+                async def enqueue_terminal_delivery_compensation(
+                    job: Any,
+                    _error_code: str,
+                    failed_payload: dict[str, Any],
+                    job_repository: SQLAlchemyJobRepository = repository,
+                ) -> None:
+                    """为改写或二次发送终态失败登记一次人工补偿任务。"""
+                    if getattr(job, "status", None) is not JobStatus.FAILED:
+                        return
+                    raw_message_id: object | None = None
+                    if job.job_type == "guest_delivery_rewrite":
+                        raw_message_id = failed_payload.get("message_id")
+                    elif job.job_type == "wecom_send_text":
+                        raw_message_id = failed_payload.get("retry_of_message_id")
+                    try:
+                        message_id = (
+                            int(raw_message_id)
+                            if isinstance(raw_message_id, (int, str))
+                            and raw_message_id
+                            else 0
+                        )
+                    except ValueError:
+                        message_id = 0
+                    if message_id <= 0:
+                        return
+                    await job_repository.enqueue(
+                        "guest_delivery_failure_compensate",
+                        {"message_id": message_id},
+                        dedupe_key=f"delivery-compensate:{message_id}",
+                    )
+
                 worker = Worker(
                     repository=repository,
                     handlers=handlers,
                     heartbeat=lambda value: setattr(app.state, "worker_last_heartbeat", value),
                     checkpoint=session.commit,
                     on_job_committed=lambda job: _record_committed_job_heartbeat(app, job),
+                    on_job_failed=enqueue_terminal_delivery_compensation,
                 )
                 handled = await worker.run_once()
         except SQLAlchemyError as error:
@@ -2710,6 +2820,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 wecom=TransactionalOutboxWeCom(
                     session,
                     source_message_id=message.msgid,
+                    source_guest_message_id=message.msgid,
                     delivery_phase=_guest_delivery_phase(
                         deferred=deferred,
                         deferred_phase=deferred_phase,
@@ -2939,6 +3050,56 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         return service.handle
 
+    def build_delivery_rewrite_handler(
+        session: AsyncSession,
+        bundle: RuntimeClientBundle,
+    ) -> JobHandler:
+        """为首次安全拦截创建一次无工具改写处理器。"""
+
+        async def compensate_unavailable(message_id: int) -> None:
+            """上下文缺失时清 pending 并登记脱敏人工跟进。"""
+            await _compensate_guest_delivery_failure(
+                session,
+                message_id,
+                agent_id=bundle.agent_id,
+                employee_userids=list(bundle.duty_userids),
+            )
+
+        service = GuestDeliveryRewriteJobService(
+            repository=SQLAlchemyMessageRepository(session),
+            rewriter=bundle.delivery_rewriter,
+            outbox_factory=lambda message_id, guest_message_id: (
+                TransactionalOutboxWeCom(
+                    session,
+                    source_message_id=f"delivery-rewrite:{message_id}",
+                    delivery_phase="guest",
+                    source_guest_message_id=guest_message_id,
+                )
+            ),
+            before_model=session.commit,
+            on_unavailable=compensate_unavailable,
+            agent_id=bundle.agent_id,
+            duty_employee_userids=list(bundle.duty_userids),
+        )
+        return service.handle
+
+    def build_delivery_compensation_handler(
+        session: AsyncSession,
+        bundle: RuntimeClientBundle,
+    ) -> JobHandler:
+        """为改写或二次发送终态失败创建脱敏员工补偿处理器。"""
+
+        async def handle(payload: dict[str, Any]) -> None:
+            """清除原消息 pending 并登记一次去重人工通知。"""
+            await _compensate_guest_delivery_failure(
+                session,
+                int(payload["message_id"]),
+                agent_id=bundle.agent_id,
+                employee_userids=list(bundle.duty_userids),
+            )
+
+        return handle
+
     async def build_worker_bindings(
         session: AsyncSession,
         bundle: RuntimeClientBundle,
@@ -2950,6 +3111,13 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "hostex_event": build_hostex_event_handler(session, bundle),
             "credential_send_part": build_credential_part_handler(session, bundle),
             "lifecycle_send": build_lifecycle_handler(session, bundle),
+            "guest_delivery_rewrite": build_delivery_rewrite_handler(
+                session,
+                bundle,
+            ),
+            "guest_delivery_failure_compensate": (
+                build_delivery_compensation_handler(session, bundle)
+            ),
             "wecom_process_message": lambda payload: handle_deferred_message(
                 payload,
                 bundle,
@@ -3031,7 +3199,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                             factory=factory,
                             registry=candidate_registry,
                             runtime_handler_factory=build_worker_bindings,
-                            excluded_job_types={"wecom_process_message"},
+                            excluded_job_types=_MODEL_JOB_TYPES,
                             recover_stale=True,
                         )
                     )
@@ -3043,7 +3211,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                             factory=factory,
                             registry=candidate_registry,
                             runtime_handler_factory=build_worker_bindings,
-                            included_job_types={"wecom_process_message"},
+                            included_job_types=_MODEL_JOB_TYPES,
                             recover_stale=True,
                         )
                     )

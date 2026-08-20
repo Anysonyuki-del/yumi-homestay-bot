@@ -183,6 +183,10 @@ class SQLAlchemyJobRepository:
             "hostex_create_reservation",
             "lifecycle_send",
         }
+        await self._enqueue_stale_delivery_compensations(
+            before=before,
+            max_attempts=max_attempts,
+        )
         failed_statement = (
             update(Job)
             .where(
@@ -246,6 +250,51 @@ class SQLAlchemyJobRepository:
             + int(maxed_out.rowcount)
             + int(retried.rowcount)
         )
+
+    async def _enqueue_stale_delivery_compensations(
+        self,
+        *,
+        before: datetime,
+        max_attempts: int,
+    ) -> None:
+        """为遗留改写或二次发送登记去重人工补偿任务。"""
+        stale_jobs = list(
+            (
+                await self._session.scalars(
+                    select(Job).where(
+                        Job.status == JobStatus.RUNNING,
+                        Job.locked_at < before,
+                        Job.job_type.in_(
+                            {"guest_delivery_rewrite", "wecom_send_text"}
+                        ),
+                        *self._job_type_conditions(),
+                    )
+                )
+            ).all()
+        )
+        normalized_max_attempts = max(1, max_attempts)
+        for job in stale_jobs:
+            message_id: int | None = None
+            if (
+                job.job_type == "guest_delivery_rewrite"
+                and job.attempts >= normalized_max_attempts
+            ):
+                raw_message_id = job.payload.get("message_id")
+                if isinstance(raw_message_id, int):
+                    message_id = raw_message_id
+            elif job.job_type == "wecom_send_text":
+                raw_retry_id = job.payload.get("retry_of_message_id")
+                try:
+                    message_id = int(raw_retry_id) if raw_retry_id else None
+                except (TypeError, ValueError):
+                    message_id = None
+            if message_id is None or message_id <= 0:
+                continue
+            await self.enqueue(
+                "guest_delivery_failure_compensate",
+                {"message_id": message_id},
+                dedupe_key=f"delivery-compensate:{message_id}",
+            )
 
     async def _mark_stale_complaint_deliveries(self, before: datetime) -> None:
         """把遗留客诉发送任务同步回写为投递失败，避免状态永久排队。"""

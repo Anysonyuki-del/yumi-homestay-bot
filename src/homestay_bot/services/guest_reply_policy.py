@@ -26,6 +26,30 @@ _EN_UMBRELLA_PATTERN = re.compile(
     r"\b(?:umbrella|raincoat|rain[ -]?gear|waterproof)\b",
     re.IGNORECASE,
 )
+_PROPERTY_SELF_REFERENCE_PATTERN = re.compile(
+    r"我们民宿|本民宿|咱们民宿|我们客栈|本客栈|本店|"
+    r"\bour (?:homestay|property|guesthouse|hotel)\b",
+    re.IGNORECASE,
+)
+_ROOM_SALES_CTA_PATTERN = re.compile(
+    r"如果.{0,12}(?:我|我们).{0,16}(?:推荐|介绍).{0,24}房型|"
+    r"(?:我|我们).{0,12}(?:可以|能).{0,16}(?:推荐|介绍).{0,24}房型|"
+    r"帮您.{0,16}(?:推荐|介绍|挑选).{0,24}房型",
+    re.IGNORECASE,
+)
+_SENSITIVE_GUEST_PATTERNS = (
+    re.compile(
+        r"(?<![A-Za-z0-9_.+-])[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+        r"(?![A-Za-z0-9.-])"
+    ),
+    re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),
+    re.compile(r"(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)"),
+    re.compile(
+        r"(?:订单号?|预订号|order(?:\s+number)?)\s*[:：#]?\s*[A-Za-z0-9-]{4,}",
+        re.IGNORECASE,
+    ),
+    re.compile(r"[\u4e00-\u9fff]{2,20}(?:路|街|道|巷)\d+号"),
+)
 
 # 这些模式只处理客人可见的、尚未由人工确认的执行结果承诺。
 # “请立即离开房间”“拨打 119”等安全指令不在匹配范围内。
@@ -93,6 +117,63 @@ def human_contact_reply(language: Language) -> str:
     if language is Language.EN:
         return _EN_HUMAN_CONTACT_REPLY
     return _ZH_HUMAN_CONTACT_REPLY
+
+
+def remove_ungrounded_property_claims(content: str) -> str:
+    """逐句删除未经审核的民宿自述和无关房型推销。"""
+    safe_lines: list[str] = []
+    for line in content.splitlines():
+        if (
+            not _PROPERTY_SELF_REFERENCE_PATTERN.search(line)
+            and not _ROOM_SALES_CTA_PATTERN.search(line)
+        ):
+            safe_lines.append(line)
+            continue
+        # 保护数字列表的小数点，只按中英文句末拆分命中行。
+        sentences = re.split(
+            r"(?<=[。！？!?])|(?<=\.)\s+(?=[A-Z])",
+            line,
+        )
+        safe_sentences = [
+            sentence
+            for sentence in sentences
+            if sentence
+            and not _PROPERTY_SELF_REFERENCE_PATTERN.search(sentence)
+            and not _ROOM_SALES_CTA_PATTERN.search(sentence)
+        ]
+        if safe_sentences:
+            safe_lines.append("".join(safe_sentences).strip())
+
+    numbered_line = re.compile(
+        r"^(?P<indent>\s*)(?P<number>\d{1,2})[.、．）)]\s*(?P<body>.+)$"
+    )
+    if sum(bool(numbered_line.match(line)) for line in safe_lines) >= 2:
+        sequence = 0
+        renumbered: list[str] = []
+        for line in safe_lines:
+            match = numbered_line.match(line)
+            if match is None:
+                renumbered.append(line)
+                continue
+            sequence += 1
+            renumbered.append(
+                f"{match.group('indent')}{sequence}. {match.group('body')}"
+            )
+        safe_lines = renumbered
+    return "\n".join(safe_lines).strip()
+
+
+def redact_sensitive_guest_text(content: str) -> str:
+    """集中遮盖手机号、邮箱、身份证、订单号和精确门牌地址。"""
+    redacted = content
+    for pattern in _SENSITIVE_GUEST_PATTERNS:
+        redacted = pattern.sub("[敏感信息已隐藏]", redacted)
+    return redacted
+
+
+def contains_sensitive_guest_text(content: str) -> bool:
+    """判断客人可见或模型输入文本是否仍含本地可识别敏感字段。"""
+    return any(pattern.search(content) for pattern in _SENSITIVE_GUEST_PATTERNS)
 
 
 def _contains_unsafe_commitment(sentence: str) -> bool:
@@ -242,12 +323,13 @@ def sanitize_guest_reply(
     """清除客人侧执行承诺，并在需要人工时追加唯一管家收尾。"""
     if requires_human:
         handoff = human_contact_reply(language)
+        separator = " " if language is Language.EN else ""
         # 同一文本可能依次经过模型适配器和会话出口；先移除既有固定收尾，
         # 再统一过滤并追加，保证重复清洗不改变正文或误删前置歉意。
         content_without_handoff = content.strip()
         if content_without_handoff.endswith(handoff):
             content_without_handoff = content_without_handoff[: -len(handoff)].rstrip()
-        safe_content = "".join(
+        safe_content = separator.join(
             _safe_human_sentences(content_without_handoff, language)
         ).strip()
         if not safe_content:
@@ -256,11 +338,10 @@ def sanitize_guest_reply(
                 if language is Language.EN
                 else "我已收到您的诉求。"
             )
-            separator = " " if language is Language.EN else ""
             return f"{acknowledgement}{separator}{handoff}"
-        separator = " " if language is Language.EN else ""
         return f"{safe_content}{separator}{handoff}"
-    safe_content = "".join(_safe_sentences(content)).strip()
+    separator = " " if language is Language.EN else ""
+    safe_content = separator.join(_safe_sentences(content)).strip()
     if safe_content:
         return safe_content
     if language is Language.EN:

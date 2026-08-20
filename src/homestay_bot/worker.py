@@ -38,6 +38,7 @@ class WorkerRepository[JobType: WorkerJob](Protocol):
 
 
 JobHandler = Callable[[dict[str, Any]], Awaitable[None]]
+JobFailureHandler = Callable[[Any, str, dict[str, Any]], Awaitable[None]]
 
 
 class RetrySafeJobError(RuntimeError):
@@ -259,6 +260,7 @@ class Worker[JobType: WorkerJob]:
         "hostex_event",
         "faq_draft_generate",
         "complaint_review_generate",
+        "guest_delivery_rewrite",
         "customer_tag_sync",
         "wecom_process_message",
     }
@@ -271,6 +273,7 @@ class Worker[JobType: WorkerJob]:
         heartbeat: Callable[[datetime], None] | None = None,
         checkpoint: Callable[[], Awaitable[None]] | None = None,
         on_job_committed: Callable[[JobType], None] | None = None,
+        on_job_failed: JobFailureHandler | None = None,
     ) -> None:
         """注入任务仓储、处理器、提交边界和成功提交回调。"""
         self._repository = repository
@@ -278,6 +281,7 @@ class Worker[JobType: WorkerJob]:
         self._heartbeat = heartbeat
         self._checkpoint = checkpoint
         self._on_job_committed = on_job_committed
+        self._on_job_failed = on_job_failed
 
     async def run_once(self) -> bool:
         """领取并处理一项任务；没有到期任务时返回 False。"""
@@ -310,6 +314,7 @@ class Worker[JobType: WorkerJob]:
             try:
                 await handler(job.payload)
             except Exception as error:
+                failed_payload = dict(job.payload)
                 max_attempts = (
                     10_000 if isinstance(error, DeferredRetryJobError) else 3
                 )
@@ -323,6 +328,12 @@ class Worker[JobType: WorkerJob]:
                     ),
                     max_attempts=max_attempts,
                 )
+                if self._on_job_failed is not None:
+                    await self._on_job_failed(
+                        job,
+                        type(error).__name__,
+                        failed_payload,
+                    )
             else:
                 await self._repository.mark_completed(job)
                 succeeded = True

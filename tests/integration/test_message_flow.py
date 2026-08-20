@@ -6,6 +6,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.application import (
+    TransactionalOutboxWeCom,
+    _compensate_guest_delivery_failure,
     _handle_guest_delivery_failure,
     _notify_guest_delivery_failure,
 )
@@ -24,6 +26,7 @@ from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
     SQLAlchemyMessageRepository,
 )
+from homestay_bot.services.delivery_rewrite_job import GuestDeliveryRewriteJobService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
 
 
@@ -336,7 +339,7 @@ async def test_async_guest_delivery_failure_queues_one_safe_retry() -> None:
             session,
             "wecom-msg-2",
             fail_type=10,
-        ) is False
+        ) is True
         jobs = list((await session.scalars(select(Job))).all())
 
         assert len(jobs) == 1
@@ -349,8 +352,8 @@ async def test_async_guest_delivery_failure_queues_one_safe_retry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_security_restricted_guest_delivery_uses_safe_fallback() -> None:
-    """安全限制失败不得重复发送被拦截正文，而应改发短兜底。"""
+async def test_security_restricted_guest_delivery_queues_one_rewrite_job() -> None:
+    """首次安全限制只登记一次改写任务，且任务载荷不得复制对话正文。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -373,13 +376,247 @@ async def test_security_restricted_guest_delivery_uses_safe_fallback() -> None:
             "wecom-msg-security",
             fail_type=13,
         ) is True
+        assert await _handle_guest_delivery_failure(
+            session,
+            "wecom-msg-security",
+            fail_type=13,
+        ) is False
+        failed_message = await session.scalar(
+            select(Message).where(
+                Message.external_message_id == "wecom-msg-security"
+            )
+        )
+        assert failed_message is not None
+        metadata = dict(failed_message.message_metadata)
+        metadata.update(
+            {
+                "delivery_retry_count": 1,
+                "delivery_rewrite_pending": False,
+                "delivery_rewrite_outbox_id": "outbox-rewrite",
+            }
+        )
+        failed_message.message_metadata = metadata
+        await session.flush()
+        assert await _handle_guest_delivery_failure(
+            session,
+            "wecom-msg-security",
+            fail_type=13,
+        ) is True
         jobs = list((await session.scalars(select(Job))).all())
 
         assert len(jobs) == 1
-        assert jobs[0].payload["content"] != blocked_content
-        assert jobs[0].payload["content"] == (
-            "我已收到您的问题，正在为您核实相关信息，请稍等片刻。"
+        assert jobs[0].job_type == "guest_delivery_rewrite"
+        assert jobs[0].dedupe_key == "delivery-rewrite:1"
+        assert jobs[0].payload == {"message_id": 1}
+        assert blocked_content not in str(jobs[0].payload)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delivery_rewrite_context_prefers_exact_source_guest() -> None:
+    """即使失败回复后已有新问题，改写仍应读取原始关联问题。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+        session.add(conversation)
+        await session.flush()
+        now = datetime(2026, 8, 21, tzinfo=UTC)
+        original_guest = Message(
+            conversation_id=conversation.id,
+            external_message_id="guest-weather",
+            origin=MessageOrigin.GUEST,
+            message_type="text",
+            content="明天天气",
+            message_metadata={},
+            sent_at=now,
         )
+        failed_bot = Message(
+            conversation_id=conversation.id,
+            external_message_id="bot-weather",
+            origin=MessageOrigin.BOT,
+            message_type="text",
+            content="武汉明天有阵雨。",
+            message_metadata={"source_guest_message_id": "guest-weather"},
+            sent_at=now,
+        )
+        newer_guest = Message(
+            conversation_id=conversation.id,
+            external_message_id="guest-newer",
+            origin=MessageOrigin.GUEST,
+            message_type="text",
+            content="再问一下门票",
+            message_metadata={},
+            sent_at=now,
+        )
+        session.add_all([original_guest, failed_bot, newer_guest])
+        await session.flush()
+        await SQLAlchemyMessageRepository(session).mark_delivery_failed(
+            "bot-weather",
+            error_code="wecom_async_13",
+        )
+
+        context = await SQLAlchemyMessageRepository(
+            session
+        ).get_delivery_rewrite_context(failed_bot.id)
+
+        assert context is not None
+        assert context.source_guest.external_message_id == "guest-weather"
+        assert context.source_guest.content == "明天天气"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_guest_outbox_carries_exact_source_message_id() -> None:
+    """正常回复出站任务应携带原客人消息编号，供异步失败改写精确关联。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        outbox = TransactionalOutboxWeCom(
+            session,
+            source_message_id="guest-weather",
+            source_guest_message_id="guest-weather",
+            delivery_phase="final",
+        )
+        await outbox.send_text("wk-1", "wm-1", "武汉明天有阵雨。")
+        job = await session.scalar(select(Job))
+
+        assert job is not None
+        assert job.payload["source_guest_message_id"] == "guest-weather"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delivery_rewrite_service_commits_guard_before_real_outbox() -> None:
+    """真实事务中应先提交单次调用标记，再登记一次可审计二次发送。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    class RewriterStub:
+        """返回事实等价但重新组织过的天气回复。"""
+
+        async def rewrite(self, **kwargs) -> str:
+            """验证仓储正文已传入并返回固定改写。"""
+            assert kwargs["guest_question"] == "明天天气"
+            return "8月22日武汉有阵雨，气温25～31℃。"
+
+    async with factory() as session:
+        conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+        session.add(conversation)
+        await session.flush()
+        now = datetime(2026, 8, 21, tzinfo=UTC)
+        guest = Message(
+            conversation_id=conversation.id,
+            external_message_id="guest-rewrite",
+            origin=MessageOrigin.GUEST,
+            message_type="text",
+            content="明天天气",
+            message_metadata={},
+            sent_at=now,
+        )
+        failed_bot = Message(
+            conversation_id=conversation.id,
+            external_message_id="bot-rewrite",
+            origin=MessageOrigin.BOT,
+            message_type="text",
+            content="武汉8月22日有阵雨，气温25～31℃。",
+            message_metadata={"source_guest_message_id": "guest-rewrite"},
+            sent_at=now,
+        )
+        session.add_all([guest, failed_bot])
+        await session.flush()
+        repository = SQLAlchemyMessageRepository(session)
+        await repository.mark_delivery_failed(
+            "bot-rewrite",
+            error_code="wecom_async_13",
+        )
+        service = GuestDeliveryRewriteJobService(
+            repository=repository,
+            rewriter=RewriterStub(),
+            outbox_factory=lambda message_id, guest_message_id: (
+                TransactionalOutboxWeCom(
+                    session,
+                    source_message_id=f"delivery-rewrite:{message_id}",
+                    source_guest_message_id=guest_message_id,
+                    delivery_phase="guest",
+                )
+            ),
+            before_model=session.commit,
+            on_unavailable=lambda _message_id: session.commit(),
+            agent_id=1000002,
+            duty_employee_userids=["staff-1"],
+        )
+
+        await service.handle({"message_id": failed_bot.id})
+        await session.commit()
+        await session.refresh(failed_bot)
+        jobs = list((await session.scalars(select(Job))).all())
+
+        assert failed_bot.message_metadata["delivery_rewrite_started"] is True
+        assert failed_bot.message_metadata["delivery_retry_count"] == 1
+        assert len(jobs) == 1
+        assert jobs[0].job_type == "wecom_send_text"
+        assert jobs[0].payload["source_guest_message_id"] == "guest-rewrite"
+        assert jobs[0].payload["retry_of_message_id"] == str(failed_bot.id)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delivery_rewrite_context_supports_legacy_bot_without_source_link() -> None:
+    """部署前旧回复缺少关联字段时，只回退到回复之前最近的客人文本。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+        session.add(conversation)
+        await session.flush()
+        now = datetime(2026, 8, 21, tzinfo=UTC)
+        guest = Message(
+            conversation_id=conversation.id,
+            external_message_id="legacy-guest",
+            origin=MessageOrigin.GUEST,
+            message_type="text",
+            content="黄鹤楼门票多少钱",
+            message_metadata={},
+            sent_at=now,
+        )
+        failed_bot = Message(
+            conversation_id=conversation.id,
+            external_message_id="legacy-bot",
+            origin=MessageOrigin.BOT,
+            message_type="text",
+            content="门票为70元。",
+            message_metadata={},
+            sent_at=now,
+        )
+        session.add_all([guest, failed_bot])
+        await session.flush()
+        await SQLAlchemyMessageRepository(session).mark_delivery_failed(
+            "legacy-bot",
+            error_code="wecom_async_13",
+        )
+
+        context = await SQLAlchemyMessageRepository(
+            session
+        ).get_delivery_rewrite_context(failed_bot.id)
+
+        assert context is not None
+        assert context.source_guest.content == "黄鹤楼门票多少钱"
 
     await engine.dispose()
 
@@ -427,6 +664,55 @@ async def test_exhausted_guest_delivery_failure_notifies_staff_once() -> None:
         ) is False
         jobs = list((await session.scalars(select(Job))).all())
 
+        assert len(jobs) == 1
+        assert jobs[0].job_type == "wecom_send_internal_text"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_delivery_compensation_clears_pending_and_notifies_once() -> None:
+    """改写或二次发送终态失败应清 pending 并只登记一次员工通知。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+        session.add(conversation)
+        await session.flush()
+        messages = MessageService(SQLAlchemyMessageRepository(session))
+        await messages.record_bot(
+            conversation.id,
+            "bot-terminal-failure",
+            "未成功送达的改写回复",
+            metadata={
+                "delivery_status": "failed",
+                "delivery_retry_pending": True,
+                "delivery_rewrite_pending": True,
+            },
+        )
+
+        assert await _compensate_guest_delivery_failure(
+            session,
+            1,
+            agent_id=1000002,
+            employee_userids=["staff-1"],
+        ) is True
+        assert await _compensate_guest_delivery_failure(
+            session,
+            1,
+            agent_id=1000002,
+            employee_userids=["staff-1"],
+        ) is False
+        message = await session.get(Message, 1)
+        jobs = list((await session.scalars(select(Job))).all())
+
+        assert message is not None
+        assert message.message_metadata["delivery_retry_pending"] is False
+        assert message.message_metadata["delivery_rewrite_pending"] is False
+        assert message.message_metadata["delivery_failure_notified"] is True
         assert len(jobs) == 1
         assert jobs[0].job_type == "wecom_send_internal_text"
 

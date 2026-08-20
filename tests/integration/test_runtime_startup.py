@@ -99,6 +99,7 @@ def _runtime_bundle(
         wecom=object(),
         contact_client=(object() if snapshot.wecom_contact_secret is not None else None),
         assistant=object(),
+        delivery_rewriter=object(),
         faq_drafter=object(),
         tourism_searcher=object(),
         reminder_weather=object(),
@@ -1285,8 +1286,16 @@ def test_unavailable_admin_bootstrap_keeps_workers_running_and_reports_degraded(
         assert response.json() == {"status": "degraded"}
         assert worker_wiring == {"runtime_handler_factory": True}
         assert worker_recovery_wiring == [
-            (None, {"wecom_process_message"}, True),
-            ({"wecom_process_message"}, set(), True),
+            (
+                None,
+                {"wecom_process_message", "guest_delivery_rewrite"},
+                True,
+            ),
+            (
+                {"wecom_process_message", "guest_delivery_rewrite"},
+                set(),
+                True,
+            ),
         ]
         assert app.state.private_file_service is app.state.task_page_service
         assert app.state.runtime_client_registry is not None

@@ -125,6 +125,7 @@ def build_bundle(revision: int, probe: CloseProbe) -> RuntimeClientBundle:
         wecom=object(),
         contact_client=None,
         assistant=object(),
+        delivery_rewriter=object(),
         faq_drafter=object(),
         tourism_searcher=object(),
         reminder_weather=object(),
