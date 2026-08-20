@@ -244,6 +244,50 @@ async def test_weather_query_pins_wuhan_and_explicit_tomorrow_date() -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_tourism_query_defaults_to_wuhan_when_location_is_omitted() -> None:
+    """未写地点的旅游联网问题必须按武汉搜索。"""
+    client = AnthropicClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+    )
+
+    await searcher.search(
+        question="黄鹤楼门票多少钱？",
+        language=Language.ZH,
+        queried_on=date(2026, 8, 20),
+    )
+
+    request = client.messages.requests[0]
+    user_query = request["messages"][0]["content"]
+    assert "武汉" in user_query
+    assert "原始问题：黄鹤楼门票多少钱？" in user_query
+    assert "未指定地点的旅游联网问题默认按武汉市查询" in request["system"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_non_wuhan_location_is_preserved() -> None:
+    """客人明确指定其他城市时不能被武汉默认值覆盖。"""
+    client = AnthropicClientStub()
+    searcher = DeepSeekTourismSearcher(
+        client=client,
+        model="deepseek-v4-flash",
+    )
+
+    await searcher.search(
+        question="北京明天天气如何？",
+        language=Language.ZH,
+        queried_on=date(2026, 8, 20),
+    )
+
+    request = client.messages.requests[0]
+    user_query = request["messages"][0]["content"]
+    assert "北京" in user_query
+    assert "武汉" not in user_query
+    assert "2026-08-21" in user_query
+
+
+@pytest.mark.asyncio
 async def test_deepseek_tourism_rejects_answer_without_search_evidence() -> None:
     """没有搜索证据时不得把模型常识冒充实时结果。"""
     statuses: list[str] = []

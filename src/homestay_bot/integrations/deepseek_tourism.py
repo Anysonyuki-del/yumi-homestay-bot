@@ -30,6 +30,15 @@ _WEATHER_PATTERN = re.compile(
     r"天气|气温|温度|降雨|下雨|weather|forecast|temperature|rain",
     re.IGNORECASE,
 )
+_EXPLICIT_LOCATION_PATTERN = re.compile(
+    r"武汉|武昌|汉口|北京|上海|广州|深圳|杭州|南京|成都|重庆|西安|长沙|"
+    r"三亚|厦门|青岛|天津|苏州|郑州|合肥|南昌|福州|昆明|贵阳|海口|"
+    r"大连|济南|太原|石家庄|沈阳|长春|哈尔滨|兰州|乌鲁木齐|拉萨|"
+    r"香港|澳门|台北|Wuhan|Beijing|Shanghai|Guangzhou|Shenzhen|"
+    r"(?:[\u4e00-\u9fff]{2,8})(?:市|省|自治区|县)|"
+    r"\b(?:in|at|near|for)\s+[A-Z][A-Za-z -]{2,40}\b",
+    re.IGNORECASE,
+)
 _TOMORROW_PATTERN = re.compile(r"明天|明日|tomorrow", re.IGNORECASE)
 _DAY_AFTER_TOMORROW_PATTERN = re.compile(r"后天|day after tomorrow", re.IGNORECASE)
 _TODAY_PATTERN = re.compile(r"今天|今日|today", re.IGNORECASE)
@@ -138,7 +147,7 @@ class DeepSeekTourismSearcher:
             target_date = None
 
         # 民宿业务默认服务武汉；若客人已明确地点，保留原问题让搜索模型识别。
-        location_hint = "武汉" if not re.search(r"武汉|武昌|汉口|Wuhan", question, re.I) else ""
+        location_hint = "" if _EXPLICIT_LOCATION_PATTERN.search(question) else "武汉"
         if language is Language.ZH:
             if target_date is not None:
                 instruction = (
@@ -170,6 +179,21 @@ class DeepSeekTourismSearcher:
             else f"{instruction}\nOriginal question: {question}"
         )
         return prepared_question, instruction
+
+    @staticmethod
+    def _prepare_default_location_question(
+        question: str,
+        *,
+        language: Language,
+    ) -> tuple[str, str]:
+        """为未指定地点的联网问题补充武汉默认地点。"""
+        if _EXPLICIT_LOCATION_PATTERN.search(question):
+            return question, ""
+        if language is Language.ZH:
+            instruction = "请按武汉市查询以下旅游问题。"
+            return f"{instruction}\n原始问题：{question}", instruction
+        instruction = "Search the following tourism question for Wuhan, China."
+        return f"{instruction}\nOriginal question: {question}", instruction
 
     @staticmethod
     def _extract_content(
@@ -335,7 +359,12 @@ class DeepSeekTourismSearcher:
             logger.info("旅游搜索完成：cache_hit=true duration_ms=0")
             return cached_reply
 
-        search_question = question
+        search_question, location_instruction = (
+            self._prepare_default_location_question(
+                question,
+                language=language,
+            )
+        )
         weather_instruction = ""
         if _WEATHER_PATTERN.search(question):
             search_question, weather_instruction = self._prepare_weather_question(
@@ -365,6 +394,9 @@ class DeepSeekTourismSearcher:
                 else ""
             )
             + "不要在正文中输出网址或 Markdown 链接。"
+            + "未指定地点的旅游联网问题默认按武汉市查询；"
+            "仅客人明确指定其他地点时才使用其他地点。"
+            + location_instruction
             + (
                 "天气问题必须明确回答目标日期、最高/最低气温和降雨概率；"
                 + weather_instruction
@@ -381,6 +413,9 @@ class DeepSeekTourismSearcher:
                 "within this window, include the full year for every event "
                 "date, and label later events clearly. Select the three best "
                 "recommendations and keep the answer concise at 120-180 words."
+                " Unspecified tourism locations default to Wuhan, China; "
+                "only an explicitly named location overrides that default."
+                + location_instruction
                 + (
                     " For weather questions, state the target date, high/low "
                     "temperature, and precipitation probability explicitly. "
