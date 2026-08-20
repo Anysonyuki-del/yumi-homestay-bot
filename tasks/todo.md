@@ -3246,7 +3246,7 @@ git diff --check
 - [x] GREEN 3：修改 `src/homestay_bot/services/conversation_service.py`，让所有客人可见出口统一调用最终正文策略；删除或收敛 `_warm_guest_reply()` 的重复职责，禁止同一正文被多次非幂等重构。
 - [x] 回归验证：运行新增定向 pytest、对话/旅游/天气/安全策略相关套件、显式禁用 live contract 的全量 pytest、Ruff、mypy、compileall、pip check 和 diff check；记录修改前 RED 与修改后 GREEN 证据。
 - [x] 质量审查：核对事实字段不变、所有客人出口覆盖、高危规则无道歉无承诺、安全步骤优先、无新增外部调用、日志与审计不包含客人敏感正文。
-- [ ] 集成与部署：用户确认实现并通过审查后再提交、推送；云端先备份代码、`.env` 和数据库，再只重建必要服务，验证迁移、容器日志、本机及公网健康检查。
+- [x] 集成与部署：用户确认实现并通过审查后再提交、推送；云端先备份代码、`.env` 和数据库，再只重建必要服务，验证迁移、容器日志、本机及公网健康检查。
 - [ ] 真实验收：在企业微信分别询问“明天天气如何”、普通服务请求和一条高危需人工问题，核对武汉默认、亲和管家口吻、三秒合并、单次回复、高危中立模板与值班管家收尾。
 
 #### 统一民宿管家回复口吻 Review
@@ -3256,3 +3256,5 @@ git diff --check
 - 高危边界：客诉、退款、紧急事件和明确人工接管使用固定中立话术，不保留模型道歉、责任判断、到场或完成承诺；火灾等安全步骤排在确认与联系值班管家之前。普通模型或联网故障保留明确失败说明，再按原流程联系管家。
 - 风格与事实：普通模型、旅游搜索和精炼提示统一为温暖、简洁、可靠的民宿管家口吻，不新增二次模型调用；天气本地策略只增加自然开场和有降雨依据时的带伞提醒，日期、地点、温度、降雨、价格、房态与来源不改写。
 - 验证：相关套件 `181 passed`；禁 live 全量 `953 passed, 15 skipped`，仅有既有 Starlette 弃用警告；Ruff 全仓、mypy（105 个源码文件）、compileall、pip check、diff check全部通过。手工三场景探针确认天气、高危和火灾最终正文符合已确认模板。
+- 集成与部署：功能提交 `6239048` 已推送主干；服务器直连 GitHub 两次 TLS 失败后，改用经 `git bundle verify` 校验的同一 Git 提交包执行 fast-forward，没有覆盖 `.env` 或未跟踪文件。回滚备份 `/opt/yumi-backups/guest-reply-tone-20260821-001935` 含旧提交、权限 `600` 的 `.env` 和非空 PostgreSQL 导出（371355 bytes）。
+- 云端验收：服务器代码为 `6239048`，Alembic 保持 `0018_stay_checkout_observation (head)`；只重建 API，PostgreSQL 容器保持连续运行。API 日志确认 application startup complete，本机 `127.0.0.1:8000/health` 与公网 `https://akros.icu/health` 均返回 `{"status":"ok"}`。
