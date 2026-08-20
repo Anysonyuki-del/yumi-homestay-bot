@@ -3215,4 +3215,7 @@ git diff --check
 - 安全规则：单条紧急、客诉、明确人工和非文本继续立即处理；合并后再次用原文、空格归一化和去空白文本复核紧急、客诉、人工及快速安抚，覆盖跨消息拆开的“补/矿泉水”“提/前入住”“human/agent”。原始合并正文仍用于模型和审计展示。
 - 出站与恢复：debounce 阶段安抚使用 `ack` outbox 阶段，最终使用 `final`，幂等键互不覆盖；已有 ACK PENDING/RUNNING 延迟、FAILED 兜底、COMPLETED 正文去重保持不变。
 - 验证：相关回归 `161 passed`；最终禁 live 全量 `941 passed, 15 skipped`，仅有既有 Starlette 弃用警告；Ruff、mypy（105 个源码文件）、compileall、pip check、diff check 全部通过。独立复审两轮发现并验证修复竞态后最终 APPROVED，无 Critical/Important/Minor。
-- 当前仅提交到隔离功能分支；尚未合并、推送或部署生产，等待用户选择集成方式。
+- 集成与部署：功能提交 `5d35e96` 已快进合并到 `main`、推送 GitHub 并部署云服务器；服务器只重建 API，PostgreSQL 容器保持运行。
+- 回滚证据：备份目录 `/opt/yumi-backups/guest-message-debounce-20260820-213459`，包含旧提交、权限收紧的 `.env` 和非空 PostgreSQL 导出（370051 bytes）。
+- 云端验收：服务器代码为 `5d35e96`，Alembic 保持 `0018_stay_checkout_observation (head)`；API 启动日志确认 application startup complete，本机 `127.0.0.1:8000/health` 与公网 `https://akros.icu/health` 均返回 `{"status":"ok"}`。
+- 剩余真实验收：请用户在企业微信连续发送两到三条属于同一问题的文本，间隔均小于三秒；确认三秒静默结束后只产生一组回复和业务处理。
