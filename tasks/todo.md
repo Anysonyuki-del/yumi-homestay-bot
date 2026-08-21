@@ -3416,4 +3416,8 @@ git diff --check
 - 生产失败正文回放生成 144 字纯文本天气简报；保留日期、温度、降雨概率、风力与雨具提醒，不含来源、列表符、重复开场或未经确认的民宿事实。
 - 补丁独立复审：Critical 0、Important 0，Ready；扩大定向 254 项通过。
 - 补丁最终全量：1111 passed、15 skipped；Ruff、mypy、compileall、pip check 和 diff check 全部通过。
+- 补丁提交 `7ad1ef3` 已推送至 GitHub `origin/main`，云端仓库和运行容器均已更新到该版本。
+- 补丁部署前备份位于 `/opt/yumi-backups/weather-fallback-20260821T003746Z`；数据库备份与 `.env` 副本均非空且权限为 600。
+- 补丁部署后内网与公网健康检查均返回 `ok`，Alembic 位于 `0018_stay_checkout_observation (head)`，API 与 PostgreSQL 状态正常。
+- 三个补丁源码文件的宿主机与容器 SHA-256 完全一致；启动日志包含一次 `Application startup complete`，部署后错误计数为 0。
 - 仍需补丁部署后再次发送真实天气消息，只有客人实际收到有效正文才完成 ACCEPT。
