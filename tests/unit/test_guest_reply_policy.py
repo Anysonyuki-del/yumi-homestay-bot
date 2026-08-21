@@ -190,6 +190,18 @@ def test_weather_reply_uses_warm_host_tone_without_changing_facts() -> None:
     ) == reply
 
 
+def test_weather_reply_does_not_duplicate_opener_without_comma() -> None:
+    """模型已使用天气开场但漏写逗号时不得再次追加相同开场。"""
+    reply = prepare_guest_reply(
+        "我帮您看了一下武汉明天多云。",
+        language=Language.ZH,
+        requires_human=False,
+        question="明天天气",
+    )
+
+    assert reply.count("我帮您看了一下") == 1
+
+
 def test_guest_reply_normalizes_only_explicit_markdown_structures() -> None:
     """纯文本转换只处理明确 Markdown，不误删合法星号与下划线。"""
     reply = prepare_guest_reply(

@@ -271,7 +271,7 @@ def _warm_weather_reply(content: str, language: Language) -> str:
         return content
 
     opener = "我帮您看了一下，"
-    if not content.startswith(opener):
+    if not content.startswith("我帮您看了一下"):
         content = f"{opener}{content}"
     if re.search(r"下雨|降雨|阵雨|雷雨", content) and not _ZH_UMBRELLA_PATTERN.search(
         content

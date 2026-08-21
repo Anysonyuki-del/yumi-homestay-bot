@@ -24,6 +24,46 @@ _SOURCE_OR_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _NUMBER_PATTERN = re.compile(r"\d")
+_DUPLICATE_ZH_WEATHER_OPENER_PATTERN = re.compile(
+    r"^(?:我帮您看了一下[，,]?\s*){2,}"
+)
+_SOURCE_DEPENDENT_CAVEAT_PATTERN = re.compile(
+    r"(?:具体)?(?:活动)?(?:时间)?以[^，,。；;\n]{1,50}为准"
+)
+_ZH_EXPLICIT_SOURCE = (
+    r"[^，,。；;）)\n]{0,30}"
+    r"(?:气象台|气象局|文旅局|文化和旅游局|景区|主办方|官方)"
+)
+_ATTRACTION_ATTRIBUTION_PATTERN = re.compile(
+    r"(?P<boundary>^|[（(。；;，,]\s*)"
+    r"(?:据|根据)?(?P<place>[^，,。；;）)\n]{1,20}?)(?:景区|景点官方)"
+    r"(?:(?:发布的?)?(?:预报|信息|数据)(?:显示|称|指出)|"
+    r"称|指出|预报|发布)[，,]\s*"
+)
+_ATTRIBUTION_PATTERNS = (
+    re.compile(
+        r"(?P<boundary>^|[（(。；;，,]\s*)(?:据|根据)"
+        r"[^，,。；;）)\n]{1,50}[，,]\s*"
+    ),
+    re.compile(
+        rf"(?P<boundary>^|[（(。；;，,]\s*){_ZH_EXPLICIT_SOURCE}"
+        r"(?:(?:发布的)?(?:预报|信息|数据)(?:显示|称|指出)|"
+        r"称|指出|预报|发布)[，,]\s*"
+    ),
+    re.compile(
+        r"(?P<boundary>^|[（(。；;，,]\s*)(?:数据|信息|预报)?(?:来自|来源于)"
+        r"[^，,。；;）)\n]{1,50}(?:[，,]\s*|(?=[）)]))"
+    ),
+    re.compile(
+        r"(?P<boundary>^|[.;(]\s*)(?:according to|based on|as reported by)\s+"
+        r"[^,.:;)\n]{1,80}[,:]\s*",
+        re.IGNORECASE,
+    ),
+)
+_LIST_MARKER_PATTERN = re.compile(
+    r"(?m)^[ \t]*(?:[-*+•●▪·][ \t]*|\d{1,2}[.、．）)][ \t]*)"
+)
+_INLINE_LIST_SEPARATOR_PATTERN = re.compile(r"\s+[-*+•●▪·]\s+")
 _CATEGORY_FACT_PATTERNS = (
     re.compile(
         r"天气|气温|温度|阵雨|降雨|下雨|雷雨|晴|多云|阴|伞|雨衣|"
@@ -106,6 +146,22 @@ def _deterministic_fact_fallback(
     body, _evidence_footer = split_tourism_reply(blocked_reply)
     body = redact_sensitive_guest_text(body)
     body = _SOURCE_OR_URL_PATTERN.sub("", body)
+    body = _ATTRACTION_ATTRIBUTION_PATTERN.sub(
+        lambda match: f"{match.group('boundary')}{match.group('place')}",
+        body,
+    )
+    for pattern in _ATTRIBUTION_PATTERNS:
+        body = pattern.sub(lambda match: match.group("boundary"), body)
+    body = re.sub(r"[（(]\s*[）)]", "", body)
+    body = _SOURCE_DEPENDENT_CAVEAT_PATTERN.sub("出发前请再确认", body)
+    body = _DUPLICATE_ZH_WEATHER_OPENER_PATTERN.sub("我帮您看了一下，", body)
+    # 二次发送使用紧凑纯文本，避免列表符和换行再次触发平台安全限制。
+    body = _LIST_MARKER_PATTERN.sub("", body)
+    body = _INLINE_LIST_SEPARATOR_PATTERN.sub("；", body)
+    body = re.sub(r"\s*[•●▪]\s*", "；", body)
+    body = re.sub(r"[\r\n]+", "；", body)
+    body = re.sub(r"；{2,}", "；", body).strip("； ")
+    body = re.sub(r"([。！？!?])；", r"\1", body)
     body = remove_ungrounded_property_claims(body)
     sentences = [
         sentence.strip()
@@ -134,7 +190,7 @@ def _deterministic_fact_fallback(
     fallback = "".join(selected[:3]).strip()
     if fallback:
         safe_fallback = sanitize_guest_reply(
-            fallback[:500].rstrip(),
+            fallback[:500].rstrip("，,；; "),
             language=language,
             requires_human=False,
         )
@@ -160,10 +216,21 @@ def _deterministic_fact_fallback(
                     else zh_labels[label_index]
                 )
                 safe_fallback = f"{label}{safe_fallback}"
-            return safe_fallback
+            return _limit_fallback_reply(safe_fallback)
     if language is Language.EN:
         return "I received your question and am checking the details for you."
     return "我已收到您的问题，正在为您核实相关信息，请稍等片刻。"
+
+
+def _limit_fallback_reply(content: str, limit: int = 320) -> str:
+    """在标签与清洗完成后限制最终长度，并尽量停在完整句末。"""
+    if len(content) <= limit:
+        return content
+    candidate = content[: limit - 1]
+    sentence_ends = [match.end() for match in re.finditer(r"[。！？!?]", candidate)]
+    if sentence_ends and sentence_ends[-1] >= limit // 2:
+        return candidate[: sentence_ends[-1]]
+    return f"{candidate.rstrip('，,；; ')}。"
 
 
 class GuestDeliveryRewriteJobService:

@@ -69,9 +69,26 @@ _EN_SOURCE_NAMES = {
     "武汉市气象服务": "Wuhan Meteorological Service",
     "湖北省气象局": "Hubei Meteorological Service",
 }
-_NATURAL_FOOTER_PREFIXES = (
-    "这是我今天（",
-    "I checked this latest ",
+_NATURAL_FOOTER_PATTERN = re.compile(
+    r"(?:"
+    r"这是我今天（\d{1,2}月\d{1,2}日）帮您查到的"
+    r"(?:最新预报|最新天气信息|最新活动信息|最新票务与开放信息|最新出行信息)，"
+    r"主要参考了[^。\n]+等公开信息。"
+    r"(?:天气可能临时变化，出门前可以再看一眼实时情况。|"
+    r"活动安排可能临时调整，出发前可以再确认一下。|"
+    r"票价和开放安排可能临时调整，出发前可以再确认一下。|"
+    r"出行信息可能临时变化，出发前可以再确认一下。)"
+    r"|"
+    r"I checked this latest (?:forecast|event information|ticket and opening information|"
+    r"travel information) for you today \([A-Z][a-z]+ \d{1,2}\), mainly using "
+    r"public information from .+?\. "
+    r"(?:Weather can change at short notice, so please check the live forecast once "
+    r"more before heading out\.|Event schedules can change, so please confirm once "
+    r"more before heading out\.|Prices and opening arrangements can change, so please "
+    r"confirm once more before heading out\.|Travel information can change, so please "
+    r"check once more before heading out\.)"
+    r")$",
+    re.IGNORECASE,
 )
 
 
@@ -184,11 +201,10 @@ def _plain_text_tourism_body(content: str) -> str:
 
 def split_tourism_reply(reply_text: str) -> tuple[str, str]:
     """拆出本地生成的自然证据收尾，供模型只精炼旅游正文。"""
-    for prefix in _NATURAL_FOOTER_PREFIXES:
-        marker = f"\n\n{prefix}"
-        if marker in reply_text:
-            body, footer = reply_text.split(marker, 1)
-            return body.rstrip(), f"{prefix}{footer}".strip()
+    match = _NATURAL_FOOTER_PATTERN.search(reply_text)
+    if match is not None:
+        body = reply_text[: match.start()]
+        return body.rstrip(), match.group(0).strip()
     return reply_text.rstrip(), ""
 
 

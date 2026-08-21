@@ -10,6 +10,7 @@ from homestay_bot.integrations.deepseek_delivery_rewriter import (
 from homestay_bot.repositories.conversations import DeliveryRewriteContext
 from homestay_bot.services.delivery_rewrite_job import (
     GuestDeliveryRewriteJobService,
+    _deterministic_fact_fallback,
 )
 
 
@@ -171,6 +172,215 @@ async def test_rewrite_failure_uses_weather_fact_fallback_and_notifies_staff() -
     assert len(outbox.staff_sends) == 1
     assert repository.saved is not None
     assert repository.saved["delivery_rewrite_fallback_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_production_weather_fallback_is_short_plain_text_without_sources() -> None:
+    """生产失败正文的本地兜底不得保留来源收尾、列表符或重复开场。"""
+    context = rewrite_context()
+    context.failed_bot.content = (
+        "我帮您看了一下，我帮您看了一下武汉明天（2026年8月22日，周六）的天气。"
+        "• 多云，午后局地有阵雨或雷阵雨\n"
+        "• 气温：最低27℃，最高36℃（部分预报为26～34℃，"
+        "以武汉市气象台最新预报为准）\n"
+        "• 降雨概率约10%，午后阵雨为局地性热雷雨\n"
+        "• 偏北风2～3级，阵风4～5级\n\n"
+        "提醒您：明天是闷热桑拿天，出门带把晴雨伞。"
+        "这是我今天（8月21日）帮您查到的最新预报，主要参考了"
+        "武汉-天气预报、AccuWeather等公开信息。"
+        "天气可能临时变化，出门前可以再看一眼实时情况。"
+    )
+    repository = RepositoryStub(context)
+    rewriter = RewriterStub(DeliveryRewriteUnavailableError("invalid"))
+    outbox = OutboxStub()
+    service = GuestDeliveryRewriteJobService(
+        repository=repository,
+        rewriter=rewriter,
+        outbox_factory=lambda _message_id, _guest_message_id: outbox,
+        before_model=no_op_checkpoint,
+        on_unavailable=lambda _message_id: no_op_checkpoint(),
+        agent_id=1000002,
+        duty_employee_userids=["staff-1"],
+    )
+
+    await service.handle({"message_id": 11})
+
+    content = str(outbox.guest_sends[0][0][2])
+    assert content.count("我帮您看了一下") <= 1
+    assert "•" not in content
+    assert "。；" not in content
+    assert "参考" not in content
+    assert "AccuWeather" not in content
+    assert "8月22日" in content
+    assert "27℃" in content
+    assert len(content) <= 350
+
+
+@pytest.mark.parametrize(
+    ("blocked_reply", "expected_fact"),
+    [
+        ("据武汉市气象台预报，武汉明天多云，气温27℃。", "武汉明天多云"),
+        ("武汉市气象台发布的预报显示，武汉明天有阵雨，气温27℃。", "武汉明天有阵雨"),
+        ("武汉明天多云，气温27℃。（数据来自武汉市气象台）", "气温27℃"),
+        ("武汉明天多云。据武汉市气象台预报，降雨概率10%，气温27℃。", "降雨概率10%"),
+        ("我帮您看了一下，据武汉市气象台预报，武汉明天气温27℃。", "武汉明天气温27℃"),
+        ("据武汉市气象台，武汉明天多云，气温27℃。", "武汉明天多云"),
+        ("信息来自武汉市气象台，武汉明天有阵雨，气温27℃。", "武汉明天有阵雨"),
+        ("武汉市气象台称，武汉明天多云，气温27℃。", "武汉明天多云"),
+        ("武汉市气象台预报，武汉明天多云，气温27℃。", "武汉明天多云"),
+        ("武汉市气象台发布，武汉明天有阵雨，气温27℃。", "武汉明天有阵雨"),
+        (
+            "According to Wuhan Meteorological Service, Wuhan will be cloudy at 27°C.",
+            "Wuhan will be cloudy",
+        ),
+        (
+            "As reported by Wuhan Meteorological Service, Wuhan will be cloudy at 27°C.",
+            "Wuhan will be cloudy",
+        ),
+    ],
+)
+def test_fact_fallback_removes_common_source_attribution(
+    blocked_reply: str,
+    expected_fact: str,
+) -> None:
+    """常见来源表达不得进入二次发送，同时保留后续天气事实。"""
+    language = (
+        Language.EN
+        if blocked_reply.startswith(("According", "As reported"))
+        else Language.ZH
+    )
+    question = "Weather tomorrow" if language is Language.EN else "明天天气"
+    reply = _deterministic_fact_fallback(question, blocked_reply, language)
+
+    assert expected_fact in reply
+    assert "气象台" not in reply
+    assert "数据来自" not in reply
+    assert "预报显示" not in reply
+    assert "According to" not in reply
+    assert "As reported by" not in reply
+
+
+@pytest.mark.parametrize(
+    ("blocked_reply", "expected_subject"),
+    [
+        ("武汉明天天气预报显示，多云，气温27℃。", "武汉明天天气"),
+        ("黄鹤楼开放信息显示，8:30开放，门票70元。", "黄鹤楼开放信息"),
+    ],
+)
+def test_fact_fallback_keeps_non_source_fact_subject(
+    blocked_reply: str,
+    expected_subject: str,
+) -> None:
+    """普通事实主语中的“预报/信息显示”不得被误判为来源。"""
+    reply = _deterministic_fact_fallback("实时信息", blocked_reply, Language.ZH)
+
+    assert expected_subject in reply
+
+
+def test_fact_fallback_preserves_facts_inside_attribution_parentheses() -> None:
+    """括号中的来源引导可删除，但门票和开放时间必须保留。"""
+    reply = _deterministic_fact_fallback(
+        "黄鹤楼门票",
+        "黄鹤楼（据景区公告，门票70元，8:30开放）建议提前预约。",
+        Language.ZH,
+    )
+
+    assert "景区公告" not in reply
+    assert "门票70元" in reply
+    assert "8:30开放" in reply
+
+
+@pytest.mark.parametrize(
+    ("blocked_reply", "place"),
+    [
+        ("黄鹤楼景区称，门票70元，8:30开放。", "黄鹤楼"),
+        ("东湖景区指出，今天正常开放。", "东湖"),
+        ("黄鹤楼景区发布的信息显示，门票70元，8:30开放。", "黄鹤楼"),
+        ("黄鹤楼景区信息显示，门票70元，8:30开放。", "黄鹤楼"),
+        ("据黄鹤楼景区称，门票70元，8:30开放。", "黄鹤楼"),
+    ],
+)
+def test_fact_fallback_keeps_attraction_subject_when_removing_attribution(
+    blocked_reply: str,
+    place: str,
+) -> None:
+    """景点兼作来源时只去机构后缀和归因动词，保留地点主体。"""
+    reply = _deterministic_fact_fallback("景点开放", blocked_reply, Language.ZH)
+
+    assert place in reply
+    assert "景区称" not in reply
+    assert "景区指出" not in reply
+
+
+@pytest.mark.parametrize(
+    "blocked_reply",
+    [
+        "According to Wuhan Meteorological Service: Wuhan will be cloudy, with a high of 27°C.",
+        "According to the ticket office: Yellow Crane Tower is open, with tickets at 70 yuan.",
+    ],
+)
+def test_fact_fallback_english_colon_attribution_preserves_following_fact(
+    blocked_reply: str,
+) -> None:
+    """英文冒号来源只删除冒号前归因，不得吞掉冒号后的天气或票务事实。"""
+    reply = _deterministic_fact_fallback("live information", blocked_reply, Language.EN)
+
+    assert "According to" not in reply
+    assert ("Wuhan will be cloudy" in reply) or ("Yellow Crane Tower is open" in reply)
+
+
+@pytest.mark.parametrize(
+    "blocked_reply",
+    [
+        "黄鹤楼门票70元，具体以景区预约信息为准。",
+        "活动19:30开始，时间以主办方最新信息为准。",
+    ],
+)
+def test_fact_fallback_normalizes_source_dependent_caveat(
+    blocked_reply: str,
+) -> None:
+    """来源依赖提醒应改成自然确认提示，不得留下“具体”等残句。"""
+    reply = _deterministic_fact_fallback("票务活动", blocked_reply, Language.ZH)
+
+    assert "为准" not in reply
+    assert "具体。" not in reply
+    assert "活动时间。" not in reply
+    assert "请再确认" in reply
+
+
+@pytest.mark.parametrize("marker", ["-", "*", "+", "•", "●", "▪", "·", "1."])
+def test_fact_fallback_removes_common_list_markers(marker: str) -> None:
+    """二次发送必须去掉 Markdown、圆点和编号列表标记。"""
+    blocked_reply = f"{marker} 多云\n{marker} 气温27℃\n{marker} 降雨概率10%"
+
+    reply = _deterministic_fact_fallback("明天天气", blocked_reply, Language.ZH)
+
+    assert marker not in reply
+    assert "多云" in reply
+    assert "27℃" in reply
+
+
+@pytest.mark.parametrize("marker", ["*", "+", "•", "●", "▪", "·"])
+def test_fact_fallback_removes_inline_list_separators(marker: str) -> None:
+    """带空格的单行列表分隔符也必须转换为普通标点。"""
+    reply = _deterministic_fact_fallback(
+        "明天天气",
+        f"多云 {marker} 气温27℃ {marker} 降雨概率10%。",
+        Language.ZH,
+    )
+
+    assert marker not in reply
+    assert "27℃" in reply
+
+
+def test_fact_fallback_final_reply_never_exceeds_320_characters() -> None:
+    """分类标签追加后仍必须满足二次发送的最终长度上限。"""
+    blocked_reply = "武汉明天多云，气温27℃，" + "午后局地阵雨，" * 60 + "出门带伞。"
+
+    reply = _deterministic_fact_fallback("明天天气", blocked_reply, Language.ZH)
+
+    assert len(reply) <= 320
+    assert reply.endswith(("。", "！", "？"))
 
 
 @pytest.mark.asyncio

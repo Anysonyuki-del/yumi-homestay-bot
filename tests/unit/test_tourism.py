@@ -8,6 +8,7 @@ from homestay_bot.integrations.tourism import (
     format_tourism_reply,
     is_tourism_query,
     latest_user_question,
+    split_tourism_reply,
 )
 
 
@@ -75,6 +76,63 @@ def test_latest_user_question_drops_conversation_history() -> None:
         "role": "user",
         "content": "武汉最近有什么展览？",
     }
+
+
+def test_split_tourism_reply_finds_footer_after_whitespace_is_flattened() -> None:
+    """统一回复策略压平换行后仍应识别本地生成的自然来源收尾。"""
+    body, footer = split_tourism_reply(
+        "武汉明天多云。这是我今天（8月21日）帮您查到的最新预报，"
+        "主要参考了武汉市气象台等公开信息。"
+        "天气可能临时变化，出门前可以再看一眼实时情况。"
+    )
+
+    assert body == "武汉明天多云。"
+    assert footer.startswith("这是我今天（8月21日）")
+
+
+@pytest.mark.parametrize(
+    "reply_text",
+    [
+        "这是我今天（8月21日）整理的东湖路线：乘地铁8号线。",
+        "武汉明天多云。这是我今天（8月21日）拍到的活动海报，演出19:30开始。",
+        "I checked this latest route twice before recommending it.",
+        (
+            "这是我今天（8月21日）帮您查到的最新天气信息，主要参考了"
+            "游客反馈等公开信息。随后我们去东湖。"
+        ),
+        (
+            "I checked this latest forecast for you today (August 21), mainly using "
+            "public information from visitor comments. Then we went to East Lake."
+        ),
+    ],
+)
+def test_split_tourism_reply_does_not_strip_ordinary_similar_text(
+    reply_text: str,
+) -> None:
+    """只有完整本地证据收尾可拆分，相似的普通正文必须原样保留。"""
+    body, footer = split_tourism_reply(reply_text)
+
+    assert body == reply_text
+    assert footer == ""
+
+
+@pytest.mark.parametrize("source_name", ["Wuhan Gov. Portal", "U.S. Embassy Wuhan"])
+def test_split_tourism_reply_accepts_periods_inside_english_source_name(
+    source_name: str,
+) -> None:
+    """英文可读来源名含句点时，formatter 与 splitter 仍须完整往返。"""
+    formatted = format_tourism_reply(
+        "Wuhan will be cloudy tomorrow.",
+        [(source_name, "https://example.org/weather")],
+        date(2026, 8, 21),
+        language="en",
+        category="weather",
+    )
+
+    body, footer = split_tourism_reply(formatted)
+
+    assert body == "Wuhan will be cloudy tomorrow."
+    assert source_name in footer
 
 
 def test_weather_reply_uses_natural_evidence_footer_without_markdown() -> None:
