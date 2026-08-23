@@ -7,7 +7,7 @@
 - [x] 建立单一应用版本来源并补自动化测试
 - [x] 归并近期改动经验，更新项目入口与长期手册
 - [x] 执行定向/全量验证、静态检查和文档一致性检查
-- [ ] 经用户确认后提交、打版本标签并部署云端
+- [x] 经用户确认后提交、打版本标签并部署云端
 
 ## Review
 
@@ -17,7 +17,12 @@
 - `YuMi民宿AI项目总结.txt` 含真实入住资料，始终排除在读取内容、文档归并和提交范围之外；README 与手册敏感标记扫描通过。
 - 文档内全部 Python `文件::函数` 引用已在当前源码解析通过；标准隔离构建生成 `homestay_bot-1.0.0` wheel，METADATA 中名称和版本一致。
 - 扩大定向测试 34 项通过；禁真实契约全量 `1117 passed, 15 skipped`；Ruff、mypy（108 个源码文件）、compileall、pip check、JavaScript 语法和 diff check 全部通过。
-- 当前尚未提交、创建 `v1.0.0` 标签或部署，等待用户确认发布动作。
+- 发布提交 `76e31a1` 已推送 GitHub，轻量与解引用后的 `v1.0.0` 标签均指向该提交；敏感项目总结未进入 Git。
+- 云端部署前备份位于 `/opt/yumi-backups/v1.0.0-20260823T213543Z`；PostgreSQL 自定义格式备份已通过目录校验，环境配置与私有上传按存在情况备份。
+- 云服务器访问 GitHub 时发生一次 GnuTLS 中断，仓库和容器均未变化；改用经 `git bundle verify` 校验的完整 bundle 后 fast-forward，未覆盖 3 个既有环境备份文件。
+- API 镜像构建安装 `homestay-bot==1.0.0`，容器内 `get_app_version()` 返回 `1.0.0`；PostgreSQL 保持 healthy，Alembic current/head 均为 `0018_stay_checkout_observation`。
+- 云端本机及公网 `/health` 均返回 `ok`，公网 OpenAPI 版本为 `1.0.0`，新版 CSS 包含 `.app-version`；未登录后台返回 401。
+- 部署后 API 重启次数为 0，近 10 分钟错误关键词计数为 0，云端 tracked worktree 干净。
 
 # 历史任务：运营后台前端视觉与交互优化
 
