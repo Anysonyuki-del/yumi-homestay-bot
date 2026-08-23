@@ -8,8 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as package_version
 from typing import Any, BinaryIO, cast
 from zoneinfo import ZoneInfo
 
@@ -173,6 +171,7 @@ from homestay_bot.services.runtime_config_service import (
 from homestay_bot.services.runtime_config_tester import RuntimeConfigTester
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 from homestay_bot.services.task_page_service import TaskPageService
+from homestay_bot.version import get_app_version
 from homestay_bot.worker import (
     JobHandler,
     RetrySafeJobError,
@@ -2762,10 +2761,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         web_search_status_getter=web_search_state.get,
         contact_sync_configured=False,
     )
-    try:
-        app_version = package_version("homestay-bot")
-    except PackageNotFoundError:
-        app_version = "0.1.0"
+    app_version = get_app_version()
     diagnostics_repository = SessionAdminDiagnosticsRepository(factory)
     app.state.admin_diagnostics_service = AdminDiagnosticsService(
         health=app.state.health_service,

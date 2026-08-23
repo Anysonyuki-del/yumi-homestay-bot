@@ -167,7 +167,9 @@ tbody tr:hover { background: #fafcff; }
 .side-nav a, .account-link { display: flex; min-height: 40px; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 6px; color: #475569; font-weight: 550; text-decoration: none; transition: color 160ms ease, background-color 160ms ease; }
 .side-nav a:hover, .account-link:hover { color: #0f172a; background: #f8fafc; }
 .side-nav a[aria-current="page"] { color: var(--primary-hover); background: var(--primary-soft); font-weight: 650; }
-.account-link { margin-top: auto; border-top: 1px solid var(--line); border-radius: 0; }
+.sidebar-footer { display: grid; gap: 4px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); }
+.account-link { border-radius: 0; }
+.app-version { padding: 0 9px; color: #94a3b8; font-size: .68rem; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 .icon-button { display: inline-grid; width: 44px; min-width: 44px; height: 44px; padding: 0; place-items: center; border: 0; border-radius: 6px; color: #475569; background: transparent; }
 .icon-button:hover { color: #0f172a; background: #f1f5f9; }
 .drawer-close { position: absolute; top: 10px; right: 8px; }

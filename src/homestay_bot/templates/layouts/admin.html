@@ -46,7 +46,10 @@
           </div>
           {% endif %}
         </nav>
-        <a class="account-link" href="/employee/account">{{ icons.icon("user") }}<span>账号安全</span></a>
+        <div class="sidebar-footer">
+          <a class="account-link" href="/employee/account">{{ icons.icon("user") }}<span>账号安全</span></a>
+          <span class="app-version" title="应用发布版本 {{ app_version }}">{{ app_version_label }}</span>
+        </div>
       </aside>
       <div class="drawer-backdrop" data-drawer-close hidden></div>
       <div class="admin-workspace">

@@ -25,6 +25,7 @@ from homestay_bot.routes.properties import router as properties_router
 from homestay_bot.routes.runtime_config import router as runtime_config_router
 from homestay_bot.routes.tasks import router as tasks_router
 from homestay_bot.routes.wecom_callback import router as wecom_callback_router
+from homestay_bot.version import get_app_version
 
 
 def _session_configuration() -> tuple[str, bool]:
@@ -49,6 +50,7 @@ configure_logging_redaction()
 
 app = FastAPI(
     title="武汉民宿客服机器人",
+    version=get_app_version(),
     lifespan=application_lifespan,
 )
 app.add_middleware(

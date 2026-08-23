@@ -23,6 +23,7 @@ from homestay_bot.domain.enums import (
     ReminderType,
     RoomOperationalStatus,
 )
+from homestay_bot.version import get_app_version, get_app_version_label
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
@@ -135,9 +136,18 @@ def safe_external_url(value: object) -> str:
     return value
 
 
+def base_template_context(_request: object) -> dict[str, str]:
+    """为全部后台模板提供统一产品名称和发布版本。"""
+    return {
+        "app_name": "YuMi 管理后台",
+        "app_version": get_app_version(),
+        "app_version_label": get_app_version_label(),
+    }
+
+
 templates = Jinja2Templates(
     directory=Path(__file__).resolve().parent / "templates",
-    context_processors=[lambda _request: {"app_name": "YuMi 管理后台"}],
+    context_processors=[base_template_context],
 )
 templates.env.filters.update(
     {

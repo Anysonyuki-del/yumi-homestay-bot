@@ -99,6 +99,7 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     assert _contrast_ratio("#2563eb", "#f7f8fa") >= 3
     assert _contrast_ratio("#2563eb", "#ffffff") >= 3
     assert ".data-table" in css
+    assert ".app-version" in css
     assert "font-variant-numeric: tabular-nums" in css
     assert ".page-content > .panel + .panel" in css
     assert "detail-section + .detail-section" in css
@@ -117,6 +118,22 @@ def test_admin_shell_uses_grouped_lightweight_navigation() -> None:
     assert "系统管理" in layout
     assert "topbar__eyebrow" not in layout
     assert layout.count("{{ page_title }}") == 2  # title 元素与唯一可见 h1
+    assert 'class="app-version"' in layout
+    assert "{{ app_version_label }}" in layout
+
+
+def test_admin_template_context_exposes_one_release_version(monkeypatch) -> None:
+    """全部后台页面必须复用同一应用版本上下文。"""
+    monkeypatch.setattr(web, "get_app_version", lambda: "1.2.3")
+    monkeypatch.setattr(web, "get_app_version_label", lambda: "v1.2.3")
+
+    context = web.base_template_context(object())
+
+    assert context == {
+        "app_name": "YuMi 管理后台",
+        "app_version": "1.2.3",
+        "app_version_label": "v1.2.3",
+    }
 
 
 def test_core_list_templates_share_desktop_table_and_mobile_card_patterns() -> None:
