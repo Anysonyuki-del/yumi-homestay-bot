@@ -4,8 +4,17 @@
 - [x] 对比公网 CSS 与浏览器计算样式，确认固定静态 URL 导致缓存未失效
 - [x] 将补丁版本提升到 `v1.0.1`，CSS/JS URL 使用应用版本作为缓存键
 - [x] 补充静态资源版本契约测试与长期防回归规则
-- [ ] 完成定向/全量验证、构建、提交、标签和云端部署
-- [ ] 使用同一 Chrome 页面验证侧栏 176px、顶栏 56px、浅色主题和 `v1.0.1`
+- [x] 完成定向/全量验证、构建、提交、标签和云端部署
+- [x] 使用同一 Chrome 页面验证侧栏 176px、顶栏 56px、浅色主题和 `v1.0.1`
+
+## Review
+
+- 根因证据：公网 CSS 哈希与本地一致且包含 176px/56px 新规则，但已打开 Chrome 的计算样式仍为 240px/68px 深蓝旧主题；HTML、容器和版本均已更新，只有固定 URL 的 CSS 命中旧缓存。
+- 修复：发布 `v1.0.1`，公共模板为 CSS 和 JavaScript URL 附加 `app_version` 查询参数；静态契约和真实路由测试同时锁定 `?v=`，防止退回固定 URL。
+- 验证：定向 18 项通过；禁真实契约全量 `1117 passed, 15 skipped`；Ruff、mypy（108 个源码文件）、compileall、pip check、JavaScript 语法、diff check 与 `homestay_bot-1.0.1` wheel 构建全部通过。
+- 发布提交 `17d22de` 和 `v1.0.1` 标签已推送并部署；备份位于 `/opt/yumi-backups/v1.0.1-20260823T214444Z`，PostgreSQL 备份已通过目录校验。
+- 同一 Chrome 页面刷新后实际请求 `/static/app.css?v=1.0.1` 与 `/static/admin.js?v=1.0.1`；计算样式为侧栏 176px、顶栏 56px、白色侧栏和浅灰背景，版本显示 `v1.0.1`。
+- 公网版本为 `1.0.1` 且 `/health` 返回 `ok`；PostgreSQL healthy，API 重启次数和近 10 分钟错误计数均为 0。
 
 # 历史任务：建立发布版本并整理工程经验文档
 
