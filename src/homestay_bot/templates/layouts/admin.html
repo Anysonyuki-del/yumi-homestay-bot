@@ -7,6 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow">
     <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f7f8fa">
     <title>{% block title %}{{ page_title }} · {{ app_name }}{% endblock %}</title>
     <link rel="stylesheet" href="/static/app.css">
     <script src="/static/admin.js" defer></script>
@@ -15,9 +16,11 @@
     <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div class="admin-shell">
       <aside class="admin-sidebar" id="admin-drawer" aria-label="后台导航" data-drawer inert aria-hidden="true">
-        <div class="brand"><span class="brand__mark">Y</span><span>YuMi<br><small>民宿运营台</small></span></div>
+        <div class="brand"><span class="brand__mark" aria-hidden="true">Y</span><span>YuMi<small>民宿运营台</small></span></div>
         <button class="icon-button drawer-close" type="button" aria-label="关闭导航" data-drawer-close>{{ icons.icon("close") }}</button>
         <nav class="side-nav">
+          <div class="nav-group">
+            <p class="nav-group__label">运营</p>
           {% if nav_is_admin %}
           <a href="/employee/admin" {% if active_nav == "dashboard" %}aria-current="page"{% endif %}>{{ icons.icon("home") }}<span>总览</span></a>
           {% endif %}
@@ -25,13 +28,22 @@
           {% if nav_is_admin %}
           <a href="/employee/approvals" {% if active_nav == "approvals" %}aria-current="page"{% endif %}>{{ icons.icon("calendar") }}<span>预订审批</span></a>
           <a href="/employee/properties" {% if active_nav == "properties" %}aria-current="page"{% endif %}>{{ icons.icon("rooms") }}<span>房源管理</span></a>
+          {% endif %}
+          </div>
+          <div class="nav-group">
+            <p class="nav-group__label">客户与内容</p>
+          {% if nav_is_admin %}
           <a href="/employee/customers" {% if active_nav == "customers" %}aria-current="page"{% endif %}>{{ icons.icon("people") }}<span>客户管理</span></a>
           {% endif %}
           <a href="/employee/knowledge" {% if active_nav == "knowledge" %}aria-current="page"{% endif %}>{{ icons.icon("book") }}<span>知识库</span></a>
+          </div>
           {% if nav_is_admin %}
+          <div class="nav-group">
+            <p class="nav-group__label">系统管理</p>
           <a href="/employee/admin/debug" {% if active_nav == "debug" %}aria-current="page"{% endif %}>{{ icons.icon("pulse") }}<span>AI 调试台</span></a>
           <a href="/employee/admin/diagnostics" {% if active_nav == "diagnostics" %}aria-current="page"{% endif %}>{{ icons.icon("pulse") }}<span>系统诊断</span></a>
           <a href="/employee/admin/settings" {% if active_nav == "settings" %}aria-current="page"{% endif %}>{{ icons.icon("settings") }}<span>接口设置</span></a>
+          </div>
           {% endif %}
         </nav>
         <a class="account-link" href="/employee/account">{{ icons.icon("user") }}<span>账号安全</span></a>
@@ -40,8 +52,8 @@
       <div class="admin-workspace">
         <header class="topbar">
           <button class="icon-button drawer-trigger" type="button" aria-controls="admin-drawer" aria-expanded="false" aria-label="打开导航" data-drawer-open>{{ icons.icon("menu") }}</button>
-          <div><p class="topbar__eyebrow">YuMi 民宿</p><strong>{{ page_title }}</strong></div>
-          <a class="topbar__account" href="/employee/account" aria-label="账号安全">{{ icons.icon("user") }}</a>
+          <span class="topbar__brand">YuMi 民宿运营台</span>
+          <a class="topbar__account" href="/employee/account" aria-label="账号安全">{{ icons.icon("user") }}<span>账号安全</span></a>
         </header>
         <details class="no-script-nav">
           <summary>打开页面导航</summary>
@@ -52,7 +64,7 @@
           {% if error %}<div class="alert alert--danger" role="alert">{{ error }}</div>{% endif %}
           {% if flash %}<div class="alert alert--success" role="status">{{ flash }}</div>{% endif %}
           {% if notice %}<div class="alert alert--success" role="status">{{ notice }}</div>{% endif %}
-          {% block page_header %}<header class="content-header"><div><p class="eyebrow">运营工作台</p><h1>{{ page_title }}</h1></div>{% block page_actions %}{% endblock %}</header>{% endblock %}
+          {% block page_header %}<header class="content-header"><h1>{{ page_title }}</h1>{% block page_actions %}{% endblock %}</header>{% endblock %}
           {% block content %}{% endblock %}
         </main>
       </div>

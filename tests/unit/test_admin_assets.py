@@ -47,7 +47,7 @@ def test_no_javascript_navigation_reaches_every_core_admin_page() -> None:
 
 
 def test_admin_javascript_contract_covers_accessible_progressive_enhancements() -> None:
-    """静态契约锁定抽屉、危险确认、脏表单和重复提交保护。"""
+    """静态契约锁定抽屉、危险确认、脏表单和可感知提交状态。"""
     script = (ASSET_ROOT / "static/admin.js").read_text()
 
     assert 'event.key === "Escape"' in script
@@ -63,6 +63,10 @@ def test_admin_javascript_contract_covers_accessible_progressive_enhancements() 
     assert "dirtyForms.delete(form)" in script
     assert "dirtyForms.size === 0" in script
     assert 'form.dataset.submitting === "true"' in script
+    assert "setSubmittingState" in script
+    assert 'submitter.dataset.originalLabel' in script
+    assert 'submitter.textContent = "正在处理…"' in script
+    assert 'submitter.setAttribute("aria-busy", "true")' in script
     assert "event.preventDefault()" in script
     assert 'workspace.setAttribute("aria-hidden", "true")' in script
     assert "workspace.inert = true" in script
@@ -81,8 +85,10 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     assert "transform: translateX(-105%)" in css
     for width in (375, 768, 1024, 1440):
         assert f"@media (min-width: {width}px)" in css
-    assert ":focus-visible { outline: 3px solid #1d4ed8" in css
-    assert ".admin-sidebar :focus-visible { outline-color: var(--gold)" in css
+    assert "--primary: #2563eb" in css
+    assert "--sidebar-width: 176px" in css
+    assert "--topbar-height: 56px" in css
+    assert ":focus-visible { outline: 3px solid var(--primary)" in css
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert "body {" in css and "overflow-x: clip" not in css and "overflow-x: hidden" not in css
     assert "overflow-wrap: anywhere" in css
@@ -90,15 +96,41 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     assert "overflow: auto" in css
     assert "white-space: pre-wrap" in css
     assert "overscroll-behavior" in css
-    assert _contrast_ratio("#1d4ed8", "#f8fafc") >= 3
-    assert _contrast_ratio("#1d4ed8", "#ffffff") >= 3
-    # 侧栏链接和关闭按钮位于深海军蓝背景，必须使用独立不透明焦点色。
-    assert _contrast_ratio("#ca8a04", "#172554") >= 3
+    assert _contrast_ratio("#2563eb", "#f7f8fa") >= 3
+    assert _contrast_ratio("#2563eb", "#ffffff") >= 3
+    assert ".data-table" in css
+    assert "font-variant-numeric: tabular-nums" in css
     assert ".page-content > .panel + .panel" in css
     assert "detail-section + .detail-section" in css
     assert " .panel + .panel" not in css.replace(
         ".page-content > .panel + .panel", ""
     )
+
+
+def test_admin_shell_uses_grouped_lightweight_navigation() -> None:
+    """桌面后台应使用分组导航和唯一页面标题，避免重复标题占用首屏。"""
+    layout = (ASSET_ROOT / "templates/layouts/admin.html").read_text()
+
+    assert 'class="nav-group"' in layout
+    assert "运营" in layout
+    assert "客户与内容" in layout
+    assert "系统管理" in layout
+    assert "topbar__eyebrow" not in layout
+    assert layout.count("{{ page_title }}") == 2  # title 元素与唯一可见 h1
+
+
+def test_core_list_templates_share_desktop_table_and_mobile_card_patterns() -> None:
+    """核心运营列表应统一桌面扫描方式，同时保留移动卡片。"""
+    template_root = ASSET_ROOT / "templates"
+    for relative_path in (
+        "customers/index.html",
+        "properties/index.html",
+        "tasks/index.html",
+        "approvals/index.html",
+    ):
+        source = (template_root / relative_path).read_text()
+        assert 'class="data-table"' in source
+        assert "mobile-card-list" in source
 
 
 def test_business_templates_extend_one_admin_shell() -> None:

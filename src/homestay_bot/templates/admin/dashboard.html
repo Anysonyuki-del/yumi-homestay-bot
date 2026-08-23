@@ -3,23 +3,24 @@
 {% block title %}运营总览 · {{ app_name }}{% endblock %}
 {% block content %}
 <section class="metric-grid" aria-label="今日运营摘要">
-  <article class="metric-card"><span>今日入住</span><strong>{{ snapshot.check_in_count }}</strong><small>{{ snapshot.local_date|date_zh }}</small></article>
-  <article class="metric-card"><span>今日退房</span><strong>{{ snapshot.check_out_count }}</strong><small>请及时确认房态</small></article>
-  <article class="metric-card"><span>待办任务</span><strong>{{ snapshot.pending_task_count }}</strong><a href="/employee/tasks">查看任务</a></article>
-  <article class="metric-card"><span>待审批</span><strong>{{ snapshot.pending_approval_count }}</strong><a href="/employee/approvals">查看审批</a></article>
-  <article class="metric-card metric-card--attention"><span>需人工关注</span><strong>{{ snapshot.manual_attention_count }}</strong><small>客诉、凭证与提醒</small></article>
+  <article class="metric-item"><span>今日入住</span><strong>{{ snapshot.check_in_count }}</strong><small>{{ snapshot.local_date|date_zh }}</small></article>
+  <article class="metric-item"><span>今日退房</span><strong>{{ snapshot.check_out_count }}</strong><small>及时确认房态</small></article>
+  <article class="metric-item"><span>启用房间</span><strong>{{ snapshot.active_room_count }}</strong><small>当前运营房源</small></article>
+  <article class="metric-item"><span>待办任务</span><strong>{{ snapshot.pending_task_count }}</strong><a href="/employee/tasks">查看任务</a></article>
+  <article class="metric-item"><span>待审批</span><strong>{{ snapshot.pending_approval_count }}</strong><a href="/employee/approvals">查看审批</a></article>
+  <article class="metric-item metric-item--attention"><span>需人工关注</span><strong>{{ snapshot.manual_attention_count }}</strong><small>客诉、凭证与提醒</small></article>
 </section>
 
 <div class="dashboard-grid">
   <section class="panel">
-    <div class="panel__header"><div><p class="eyebrow">今日动线</p><h2>入住与退房</h2></div></div>
+    <div class="panel__header"><div><p class="eyebrow">今日动线</p><h2>入住与退房</h2></div><small>{{ snapshot.local_date|date_zh }}</small></div>
     <div class="stay-columns">
       <div><h3>入住 · {{ snapshot.check_in_count }}</h3>
-        {% if snapshot.arrivals %}<ul class="clean-list">{% for stay in snapshot.arrivals %}<li><strong>{{ stay.room_title }}</strong>{{ ui.badge("今日入住", "info") }}</li>{% endfor %}</ul>
+        {% if snapshot.arrivals %}<ul class="clean-list stay-list">{% for stay in snapshot.arrivals %}<li><strong>{{ stay.room_title }}</strong>{{ ui.badge("今日入住", "info") }}</li>{% endfor %}</ul>
         {% else %}{{ ui.empty("今日暂无入住", "新订单同步后会显示在这里。") }}{% endif %}
       </div>
       <div><h3>退房 · {{ snapshot.check_out_count }}</h3>
-        {% if snapshot.departures %}<ul class="clean-list">{% for stay in snapshot.departures %}<li><strong>{{ stay.room_title }}</strong>{{ ui.badge("今日退房", "gold") }}</li>{% endfor %}</ul>
+        {% if snapshot.departures %}<ul class="clean-list stay-list">{% for stay in snapshot.departures %}<li><strong>{{ stay.room_title }}</strong>{{ ui.badge("今日退房", "gold") }}</li>{% endfor %}</ul>
         {% else %}{{ ui.empty("今日暂无退房", "可以继续关注房态和待办任务。") }}{% endif %}
       </div>
     </div>

@@ -213,7 +213,8 @@ def test_property_pages_use_admin_shell_and_protect_credential_replacement(
 
     assert '/static/admin.js' in index.text
     assert 'href="/employee/properties" aria-current="page"' in detail.text
-    assert 'class="property-grid"' in index.text
+    assert 'class="data-table"' in index.text
+    assert 'class="mobile-card-list clean-list"' in index.text
     assert detail.text.count('data-unsaved-warning') >= 2
     assert (
         'action="/employee/properties/101/credentials" data-confirm='

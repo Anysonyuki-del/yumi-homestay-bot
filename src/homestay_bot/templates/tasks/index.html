@@ -10,18 +10,10 @@
     </div>
     {{ ui.badge("管理员视图" if is_admin else "员工视图", "info") }}
   </div>
-  <ul class="task-list clean-list">
-    {% for task in tasks %}
-    <li>
-      <a class="task-row" href="/employee/tasks/{{ task.id }}">
-        <span><strong>{{ task.task_type | status_zh }}</strong><small>{{ task.service_date | date_zh }} · 房间 {{ task.property_id or "待确认" }}</small></span>
-        {{ ui.badge(task.status | status_zh, "warning" if task.status.value in ["pending_confirmation", "pending_assignment", "pending_inspection"] else "neutral") }}
-      </a>
-    </li>
-    {% else %}
-    <li>{{ ui.empty("当前没有需要处理的任务", "新任务会在分派后出现在这里。") }}</li>
-    {% endfor %}
-  </ul>
+  <div class="responsive-table"><table class="data-table"><thead><tr><th>任务类型</th><th>服务日期</th><th>房源</th><th>状态</th><th><span class="visually-hidden">操作</span></th></tr></thead><tbody>
+    {% for task in tasks %}<tr><td><strong>{{ task.task_type | status_zh }}</strong></td><td>{{ task.service_date | date_zh }}</td><td>{{ task.property_id or "待确认" }}</td><td>{{ ui.badge(task.status | status_zh, "warning" if task.status.value in ["pending_confirmation", "pending_assignment", "pending_inspection"] else "neutral") }}</td><td><a class="table-action" href="/employee/tasks/{{ task.id }}">处理任务</a></td></tr>{% else %}<tr><td colspan="5">当前没有需要处理的任务。</td></tr>{% endfor %}
+  </tbody></table></div>
+  <ul class="mobile-card-list clean-list">{% for task in tasks %}<li><a class="mobile-record-card" href="/employee/tasks/{{ task.id }}"><span><strong>{{ task.task_type | status_zh }}</strong> {{ ui.badge(task.status | status_zh, "warning" if task.status.value in ["pending_confirmation", "pending_assignment", "pending_inspection"] else "neutral") }}</span><small>{{ task.service_date | date_zh }} · 房源 {{ task.property_id or "待确认" }}</small></a></li>{% else %}<li>{{ ui.empty("当前没有需要处理的任务", "新任务会在分派后出现在这里。") }}</li>{% endfor %}</ul>
   {{ ui.pagination("/employee/tasks", page, previous_page, next_page) }}
 </section>
 {% endblock %}

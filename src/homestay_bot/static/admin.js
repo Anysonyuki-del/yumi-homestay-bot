@@ -128,6 +128,19 @@ window.addEventListener("beforeunload", (event) => {
   event.returnValue = "";
 });
 
+/** 在浏览器确认提交后锁定提交按钮，并提供可感知的处理中反馈。 */
+function setSubmittingState(submitter) {
+  if (!(submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement)) return;
+  submitter.dataset.originalLabel = submitter instanceof HTMLInputElement
+    ? submitter.value
+    : submitter.textContent || "";
+  if (submitter instanceof HTMLInputElement) submitter.value = "正在处理…";
+  else submitter.textContent = "正在处理…";
+  submitter.setAttribute("aria-busy", "true");
+  submitter.setAttribute("aria-disabled", "true");
+  submitter.disabled = true;
+}
+
 document.querySelectorAll("form").forEach((form) => {
   form.addEventListener("submit", (event) => {
     // 被确认框等前置校验取消时不得锁定表单；仅首个有效提交进入锁定状态。
@@ -137,11 +150,13 @@ document.querySelectorAll("form").forEach((form) => {
       return;
     }
     form.dataset.submitting = "true";
-    const submitter = form.querySelector('button[type="submit"], input[type="submit"]');
-    if (!(submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement)) return;
+    const requestedSubmitter = event.submitter;
+    const submitter = requestedSubmitter instanceof HTMLElement
+      ? requestedSubmitter
+      : form.querySelector('button[type="submit"], input[type="submit"]');
+    // 延迟到浏览器完成本次提交事件后再禁用，避免丢失带 name/value 的提交按钮。
     window.setTimeout(() => {
-      submitter.disabled = true;
-      submitter.setAttribute("aria-disabled", "true");
+      setSubmittingState(submitter);
     }, 0);
   });
 });

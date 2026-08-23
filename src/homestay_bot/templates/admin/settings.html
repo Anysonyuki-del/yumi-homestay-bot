@@ -22,29 +22,29 @@
 
     <fieldset class="config-group">
       <legend>DeepSeek</legend>
-      <label>API Key <small>{{ page.view.deepseek_api_key }}</small><input type="password" name="deepseek_api_key" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+      <label>API Key <small>{{ page.view.deepseek_api_key }}</small><input type="password" name="deepseek_api_key" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
       <label>接口地址<input type="url" name="deepseek_base_url" maxlength="2048" value="{{ page.view.deepseek_base_url }}" required></label>
       <label>模型名称<input type="text" name="deepseek_model" maxlength="256" value="{{ page.view.deepseek_model }}" required></label>
     </fieldset>
 
     <fieldset class="config-group">
       <legend>百居易</legend>
-      <label>Access Token <small>{{ page.view.hostex_access_token }}</small><input type="password" name="hostex_access_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
-      <label>Webhook Secret <small>{{ page.view.hostex_webhook_secret_token }}</small><input type="password" name="hostex_webhook_secret_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+      <label>Access Token <small>{{ page.view.hostex_access_token }}</small><input type="password" name="hostex_access_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
+      <label>Webhook Secret <small>{{ page.view.hostex_webhook_secret_token }}</small><input type="password" name="hostex_webhook_secret_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
       <label>对账间隔（秒）<input type="number" name="hostex_reconcile_interval_seconds" min="60" max="86400" step="1" value="{{ page.view.hostex_reconcile_interval_seconds|int }}" required></label>
     </fieldset>
 
     <fieldset class="config-group config-group--wide">
       <legend>企业微信</legend>
       <div class="form-grid">
-        <label>企业 ID <small>{{ page.view.wecom_corp_id }}</small><input type="password" name="wecom_corp_id" maxlength="256" autocomplete="new-password" placeholder="留空保留原值"></label>
-        <label>微信客服 Secret <small>{{ page.view.wecom_kf_secret }}</small><input type="password" name="wecom_kf_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
-        <label>回调 Token <small>{{ page.view.wecom_callback_token }}</small><input type="password" name="wecom_callback_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
-        <label>EncodingAESKey <small>{{ page.view.wecom_encoding_aes_key }}</small><input type="password" name="wecom_encoding_aes_key" maxlength="43" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>企业 ID <small>{{ page.view.wecom_corp_id }}</small><input type="password" name="wecom_corp_id" maxlength="256" autocomplete="new-password" placeholder="留空保留原值…"></label>
+        <label>微信客服 Secret <small>{{ page.view.wecom_kf_secret }}</small><input type="password" name="wecom_kf_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
+        <label>回调 Token <small>{{ page.view.wecom_callback_token }}</small><input type="password" name="wecom_callback_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
+        <label>EncodingAESKey <small>{{ page.view.wecom_encoding_aes_key }}</small><input type="password" name="wecom_encoding_aes_key" maxlength="43" autocomplete="new-password" placeholder="留空保留原值…"></label>
         <label>应用 AgentId<input type="number" name="wecom_agent_id" min="1" {% if page.view.wecom_agent_id > 0 %}value="{{ page.view.wecom_agent_id }}"{% endif %} required></label>
-        <label>应用 Secret <small>{{ page.view.wecom_agent_secret }}</small><input type="password" name="wecom_agent_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
-        <label>Contact Secret <small>{{ page.view.wecom_contact_secret }}</small><input type="password" name="wecom_contact_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
-        <label>值班成员 <small>{{ page.view.wecom_duty_userids }}</small><input type="password" name="wecom_duty_userids" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值"></label>
+        <label>应用 Secret <small>{{ page.view.wecom_agent_secret }}</small><input type="password" name="wecom_agent_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
+        <label>Contact Secret <small>{{ page.view.wecom_contact_secret }}</small><input type="password" name="wecom_contact_secret" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
+        <label>值班成员 <small>{{ page.view.wecom_duty_userids }}</small><input type="password" name="wecom_duty_userids" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
         <label>消息补拉间隔（秒）<input type="number" name="wecom_poll_interval_seconds" min="5" max="300" step="1" value="{{ page.view.wecom_poll_interval_seconds|int }}" required></label>
       </div>
       <label class="check-row"><input type="checkbox" name="clear_wecom_contact_secret" value="true">明确清除 Contact Secret（将停用客户联系标签同步）</label>

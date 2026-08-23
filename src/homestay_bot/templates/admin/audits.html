@@ -4,13 +4,13 @@
 <section class="panel">
   <div class="panel__header"><div><p class="eyebrow">安全审计</p><h2>最近操作</h2></div><a href="/employee/admin/diagnostics">返回系统诊断</a></div>
   <p>这里只展示动作、对象类型与时间，不展示问题、回复、客户身份或原始详情。</p>
-  <div class="table-scroll"><table><thead><tr><th>时间</th><th>动作</th><th>对象类型</th></tr></thead><tbody>
+  <div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>动作</th><th>对象类型</th></tr></thead><tbody>
     {% for item in audit_page.items %}<tr><td>{{ item.created_at|datetime_zh }}</td><td>{{ item.action }}</td><td>{{ item.target_type }}</td></tr>{% else %}<tr><td colspan="3">暂无操作记录</td></tr>{% endfor %}
   </tbody></table></div>
-  <nav aria-label="操作记录分页">
-    {% if audit_page.has_previous %}<a href="?page={{ audit_page.page - 1 }}">上一页</a>{% endif %}
+  <nav class="pagination" aria-label="操作记录分页">
+    {% if audit_page.has_previous %}<a class="button button--secondary" href="?page={{ audit_page.page - 1 }}">上一页</a>{% endif %}
     <span>第 {{ audit_page.page }} 页</span>
-    {% if audit_page.has_next %}<a href="?page={{ audit_page.page + 1 }}">下一页</a>{% endif %}
+    {% if audit_page.has_next %}<a class="button button--secondary" href="?page={{ audit_page.page + 1 }}">下一页</a>{% endif %}
   </nav>
 </section>
 {% endblock %}

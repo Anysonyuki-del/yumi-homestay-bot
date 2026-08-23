@@ -1,4 +1,12 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
 
-{% block content %}<section class="panel panel--padded"><ul class="record-list clean-list">{% for approval in approvals %}<li><a class="record-link" href="/employee/approvals/{{ approval.id }}"><span><strong>{{ approval.approval_code }} · {{ approval.guest_name }}</strong><small>{{ approval.check_in_date | date_zh }} 入住</small></span>{{ ui.badge(approval.status | status_zh, "warning") }}</a></li>{% else %}<li>{{ ui.empty("当前没有待处理审批") }}</li>{% endfor %}</ul>{{ ui.pagination("/employee/approvals", page, previous_page, next_page) }}</section>{% endblock %}
+{% block content %}
+<section class="panel panel--padded">
+  <div class="responsive-table"><table class="data-table"><thead><tr><th>审批编号</th><th>客人</th><th>入住日期</th><th>状态</th><th><span class="visually-hidden">操作</span></th></tr></thead><tbody>
+    {% for approval in approvals %}<tr><td><strong>{{ approval.approval_code }}</strong></td><td>{{ approval.guest_name }}</td><td>{{ approval.check_in_date | date_zh }}</td><td>{{ ui.badge(approval.status | status_zh, "warning") }}</td><td><a class="table-action" href="/employee/approvals/{{ approval.id }}">查看审批</a></td></tr>{% else %}<tr><td colspan="5">当前没有待处理审批。</td></tr>{% endfor %}
+  </tbody></table></div>
+  <ul class="mobile-card-list clean-list">{% for approval in approvals %}<li><a class="mobile-record-card" href="/employee/approvals/{{ approval.id }}"><span><strong>{{ approval.approval_code }}</strong> {{ ui.badge(approval.status | status_zh, "warning") }}</span><small>{{ approval.guest_name }} · {{ approval.check_in_date | date_zh }} 入住</small></a></li>{% else %}<li>{{ ui.empty("当前没有待处理审批") }}</li>{% endfor %}</ul>
+  {{ ui.pagination("/employee/approvals", page, previous_page, next_page) }}
+</section>
+{% endblock %}
