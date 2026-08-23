@@ -120,6 +120,8 @@ def test_admin_shell_uses_grouped_lightweight_navigation() -> None:
     assert layout.count("{{ page_title }}") == 2  # title 元素与唯一可见 h1
     assert 'class="app-version"' in layout
     assert "{{ app_version_label }}" in layout
+    assert 'href="/static/app.css?v={{ app_version }}"' in layout
+    assert 'src="/static/admin.js?v={{ app_version }}"' in layout
 
 
 def test_admin_template_context_exposes_one_release_version(monkeypatch) -> None:

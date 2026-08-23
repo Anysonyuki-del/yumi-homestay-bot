@@ -9,8 +9,8 @@
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#f7f8fa">
     <title>{% block title %}{{ page_title }} · {{ app_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="/static/app.css">
-    <script src="/static/admin.js" defer></script>
+    <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
+    <script src="/static/admin.js?v={{ app_version }}" defer></script>
   </head>
   <body class="admin-body">
     <a class="skip-link" href="#main-content">跳到主要内容</a>

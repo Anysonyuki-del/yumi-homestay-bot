@@ -181,7 +181,10 @@ def test_dashboard_renders_unified_safe_shell_for_empty_data() -> None:
     assert parser.matching("html", lang="zh-CN")
     assert parser.matching("meta", name="viewport")
     assert parser.matching("aside", id="admin-drawer", **{"data-drawer": None})
-    assert parser.matching("script", src="/static/admin.js")
+    assert any(
+        (attrs.get("src") or "").startswith("/static/admin.js?v=")
+        for attrs in parser.matching("script")
+    )
     assert parser.matching("a", href="/employee/admin", **{"aria-current": "page"})
     assert "总览" in response.text
     assert "任务中心" in response.text
@@ -203,7 +206,10 @@ def test_diagnostics_keeps_http_200_when_health_is_degraded() -> None:
 
     assert response.status_code == 200
     assert parser.matching("aside", id="admin-drawer", **{"data-drawer": None})
-    assert parser.matching("script", src="/static/admin.js")
+    assert any(
+        (attrs.get("src") or "").startswith("/static/admin.js?v=")
+        for attrs in parser.matching("script")
+    )
     assert parser.matching(
         "a",
         href="/employee/admin/diagnostics",
