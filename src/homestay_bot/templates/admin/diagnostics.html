@@ -6,30 +6,63 @@
   <div>
     <p class="eyebrow">只读运行状态</p>
     <h2>{{ "运行正常" if overall_ok else "需要关注" }}</h2>
-    <p>此页面仅展示受控状态，不包含配置内容、客户资料或外部服务响应。</p>
+    <p>优先显示偏离正常状态的项目，不包含配置内容、客户资料或外部服务响应。</p>
   </div>
   {{ ui.badge("正常" if overall_ok else "降级", "success" if overall_ok else "warning") }}
 </section>
 <section class="panel">
-  <div class="panel__header"><div><p class="eyebrow">基础组件</p><h2>检查结果</h2></div><small>服务启动于 {{ started_at|datetime_zh }}</small></div>
+  <div class="panel__header"><div><p class="eyebrow">基础组件</p><h2>需要关注</h2></div><small>服务启动于 {{ started_at|datetime_zh }}</small></div>
+  {% if not health_available %}
+  <div class="alert alert--warning" role="alert">基础组件状态暂时无法读取，请检查服务日志后重试。</div>
+  {% elif attention_checks %}
   <dl class="diagnostics-list">
-    {% for item in checks %}
+    {% for item in attention_checks %}
     <div><dt>{{ item.label }}</dt><dd>{{ ui.badge(item.status_label, item.tone) }}</dd></div>
     {% endfor %}
   </dl>
+  {% else %}
+  <p class="empty-state">没有需要处理的组件异常。</p>
+  {% endif %}
+  {% if healthy_check_count %}<p class="diagnostics-note">另有 {{ healthy_check_count }} 项检查正常，已从问题列表收起。</p>{% endif %}
 </section>
 {% if diagnostics %}
 <section class="panel">
   <div class="panel__header"><div><p class="eyebrow">运行元数据</p><h2>任务与配置</h2></div><a href="/employee/admin/diagnostics/audits">查看操作记录</a></div>
   <dl class="diagnostics-list">
     <div><dt>应用版本</dt><dd>{{ diagnostics.version }}</dd></div>
-    <div><dt>配置版本</dt><dd>revision {{ diagnostics.configuration_revision if diagnostics.configuration_revision is not none else "不可用" }}</dd></div>
-    {% for name, count in diagnostics.job_status_counts|dictsort %}<div><dt>任务 {{ name }}</dt><dd>{{ count }}</dd></div>{% endfor %}
-    <div><dt>最近稳定错误码</dt><dd>{{ diagnostics.recent_job_error_codes|join("、") or "无" }}</dd></div>
+    {% if diagnostics.configuration_revision_source == "runtime" %}
+    <div><dt>配置版本</dt><dd>运行配置 revision {{ diagnostics.configuration_revision }}</dd></div>
+    {% elif diagnostics.configuration_revision_source == "database" %}
+    <div><dt>配置版本</dt><dd>数据库记录 revision {{ diagnostics.configuration_revision }}（未确认已生效）</dd></div>
+    {% else %}
+    <div><dt>配置版本</dt><dd>无法读取</dd></div>
+    {% endif %}
   </dl>
-  <label for="diagnostic-report">脱敏诊断报告</label>
-  <textarea id="diagnostic-report" rows="8" readonly>{{ diagnostics.report_text }}</textarea>
-  <button class="button" type="button" data-copy-target="diagnostic-report">复制诊断报告</button>
+  <h3>后台任务</h3>
+  {% if diagnostics.job_status_counts is none %}
+  <div class="alert alert--warning" role="alert">任务状态暂时无法读取，请检查数据库连接后重试。</div>
+  {% elif attention_tasks %}
+  <dl class="diagnostics-list">
+    {% for item in attention_tasks %}<div><dt>{{ item.label }}</dt><dd>{{ ui.badge(item.count, item.tone) }}</dd></div>{% endfor %}
+  </dl>
+  {% else %}
+  <p class="empty-state">没有待处理、运行中或失败的后台任务。</p>
+  {% endif %}
+  <h3>最近错误码</h3>
+  {% if diagnostics.recent_job_error_codes is none %}
+  <div class="alert alert--warning" role="alert">错误码暂时无法读取，请检查数据库连接后重试。</div>
+  {% else %}
+  <p>{{ diagnostics.recent_job_error_codes|join("、") or "无" }}</p>
+  {% endif %}
+</section>
+<section class="panel">
+  <details class="diagnostics-report">
+    <summary>完整脱敏报告</summary>
+    <p>用于排障或提交给技术人员，包含全部受控状态，但不包含密钥、客户资料和外部响应正文。</p>
+    <label for="diagnostic-report">报告内容</label>
+    <textarea id="diagnostic-report" rows="10" readonly>{{ diagnostics.report_text }}</textarea>
+    <button class="button" type="button" data-copy-target="diagnostic-report">复制诊断报告</button>
+  </details>
 </section>
 {% endif %}
 {% endblock %}

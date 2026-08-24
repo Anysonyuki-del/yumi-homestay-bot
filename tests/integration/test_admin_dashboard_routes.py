@@ -64,12 +64,14 @@ class DiagnosticsStub:
     async def snapshot(self) -> DiagnosticsSnapshot:
         """返回服务端已生成的脱敏复制报告。"""
         return DiagnosticsSnapshot(
-            health={"status": "degraded", "database": "ok"},
-            job_status_counts={"pending": 2},
+            health={"status": "degraded", "database": "ok", "worker_heartbeat": "stale"},
+            health_available=True,
+            job_status_counts={"completed": 20, "pending": 2, "failed": 1},
             recent_job_error_codes=("timeout",),
             started_at=datetime(2026, 8, 11, tzinfo=UTC),
             version="1.2.3",
             configuration_revision=7,
+            configuration_revision_source="runtime",
             report_text="YuMi 系统诊断报告（已脱敏）\n版本：1.2.3",
         )
 
@@ -295,8 +297,15 @@ def test_diagnostics_detail_and_audit_page_use_safe_server_view_models() -> None
 
     assert diagnostics.status_code == 200
     assert diagnostics.headers["cache-control"] == "no-store"
-    assert "revision 7" in diagnostics.text
+    assert "运行配置 revision 7" in diagnostics.text
+    assert "数据库连接" not in diagnostics.text
+    assert "后台任务处理" in diagnostics.text
+    assert "待处理任务" in diagnostics.text
+    assert "失败任务" in diagnostics.text
+    assert "已完成任务" not in diagnostics.text
     assert "YuMi 系统诊断报告（已脱敏）" in diagnostics.text
+    assert "完整脱敏报告" in diagnostics.text
+    assert "<details" in diagnostics.text
     assert "data-copy-target" in diagnostics.text
     assert audits.status_code == 200
     assert audits.headers["cache-control"] == "no-store"

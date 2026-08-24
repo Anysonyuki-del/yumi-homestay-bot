@@ -62,6 +62,11 @@ _STATUS_PRESENTATION = {
     "not_configured": ("未配置", "neutral"),
     "degraded": ("降级", "warning"),
 }
+_TASK_STATUS_PRESENTATION = {
+    "failed": ("失败任务", "danger"),
+    "pending": ("待处理任务", "warning"),
+    "running": ("运行中任务", "neutral"),
+}
 
 
 def _clock(request: Request) -> datetime:
@@ -147,7 +152,7 @@ async def admin_dashboard(request: Request) -> Response:
 
 @router.get("/diagnostics", response_class=HTMLResponse)
 async def admin_diagnostics(request: Request) -> Response:
-    """以固定中文标签展示现有健康服务结果，降级时仍返回 HTTP 200。"""
+    """优先展示偏离正常状态的诊断结果，降级时仍返回 HTTP 200。"""
     await _require_admin(request)
     service = _diagnostics_service(request)
     diagnostic_snapshot: DiagnosticsSnapshot | None = None
@@ -160,14 +165,28 @@ async def admin_diagnostics(request: Request) -> Response:
             health = {"status": "degraded"}
     else:
         health = await _safe_health(request)
-    checks: list[dict[str, str]] = []
+    attention_checks: list[dict[str, str]] = []
+    healthy_check_count = 0
     for key, label in _CHECK_LABELS.items():
         if key not in health:
+            continue
+        if health[key] == "ok":
+            healthy_check_count += 1
             continue
         status_label, tone = _STATUS_PRESENTATION.get(
             health[key], ("需检查", "warning")
         )
-        checks.append({"label": label, "status_label": status_label, "tone": tone})
+        attention_checks.append(
+            {"label": label, "status_label": status_label, "tone": tone}
+        )
+
+    attention_tasks: list[dict[str, str | int]] = []
+    if diagnostic_snapshot is not None and diagnostic_snapshot.job_status_counts:
+        for key, (label, tone) in _TASK_STATUS_PRESENTATION.items():
+            count = diagnostic_snapshot.job_status_counts.get(key, 0)
+            if count > 0:
+                attention_tasks.append({"label": label, "count": count, "tone": tone})
+
     started_at = getattr(request.app.state, "started_at", None)
     response = templates.TemplateResponse(
         request=request,
@@ -177,7 +196,14 @@ async def admin_diagnostics(request: Request) -> Response:
             "active_nav": "diagnostics",
             "overall_ok": health.get("status") == "ok",
             "health_degraded": health.get("status") != "ok",
-            "checks": checks,
+            "health_available": (
+                diagnostic_snapshot.health_available
+                if diagnostic_snapshot is not None
+                else any(key != "status" for key in health)
+            ),
+            "attention_checks": attention_checks,
+            "healthy_check_count": healthy_check_count,
+            "attention_tasks": attention_tasks,
             "started_at": (
                 diagnostic_snapshot.started_at if diagnostic_snapshot else started_at
             ),

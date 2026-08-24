@@ -219,6 +219,10 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .diagnostics-summary p { margin-bottom: 0; color: var(--muted); }
 .diagnostics-list { margin: 0; }
 .diagnostics-list > div { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+.diagnostics-note { margin: 12px 0 0; color: var(--muted); font-size: .82rem; }
+.diagnostics-report summary { cursor: pointer; font-weight: 700; }
+.diagnostics-report[open] summary { margin-bottom: 12px; }
+.diagnostics-report textarea { margin-top: 8px; white-space: pre; overflow: auto; }
 
 @media (min-width: 375px) {
   .page-content { padding-inline: 16px; }

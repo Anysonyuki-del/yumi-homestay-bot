@@ -2,8 +2,6 @@
 
 YuMi 民宿 AI 是面向武汉小型民宿的半人工、半智能客服及运营管理系统。系统让 AI 处理重复咨询和运营协同，让员工保留对价格、退款、投诉、提前入住等经营决策的控制权。
 
-当前稳定发布版本：`v1.0.2`。
-
 ## 当前能力
 
 - 企业微信微信客服消息接入、回调验签、异步收发和失败回执处理
@@ -25,20 +23,11 @@ YuMi 民宿 AI 是面向武汉小型民宿的半人工、半智能客服及运�
 - DeepSeek Chat Completions API
 - SQLite（本地）或 PostgreSQL（生产）
 
-## 版本编号
+## 版本与运行状态
 
-项目使用语义化版本管理应用发布，唯一版本源是 `pyproject.toml` 的 `project.version`。不要把以下四类编号混用：
+应用发布版本唯一来源是 [`pyproject.toml`](pyproject.toml) 的 `project.version`，运行时由 `src/homestay_bot/version.py::get_app_version()` 读取安装包元数据。数据库结构以 `alembic current` 为准；实际生效的配置 revision、组件健康和任务异常在管理员“系统诊断”页面查看。
 
-| 编号 | 示例 | 用途 |
-|---|---|---|
-| 应用发布版本 | `v1.0.0` | 对外说明功能基线，显示在后台侧栏和系统诊断 |
-| 数据库迁移版本 | `0018_stay_checkout_observation` | 标识数据库结构，不代表应用发布版本 |
-| 运行配置版本 | `revision 3` | 标识后台接口配置的激活修订，不代表代码版本 |
-| Git 提交 | `3df8736` | 精确定位一次构建或部署内容 |
-
-发布前先更新 `pyproject.toml`，通过测试后再创建同号 Git 标签；应用页面和诊断报告不得维护第二份版本常量。
-
-长期工程规则见 [YuMi 民宿 AI 开发经验与防回归手册](YuMi民宿AI开发经验与防回归手册.md)，新增教训先记录到 [tasks/lessons.md](tasks/lessons.md)，验证和部署证据记录到 [tasks/todo.md](tasks/todo.md)。
+发布流程、工程约束和变更检查见 [YuMi 民宿 AI 开发经验与防回归手册](YuMi民宿AI开发经验与防回归手册.md)。尚未归并的新教训记录在 [tasks/lessons.md](tasks/lessons.md)，[tasks/todo.md](tasks/todo.md) 只保存当前工作单。
 
 ## 本地运行
 
@@ -77,17 +66,9 @@ curl http://127.0.0.1:8010/health
 
 ## 配置说明
 
-`.env.example` 是不含密钥的配置模板，主要配置项包括：
+完整配置模板和字段说明见 [`.env.example`](.env.example)。启动必需配置由 `src/homestay_bot/config.py::BootstrapSettings` 定义，可热切换的外部服务配置由 `src/homestay_bot/config.py::RuntimeEnvironmentSettings` 定义；README 不维护第二份字段清单。
 
-- `DATABASE_URL`：数据库连接地址
-- `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`：大模型配置
-- `HOSTEX_ACCESS_TOKEN`：百居易 API 凭证
-- `WECOM_CORP_ID`、`WECOM_KF_SECRET`、`WECOM_CALLBACK_TOKEN`、`WECOM_ENCODING_AES_KEY`：企业微信客服回调和消息配置
-- `WECOM_AGENT_ID`、`WECOM_AGENT_SECRET`：企业微信内部应用通知配置
-- `PUBLIC_BASE_URL`：HTTPS 公网根地址
-- `SESSION_SECRET`、`DATA_ENCRYPTION_KEY`：后台会话和敏感凭证加密密钥
-
-生产环境必须替换示例值，并限制 `.env`、数据库、私有上传目录和备份目录的访问权限。
+生产环境必须替换示例值，并限制 `.env`、数据库、私有上传目录和备份目录的访问权限。真实密钥只能保存在环境变量或部署平台的密钥管理服务中。
 
 ## 测试与质量检查
 

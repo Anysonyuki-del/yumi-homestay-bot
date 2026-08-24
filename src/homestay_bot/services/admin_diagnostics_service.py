@@ -3,9 +3,10 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 logger = logging.getLogger(__name__)
+ConfigurationRevisionSource = Literal["runtime", "database", "unavailable"]
 
 
 class HealthPort(Protocol):
@@ -43,11 +44,13 @@ class DiagnosticsSnapshot:
     """系统诊断页面和复制报告共用的安全 view model。"""
 
     health: dict[str, str]
-    job_status_counts: dict[str, int]
-    recent_job_error_codes: tuple[str, ...]
+    health_available: bool
+    job_status_counts: dict[str, int] | None
+    recent_job_error_codes: tuple[str, ...] | None
     started_at: datetime
     version: str
     configuration_revision: int | None
+    configuration_revision_source: ConfigurationRevisionSource
     report_text: str
 
 
@@ -82,41 +85,66 @@ class AdminDiagnosticsService:
         self._version = version
 
     async def snapshot(self) -> DiagnosticsSnapshot:
-        """生成诊断快照；任一探针失败时不透传异常正文。"""
+        """独立执行各安全探针，保留成功数据并明确标记失败项。"""
+        health_available = True
         try:
             health = await self._health.check()
         except Exception as error:
             logger.warning("管理员诊断健康聚合失败：error_type=%s", type(error).__name__)
             health = {"status": "degraded"}
+            health_available = False
+
+        counts: dict[str, int] | None
         try:
             counts = await self._repository.job_status_counts()
+        except Exception as error:
+            logger.warning("管理员诊断任务计数失败：error_type=%s", type(error).__name__)
+            counts = None
+            health = {**health, "status": "degraded"}
+
+        error_codes: tuple[str, ...] | None
+        try:
             error_codes = await self._repository.recent_job_error_codes(limit=8)
         except Exception as error:
-            logger.warning("管理员诊断任务聚合失败：error_type=%s", type(error).__name__)
-            counts = {}
-            error_codes = ()
+            logger.warning("管理员诊断错误码读取失败：error_type=%s", type(error).__name__)
+            error_codes = None
             health = {**health, "status": "degraded"}
+
         revision: int | None = None
+        revision_source: ConfigurationRevisionSource = "unavailable"
         if self._registry is not None:
             try:
                 revision = int((await self._registry.status()).revision)
+                revision_source = "runtime"
             except Exception as error:
                 logger.warning("管理员诊断配置状态失败：error_type=%s", type(error).__name__)
                 health = {**health, "status": "degraded"}
-        else:
+
+        if revision_source == "unavailable":
             try:
                 revision = await self._repository.configuration_revision()
+                revision_source = "database"
             except Exception as error:
                 logger.warning("管理员诊断配置读取失败：error_type=%s", type(error).__name__)
                 health = {**health, "status": "degraded"}
-        report = self._build_report(health, counts, error_codes, revision)
+
+        report = self._build_report(
+            health,
+            health_available,
+            counts,
+            error_codes,
+            revision,
+            revision_source,
+        )
         return DiagnosticsSnapshot(
             health=health,
+            health_available=health_available,
             job_status_counts=counts,
             recent_job_error_codes=error_codes,
             started_at=self._started_at,
             version=self._version,
             configuration_revision=revision,
+            configuration_revision_source=revision_source,
             report_text=report,
         )
 
@@ -139,27 +167,49 @@ class AdminDiagnosticsService:
     def _build_report(
         self,
         health: dict[str, str],
-        counts: dict[str, int],
-        error_codes: tuple[str, ...],
+        health_available: bool,
+        counts: dict[str, int] | None,
+        error_codes: tuple[str, ...] | None,
         revision: int | None,
+        revision_source: ConfigurationRevisionSource,
     ) -> str:
-        """由服务端生成可复制的固定格式脱敏文本。"""
+        """生成完整脱敏报告，并区分无数据、读取失败和有效运行值。"""
         lines = [
             "YuMi 系统诊断报告（已脱敏）",
             f"版本：{self._version}",
             f"启动时间：{self._started_at.isoformat()}",
-            f"配置 revision：{revision if revision is not None else '不可用'}",
-            f"总体状态：{health.get('status', 'degraded')}",
         ]
-        lines.extend(
-            f"组件 {name}：{value}"
-            for name, value in sorted(health.items())
-            if name != "status"
-        )
-        lines.extend(
-            f"任务 {name}：{value}"
-            for name, value in sorted(counts.items())
-        )
-        if error_codes:
+
+        if revision_source == "runtime" and revision is not None:
+            lines.append(f"运行配置 revision：{revision}")
+        elif revision_source == "database" and revision is not None:
+            lines.append(f"数据库配置 revision：{revision}（未确认已生效）")
+        else:
+            lines.append("配置 revision：无法读取")
+
+        lines.append(f"总体状态：{health.get('status', 'degraded')}")
+        if health_available:
+            lines.extend(
+                f"组件 {name}：{value}"
+                for name, value in sorted(health.items())
+                if name != "status"
+            )
+        else:
+            lines.append("组件状态：无法读取")
+
+        if counts is None:
+            lines.append("任务状态：无法读取")
+        elif counts:
+            lines.extend(
+                f"任务 {name}：{value}" for name, value in sorted(counts.items())
+            )
+        else:
+            lines.append("任务状态：无任务")
+
+        if error_codes is None:
+            lines.append("最近错误码：无法读取")
+        elif error_codes:
             lines.append("最近错误码：" + "、".join(error_codes))
+        else:
+            lines.append("最近错误码：无")
         return "\n".join(lines)
