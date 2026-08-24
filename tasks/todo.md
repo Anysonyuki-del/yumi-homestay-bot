@@ -61,3 +61,6 @@
 - 管理员诊断页首屏只显示异常差异，完整脱敏报告折叠保留；机器健康接口未改动。
 - 本地验收：`1124 passed, 15 skipped`；Ruff、mypy（108 个源文件）、compileall、pip check、JavaScript 语法和 diff 检查均通过。
 - 构建验收：wheel 文件名和 METADATA 均确认版本为 `1.0.3`。
+- 发布：功能提交 `1f5d995` 与 `v1.0.3` 标签已推送并部署；部署前备份位于 `/opt/yumi-backups/v1.0.3-20260824T195148Z`，数据库备份已通过 `pg_restore` 目录校验。
+- 云端验收：仓库和容器版本均为 `1.0.3`，本机与公网健康状态均为 `ok`，Alembic 为 `0018_stay_checkout_observation (head)`，诊断模板已更新且未登录访问返回 401。
+- 运行状态：PostgreSQL 保持 healthy，API 重启次数和近 10 分钟异常关键词计数均为 0；三个既有未跟踪环境备份文件保持不变。
