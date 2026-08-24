@@ -1,8 +1,8 @@
 ---
 title: YuMi 民宿 AI 开发经验与防回归手册
 date: 2026-08-01
-updated: 2026-08-24
-version: 1.0.1
+updated: 2026-08-25
+version: 1.0.2
 status: active
 tags:
   - YuMi民宿

@@ -7,11 +7,11 @@ from homestay_bot import version
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_declared_release_version_is_one_zero_one() -> None:
+def test_declared_release_version_is_one_zero_two() -> None:
     """正式基线版本必须由 pyproject 单点声明。"""
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
 
-    assert project["project"]["version"] == "1.0.1"
+    assert project["project"]["version"] == "1.0.2"
 
 
 def test_app_version_reads_installed_distribution_metadata(monkeypatch) -> None:

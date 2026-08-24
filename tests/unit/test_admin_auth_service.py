@@ -305,12 +305,12 @@ async def test_reverify_at_version_rejects_stale_session_without_mutating_versio
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "new_password",
-    ["", "   ", "short-pass", "x" * 129],
+    ["", "   ", "x" * 129],
 )
 async def test_change_password_rejects_invalid_new_password(
     new_password: str,
 ) -> None:
-    """新密码必须非空白且长度保持在 12 到 128 个字符。"""
+    """新密码必须包含非空白字符，且不能超过输入安全上限。"""
     credential = _credential()
     service = AdminAuthService(MemoryAdminCredentialRepository(credential))
 
@@ -323,19 +323,19 @@ async def test_change_password_rejects_invalid_new_password(
 
 
 @pytest.mark.asyncio
-async def test_change_password_accepts_twelve_to_128_characters() -> None:
-    """符合长度边界且非空白的新密码应成功写入。"""
+async def test_change_password_accepts_one_to_128_characters() -> None:
+    """取消最小长度后，一个字符至 128 个字符的新密码均可写入。"""
     credential = _credential()
     service = AdminAuthService(MemoryAdminCredentialRepository(credential))
 
     await service.change_password(
         credential.id,
         "initial-password",
-        "x" * 12,
+        "x",
     )
     await service.change_password(
         credential.id,
-        "x" * 12,
+        "x",
         "y" * 128,
     )
 

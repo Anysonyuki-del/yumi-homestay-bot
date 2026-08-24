@@ -64,8 +64,10 @@ class AdminAuthStub:
         self.changed_passwords.append((admin_id, current, new))
         if current != "correct-password":
             raise AuthenticationError("用户名或密码错误")
-        if len(new) < 12:
-            raise ValueError("新密码长度必须在 12 到 128 个字符之间")
+        if not new.strip():
+            raise ValueError("新密码不能为空或全为空白")
+        if len(new) > 128:
+            raise ValueError("新密码不能超过 128 个字符")
         self.version += 1
         self.must_change_password = False
 
@@ -564,6 +566,45 @@ def test_first_login_only_allows_password_change_then_updates_current_version() 
     assert auth.changed_passwords == [(1, "correct-password", "new-secure-password")]
     assert after.status_code == 200
     assert after.json()["session"]["admin_session_version"] == 5
+
+
+def test_password_forms_do_not_require_a_minimum_length() -> None:
+    """普通改密页和首次改密页都不得在浏览器端恢复 12 位限制。"""
+    client, _ = build_client()
+    login(client)
+    regular = client.get("/employee/account")
+
+    first_login_client, _ = build_client(must_change_password=True)
+    login(first_login_client)
+    first_login = first_login_client.get("/employee/account")
+
+    assert 'name="new_password"' in regular.text
+    assert 'name="new_password"' in first_login.text
+    assert 'minlength="12"' not in regular.text
+    assert 'minlength="12"' not in first_login.text
+
+
+def test_password_route_accepts_a_one_character_new_password() -> None:
+    """控制页面提交一个字符的新密码时，后端路由必须正常受理。"""
+    client, auth = build_client()
+    login(client)
+    account = client.get("/employee/account")
+
+    changed = client.post(
+        "/employee/account/password",
+        data={
+            "current_password": "correct-password",
+            "new_password": "x",
+            "csrf_token": csrf_for_action(
+                account.text,
+                "/employee/account/password",
+            ),
+        },
+        follow_redirects=False,
+    )
+
+    assert changed.status_code == 303
+    assert auth.changed_passwords == [(1, "correct-password", "x")]
 
 
 def test_logout_and_revoke_sessions_require_csrf_and_revoke_keeps_current_session() -> None:

@@ -2,7 +2,6 @@ from argon2 import PasswordHasher, Type, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 ADMIN_PASSWORD_HASHER = PasswordHasher(type=Type.ID)
-MIN_ADMIN_PASSWORD_LENGTH = 12
 MAX_ADMIN_PASSWORD_LENGTH = 128
 
 
@@ -33,8 +32,8 @@ def verify_admin_password(password_hash: str, password: str) -> bool:
 
 
 def validate_new_admin_password(password: str) -> None:
-    """要求新密码非空白且长度为 12 至 128 个字符。"""
+    """允许管理员自定密码长度，但拒绝空白和异常超长输入。"""
     if not password.strip():
         raise ValueError("新密码不能为空或全为空白")
-    if not MIN_ADMIN_PASSWORD_LENGTH <= len(password) <= MAX_ADMIN_PASSWORD_LENGTH:
-        raise ValueError("新密码长度必须为 12 至 128 个字符")
+    if len(password) > MAX_ADMIN_PASSWORD_LENGTH:
+        raise ValueError("新密码不能超过 128 个字符")
