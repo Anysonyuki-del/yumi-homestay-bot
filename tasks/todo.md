@@ -1,66 +1,34 @@
-# 当前任务：收敛文档事实归属与系统诊断输出
+# 当前任务：升级客户记忆机制（原生链路 v2）
 
-- [x] 第一段：审查文档职责、重复事实、易过期状态和诊断信息层级
-- [x] 第二段：确认 README、长期手册、Lessons、Todo 的唯一职责
-- [x] 第三段：确认 diagnostics 的有效状态、失败语义与展示层级
-- [x] HARD-GATE：用户确认完整 Spec 后再编码
-- [x] 实施最小范围修复并同步全部用户可见文案入口
-- [x] 运行文档契约、诊断定向测试和全量验证
+- [x] 现状分析：确认近期原文、分层摘要、实时订单任务和 FAQ 复核链路
+- [x] 功能确认：结构化客户记忆、证据分级、冲突治理、限量召回和物理删除
+- [x] 风险确认：不接入 Codex 全局记忆，不新增 Mastra/Node 旁路，不缓存动态业务事实
+- [x] HARD-GATE：用户确认方案并要求开始改动
+- [x] 新增客户记忆数据模型、索引和 0019 数据库迁移
+- [x] 扩展既有 DeepSeek 摘要调用，同次返回结构化记忆候选
+- [x] 实现证据晋级、纠正覆盖、冲突隔离、过期失效和待确认项稳定合并
+- [x] 在会话回复前按当前客户、当前问题和字符预算召回有效记忆
+- [x] 在既有客户详情页提供记忆复核，并让摘要删除同时物理删除结构化记忆
+- [x] 覆盖客户合并迁移、隐私删除和自动维护边界
+- [x] 运行迁移升降级、定向测试、全量测试和静态检查
 
-## 现状依据
+## 已确认实现边界
 
-- `README.md` 手写当前版本和配置字段，同时声明版本唯一来源为 `pyproject.toml::project.version`；长期手册 frontmatter 也维护第二份版本。
-- `tasks/lessons.md` 与长期手册重复保存规则；长期手册的维护规则同时要求“双写”和“单一权威”，两者冲突。
-- `tasks/todo.md` 同时承载多个当前任务、完整 Spec、实施过程和历史部署证据，无法可靠表达当前状态。
-- `AdminDiagnosticsService.snapshot()` 在探针失败时把任务计数与错误码降为空集合，模板会把读取失败显示成“无”。
-- 诊断首屏重复展示全部组件、任务和复制报告，没有突出异常差异。
-
-## 文档唯一归属
-
-- `README.md` 只负责项目定位、最短启动路径和权威入口，不保存当前版本、迁移号、运行 revision 或配置字段复本。
-- `YuMi民宿AI开发经验与防回归手册.md` 只保留长期工程契约、代码符号入口和变更检查清单，不保存讨论过程、批次说明或运行状态。
-- `tasks/lessons.md` 只保存尚未归并的新教训；归并后删除正文，由 Git 保留历史。
-- `tasks/todo.md` 只保留唯一当前工作单和本次 Review；完成记录由 Git 历史保存。
-- 带日期的 `docs/superpowers/specs` 与 `docs/superpowers/plans` 保持原文，不作为当前产品说明。
-- `tests/unit/test_version.py` 只验证版本格式和运行时读取契约，不硬编码当前发布号。
-
-## Diagnostics 行为
-
-- 健康、任务计数、错误码和配置 revision 独立探测；单项失败不清空其他成功数据。
-- 空集合表示读取成功且没有数据，`None` 表示无法读取；页面和完整报告不得混淆两者。
-- registry 可读时展示实际生效 revision；否则回退数据库记录并标记“未确认已生效”。
-- 首屏只展示异常、未配置、积压和失败；完整脱敏报告折叠保留。
-- `/employee/health` 的机器 JSON、字段名和状态码保持不变。
-
-## 文件计划
-
-- `src/homestay_bot/services/admin_diagnostics_service.py`
-- `src/homestay_bot/routes/admin.py::admin_diagnostics()`
-- `src/homestay_bot/templates/admin/diagnostics.html`
-- `src/homestay_bot/static/app.css`
-- `tests/unit/test_admin_diagnostics_service.py`
-- `tests/integration/test_admin_dashboard_routes.py`
-- `README.md`
-- `YuMi民宿AI开发经验与防回归手册.md`
-- `tasks/lessons.md`
-- `tasks/todo.md`
-- `tests/unit/test_version.py`
-- `pyproject.toml`
-
-## 验收要求
-
-- 文档链接和 `文件::符号` 可解析，长期文档不包含当前发布号、部署状态或多个当前任务。
-- 诊断定向测试覆盖部分探针失败、数据库 revision 回退、真假空值、差异展示和敏感信息缺席。
-- 运行完整测试、Ruff、mypy、compileall、依赖、JavaScript、模板静态资源和 diff 检查。
-- 敏感未跟踪文件不得读取、暂存或提交。
+- 复用 `ContextRetentionService`、`DeepSeekContextSummarizer` 和 PostgreSQL，不建立第二套模型调用或独立记忆服务。
+- 客户记忆严格按 `customer_id` 隔离；跨客户经验继续走已有 FAQ 候选和管理员审核链路。
+- 手机号、身份证、详细地址、门锁/验证码/二维码，以及价格、房态、付款退款和当前订单状态不得进入结构化记忆。
+- 实时订单、任务与 Hostex 查询始终高于历史记忆；模型推断只能成为待复核候选。
+- 召回只读取有效且未到复核期的记忆，并按当前问题相关性及固定数量/字符预算裁剪。
+- 修改限于客户记忆及必要依赖点；订单、房态、审批、凭证和任务状态机保持不变。
 
 ## Review
 
-- 长期文档已经按唯一事实归属收敛：README 只保留入口，手册只保留稳定契约，Lessons 清空已归并内容，Todo 只保留当前工作单。
-- Diagnostics 的健康、任务计数、错误码与配置 revision 已改为独立探测；读取失败、成功但为空、数据库回退三种状态不再混淆。
-- 管理员诊断页首屏只显示异常差异，完整脱敏报告折叠保留；机器健康接口未改动。
-- 本地验收：`1124 passed, 15 skipped`；Ruff、mypy（108 个源文件）、compileall、pip check、JavaScript 语法和 diff 检查均通过。
-- 构建验收：wheel 文件名和 METADATA 均确认版本为 `1.0.3`。
-- 发布：功能提交 `1f5d995` 与 `v1.0.3` 标签已推送并部署；部署前备份位于 `/opt/yumi-backups/v1.0.3-20260824T195148Z`，数据库备份已通过 `pg_restore` 目录校验。
-- 云端验收：仓库和容器版本均为 `1.0.3`，本机与公网健康状态均为 `ok`，Alembic 为 `0018_stay_checkout_observation (head)`，诊断模板已更新且未登录访问返回 401。
-- 运行状态：PostgreSQL 保持 healthy，API 重启次数和近 10 分钟异常关键词计数均为 0；三个既有未跟踪环境备份文件保持不变。
+- 新增 `customer_memory_items`，以客户、主题、证据、状态、复核期和有效期治理结构化记忆；0019 迁移已通过真实 SQLite 升级、逐级降级和再次升级测试。
+- DeepSeek 分层摘要仍只调用一次，并在同一 JSON 中返回记忆候选；本地会校验消息来源、敏感字段、动态业务事实和候选边界，推断不会自动晋级。
+- 客户明示或员工确认的高置信稳定事实可成为有效记忆；明确纠正会覆盖旧值，同主题冲突会全部停止召回，到复核期后自动失效。
+- 最近三条原文继续保留且不进入短摘要，但会独立标记“已观察”；单条“我的狗叫查理”在维护任务运行后即可供新会话召回，无需等待更多聊天消息。
+- 摘要器会回传实际进入模型预算的消息编号，只有这些消息能被标记或清除；因输入预算省略的原文会留到下一轮，避免错误清理。
+- 会话按当前 `customer_id` 和当前问题召回最多 8 条、2400 字符的有效记忆；本轮陈述、实时订单、任务与工具结果始终优先。
+- 既有客户详情页可批准、拒绝或标记失效；删除摘要会同时物理删除结构化记忆，客户合并会迁移记忆并隔离合并冲突。
+- 验收结果：`1136 passed, 15 skipped`；Ruff、mypy（108 个源文件）、compileall、pip check、Alembic head 和 diff 检查均通过。
+- 与本次任务无关的未跟踪 `YuMi民宿AI项目总结.txt` 保持未读、未改。

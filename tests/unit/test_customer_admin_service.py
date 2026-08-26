@@ -29,6 +29,7 @@ class CustomerAdminRepositoryStub:
         self.note_calls: list[tuple[int, str, int]] = []
         self.summary_calls: list[dict[str, object]] = []
         self.deleted_summaries: list[tuple[int, int]] = []
+        self.memory_reviews: list[tuple[int, int, int, str]] = []
         self.merge_calls: list[tuple[int, int, bool]] = []
         self.manual_merge_calls: list[tuple[int, int, int]] = []
         self.sync_completed: list[int] = []
@@ -46,6 +47,7 @@ class CustomerAdminRepositoryStub:
             "tags": [],
             "selected_tag_ids": [],
             "summary": None,
+            "memories": [],
             "merge_suggestions": [],
         }
 
@@ -91,6 +93,14 @@ class CustomerAdminRepositoryStub:
     async def delete_summary(self, customer_id, administrator_id):
         """记录摘要删除。"""
         self.deleted_summaries.append((customer_id, administrator_id))
+
+    async def review_memory(
+        self, customer_id, memory_id, administrator_id, decision
+    ):
+        """记录结构化客户记忆复核。"""
+        self.memory_reviews.append(
+            (customer_id, memory_id, administrator_id, decision)
+        )
 
     async def review_merge(self, suggestion_id, administrator_id, accepted):
         """记录合并确认或拒绝。"""
@@ -388,3 +398,38 @@ async def test_admin_creates_manual_merge_with_identifiers_only() -> None:
 
     assert suggestion_id == 23
     assert repository.manual_merge_calls == [(7, 8, 1)]
+
+
+@pytest.mark.asyncio
+async def test_admin_reviews_structured_memory_through_existing_customer_service() -> None:
+    """结构化记忆复核复用既有管理员权限和客户服务边界。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+    )
+
+    await service.review_memory(7, 12, employee(), decision="approve")
+
+    assert repository.memory_reviews == [(7, 12, 1, "approve")]
+
+
+@pytest.mark.asyncio
+async def test_structured_memory_review_rejects_unknown_decision() -> None:
+    """未知记忆状态转换必须在服务层停止。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+    )
+
+    with pytest.raises(ValueError, match="不支持"):
+        await service.review_memory(7, 12, employee(), decision="archive")
+
+    assert repository.memory_reviews == []

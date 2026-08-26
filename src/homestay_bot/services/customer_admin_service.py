@@ -104,6 +104,15 @@ class CustomerAdminRepositoryPort(Protocol):
     ) -> None:
         """删除客户摘要。"""
 
+    async def review_memory(
+        self,
+        customer_id: int,
+        memory_id: int,
+        administrator_id: int,
+        decision: str,
+    ) -> None:
+        """复核单条结构化客户记忆。"""
+
     async def review_merge(
         self,
         suggestion_id: int,
@@ -334,6 +343,25 @@ class CustomerAdminService:
         await self._repository.delete_summary(
             customer_id,
             administrator.id,
+        )
+
+    async def review_memory(
+        self,
+        customer_id: int,
+        memory_id: int,
+        administrator: Employee,
+        *,
+        decision: str,
+    ) -> None:
+        """只允许管理员批准、拒绝或标记单条客户记忆失效。"""
+        self._require_admin(administrator)
+        if decision not in {"approve", "reject", "stale"}:
+            raise CustomerConflictError("不支持的客户记忆复核操作")
+        await self._repository.review_memory(
+            customer_id,
+            memory_id,
+            administrator.id,
+            decision,
         )
 
     async def review_merge(

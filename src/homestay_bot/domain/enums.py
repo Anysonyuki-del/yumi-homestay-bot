@@ -43,6 +43,34 @@ class CustomerMergeStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class CustomerMemoryCategory(StrEnum):
+    """定义允许长期保存的客户记忆类别。"""
+
+    PREFERENCE = "preference"
+    CONFIRMED_FACT = "confirmed_fact"
+    UNRESOLVED = "unresolved"
+    SERVICE_HISTORY = "service_history"
+
+
+class CustomerMemoryStatus(StrEnum):
+    """定义结构化客户记忆从候选到失效的治理状态。"""
+
+    CANDIDATE = "candidate"
+    ACTIVE = "active"
+    DISPUTED = "disputed"
+    STALE = "stale"
+    SUPERSEDED = "superseded"
+    REJECTED = "rejected"
+
+
+class CustomerMemoryEvidenceType(StrEnum):
+    """区分记忆来自客户明示、员工确认还是模型推断。"""
+
+    USER_EXPLICIT = "user_explicit"
+    EMPLOYEE_CONFIRMED = "employee_confirmed"
+    MODEL_INFERENCE = "model_inference"
+
+
 class BusinessTaskType(StrEnum):
     """定义一期允许进入任务中心的业务事项。"""
 

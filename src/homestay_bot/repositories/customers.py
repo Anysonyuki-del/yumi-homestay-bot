@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, update
@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import (
     CustomerIdentityProvider,
+    CustomerMemoryCategory,
+    CustomerMemoryEvidenceType,
+    CustomerMemoryStatus,
     CustomerMergeStatus,
     EmployeeRole,
 )
@@ -19,6 +22,7 @@ from homestay_bot.domain.models import (
     Customer,
     CustomerContextSummary,
     CustomerIdentity,
+    CustomerMemoryItem,
     CustomerMergeSuggestion,
     CustomerTag,
     CustomerTagLink,
@@ -368,6 +372,20 @@ class SQLAlchemyCustomerRepository:
                 CustomerContextSummary.customer_id == customer_id
             )
         )
+        memories = list(
+            (
+                await self._session.scalars(
+                    select(CustomerMemoryItem)
+                    .where(CustomerMemoryItem.customer_id == customer_id)
+                    .order_by(
+                        CustomerMemoryItem.status,
+                        CustomerMemoryItem.updated_at.desc(),
+                        CustomerMemoryItem.id.desc(),
+                    )
+                    .limit(100)
+                )
+            ).all()
+        )
         merge_suggestions = list(
             (
                 await self._session.scalars(
@@ -393,6 +411,7 @@ class SQLAlchemyCustomerRepository:
             "tags": tags,
             "selected_tag_ids": selected_tag_ids,
             "summary": summary,
+            "memories": memories,
             "merge_suggestions": merge_suggestions,
         }
 
@@ -600,7 +619,7 @@ class SQLAlchemyCustomerRepository:
         customer_id: int,
         administrator_id: int,
     ) -> None:
-        """物理删除客户摘要并写最小审计。"""
+        """物理删除客户摘要和结构化记忆并写最小审计。"""
         await self._require_admin(administrator_id)
         summary = await self._session.scalar(
             select(CustomerContextSummary)
@@ -609,12 +628,101 @@ class SQLAlchemyCustomerRepository:
         )
         if summary is not None:
             await self._session.delete(summary)
+        memories = list(
+            (
+                await self._session.scalars(
+                    select(CustomerMemoryItem)
+                    .where(CustomerMemoryItem.customer_id == customer_id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        for memory in memories:
+            await self._session.delete(memory)
         self._add_customer_audit(
             administrator_id,
             "customer_summary_deleted",
             customer_id,
         )
         await self._session.flush()
+
+    async def review_memory(
+        self,
+        customer_id: int,
+        memory_id: int,
+        administrator_id: int,
+        decision: str,
+    ) -> None:
+        """以管理员判断结束候选、冲突或过期记忆的治理状态。"""
+        await self._require_admin(administrator_id)
+        memory = await self._session.scalar(
+            select(CustomerMemoryItem)
+            .where(
+                CustomerMemoryItem.id == memory_id,
+                CustomerMemoryItem.customer_id == customer_id,
+            )
+            .with_for_update()
+        )
+        if memory is None:
+            raise CustomerNotFoundError("客户记忆不存在")
+        now = datetime.now(UTC)
+        if decision == "approve":
+            conflicts = list(
+                (
+                    await self._session.scalars(
+                        select(CustomerMemoryItem)
+                        .where(
+                            CustomerMemoryItem.customer_id == customer_id,
+                            CustomerMemoryItem.subject_key == memory.subject_key,
+                            CustomerMemoryItem.id != memory.id,
+                            CustomerMemoryItem.status.in_(
+                                [
+                                    CustomerMemoryStatus.ACTIVE,
+                                    CustomerMemoryStatus.DISPUTED,
+                                ]
+                            ),
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            for conflict in conflicts:
+                conflict.status = CustomerMemoryStatus.SUPERSEDED
+                conflict.status_reason = "管理员批准同主题记忆"
+            memory.status = CustomerMemoryStatus.ACTIVE
+            memory.evidence_type = CustomerMemoryEvidenceType.EMPLOYEE_CONFIRMED
+            memory.confirmed_at = now
+            review_days, expiry_days = self._memory_review_days(memory.category)
+            memory.review_at = now + timedelta(days=review_days)
+            memory.expires_at = now + timedelta(days=expiry_days)
+            memory.status_reason = None
+        elif decision == "reject":
+            memory.status = CustomerMemoryStatus.REJECTED
+            memory.status_reason = "管理员拒绝"
+        elif decision == "stale":
+            memory.status = CustomerMemoryStatus.STALE
+            memory.status_reason = "管理员标记失效"
+        else:
+            raise CustomerConflictError("不支持的客户记忆复核操作")
+        self._add_customer_audit(
+            administrator_id,
+            "customer_memory_reviewed",
+            customer_id,
+            {"memory_id": memory_id, "decision": decision},
+        )
+        await self._session.flush()
+
+    @staticmethod
+    def _memory_review_days(
+        category: CustomerMemoryCategory,
+    ) -> tuple[int, int]:
+        """返回管理员批准后各类记忆的复核天数和最长有效天数。"""
+        return {
+            CustomerMemoryCategory.PREFERENCE: (365, 730),
+            CustomerMemoryCategory.CONFIRMED_FACT: (180, 365),
+            CustomerMemoryCategory.UNRESOLVED: (30, 60),
+            CustomerMemoryCategory.SERVICE_HISTORY: (180, 365),
+        }[category]
 
     async def review_merge(
         self,
@@ -866,6 +974,7 @@ class SQLAlchemyCustomerRepository:
         )
         await self._merge_tag_links(source.id, target.id)
         await self._merge_customer_summaries(source.id, target.id)
+        await self._merge_customer_memories(source.id, target.id)
 
         # 目标客户没有联系方式时才继承来源密文，避免覆盖管理员已确认资料。
         if target.phone_ciphertext is None and source.phone_ciphertext is not None:
@@ -1014,6 +1123,41 @@ class SQLAlchemyCustomerRepository:
         )[:20]
         target.version = (target.version or 0) + 1
         await self._session.delete(source)
+
+    async def _merge_customer_memories(
+        self,
+        source_customer_id: int,
+        target_customer_id: int,
+    ) -> None:
+        """迁移来源记忆，并把同主题的不同有效陈述置为争议状态。"""
+        memories = list(
+            (
+                await self._session.scalars(
+                    select(CustomerMemoryItem)
+                    .where(
+                        CustomerMemoryItem.customer_id.in_(
+                            [source_customer_id, target_customer_id]
+                        )
+                    )
+                    .order_by(CustomerMemoryItem.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        for memory in memories:
+            if memory.customer_id == source_customer_id:
+                memory.customer_id = target_customer_id
+        active_by_subject: dict[str, list[CustomerMemoryItem]] = {}
+        for memory in memories:
+            if memory.status is CustomerMemoryStatus.ACTIVE:
+                active_by_subject.setdefault(memory.subject_key, []).append(memory)
+        for same_subject in active_by_subject.values():
+            statements = {"".join(item.statement.split()) for item in same_subject}
+            if len(statements) <= 1:
+                continue
+            for memory in same_subject:
+                memory.status = CustomerMemoryStatus.DISPUTED
+                memory.status_reason = "客户合并后同主题存在冲突"
 
     @staticmethod
     def _close_source_pending_suggestions(

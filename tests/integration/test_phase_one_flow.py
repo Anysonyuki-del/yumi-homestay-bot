@@ -123,7 +123,7 @@ class SummaryStub:
     async def summarize(self, *, tier, existing_summary, messages):
         """按层级合并测试消息。"""
         return ContextSummaryResult(
-            summary=f"{tier}：" + "；".join(messages),
+            summary=f"{tier}：" + "；".join(item.content for item in messages),
             unresolved_items=[],
         )
 

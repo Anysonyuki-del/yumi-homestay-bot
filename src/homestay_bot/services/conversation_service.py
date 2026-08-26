@@ -223,8 +223,10 @@ class CustomerProfilePort(Protocol):
 class CustomerContextPort(Protocol):
     """定义按正式客户读取脱敏摘要的接口。"""
 
-    async def load_model_context(self, customer_id: int) -> CustomerModelContext:
-        """返回不含原文和敏感字段的客户摘要。"""
+    async def load_model_context(
+        self, customer_id: int, *, query: str = ""
+    ) -> CustomerModelContext:
+        """按当前问题返回不含原文和敏感字段的客户摘要。"""
 
 
 class BusinessTaskPort(Protocol):
@@ -749,7 +751,8 @@ class ConversationService:
             model_context = None
             if self._customer_context is not None and conversation.customer_id is not None:
                 model_context = await self._customer_context.load_model_context(
-                    conversation.customer_id
+                    conversation.customer_id,
+                    query=message.content,
                 )
             merged_guest_count_text = str(
                 (message.metadata or {}).get("merged_guest_count", "1")

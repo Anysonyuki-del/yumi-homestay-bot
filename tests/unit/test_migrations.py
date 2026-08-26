@@ -93,8 +93,14 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
         admin_indexes = connection.execute("PRAGMA index_list('admin_credentials')").fetchall()
         csrf_indexes = connection.execute("PRAGMA index_list('admin_csrf_nonces')").fetchall()
         stay_indexes = connection.execute("PRAGMA index_list('stay_orders')").fetchall()
+        memory_indexes = connection.execute(
+            "PRAGMA index_list('customer_memory_items')"
+        ).fetchall()
         stay_columns = {
             row[1] for row in connection.execute("PRAGMA table_info('stay_orders')")
+        }
+        message_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info('messages')")
         }
         csrf_foreign_keys = connection.execute(
             "PRAGMA foreign_key_list('admin_csrf_nonces')"
@@ -105,12 +111,16 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
         state_foreign_keys = connection.execute(
             "PRAGMA foreign_key_list('runtime_config_state')"
         ).fetchall()
+        memory_foreign_keys = connection.execute(
+            "PRAGMA foreign_key_list('customer_memory_items')"
+        ).fetchall()
     assert {
         "admin_credentials",
         "admin_csrf_nonces",
         "admin_csrf_quota",
         "runtime_config_versions",
         "runtime_config_state",
+        "customer_memory_items",
     } <= tables_after_upgrade
     assert "ck_admin_credentials_singleton" in admin_ddl
     assert "ck_admin_csrf_quota_singleton" in quota_ddl
@@ -126,10 +136,27 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert any(row[1] == "ix_admin_csrf_nonces_expires_at" for row in csrf_indexes)
     assert any(row[1] == "ix_stay_orders_check_in_status" for row in stay_indexes)
     assert any(row[1] == "ix_stay_orders_check_out_status" for row in stay_indexes)
+    assert any(
+        row[1] == "ix_customer_memory_customer_status_review"
+        for row in memory_indexes
+    )
+    assert any(
+        row[1] == "ix_customer_memory_customer_subject"
+        for row in memory_indexes
+    )
     assert "checkout_observed_on" in stay_columns
+    assert "memory_processed_at" in message_columns
     assert any(row[2] == "employees" and row[3] == "employee_id" for row in admin_foreign_keys)
     assert any(row[2] == "admin_credentials" and row[3] == "admin_id" for row in csrf_foreign_keys)
     assert sum(row[2] == "runtime_config_versions" for row in state_foreign_keys) == 2
+    assert any(
+        row[2] == "customers" and row[3] == "customer_id"
+        for row in memory_foreign_keys
+    )
+    assert any(
+        row[2] == "messages" and row[3] == "source_message_id"
+        for row in memory_foreign_keys
+    )
 
     lifecycle_downgrade = run_alembic(
         "downgrade",
@@ -143,9 +170,20 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
         stay_columns_after_lifecycle_downgrade = {
             row[1] for row in connection.execute("PRAGMA table_info('stay_orders')")
         }
+        message_columns_after_lifecycle_downgrade = {
+            row[1] for row in connection.execute("PRAGMA table_info('messages')")
+        }
+        tables_after_lifecycle_downgrade = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
     assert "status" not in version_columns
     assert "based_on_revision" not in version_columns
     assert "checkout_observed_on" not in stay_columns_after_lifecycle_downgrade
+    assert "memory_processed_at" not in message_columns_after_lifecycle_downgrade
+    assert "customer_memory_items" not in tables_after_lifecycle_downgrade
 
     dashboard_downgrade = run_alembic("downgrade", "0015_admin_runtime_config")
     assert dashboard_downgrade.returncode == 0, dashboard_downgrade.stderr
@@ -175,7 +213,7 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0018_stay_checkout_observation (head)" in current.stdout
+    assert "0019_customer_memory_items (head)" in current.stdout
 
 
 def test_runtime_config_lifecycle_backfills_existing_versions_with_orm_enum_name(

@@ -79,6 +79,16 @@ class CustomerAdminServicePort(Protocol):
     ) -> None:
         """删除客户摘要。"""
 
+    async def review_memory(
+        self,
+        customer_id: int,
+        memory_id: int,
+        administrator: Employee,
+        *,
+        decision: str,
+    ) -> None:
+        """复核单条结构化客户记忆。"""
+
     async def review_merge(
         self,
         suggestion_id: int,
@@ -453,6 +463,32 @@ async def delete_customer_summary(
     )
     try:
         await service.delete_summary(customer_id, administrator)
+    except Exception as error:
+        _raise_page_error(error)
+    return _customer_redirect(customer_id)
+
+
+@router.post("/{customer_id}/memories/{memory_id}/{decision}")
+async def review_customer_memory(
+    request: Request,
+    customer_id: int,
+    memory_id: int,
+    decision: str,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """消耗一次性令牌后复核一条结构化客户记忆。"""
+    administrator, service = await _customer_form_context(
+        request,
+        customer_id,
+        csrf_token,
+    )
+    try:
+        await service.review_memory(
+            customer_id,
+            memory_id,
+            administrator,
+            decision=decision,
+        )
     except Exception as error:
         _raise_page_error(error)
     return _customer_redirect(customer_id)

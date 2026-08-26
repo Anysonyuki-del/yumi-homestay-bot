@@ -13,6 +13,7 @@ from homestay_bot.integrations.deepseek_context_summarizer import (
 from homestay_bot.services.context_retention import (
     ContextRetentionService,
     ContextSummaryResult,
+    MemorySource,
 )
 
 NOW = datetime(2026, 7, 31, 8, tzinfo=UTC)
@@ -47,6 +48,15 @@ class ContextRepositoryStub:
         """返回七天内但不属于最近原文窗口的消息。"""
         return self.short_candidates
 
+    async def expire_customer_memories(self, customer_id: int, now: datetime) -> None:
+        """记录维护入口兼容的记忆失效步骤。"""
+
+    async def list_recent_unobserved(
+        self, customer_id: int, now: datetime
+    ) -> list[Message]:
+        """单元测试默认没有额外的最近观察消息。"""
+        return []
+
     async def get_summary(self, customer_id: int):
         """测试默认没有既有摘要。"""
         return None
@@ -63,11 +73,23 @@ class ContextRepositoryStub:
         result: ContextSummaryResult,
         messages: list[Message],
         now: datetime,
+        **kwargs,
     ) -> None:
         """记录短摘要并标记原文已覆盖。"""
         self.short_saved.append(result)
         for item in messages:
             item.short_summarized_at = now
+
+    async def save_memory_observations(
+        self,
+        customer_id: int,
+        result: ContextSummaryResult,
+        messages: list[Message],
+        now: datetime,
+    ) -> None:
+        """记录最近消息已经完成记忆观察。"""
+        for item in messages:
+            item.memory_processed_at = now
 
     async def save_long_summary_and_purge(
         self,
@@ -92,10 +114,10 @@ class SummarizerStub:
         self.calls: list[tuple[str, list[str]]] = []
 
     async def summarize(
-        self, *, tier: str, existing_summary: str, messages: list[str]
+        self, *, tier: str, existing_summary: str, messages: list[MemorySource]
     ) -> ContextSummaryResult:
         """记录脱敏后的摘要输入。"""
-        self.calls.append((tier, messages))
+        self.calls.append((tier, [item.content for item in messages]))
         if self.fail:
             raise RuntimeError("summary unavailable")
         return ContextSummaryResult(
@@ -130,6 +152,34 @@ async def test_summary_failure_keeps_original_message() -> None:
 
     assert repository.expired[0].content == "七天前的原文"
     assert repository.expired[0].purged_at is None
+
+
+@pytest.mark.asyncio
+async def test_only_messages_seen_by_summarizer_can_be_purged() -> None:
+    """模型输入预算省略的消息必须保留到下一轮，不能被摘要事务误清除。"""
+    repository = ContextRepositoryStub()
+    repository.expired = [
+        message(1, "第一条过期原文", 8),
+        message(2, "第二条过期原文", 8),
+    ]
+
+    class BoundedSummarizer(SummarizerStub):
+        """模拟模型预算只实际接收第一条消息。"""
+
+        async def summarize(self, **kwargs):
+            return ContextSummaryResult(
+                summary="只覆盖第一条",
+                unresolved_items=[],
+                processed_source_ids=frozenset({"msg-1"}),
+            )
+
+    await ContextRetentionService(
+        repository,
+        BoundedSummarizer(),
+    ).maintain_customer(1, NOW)
+
+    assert repository.expired[0].content is None
+    assert repository.expired[1].content == "第二条过期原文"
 
 
 @pytest.mark.asyncio
@@ -205,7 +255,13 @@ async def test_context_summarizer_redacts_sensitive_input() -> None:
     await summarizer.summarize(
         tier="short",
         existing_summary="",
-        messages=["手机号13800138000，门锁密码839201，地址武汉市洪山区珞喻路12号"],
+        messages=[
+            MemorySource(
+                message_id="sensitive-1",
+                origin="guest",
+                content="手机号13800138000，门锁密码839201，地址武汉市洪山区珞喻路12号",
+            )
+        ],
     )
 
     request = json.dumps(client.requests[0], ensure_ascii=False)
@@ -226,7 +282,7 @@ async def test_context_summarizer_rejects_sensitive_output() -> None:
         await summarizer.summarize(
             tier="long",
             existing_summary="",
-            messages=["普通内容"],
+            messages=[MemorySource("safe-1", "guest", "普通内容")],
         )
 
 
@@ -239,9 +295,111 @@ async def test_context_summarizer_bounds_message_input() -> None:
     await summarizer.summarize(
         tier="long",
         existing_summary="既有摘要",
-        messages=[f"消息 {index}: " + "偏好安静。" * 500 for index in range(30)],
+        messages=[
+            MemorySource(
+                f"bounded-{index}",
+                "guest",
+                f"消息 {index}: " + "偏好安静。" * 500,
+            )
+            for index in range(30)
+        ],
     )
 
     request_payload = json.loads(client.requests[0]["messages"][1]["content"])
-    assert sum(len(item) for item in request_payload["messages"]) <= 12_000
+    assert sum(len(item["content"]) for item in request_payload["messages"]) <= 12_000
     assert len(request_payload["messages"]) < 30
+
+
+@pytest.mark.asyncio
+async def test_context_summarizer_returns_safe_structured_memory_candidates() -> None:
+    """既有摘要调用应同时返回安全记忆候选，不产生第二次模型请求。"""
+    client = SummaryClientStub(
+        {
+            "summary": "客户养狗",
+            "unresolved_items": [],
+            "memory_candidates": [
+                {
+                    "subject_key": "Pet Dog Name",
+                    "category": "confirmed_fact",
+                    "statement": "客户的狗叫查理",
+                    "evidence_type": "user_explicit",
+                    "source_message_id": "memory-dog",
+                    "confidence": 0.98,
+                    "is_correction": False,
+                }
+            ],
+        }
+    )
+    summarizer = DeepSeekContextSummarizer(client, "deepseek-v4-flash")
+
+    result = await summarizer.summarize(
+        tier="short",
+        existing_summary="",
+        messages=[MemorySource("memory-dog", "guest", "我的狗叫查理")],
+    )
+
+    assert len(client.requests) == 1
+    assert result.memory_candidates[0].subject_key == "pet_dog_name"
+    assert result.memory_candidates[0].statement == "客户的狗叫查理"
+
+
+@pytest.mark.asyncio
+async def test_context_summarizer_drops_dynamic_business_memory() -> None:
+    """即使模型输出，房价和当前订单等动态事实也不得进入记忆候选。"""
+    client = SummaryClientStub(
+        {
+            "summary": "客户咨询过房价",
+            "unresolved_items": [],
+            "memory_candidates": [
+                {
+                    "subject_key": "current_room_price",
+                    "category": "confirmed_fact",
+                    "statement": "客户当前房价是每晚 399 元",
+                    "evidence_type": "user_explicit",
+                    "source_message_id": "dynamic-price",
+                    "confidence": 0.99,
+                }
+            ],
+        }
+    )
+    summarizer = DeepSeekContextSummarizer(client, "deepseek-v4-flash")
+
+    result = await summarizer.summarize(
+        tier="short",
+        existing_summary="",
+        messages=[MemorySource("dynamic-price", "guest", "房价是 399 元")],
+    )
+
+    assert result.memory_candidates == []
+
+
+@pytest.mark.asyncio
+async def test_context_summarizer_downgrades_unseen_source_to_inference() -> None:
+    """模型引用未进入实际请求的消息编号时不得获得明示证据等级。"""
+    client = SummaryClientStub(
+        {
+            "summary": "客户养狗",
+            "unresolved_items": [],
+            "memory_candidates": [
+                {
+                    "subject_key": "pet_dog_name",
+                    "category": "confirmed_fact",
+                    "statement": "客户的狗叫查理",
+                    "evidence_type": "user_explicit",
+                    "source_message_id": "not-visible",
+                    "confidence": 0.99,
+                }
+            ],
+        }
+    )
+    summarizer = DeepSeekContextSummarizer(client, "deepseek-v4-flash")
+
+    result = await summarizer.summarize(
+        tier="short",
+        existing_summary="",
+        messages=[MemorySource("visible", "guest", "普通内容")],
+    )
+
+    candidate = result.memory_candidates[0]
+    assert candidate.evidence_type.value == "model_inference"
+    assert candidate.source_message_id is None

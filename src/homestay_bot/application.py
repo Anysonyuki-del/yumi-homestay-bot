@@ -2265,7 +2265,7 @@ async def _run_context_maintenance_loop(
     heartbeat_now: Callable[[], datetime] | None = None,
     heartbeat: Callable[[datetime], None] | None = None,
 ) -> None:
-    """每小时为有消息的正式客户更新分层摘要。"""
+    """每小时为有消息的正式客户更新分层摘要和结构化记忆。"""
     current_time = now_provider or (lambda: datetime.now(UTC))
     completed_time = heartbeat_now or (lambda: datetime.now(UTC))
 

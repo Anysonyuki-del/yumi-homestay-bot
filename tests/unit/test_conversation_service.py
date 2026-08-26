@@ -190,9 +190,12 @@ class CustomerProfileStub:
 class CustomerContextStub:
     """返回固定脱敏客户摘要。"""
 
-    async def load_model_context(self, customer_id: int) -> CustomerModelContext:
-        """验证按正式客户主键读取摘要。"""
+    async def load_model_context(
+        self, customer_id: int, *, query: str = ""
+    ) -> CustomerModelContext:
+        """验证按正式客户主键和当前问题读取摘要。"""
         assert customer_id == 42
+        assert query == "几点入住？"
         return CustomerModelContext("偏好安静", "曾入住", [])
 
 

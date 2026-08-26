@@ -1,19 +1,334 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from homestay_bot.domain.enums import BusinessTaskStatus, BusinessTaskType, MessageOrigin
+from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    BusinessTaskType,
+    CustomerMemoryCategory,
+    CustomerMemoryEvidenceType,
+    CustomerMemoryStatus,
+    MessageOrigin,
+)
 from homestay_bot.domain.models import (
     Base,
     BusinessTask,
     Conversation,
     Customer,
+    CustomerMemoryItem,
     Message,
     PropertyProfile,
     StayOrder,
 )
 from homestay_bot.repositories.context import SQLAlchemyContextRepository
+from homestay_bot.services.context_retention import (
+    ContextRetentionService,
+    ContextSummaryResult,
+    CustomerMemoryCandidate,
+)
+
+
+async def _customer_message(
+    session,
+    *,
+    customer_name: str,
+    external_message_id: str,
+    content: str,
+) -> tuple[Customer, Message]:
+    """建立可被结构化记忆引用的正式客户消息。"""
+    customer = Customer(display_name=customer_name)
+    session.add(customer)
+    await session.flush()
+    conversation = Conversation(
+        customer_id=customer.id,
+        open_kfid=f"kfid-{external_message_id}",
+        external_userid=f"user-{external_message_id}",
+    )
+    session.add(conversation)
+    await session.flush()
+    source = Message(
+        conversation_id=conversation.id,
+        external_message_id=external_message_id,
+        origin=MessageOrigin.GUEST,
+        message_type="text",
+        content=content,
+        sent_at=datetime.now(UTC),
+    )
+    session.add(source)
+    await session.flush()
+    return customer, source
+
+
+@pytest.mark.asyncio
+async def test_explicit_memory_is_recalled_only_for_owner_and_relevant_query() -> None:
+    """客户明示稳定事实只对同一客户和相关问题进入模型上下文。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="查理主人",
+            external_message_id="memory-dog",
+            content="我的狗叫查理",
+        )
+        other = Customer(display_name="另一位客户")
+        session.add(other)
+        await session.flush()
+        repository = SQLAlchemyContextRepository(session)
+        await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult(
+                summary="客户养狗",
+                unresolved_items=[],
+                memory_candidates=[
+                    CustomerMemoryCandidate(
+                        subject_key="pet_dog_name",
+                        category=CustomerMemoryCategory.CONFIRMED_FACT,
+                        statement="客户的狗叫查理",
+                        evidence_type=CustomerMemoryEvidenceType.USER_EXPLICIT,
+                        source_message_id=source.external_message_id,
+                        confidence=0.98,
+                    )
+                ],
+            ),
+            [source],
+            now,
+        )
+
+        owner_context = await repository.load_model_context(
+            customer.id, query="我的狗叫什么？"
+        )
+        unrelated_context = await repository.load_model_context(
+            customer.id, query="几点退房？"
+        )
+        other_context = await repository.load_model_context(
+            other.id, query="我的狗叫什么？"
+        )
+
+        assert owner_context.memories == [
+            {
+                "subject_key": "pet_dog_name",
+                "category": "confirmed_fact",
+                "statement": "客户的狗叫查理",
+                "confidence": 0.98,
+            }
+        ]
+        assert unrelated_context.memories == []
+        assert other_context.memories == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_single_recent_message_becomes_cross_conversation_memory() -> None:
+    """最近原文无需等待退出三条窗口，也能在维护后供新会话召回。"""
+
+    class RecentMemorySummarizer:
+        """从单条最近原文返回确定的明示记忆。"""
+
+        async def summarize(self, *, tier, existing_summary, messages):
+            """验证最近消息只参与观察，不进入短摘要。"""
+            assert tier == "memory"
+            assert messages[0].summary_eligible is False
+            return ContextSummaryResult(
+                summary="无新增摘要",
+                unresolved_items=[],
+                memory_candidates=[
+                    CustomerMemoryCandidate(
+                        "pet_dog_name",
+                        CustomerMemoryCategory.CONFIRMED_FACT,
+                        "客户的狗叫查理",
+                        CustomerMemoryEvidenceType.USER_EXPLICIT,
+                        messages[0].message_id,
+                        0.99,
+                    )
+                ],
+            )
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="单消息客户",
+            external_message_id="single-recent-dog",
+            content="我的狗叫查理",
+        )
+        repository = SQLAlchemyContextRepository(session)
+
+        await ContextRetentionService(
+            repository,
+            RecentMemorySummarizer(),
+        ).maintain_customer(customer.id, now)
+        context = await repository.load_model_context(
+            customer.id, query="我的狗叫什么？"
+        )
+
+        assert source.content == "我的狗叫查理"
+        assert source.short_summarized_at is None
+        assert source.memory_processed_at == now
+        assert context.memories[0]["statement"] == "客户的狗叫查理"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_model_inference_stays_candidate_and_explicit_correction_supersedes() -> None:
+    """模型推断不得召回，客户明确纠正同主题时应覆盖旧有效记忆。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, first = await _customer_message(
+            session,
+            customer_name="偏好客户",
+            external_message_id="memory-first",
+            content="我喜欢高楼层",
+        )
+        conversation = await session.get(Conversation, first.conversation_id)
+        correction = Message(
+            conversation_id=conversation.id,
+            external_message_id="memory-correction",
+            origin=MessageOrigin.GUEST,
+            message_type="text",
+            content="更正一下，我喜欢低楼层",
+            sent_at=now + timedelta(minutes=1),
+        )
+        session.add(correction)
+        await session.flush()
+        repository = SQLAlchemyContextRepository(session)
+        inferred = CustomerMemoryCandidate(
+            subject_key="drink_preference",
+            category=CustomerMemoryCategory.PREFERENCE,
+            statement="客户可能喜欢茶",
+            evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
+            source_message_id=first.external_message_id,
+            confidence=0.95,
+        )
+        await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult("偏好", [], [inferred]),
+            [first],
+            now,
+        )
+        await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult(
+                "偏好高楼层",
+                [],
+                [
+                    CustomerMemoryCandidate(
+                        "floor_preference",
+                        CustomerMemoryCategory.PREFERENCE,
+                        "客户喜欢高楼层",
+                        CustomerMemoryEvidenceType.USER_EXPLICIT,
+                        first.external_message_id,
+                        0.95,
+                    )
+                ],
+            ),
+            [first],
+            now,
+        )
+        await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult(
+                "偏好低楼层",
+                [],
+                [
+                    CustomerMemoryCandidate(
+                        "floor_preference",
+                        CustomerMemoryCategory.PREFERENCE,
+                        "客户喜欢低楼层",
+                        CustomerMemoryEvidenceType.USER_EXPLICIT,
+                        correction.external_message_id,
+                        0.99,
+                        is_correction=True,
+                    )
+                ],
+            ),
+            [correction],
+            now + timedelta(minutes=1),
+        )
+
+        memories = list(
+            (
+                await session.scalars(
+                    select(CustomerMemoryItem).order_by(CustomerMemoryItem.id)
+                )
+            ).all()
+        )
+        context = await repository.load_model_context(
+            customer.id, query="我喜欢什么楼层？"
+        )
+
+        assert memories[0].status is CustomerMemoryStatus.CANDIDATE
+        assert memories[1].status is CustomerMemoryStatus.SUPERSEDED
+        assert memories[2].status is CustomerMemoryStatus.ACTIVE
+        assert context.memories[0]["statement"] == "客户喜欢低楼层"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unresolved_items_merge_and_active_memory_expires_to_stale() -> None:
+    """摘要层级不得覆盖待确认项，到复核期的记忆必须停止召回。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="待确认客户",
+            external_message_id="memory-expiry",
+            content="我喜欢安静",
+        )
+        repository = SQLAlchemyContextRepository(session)
+        candidate = CustomerMemoryCandidate(
+            "quiet_preference",
+            CustomerMemoryCategory.PREFERENCE,
+            "客户喜欢安静",
+            CustomerMemoryEvidenceType.USER_EXPLICIT,
+            source.external_message_id,
+            0.9,
+        )
+        await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult("短摘要", ["待确认到达时间"], [candidate]),
+            [source],
+            now,
+        )
+        await repository.save_long_summary_and_purge(
+            customer.id,
+            ContextSummaryResult("长摘要", ["待确认开票抬头"]),
+            [source],
+            now,
+        )
+        await repository.expire_customer_memories(
+            customer.id, now + timedelta(days=366)
+        )
+        summary = await repository.get_summary(customer.id)
+        memory = await session.scalar(select(CustomerMemoryItem))
+
+        assert summary.unresolved_items == ["待确认到达时间", "待确认开票抬头"]
+        assert memory.status is CustomerMemoryStatus.STALE
+        assert (
+            await repository.load_model_context(customer.id, query="我喜欢什么环境？")
+        ).memories == []
+
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -252,7 +567,9 @@ async def test_context_summary_multiple_batches_eventually_cover_all_candidates(
         async def summarize(self, *, tier, existing_summary, messages):
             """返回不含敏感信息的固定合并结果。"""
             assert tier == "short"
-            self.batch_sizes.append(len(messages))
+            self.batch_sizes.append(
+                sum(1 for item in messages if item.summary_eligible)
+            )
             return ContextSummaryResult(
                 summary=f"已处理 {sum(self.batch_sizes)} 条",
                 unresolved_items=[],

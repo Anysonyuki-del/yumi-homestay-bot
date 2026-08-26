@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -28,6 +29,9 @@ from homestay_bot.domain.enums import (
     ConversationMode,
     CredentialDeliveryStatus,
     CustomerIdentityProvider,
+    CustomerMemoryCategory,
+    CustomerMemoryEvidenceType,
+    CustomerMemoryStatus,
     CustomerMergeStatus,
     EmployeeRole,
     JobStatus,
@@ -305,6 +309,65 @@ class CustomerContextSummary(TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class CustomerMemoryItem(TimestampMixin, Base):
+    """保存按客户隔离、带证据和生命周期的结构化记忆。"""
+
+    __tablename__ = "customer_memory_items"
+    __table_args__ = (
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_customer_memory_confidence_range",
+        ),
+        Index(
+            "ix_customer_memory_customer_status_review",
+            "customer_id",
+            "status",
+            "review_at",
+        ),
+        Index(
+            "ix_customer_memory_customer_subject",
+            "customer_id",
+            "subject_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="CASCADE"), nullable=False
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    category: Mapped[CustomerMemoryCategory] = mapped_column(
+        Enum(CustomerMemoryCategory, native_enum=False, length=32), nullable=False
+    )
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[CustomerMemoryStatus] = mapped_column(
+        Enum(CustomerMemoryStatus, native_enum=False, length=16),
+        default=CustomerMemoryStatus.CANDIDATE,
+        nullable=False,
+    )
+    evidence_type: Mapped[CustomerMemoryEvidenceType] = mapped_column(
+        Enum(CustomerMemoryEvidenceType, native_enum=False, length=32), nullable=False
+    )
+    source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.external_message_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customer_memory_items.id", ondelete="SET NULL"), nullable=True
+    )
+    status_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
 class Conversation(TimestampMixin, Base):
     """保存一个微信客服账号与一个外部联系人的会话状态。"""
 
@@ -367,6 +430,9 @@ class Message(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     short_summarized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    memory_processed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

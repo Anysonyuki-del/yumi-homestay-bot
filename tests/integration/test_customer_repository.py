@@ -11,6 +11,9 @@ from homestay_bot.domain.enums import (
     BusinessTaskStatus,
     BusinessTaskType,
     CustomerIdentityProvider,
+    CustomerMemoryCategory,
+    CustomerMemoryEvidenceType,
+    CustomerMemoryStatus,
     CustomerMergeStatus,
     EmployeeRole,
     MessageOrigin,
@@ -23,6 +26,7 @@ from homestay_bot.domain.models import (
     Customer,
     CustomerContextSummary,
     CustomerIdentity,
+    CustomerMemoryItem,
     CustomerMergeSuggestion,
     CustomerTag,
     CustomerTagLink,
@@ -562,6 +566,61 @@ async def test_admin_can_edit_customer_crm_with_safe_audits() -> None:
         assert "客户明确要求安静房间" not in audit_payload
         assert "偏好安静" not in audit_payload
         assert "过往咨询正文不应进入审计" not in audit_payload
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_admin_reviews_and_physically_deletes_customer_memory() -> None:
+    """管理员批准候选后可召回，删除摘要时必须同时物理删除记忆。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        administrator = Employee(
+            wecom_userid="admin-memory",
+            name="YuMi",
+            role=EmployeeRole.ADMIN,
+        )
+        customer = Customer(display_name="记忆复核客户")
+        session.add_all([administrator, customer])
+        await session.flush()
+        memory = CustomerMemoryItem(
+            customer_id=customer.id,
+            subject_key="pet_dog_name",
+            category=CustomerMemoryCategory.CONFIRMED_FACT,
+            statement="客户的狗叫查理",
+            status=CustomerMemoryStatus.CANDIDATE,
+            evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
+            confidence=0.88,
+            review_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC),
+        )
+        session.add(memory)
+        await session.flush()
+        repository = SQLAlchemyCustomerRepository(session)
+
+        await repository.review_memory(
+            customer.id,
+            memory.id,
+            administrator.id,
+            "approve",
+        )
+        detail = await repository.customer_detail(customer.id)
+
+        assert memory.status is CustomerMemoryStatus.ACTIVE
+        assert memory.evidence_type is CustomerMemoryEvidenceType.EMPLOYEE_CONFIRMED
+        assert detail["memories"] == [memory]
+
+        await repository.delete_summary(customer.id, administrator.id)
+        await session.flush()
+
+        assert await session.scalar(select(CustomerMemoryItem)) is None
+        audit_payload = repr(
+            list((await session.scalars(select(AuditLog))).all())
+        )
+        assert "客户的狗叫查理" not in audit_payload
 
     await engine.dispose()
 

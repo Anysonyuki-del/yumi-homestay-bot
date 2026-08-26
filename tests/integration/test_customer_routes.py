@@ -7,7 +7,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import (
+    CustomerMemoryCategory,
+    CustomerMemoryEvidenceType,
+    CustomerMemoryStatus,
+    EmployeeRole,
+)
 from homestay_bot.routes.customers import router as customers_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.services.customer_admin_service import CustomerCard
@@ -46,6 +51,17 @@ class CustomerAdminStub:
             long_summary="曾咨询武汉旅游安排",
             unresolved_items=["待确认到达时间"],
         )
+        self.memories = [
+            SimpleNamespace(
+                id=12,
+                subject_key="pet_dog_name",
+                statement="客户的狗叫查理",
+                category=CustomerMemoryCategory.CONFIRMED_FACT,
+                status=CustomerMemoryStatus.CANDIDATE,
+                evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
+                confidence=0.86,
+            )
+        ]
         self.suggestion = SimpleNamespace(
             id=9,
             reason="verified_phone",
@@ -56,6 +72,7 @@ class CustomerAdminStub:
         self.note_calls: list[tuple[int, str, int]] = []
         self.summary_calls: list[dict[str, object]] = []
         self.delete_calls: list[tuple[int, int]] = []
+        self.memory_calls: list[tuple[int, int, int, str]] = []
         self.merge_calls: list[tuple[int, int, bool]] = []
         self.manual_merge_calls: list[tuple[int, int, int]] = []
         self.list_calls: list[tuple[str | None, int, int, int]] = []
@@ -88,6 +105,7 @@ class CustomerAdminStub:
             "tags": self.tags,
             "selected_tag_ids": [1],
             "summary": self.summary,
+            "memories": self.memories,
             "merge_suggestions": [self.suggestion],
         }
 
@@ -168,6 +186,15 @@ class CustomerAdminStub:
         """记录摘要删除提交。"""
         self._require_admin(administrator)
         self.delete_calls.append((customer_id, administrator.id))
+
+    async def review_memory(
+        self, customer_id, memory_id, administrator, *, decision
+    ):
+        """记录结构化客户记忆复核。"""
+        self._require_admin(administrator)
+        self.memory_calls.append(
+            (customer_id, memory_id, administrator.id, decision)
+        )
 
     async def review_merge(
         self,
@@ -273,6 +300,8 @@ def test_admin_sees_masked_customer_and_multi_select_tags() -> None:
     assert "phone_ciphertext" not in detail.text
     assert detail.text.count('name="tag_ids"') == 2
     assert "/employee/customers/merge/9" in detail.text
+    assert "客户的狗叫查理" in detail.text
+    assert "/employee/customers/7/memories/12/approve" in detail.text
 
 
 def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
@@ -426,6 +455,22 @@ def test_admin_can_delete_summary_and_review_merge() -> None:
     assert rejected.status_code == 303
     assert customers.delete_calls == [(7, 1)]
     assert customers.merge_calls == [(9, 1, True), (9, 1, False)]
+
+
+def test_admin_can_review_structured_customer_memory() -> None:
+    """管理员可通过一次性令牌批准结构化客户记忆。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    token = detail_csrf(client)
+    reviewed = client.post(
+        "/employee/customers/7/memories/12/approve",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+
+    assert reviewed.status_code == 303
+    assert customers.memory_calls == [(7, 12, 1, "approve")]
 
 
 def test_admin_searches_masked_manual_merge_targets_from_detail() -> None:
