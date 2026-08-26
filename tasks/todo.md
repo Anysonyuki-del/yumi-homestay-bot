@@ -30,5 +30,8 @@
 - 摘要器会回传实际进入模型预算的消息编号，只有这些消息能被标记或清除；因输入预算省略的原文会留到下一轮，避免错误清理。
 - 会话按当前 `customer_id` 和当前问题召回最多 8 条、2400 字符的有效记忆；本轮陈述、实时订单、任务与工具结果始终优先。
 - 既有客户详情页可批准、拒绝或标记失效；删除摘要会同时物理删除结构化记忆，客户合并会迁移记忆并隔离合并冲突。
-- 验收结果：`1136 passed, 15 skipped`；Ruff、mypy（108 个源文件）、compileall、pip check、Alembic head 和 diff 检查均通过。
+- 验收结果：`1137 passed, 15 skipped`；Ruff、mypy（108 个源文件）、compileall、pip check、Alembic head 和 diff 检查均通过。
+- 本机发布版本为 `v1.0.4`；安装目录数据库已从 `0017` 升级到 `0019`，`quick_check` 和外键检查通过，`/health` 返回 200 `ok`。
+- 部署前备份位于 `/Users/rin/Library/Application Support/HomestayBot/.backups/pre-memory-v2-20260827-000814`。
+- 部署时修复两个既存启动缺陷：LaunchAgent 改用安装目录自包含虚拟环境，SQLite 驱动 `aiosqlite` 改为正式运行依赖；对应防回归测试已补齐。
 - 与本次任务无关的未跟踪 `YuMi民宿AI项目总结.txt` 保持未读、未改。

@@ -8,7 +8,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/rin/Library/Application Support/HomestayBot/start.sh</string>
+    <string>/Users/rin/Library/Application Support/HomestayBot/deploy/start.sh</string>
   </array>
 
   <key>WorkingDirectory</key>

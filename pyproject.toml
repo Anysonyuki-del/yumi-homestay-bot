@@ -8,6 +8,7 @@ version = "1.0.4"
 description = "武汉小型民宿企业微信客服机器人"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.21,<1",
     "alembic>=1.14,<2",
     "anthropic>=0.52,<1",
     "argon2-cffi>=23.1,<26",
@@ -27,7 +28,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "aiosqlite>=0.21,<1",
     "mypy>=1.15,<2",
     "playwright>=1.62,<1.63",
     "pytest>=8.3,<10",

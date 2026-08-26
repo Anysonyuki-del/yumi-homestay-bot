@@ -2,7 +2,8 @@
 set -eu
 
 # 启动服务前先把本地数据库迁移到当前代码要求的版本。
-APP_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# 脚本位于 deploy/，应用根目录是其父目录。
+APP_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PYTHON_BIN="$APP_ROOT/.venv/bin/python"
 
 cd "$APP_ROOT"

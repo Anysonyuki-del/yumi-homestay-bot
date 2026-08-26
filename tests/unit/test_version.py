@@ -16,6 +16,16 @@ def test_declared_release_version_is_valid_semantic_version() -> None:
     assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", declared_version)
 
 
+def test_default_sqlite_driver_is_a_runtime_dependency() -> None:
+    """默认 SQLite 部署必须在不安装开发依赖时也能启动。"""
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+
+    assert any(
+        dependency.startswith("aiosqlite")
+        for dependency in project["project"]["dependencies"]
+    )
+
+
 def test_long_lived_docs_do_not_copy_current_release_version() -> None:
     """README 和长期手册只能指向版本源，不能手写当前发布号。"""
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
