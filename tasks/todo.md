@@ -31,8 +31,9 @@
 - 会话按当前 `customer_id` 和当前问题召回最多 8 条、2400 字符的有效记忆；本轮陈述、实时订单、任务与工具结果始终优先。
 - 既有客户详情页可批准、拒绝或标记失效；删除摘要会同时物理删除结构化记忆，客户合并会迁移记忆并隔离合并冲突。
 - 验收结果：`1137 passed, 15 skipped`；Ruff、mypy（108 个源文件）、compileall、pip check、Alembic head 和 diff 检查均通过。
-- 本机发布版本为 `v1.0.4`；安装目录数据库已从 `0017` 升级到 `0019`，`quick_check` 和外键检查通过，应用进程及后台登录页均可访问。
+- 本机与生产环境均已发布 `v1.0.4`；生产提交为 `fe9cf8a`，API 容器包版本为 `1.0.4`，PostgreSQL 已从 `0018` 升级到 `0019_customer_memory_items`，公网后台实际页面显示 `v1.0.4`。
 - `/health` 启动后曾返回 200，随后因既存企业微信定时补拉 `WeComApiError` 变为 503 `degraded`；数据库、迁移和应用进程正常，该外部依赖故障不由本次记忆升级引入。
 - 部署前备份位于 `/Users/rin/Library/Application Support/HomestayBot/.backups/pre-memory-v2-20260827-000814`。
+- 生产部署前 PostgreSQL 自定义备份位于 `/opt/yumi-backups/v1.0.4-20260826T190756Z`，已通过容器内 `pg_restore -l` 校验。
 - 部署时修复两个既存启动缺陷：LaunchAgent 改用安装目录自包含虚拟环境，SQLite 驱动 `aiosqlite` 改为正式运行依赖；对应防回归测试已补齐。
 - 与本次任务无关的未跟踪 `YuMi民宿AI项目总结.txt` 保持未读、未改。
