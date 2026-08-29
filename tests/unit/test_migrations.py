@@ -3,6 +3,24 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+
+def test_migration_revision_ids_fit_alembic_version_column() -> None:
+    """所有迁移编号必须适配 Alembic 默认的 32 字符版本字段。"""
+    project_root = Path(__file__).resolve().parents[2]
+    config = Config(str(project_root / "alembic.ini"))
+    config.set_main_option("script_location", str(project_root / "migrations"))
+    revisions = tuple(ScriptDirectory.from_config(config).walk_revisions())
+
+    oversized = tuple(
+        revision.revision
+        for revision in revisions
+        if len(revision.revision) > 32
+    )
+    assert not oversized, f"迁移编号超过 32 字符：{oversized}"
+
 
 def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     """PostgreSQL 离线迁移 SQL 必须完整生成到当前唯一迁移头。"""
@@ -37,7 +55,7 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "CREATE INDEX ix_stay_orders_check_out_status" in result.stdout
     assert "checkout_observed_on" in result.stdout
     assert "0020_memory_trust_timeline" in result.stdout
-    assert "0021_task_lifecycle_room_operations" in result.stdout
+    assert "0021_task_lifecycle" in result.stdout
     assert "origin_kind" in result.stdout
     assert "closure_reason_code" in result.stdout
     assert "ix_business_tasks_status_expires_at" in result.stdout
@@ -278,7 +296,7 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0021_task_lifecycle_room_operations (head)" in current.stdout
+    assert "0021_task_lifecycle (head)" in current.stdout
 
 
 def test_customer_memory_trust_migration_quarantines_unverified_history(
