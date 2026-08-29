@@ -10,6 +10,7 @@
     <dt>执行员工</dt><dd>{{ assigned_employee_name }}</dd>
     <dt>服务日期</dt><dd>{{ task.service_date | date_zh }}</dd>
     <dt>房间状态</dt><dd>{{ room_state.status | status_zh if room_state else "未开始" }}</dd>
+    {% if task.status.value == "expired" %}<dt>失效原因</dt><dd>{{ task.closure_reason_code | status_zh }}</dd><dt>失效时间</dt><dd>{{ task.closed_at | datetime_zh }}</dd>{% endif %}
     <dt>任务说明</dt><dd class="long-text">{{ safe_description }}</dd>
   </dl>
 </section>
@@ -45,6 +46,6 @@
 
   {% if not is_admin and task.status.value == "pending_inspection" %}<form method="post" action="/employee/tasks/{{ task.id }}/ready" data-confirm="确认检查证据完整，并把房间标记为可入住吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">确认房间可入住</button></form>{% endif %}
   {% if is_admin and room_state and room_state.status.value == "ready" %}<form method="post" action="/employee/tasks/{{ task.id }}/revoke-ready" data-confirm="确定撤回可入住状态并要求重新检查吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">撤回可入住状态</button></form>{% endif %}
-  {% if is_admin and task.status.value not in ["completed", "cancelled"] %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？此操作会中止当前处理流程。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
+  {% if is_admin and task.status.value not in ["completed", "cancelled", "expired"] %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？此操作会中止当前处理流程。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
 </div></section>
 {% endblock %}

@@ -462,6 +462,7 @@ class SQLAlchemyContextRepository:
                             [
                                 BusinessTaskStatus.COMPLETED,
                                 BusinessTaskStatus.CANCELLED,
+                                BusinessTaskStatus.EXPIRED,
                             ]
                         ),
                     )

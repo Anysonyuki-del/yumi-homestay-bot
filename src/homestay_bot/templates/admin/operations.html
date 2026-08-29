@@ -2,9 +2,36 @@
 {% import "components/ui.html" as ui %}
 
 {% block content %}
-<section class="panel panel--padded">
-  <div class="section-heading"><div><p class="eyebrow">{{ snapshot.local_date | date_zh }}</p><h2>今日房态</h2></div><a class="button button--secondary" href="/employee/admin/attention">查看 {{ snapshot.attention_count }} 项关注事项</a></div>
-  <div class="responsive-table"><table class="data-table"><caption class="visually-hidden">今日房态与运营任务</caption><thead><tr><th scope="col">房源</th><th scope="col">房态</th><th scope="col">今日入住</th><th scope="col">今日退房</th><th scope="col">开放任务</th><th scope="col">下次入住</th></tr></thead><tbody>{% for room in snapshot.rooms %}<tr><td><a href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_title }}</strong></a><br><small>{{ room.room_number or "房号待补充" }}</small></td><td>{{ ui.badge(room.status | status_zh, "success" if room.status.value == "ready" else "warning") }}</td><td>今日入住 {{ room.today_arrival_count }}</td><td>今日退房 {{ room.today_departure_count }}</td><td><a href="/employee/tasks?property_id={{ room.property_id }}">{{ room.open_task_count }} 项</a></td><td>{{ room.next_arrival | date_zh if room.next_arrival else "暂无" }}</td></tr>{% else %}<tr><td colspan="6">暂无启用房源。</td></tr>{% endfor %}</tbody></table></div>
+<section class="operations-heading panel panel--padded">
+  <div class="section-heading">
+    <div><p class="eyebrow">{{ snapshot.local_date | date_zh }}</p><h2>房间近期运营</h2><p class="muted">入住状态来自百居易订单事实，运营准备度来自本地任务证据。</p></div>
+    <a class="button button--secondary" href="/employee/admin/attention">{{ snapshot.attention_count }} 项待关注</a>
+  </div>
+  {% if snapshot.source_stale %}<div class="alert alert--warning" role="status"><div><strong>房态待确认</strong><p>百居易同步已超过可信窗口；页面保留本地记录，但不会把它标记为实时房态。</p></div></div>{% elif snapshot.source_synced_at %}<p class="operations-source">最近同步：{{ snapshot.source_synced_at | datetime_zh }}</p>{% endif %}
+  <nav class="tab-nav operations-range" aria-label="近期房态范围">
+    {% for day_count in (3, 7, 14) %}<a href="/employee/admin/operations?days={{ day_count }}" {% if snapshot.horizon_days == day_count %}aria-current="page"{% endif %}>未来 {{ day_count }} 天</a>{% endfor %}
+  </nav>
 </section>
-<section class="panel panel--padded"><h2>7 日房态</h2><p class="muted">入住日记为“入”，退房日记为“退”，住宿覆盖日期记为“住”。</p><div class="responsive-table"><table class="data-table operations-matrix"><caption class="visually-hidden">未来七日房态矩阵</caption><thead><tr><th scope="col">房源</th>{% if snapshot.seven_day_rooms %}{% for day in snapshot.seven_day_rooms[0].days %}<th scope="col">{{ day.local_date.month }}/{{ day.local_date.day }}</th>{% endfor %}{% endif %}</tr></thead><tbody>{% for room in snapshot.seven_day_rooms %}<tr><th scope="row"><a href="/employee/properties/{{ room.property_id }}">{{ room.room_number or room.room_title }}</a></th>{% for day in room.days %}<td>{% if day.arrival_count %}<span title="{{ day.arrival_count }} 笔入住">入{{ day.arrival_count }}</span>{% endif %}{% if day.departure_count %}<span title="{{ day.departure_count }} 笔退房">退{{ day.departure_count }}</span>{% endif %}{% if day.occupied %}<span title="在住">住</span>{% endif %}{% if not day.arrival_count and not day.departure_count and not day.occupied %}—{% endif %}</td>{% endfor %}</tr>{% else %}<tr><td>暂无房态数据。</td></tr>{% endfor %}</tbody></table></div></section>
+{% if snapshot.rooms %}<div class="room-operations-list">
+  {% for room in snapshot.rooms %}{% set timeline = snapshot.seven_day_rooms[loop.index0] %}
+  <article class="room-operation-card">
+    <header class="room-operation-card__header">
+      <div><a href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_title }}</strong></a><small>{{ room.room_number or "房号待补充" }}</small></div>
+      <div class="room-status-pair">{{ ui.badge(room.occupancy_status | status_zh, "warning" if room.source_stale or room.occupancy_status.value in ("arriving_today", "departing_today", "turnover_today") else "success") }}{{ ui.badge("运营：" ~ (room.status | status_zh), "success" if room.status.value == "ready" else "neutral") }}</div>
+    </header>
+    <div class="room-next-action"><span>下一步</span><strong>{{ room.next_action }}</strong></div>
+    <dl class="room-operation-facts">
+      <div><dt>开放任务</dt><dd><a href="/employee/tasks?property_id={{ room.property_id }}">{{ room.open_task_count }} 项{% if room.overdue_task_count %}，其中 {{ room.overdue_task_count }} 项逾期{% endif %}</a></dd></div>
+      <div><dt>下次入住</dt><dd>{{ room.next_arrival | date_zh if room.next_arrival else "暂无" }}</dd></div>
+      <div><dt>下次退房</dt><dd>{{ room.next_departure | date_zh if room.next_departure else "暂无" }}</dd></div>
+    </dl>
+    <div class="room-timeline" aria-label="{{ room.room_title }}近期房态">
+      {% for day in timeline.days %}<div class="room-day{% if day.local_date == snapshot.local_date %} room-day--today{% endif %}{% if day.occupied %} room-day--occupied{% endif %}">
+        <strong>{{ day.local_date.month }}/{{ day.local_date.day }}{% if day.local_date == snapshot.local_date %}<span>今天</span>{% endif %}</strong>
+        {% if day.arrival_count %}<small>入住 {{ day.arrival_count }}</small>{% endif %}{% if day.departure_count %}<small>退房 {{ day.departure_count }}</small>{% endif %}{% if day.occupied %}<small>在住</small>{% elif not day.arrival_count and not day.departure_count %}<small>空闲</small>{% endif %}
+      </div>{% endfor %}
+    </div>
+  </article>{% endfor %}
+</div>{% else %}{{ ui.empty("暂无启用房源", "房源同步完成后，这里会展示近期运营状态。") }}{% endif %}
+<details class="panel panel--padded operations-overview"><summary>查看紧凑总览</summary><div class="responsive-table"><table class="data-table"><caption class="visually-hidden">房间运营紧凑总览</caption><thead><tr><th scope="col">房源</th><th scope="col">入住状态</th><th scope="col">运营准备</th><th scope="col">开放任务</th><th scope="col">下一步</th></tr></thead><tbody>{% for room in snapshot.rooms %}<tr><th scope="row"><a href="/employee/properties/{{ room.property_id }}">{{ room.room_number or room.room_title }}</a></th><td>{{ room.occupancy_status | status_zh }}</td><td>{{ room.status | status_zh }}</td><td>{{ room.open_task_count }}</td><td>{{ room.next_action }}</td></tr>{% else %}<tr><td colspan="5">暂无房态数据。</td></tr>{% endfor %}</tbody></table></div></details>
 {% endblock %}

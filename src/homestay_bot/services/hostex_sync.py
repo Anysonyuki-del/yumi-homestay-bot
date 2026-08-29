@@ -66,6 +66,13 @@ class LifecycleSchedulePort(Protocol):
         """为一笔有效订单幂等登记提醒。"""
 
 
+class TaskLifecyclePort(Protocol):
+    """定义订单变化后立即复核关联业务任务的边界。"""
+
+    async def sweep(self, *, order_id: int, limit: int) -> object:
+        """只扫描指定订单的有限任务候选。"""
+
+
 class HostexSyncService:
     """把百居易事件和定时查询统一转换为本地订单。"""
 
@@ -75,12 +82,14 @@ class HostexSyncService:
         operations: OperationsSyncPort,
         *,
         lifecycle: LifecycleSchedulePort | None = None,
+        task_lifecycle: TaskLifecyclePort | None = None,
         before_external: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """注入百居易客户端、运营仓储、事务边界和生命周期调度器。"""
         self._hostex = hostex
         self._operations = operations
         self._lifecycle = lifecycle
+        self._task_lifecycle = task_lifecycle
         self._before_external = before_external
 
     async def handle_event(self, event_key: str) -> None:
@@ -121,4 +130,7 @@ class HostexSyncService:
         if self._lifecycle is not None:
             # 取消订单也必须进入同一入口，由生命周期服务撤销既有提醒。
             await self._lifecycle.schedule_for_order(order.id)
+        if self._task_lifecycle is not None:
+            # 订单取消或改期后立即复核，小时巡检仅作为漏网兜底。
+            await self._task_lifecycle.sweep(order_id=order.id, limit=100)
         return order

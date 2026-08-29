@@ -269,6 +269,33 @@ async def test_future_heartbeat_is_not_considered_healthy() -> None:
 
     assert result["status"] == "degraded"
     assert result["wecom_polling"] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_task_lifecycle_staleness_degrades_health() -> None:
+    """超过两次小时巡检仍无成功心跳时必须进入降级状态。"""
+
+    async def database_probe() -> bool:
+        """模拟可用数据库。"""
+        return True
+
+    now = datetime.now(UTC)
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: now,
+        hostex_heartbeat_getter=lambda: now,
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
+        task_lifecycle_heartbeat_getter=lambda: now - timedelta(hours=3),
+        configuration_ok=True,
+        web_search_status_getter=lambda: "ok",
+    )
+
+    result = await service.check()
+
+    assert result["status"] == "degraded"
+    assert result["task_lifecycle"] == "stale"
 @pytest.mark.asyncio
 async def test_runtime_configuration_health_can_degrade_after_startup() -> None:
     """激活补偿冲突后动态配置标志应立即让健康状态降级。"""

@@ -202,6 +202,7 @@ class PropertyAdminService:
                         (
                             BusinessTaskStatus.COMPLETED,
                             BusinessTaskStatus.CANCELLED,
+                            BusinessTaskStatus.EXPIRED,
                         )
                     ),
                 )

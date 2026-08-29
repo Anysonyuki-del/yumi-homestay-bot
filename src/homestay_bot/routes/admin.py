@@ -3,9 +3,9 @@
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, Response
 
 from homestay_bot.domain.enums import EmployeeRole
@@ -29,7 +29,13 @@ class AdminDashboardServicePort(Protocol):
 class AdminOperationsServicePort(Protocol):
     """定义待关注中心与房态工作台的只读快照接口。"""
 
-    async def snapshot(self, now: datetime | None = None) -> OperationsSnapshot:
+    async def snapshot(
+        self,
+        now: datetime | None = None,
+        *,
+        horizon_days: int = 3,
+        source_synced_at: datetime | None = None,
+    ) -> OperationsSnapshot:
         """返回同一观察时间下的待办与房态快照。"""
 
 
@@ -57,6 +63,7 @@ _CHECK_LABELS = {
     "hostex_webhook_sync": "订单与房态同步",
     "context_maintenance": "对话上下文维护",
     "lifecycle_scheduler": "入住提醒调度",
+    "task_lifecycle": "任务生命周期巡检",
     "configuration": "必要配置",
     "web_search": "联网信息查询",
     "wecom_contact_sync": "客户联系同步",
@@ -183,10 +190,21 @@ async def admin_attention(request: Request) -> Response:
 
 
 @router.get("/operations", response_class=HTMLResponse)
-async def admin_operations(request: Request) -> Response:
-    """展示今日房态、开放任务与连续七日入住矩阵。"""
+async def admin_operations(
+    request: Request,
+    days: Literal[3, 7, 14] = Query(3),
+) -> Response:
+    """展示房间近期入住事实、运营准备度与优先行动。"""
     await _require_admin(request)
-    snapshot = await _operations_service(request).snapshot(_clock(request))
+    snapshot = await _operations_service(request).snapshot(
+        _clock(request),
+        horizon_days=days,
+        source_synced_at=getattr(
+            request.app.state,
+            "hostex_data_last_success",
+            None,
+        ),
+    )
     return templates.TemplateResponse(
         request=request,
         name="admin/operations.html",

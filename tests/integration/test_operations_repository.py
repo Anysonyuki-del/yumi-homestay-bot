@@ -10,6 +10,8 @@ from homestay_bot.domain.enums import (
     BusinessTaskType,
     EmployeeRole,
     RoomOperationalStatus,
+    TaskClosureReason,
+    TaskClosureSource,
 )
 from homestay_bot.domain.models import (
     AuditLog,
@@ -27,6 +29,7 @@ from homestay_bot.domain.models import (
 from homestay_bot.integrations.hostex_client import Reservation
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 from homestay_bot.services.business_task_service import BusinessTaskService
+from homestay_bot.services.task_lifecycle_service import TaskLifecycleService
 from homestay_bot.services.task_page_service import TaskPageService
 
 
@@ -719,4 +722,106 @@ async def test_ready_does_not_overwrite_maintenance_room() -> None:
                 1,
             )
 
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_task_lifecycle_expires_cancelled_order_task_with_audit() -> None:
+    """取消订单的未开始任务应安全失效，并保留可核验关闭审计。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 29, 8, tzinfo=UTC)
+
+    async with factory() as session:
+        room = PropertyProfile(id=301, title="取消订单房间")
+        order = StayOrder(
+            hostex_reservation_code="cancelled-lifecycle",
+            stay_code="cancelled-lifecycle",
+            property_id=room.id,
+            check_in_date=date(2026, 8, 30),
+            check_out_date=date(2026, 8, 31),
+            status="cancelled",
+        )
+        session.add_all([room, order])
+        await session.flush()
+        task = BusinessTask(
+            dedupe_key="turnover:301:2026-08-31",
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+            order_id=order.id,
+            property_id=room.id,
+            service_date=order.check_out_date,
+            description="退房后周转保洁",
+        )
+        session.add(task)
+        await session.flush()
+
+        result = await TaskLifecycleService(
+            SQLAlchemyOperationsRepository(session)
+        ).sweep(now=now, limit=100)
+        await session.commit()
+
+        stored = await session.get(BusinessTask, task.id)
+        audit = await session.scalar(
+            select(AuditLog).where(AuditLog.action == "business_task_expired")
+        )
+
+    assert result.expired == 1
+    assert stored is not None
+    assert stored.status is BusinessTaskStatus.EXPIRED
+    assert stored.closure_reason_code is TaskClosureReason.ORDER_CANCELLED
+    assert stored.closure_source is TaskClosureSource.SYSTEM
+    assert stored.closed_at == now
+    assert audit is not None
+    assert audit.details["reason"] == "order_cancelled"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_task_queue_excludes_expired_by_default_and_allows_history_filter() -> None:
+    """默认队列只展示开放任务，管理员仍可显式查看失效历史。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        room = PropertyProfile(id=401, title="任务队列房间")
+        session.add(room)
+        await session.flush()
+        active = BusinessTask(
+            task_type=BusinessTaskType.MAINTENANCE,
+            status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+            property_id=room.id,
+            service_date=date(2026, 8, 28),
+            description="待处理维修",
+        )
+        expired = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.EXPIRED,
+            property_id=room.id,
+            service_date=date(2026, 8, 27),
+            description="已失效保洁",
+        )
+        session.add_all([active, expired])
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        open_items = await repository.list_all_open(offset=0, limit=10)
+        expired_items = await repository.list_all_open(
+            offset=0,
+            limit=10,
+            status=BusinessTaskStatus.EXPIRED,
+        )
+        overdue_items = await repository.list_all_open(
+            offset=0,
+            limit=10,
+            overdue_before=date(2026, 8, 29),
+        )
+
+    assert [item.id for item in open_items] == [active.id]
+    assert [item.id for item in expired_items] == [expired.id]
+    assert [item.id for item in overdue_items] == [active.id]
     await engine.dispose()

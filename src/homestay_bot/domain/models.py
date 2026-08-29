@@ -24,6 +24,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from homestay_bot.domain.enums import (
     ApprovalStatus,
+    BusinessTaskOrigin,
     BusinessTaskStatus,
     BusinessTaskType,
     ComplaintReviewStatus,
@@ -44,6 +45,8 @@ from homestay_bot.domain.enums import (
     ReminderType,
     RoomOperationalStatus,
     RuntimeConfigVersionStatus,
+    TaskClosureReason,
+    TaskClosureSource,
 )
 
 
@@ -865,7 +868,7 @@ class BusinessTask(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint(
             (
-                "status IN ('PENDING_CONFIRMATION', 'CANCELLED') "
+                "status IN ('PENDING_CONFIRMATION', 'CANCELLED', 'EXPIRED') "
                 "OR (property_id IS NOT NULL AND service_date IS NOT NULL)"
             ),
             name="ck_business_task_execution_fields",
@@ -876,6 +879,7 @@ class BusinessTask(TimestampMixin, Base):
             "assigned_employee_id",
             "service_date",
         ),
+        Index("ix_business_tasks_status_expires_at", "status", "expires_at"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -886,6 +890,12 @@ class BusinessTask(TimestampMixin, Base):
     )
     status: Mapped[BusinessTaskStatus] = mapped_column(
         Enum(BusinessTaskStatus, native_enum=False, length=32), nullable=False
+    )
+    origin_kind: Mapped[BusinessTaskOrigin] = mapped_column(
+        Enum(BusinessTaskOrigin, native_enum=False, length=32),
+        default=BusinessTaskOrigin.UNKNOWN,
+        server_default="UNKNOWN",
+        nullable=False,
     )
     customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers.id"), nullable=True, index=True
@@ -902,6 +912,21 @@ class BusinessTask(TimestampMixin, Base):
     )
     description: Mapped[str] = mapped_column(Text, nullable=False)
     checklist: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    closure_reason_code: Mapped[TaskClosureReason | None] = mapped_column(
+        Enum(TaskClosureReason, native_enum=False, length=32), nullable=True
+    )
+    closure_source: Mapped[TaskClosureSource | None] = mapped_column(
+        Enum(TaskClosureSource, native_enum=False, length=16), nullable=True
+    )
+    closed_by_employee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class TaskAttachment(TimestampMixin, Base):

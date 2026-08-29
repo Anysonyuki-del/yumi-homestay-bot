@@ -2,13 +2,17 @@ from sqlalchemy import CheckConstraint, UniqueConstraint
 
 from homestay_bot.domain.enums import (
     ApprovalStatus,
+    BusinessTaskOrigin,
     BusinessTaskStatus,
     BusinessTaskType,
     ConversationMode,
     CredentialDeliveryStatus,
     CustomerIdentityProvider,
     CustomerMergeStatus,
+    RoomOccupancyStatus,
     RoomOperationalStatus,
+    TaskClosureReason,
+    TaskClosureSource,
 )
 from homestay_bot.domain.models import (
     AdminCredential,
@@ -38,6 +42,11 @@ def test_domain_status_values_are_stable() -> None:
     assert CustomerMergeStatus.PENDING.value == "pending"
     assert BusinessTaskType.CLEANING.value == "cleaning"
     assert BusinessTaskStatus.PENDING_CONFIRMATION.value == "pending_confirmation"
+    assert BusinessTaskStatus.EXPIRED.value == "expired"
+    assert BusinessTaskOrigin.LIFECYCLE_REMINDER.value == "lifecycle_reminder"
+    assert TaskClosureReason.ORDER_CANCELLED.value == "order_cancelled"
+    assert TaskClosureSource.SYSTEM.value == "system"
+    assert RoomOccupancyStatus.UNKNOWN.value == "unknown"
     assert RoomOperationalStatus.READY.value == "ready"
     assert CredentialDeliveryStatus.NEEDS_REVIEW.value == "needs_review"
 
@@ -89,6 +98,10 @@ def test_operations_models_define_required_unique_keys() -> None:
     assert BusinessTask.__table__.c.source_message_id.unique is True
     assert RoomOperationalState.__table__.c.property_id.primary_key is True
     assert StayOrder.__table__.c.checkout_observed_on.nullable is True
+    assert BusinessTask.__table__.c.origin_kind.nullable is False
+    assert BusinessTask.__table__.c.expires_at.nullable is True
+    assert BusinessTask.__table__.c.closed_at.nullable is True
+    assert BusinessTask.__table__.c.closed_by_employee_id.nullable is True
 
     part_unique_columns = {
         tuple(constraint.columns.keys())

@@ -11,6 +11,7 @@ from homestay_bot.domain.enums import (
     CustomerMergeStatus,
     ReminderStatus,
     ReminderType,
+    RoomOccupancyStatus,
     RoomOperationalStatus,
 )
 from homestay_bot.domain.models import (
@@ -171,14 +172,18 @@ async def test_snapshot_groups_repeated_room_followups_without_hiding_total() ->
             """当前场景不需要房间矩阵。"""
             return ()
 
-        async def list_current_and_future_stays(
+        async def list_room_stays(
             self,
-            local_date: date,
+            start_date: date,
+            end_date: date,
         ) -> tuple[StayRecord, ...]:
             """当前场景不需要订单。"""
             return ()
 
-        async def list_open_task_counts(self) -> tuple[RoomTaskCountRecord, ...]:
+        async def list_open_task_counts(
+            self,
+            local_date: date,
+        ) -> tuple[RoomTaskCountRecord, ...]:
             """当前场景不需要任务统计。"""
             return ()
 
@@ -223,14 +228,18 @@ async def test_snapshot_groups_repeated_business_tasks_into_one_work_queue() -> 
             """当前场景不需要房间矩阵。"""
             return ()
 
-        async def list_current_and_future_stays(
+        async def list_room_stays(
             self,
-            local_date: date,
+            start_date: date,
+            end_date: date,
         ) -> tuple[StayRecord, ...]:
             """当前场景不需要订单。"""
             return ()
 
-        async def list_open_task_counts(self) -> tuple[RoomTaskCountRecord, ...]:
+        async def list_open_task_counts(
+            self,
+            local_date: date,
+        ) -> tuple[RoomTaskCountRecord, ...]:
             """当前场景不需要任务统计。"""
             return ()
 
@@ -248,8 +257,56 @@ async def test_snapshot_groups_repeated_business_tasks_into_one_work_queue() -> 
     assert snapshot.attention_items[0].target_url == "/employee/tasks"
 
 
-async def test_snapshot_batches_room_today_next_arrival_and_seven_day_facts() -> None:
-    """逐房和七日矩阵应批量聚合，并排除停用房间及终止订单。"""
+async def test_snapshot_counts_manual_reminder_and_derived_task_once() -> None:
+    """同一次提醒失败及其人工任务只能形成一个待关注事项。"""
+    engine, factory = await _factory()
+    today = date(2026, 8, 29)
+    async with factory() as session:
+        room = PropertyProfile(id=7, title="江景房", is_active=True)
+        order = StayOrder(
+            hostex_reservation_code="reservation-one",
+            stay_code="stay-one",
+            property_id=7,
+            check_in_date=today,
+            check_out_date=today + timedelta(days=1),
+            status="accepted",
+        )
+        session.add_all([room, order])
+        await session.flush()
+        reminder = LifecycleReminder(
+            order_id=order.id,
+            reminder_type=ReminderType.ARRIVAL_DAY,
+            scheduled_local_date=today,
+            scheduled_at=datetime(2026, 8, 29, 2, tzinfo=UTC),
+            status=ReminderStatus.MANUAL_FOLLOWUP,
+        )
+        session.add(reminder)
+        await session.flush()
+        session.add(
+            BusinessTask(
+                dedupe_key=f"lifecycle-manual:{reminder.id}",
+                task_type=BusinessTaskType.MANUAL_CONTACT,
+                status=BusinessTaskStatus.PENDING_CONFIRMATION,
+                order_id=order.id,
+                property_id=room.id,
+                service_date=today,
+                description="人工联系",
+            )
+        )
+        await session.commit()
+
+        snapshot = await AdminOperationsService(session).snapshot(
+            datetime(2026, 8, 29, 3, tzinfo=UTC)
+        )
+
+    assert snapshot.attention_count == 1
+    assert len(snapshot.attention_items) == 1
+    assert snapshot.attention_items[0].kind == "task"
+    await engine.dispose()  # type: ignore[attr-defined]
+
+
+async def test_snapshot_batches_room_recent_operations_and_next_actions() -> None:
+    """近期运营板应批量聚合入住事实、任务风险与下一步。"""
     engine, factory = await _factory()
     query_count = 0
 
@@ -280,6 +337,13 @@ async def test_snapshot_batches_room_today_next_arrival_and_seven_day_facts() ->
                     property_id=1,
                     service_date=today,
                     description="已完成任务",
+                ),
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.EXPIRED,
+                    property_id=1,
+                    service_date=today - timedelta(days=1),
+                    description="已失效任务",
                 ),
                 StayOrder(
                     hostex_reservation_code="active-one",
@@ -319,28 +383,68 @@ async def test_snapshot_batches_room_today_next_arrival_and_seven_day_facts() ->
         query_count = 0
 
         snapshot = await AdminOperationsService(session).snapshot(
-            datetime(2026, 8, 28, 16, 30, tzinfo=UTC)
+            datetime(2026, 8, 28, 16, 30, tzinfo=UTC),
+            horizon_days=3,
+            source_synced_at=datetime(2026, 8, 28, 16, tzinfo=UTC),
         )
 
     assert snapshot.local_date == today
     assert [room.room_title for room in snapshot.rooms] == ["一号房", "二号房"]
     first, second = snapshot.rooms
     assert first.status is RoomOperationalStatus.OCCUPIED
+    assert first.occupancy_status is RoomOccupancyStatus.ARRIVING_TODAY
     assert first.today_arrival_count == 1
     assert first.today_departure_count == 0
     assert first.open_task_count == 1
+    assert first.overdue_task_count == 0
     assert first.next_arrival == today
+    assert first.next_departure == today + timedelta(days=2)
+    assert "入住" in first.next_action
     assert second.status is RoomOperationalStatus.NOT_STARTED
+    assert second.occupancy_status is RoomOccupancyStatus.VACANT
     assert second.today_arrival_count == 0
     assert second.next_arrival == today + timedelta(days=3)
+    assert snapshot.horizon_days == 3
+    assert snapshot.source_stale is False
     assert len(snapshot.seven_day_rooms) == 2
-    assert len(snapshot.seven_day_rooms[0].days) == 7
-    assert snapshot.seven_day_rooms[0].days[0].arrival_count == 1
-    assert snapshot.seven_day_rooms[0].days[0].occupied is True
-    assert snapshot.seven_day_rooms[0].days[2].occupied is False
-    assert snapshot.seven_day_rooms[1].days[3].arrival_count == 1
-    assert snapshot.seven_day_rooms[1].days[4].occupied is True
+    assert len(snapshot.seven_day_rooms[0].days) == 6
+    assert snapshot.seven_day_rooms[0].days[2].arrival_count == 1
+    assert snapshot.seven_day_rooms[0].days[2].occupied is True
+    assert snapshot.seven_day_rooms[0].days[4].occupied is False
+    assert snapshot.seven_day_rooms[1].days[5].arrival_count == 1
     assert query_count <= 10
+    await engine.dispose()  # type: ignore[attr-defined]
+
+
+async def test_snapshot_marks_occupancy_unknown_when_hostex_sync_is_stale() -> None:
+    """同步心跳超过六小时后不得把本地订单投影冒充实时房态。"""
+    engine, factory = await _factory()
+    observed_at = datetime(2026, 8, 29, 3, tzinfo=UTC)
+    today = date(2026, 8, 29)
+    async with factory() as session:
+        session.add_all(
+            [
+                PropertyProfile(id=1, title="一号房", is_active=True),
+                StayOrder(
+                    hostex_reservation_code="stale-one",
+                    stay_code="stale-one",
+                    property_id=1,
+                    check_in_date=today,
+                    check_out_date=today + timedelta(days=1),
+                    status="confirmed",
+                ),
+            ]
+        )
+        await session.commit()
+
+        snapshot = await AdminOperationsService(session).snapshot(
+            observed_at,
+            source_synced_at=observed_at - timedelta(hours=7),
+        )
+
+    assert snapshot.source_stale is True
+    assert snapshot.rooms[0].occupancy_status is RoomOccupancyStatus.UNKNOWN
+    assert snapshot.rooms[0].next_action == "先确认百居易实时房态"
     await engine.dispose()  # type: ignore[attr-defined]
 
 

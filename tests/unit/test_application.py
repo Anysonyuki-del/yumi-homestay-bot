@@ -29,6 +29,10 @@ class StopHostexReconcile(RuntimeError):
     """表示测试已观察到一次百居易对账。"""
 
 
+class StopTaskLifecycle(RuntimeError):
+    """表示测试已观察到一次任务生命周期巡检。"""
+
+
 class StopRetentionLoop(RuntimeError):
     """表示测试已观察到一次历史记录清理。"""
 
@@ -432,10 +436,18 @@ async def test_hostex_reconcile_updates_sync_and_lifecycle_heartbeats(
     class SyncServiceStub:
         """记录对账窗口并验证生命周期服务已注入。"""
 
-        def __init__(self, hostex, operations, *, lifecycle=None) -> None:
-            """验证运行时装配了生命周期调度器。"""
+        def __init__(
+            self,
+            hostex,
+            operations,
+            *,
+            lifecycle=None,
+            task_lifecycle=None,
+        ) -> None:
+            """验证运行时装配了提醒调度与任务治理服务。"""
             assert hostex == "hostex"
             assert lifecycle == "lifecycle"
+            assert isinstance(task_lifecycle, application.TaskLifecycleService)
 
         async def reconcile(self, start_date, end_date) -> int:
             """验证一期十五天补漏窗口。"""
@@ -468,6 +480,72 @@ async def test_hostex_reconcile_updates_sync_and_lifecycle_heartbeats(
     assert session.committed is True
     assert sync_heartbeats == [now]
     assert lifecycle_heartbeats == [now]
+
+
+@pytest.mark.asyncio
+async def test_task_lifecycle_loop_commits_result_and_heartbeat(monkeypatch) -> None:
+    """任务生命周期循环应按小时提交有限扫描并记录心跳。"""
+    session = SimpleNamespace(committed=False)
+    observed_at = datetime(2026, 8, 29, 8, tzinfo=UTC)
+    heartbeats: list[datetime] = []
+    results: list[object] = []
+
+    async def commit() -> None:
+        """记录生命周期事务已提交。"""
+        session.committed = True
+
+    session.commit = commit
+
+    class SessionContext:
+        """提供固定生命周期会话。"""
+
+        async def __aenter__(self):
+            """进入测试会话。"""
+            return session
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出测试会话。"""
+
+    class RepositoryStub:
+        """验证生命周期仓储绑定当前事务。"""
+
+        def __init__(self, selected_session) -> None:
+            """保存仓储会话。"""
+            assert selected_session is session
+
+    class ServiceStub:
+        """返回固定有限扫描结果。"""
+
+        def __init__(self, repository) -> None:
+            """验证使用统一运营仓储。"""
+            assert isinstance(repository, RepositoryStub)
+
+        async def sweep(self, *, now: datetime, limit: int):
+            """验证巡检时间和批次边界。"""
+            assert now == observed_at
+            assert limit == 100
+            return application.TaskLifecycleSweepResult(3, 2, 1)
+
+    async def stop_after_cycle(delay: float) -> None:
+        """验证每小时兜底周期后结束循环。"""
+        assert delay == 3600
+        raise StopTaskLifecycle
+
+    monkeypatch.setattr(application, "SQLAlchemyOperationsRepository", RepositoryStub)
+    monkeypatch.setattr(application, "TaskLifecycleService", ServiceStub)
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
+
+    with pytest.raises(StopTaskLifecycle):
+        await application._run_task_lifecycle_loop(
+            cast(Any, lambda: SessionContext()),
+            now_provider=lambda: observed_at,
+            heartbeat=heartbeats.append,
+            result_recorder=results.append,
+        )
+
+    assert session.committed is True
+    assert heartbeats == [observed_at]
+    assert results == [application.TaskLifecycleSweepResult(3, 2, 1)]
 
 
 @pytest.mark.asyncio

@@ -271,6 +271,7 @@ def test_task_filters_are_forwarded_and_persist_in_pagination() -> None:
             "service_date": "2026-08-02",
             "property_id": 101,
             "assigned_employee_id": 2,
+            "overdue": "true",
         },
     )
 
@@ -281,8 +282,11 @@ def test_task_filters_are_forwarded_and_persist_in_pagination() -> None:
     assert filters.service_date == date(2026, 8, 2)
     assert filters.property_id == 101
     assert filters.assigned_employee_id == 2
+    assert filters.overdue is True
     assert "status_filter=pending_assignment" in response.text
     assert "task_type=cleaning" in response.text
+    assert "overdue=true" in response.text
+    assert "status_filter=expired" in response.text
 
 
 def test_staff_cannot_view_other_task_id() -> None:

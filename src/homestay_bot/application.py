@@ -174,6 +174,10 @@ from homestay_bot.services.runtime_config_service import (
 )
 from homestay_bot.services.runtime_config_tester import RuntimeConfigTester
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
+from homestay_bot.services.task_lifecycle_service import (
+    TaskLifecycleService,
+    TaskLifecycleSweepResult,
+)
 from homestay_bot.services.task_page_service import TaskPageService
 from homestay_bot.version import get_app_version
 from homestay_bot.worker import (
@@ -1214,10 +1218,17 @@ class SessionAdminOperationsService:
     async def snapshot(
         self,
         now: datetime | None = None,
+        *,
+        horizon_days: int = 3,
+        source_synced_at: datetime | None = None,
     ) -> OperationsSnapshot:
         """在短会话中构造待关注事项与房态快照。"""
         async with self._factory() as session:
-            return await AdminOperationsService(session).snapshot(now)
+            return await AdminOperationsService(session).snapshot(
+                now,
+                horizon_days=horizon_days,
+                source_synced_at=source_synced_at,
+            )
 
 
 class SessionDebugPropertyRepository:
@@ -1999,6 +2010,7 @@ def _record_committed_job_heartbeat(
         return
     completed_at = (now_provider or (lambda: datetime.now(UTC)))()
     app.state.hostex_sync_last_success = completed_at
+    app.state.hostex_data_last_success = completed_at
     app.state.lifecycle_scheduler_last_success = completed_at
 
 
@@ -2409,6 +2421,9 @@ async def _run_hostex_reconcile_loop(
                         bundle.hostex,
                         SQLAlchemyOperationsRepository(session),
                         lifecycle=lifecycle,
+                        task_lifecycle=TaskLifecycleService(
+                            SQLAlchemyOperationsRepository(session)
+                        ),
                     )
                     today = current_date()
                     await service.reconcile(
@@ -2425,6 +2440,9 @@ async def _run_hostex_reconcile_loop(
                         SQLAlchemyOperationsRepository(session),
                         lifecycle=(
                             lifecycle_factory(session) if lifecycle_factory is not None else None
+                        ),
+                        task_lifecycle=TaskLifecycleService(
+                            SQLAlchemyOperationsRepository(session)
                         ),
                     )
                     today = current_date()
@@ -2453,6 +2471,38 @@ async def _run_hostex_reconcile_loop(
         else:
             raise RuntimeError("百居易对账间隔尚未配置")
         await asyncio.sleep(next_interval)
+
+
+async def _run_task_lifecycle_loop(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    interval_seconds: float = 3600,
+    now_provider: Callable[[], datetime] | None = None,
+    heartbeat: Callable[[datetime], None] | None = None,
+    result_recorder: Callable[[TaskLifecycleSweepResult], None] | None = None,
+) -> None:
+    """每小时有限治理失去业务价值的任务，不调用模型或外部接口。"""
+    current_time = now_provider or (lambda: datetime.now(UTC))
+    while True:
+        try:
+            async with factory() as session:
+                result = await TaskLifecycleService(
+                    SQLAlchemyOperationsRepository(session)
+                ).sweep(now=current_time(), limit=100)
+                await session.commit()
+            completed_at = current_time()
+            if heartbeat is not None:
+                heartbeat(completed_at)
+            if result_recorder is not None:
+                result_recorder(result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "任务生命周期巡检失败：error_type=%s",
+                type(error).__name__,
+            )
+        await asyncio.sleep(interval_seconds)
 
 
 def _next_wecom_poll_delay(
@@ -2665,8 +2715,11 @@ def _clear_lifespan_state(app: FastAPI) -> None:
         "worker_last_heartbeat",
         "wecom_poll_last_success",
         "hostex_sync_last_success",
+        "hostex_data_last_success",
         "context_maintenance_last_success",
         "lifecycle_scheduler_last_success",
+        "task_lifecycle_last_success",
+        "task_lifecycle_last_result",
     ):
         if hasattr(app.state, state_name):
             delattr(app.state, state_name)
@@ -2808,8 +2861,16 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.worker_last_heartbeat = startup_time
     app.state.wecom_poll_last_success = startup_time
     app.state.hostex_sync_last_success = startup_time
+    # 页面只接受完成过真实订单同步的时间，不能把启动宽限期冒充数据新鲜度。
+    app.state.hostex_data_last_success = None
     app.state.context_maintenance_last_success = startup_time
     app.state.lifecycle_scheduler_last_success = startup_time
+    app.state.task_lifecycle_last_success = startup_time
+    app.state.task_lifecycle_last_result = {
+        "scanned": 0,
+        "expired": 0,
+        "skipped": 0,
+    }
     app.state.runtime_configuration_consistent = True
     app.state.runtime_resources_healthy = True
     web_search_state = WebSearchState()
@@ -2820,6 +2881,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         hostex_heartbeat_getter=lambda: app.state.hostex_sync_last_success,
         context_heartbeat_getter=lambda: app.state.context_maintenance_last_success,
         lifecycle_heartbeat_getter=lambda: app.state.lifecycle_scheduler_last_success,
+        task_lifecycle_heartbeat_getter=(
+            lambda: app.state.task_lifecycle_last_success
+        ),
         configuration_ok=False,
         web_search_status_getter=web_search_state.get,
         contact_sync_configured=False,
@@ -3060,6 +3124,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             bundle.hostex,
             SQLAlchemyOperationsRepository(session),
             lifecycle=build_lifecycle_service(session, bundle),
+            task_lifecycle=TaskLifecycleService(
+                SQLAlchemyOperationsRepository(session)
+            ),
             before_external=session.commit,
         )
 
@@ -3244,12 +3311,21 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 lifecycle_heartbeat_getter=(
                     lambda: app.state.lifecycle_scheduler_last_success
                 ),
+                task_lifecycle_heartbeat_getter=(
+                    lambda: app.state.task_lifecycle_last_success
+                ),
                 configuration_ok=admin_auth_available and runtime_writable,
                 web_search_status_getter=web_search_state.get,
                 runtime_status_provider=candidate_registry.status,
                 runtime_revision_provider=runtime_revision_provider,
             )
             started_tasks: list[asyncio.Task[None]] = []
+
+            def record_hostex_reconcile_success(value: datetime) -> None:
+                """同时刷新健康心跳与房态数据来源时间。"""
+                app.state.hostex_sync_last_success = value
+                app.state.hostex_data_last_success = value
+
             try:
                 started_tasks.append(
                     _create_runtime_task(
@@ -3310,15 +3386,32 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                             factory=factory,
                             registry=candidate_registry,
                             runtime_lifecycle_factory=build_lifecycle_service,
-                            sync_heartbeat=lambda value: setattr(
-                                app.state,
-                                "hostex_sync_last_success",
-                                value,
-                            ),
+                            sync_heartbeat=record_hostex_reconcile_success,
                             lifecycle_heartbeat=lambda value: setattr(
                                 app.state,
                                 "lifecycle_scheduler_last_success",
                                 value,
+                            ),
+                        )
+                    )
+                )
+                started_tasks.append(
+                    _create_runtime_task(
+                        _run_task_lifecycle_loop(
+                            factory,
+                            heartbeat=lambda value: setattr(
+                                app.state,
+                                "task_lifecycle_last_success",
+                                value,
+                            ),
+                            result_recorder=lambda result: setattr(
+                                app.state,
+                                "task_lifecycle_last_result",
+                                {
+                                    "scanned": result.scanned,
+                                    "expired": result.expired,
+                                    "skipped": result.skipped,
+                                },
                             ),
                         )
                     )

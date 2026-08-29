@@ -208,8 +208,16 @@ async def test_hostex_reconcile_holds_one_revision_and_uses_new_interval(
     class SyncServiceStub:
         """记录同轮Hostex与生命周期依赖。"""
 
-        def __init__(self, hostex, operations, *, lifecycle=None) -> None:
-            """捕获运行依赖。"""
+        def __init__(
+            self,
+            hostex,
+            operations,
+            *,
+            lifecycle=None,
+            task_lifecycle=None,
+        ) -> None:
+            """捕获同轮 Hostex、提醒调度与任务治理依赖。"""
+            assert isinstance(task_lifecycle, application.TaskLifecycleService)
             calls.append((hostex, lifecycle))
 
         async def reconcile(self, start_date, end_date) -> int:

@@ -139,7 +139,11 @@ class AdminDashboardService:
         result = await self._session.scalar(
             select(func.count(BusinessTask.id)).where(
                 BusinessTask.status.not_in(
-                    (BusinessTaskStatus.COMPLETED, BusinessTaskStatus.CANCELLED)
+                    (
+                        BusinessTaskStatus.COMPLETED,
+                        BusinessTaskStatus.CANCELLED,
+                        BusinessTaskStatus.EXPIRED,
+                    )
                 )
             )
         )

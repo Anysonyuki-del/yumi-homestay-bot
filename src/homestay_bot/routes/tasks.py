@@ -171,6 +171,7 @@ async def task_index(
     service_date: date | None = None,
     property_id: int | None = Query(None, ge=1),
     assigned_employee_id: int | None = Query(None, ge=1),
+    overdue: bool = False,
 ) -> Response:
     """展示管理员全部待办或员工自己的任务。"""
     employee = await _current_employee(request)
@@ -185,6 +186,7 @@ async def task_index(
                 if employee.role is EmployeeRole.ADMIN
                 else None
             ),
+            overdue=overdue,
         )
         items = await _get_service(request).list_for(
             employee,
@@ -203,6 +205,7 @@ async def task_index(
         "assigned_employee_id": (
             str(assigned_employee_id) if assigned_employee_id else ""
         ),
+        "overdue": "true" if overdue else "",
     }
     active_params = {key: value for key, value in params.items() if value}
 

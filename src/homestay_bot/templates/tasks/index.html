@@ -4,12 +4,20 @@
 {% block content %}
 <section class="panel panel--padded">
   <div class="section-heading"><div><p class="eyebrow">YuMi 任务中心</p><h2>{{ "全部待办" if is_admin else "分配给我的任务" }}</h2></div>{{ ui.badge("管理员调度" if is_admin else "员工执行", "info") }}</div>
+  <nav class="tab-nav" aria-label="任务队列">
+    <a href="/employee/tasks" {% if not filters.active %}aria-current="page"{% endif %}>开放任务</a>
+    <a href="/employee/tasks?overdue=true" {% if filters.overdue %}aria-current="page"{% endif %}>逾期</a>
+    <a href="/employee/tasks?status_filter=pending_confirmation" {% if filters.status and filters.status.value == "pending_confirmation" %}aria-current="page"{% endif %}>待确认</a>
+    <a href="/employee/tasks?status_filter=pending_assignment" {% if filters.status and filters.status.value == "pending_assignment" %}aria-current="page"{% endif %}>待分派</a>
+    <a href="/employee/tasks?status_filter=expired" {% if filters.status and filters.status.value == "expired" %}aria-current="page"{% endif %}>已失效</a>
+  </nav>
   <form class="filter-toolbar" method="get" action="/employee/tasks">
     <label>状态<select name="status_filter"><option value="">全部开放状态</option>{% for status in task_statuses %}<option value="{{ status.value }}" {% if filters.status == status %}selected{% endif %}>{{ status | status_zh }}</option>{% endfor %}</select></label>
     <label>任务类型<select name="task_type"><option value="">全部类型</option>{% for type in task_types %}<option value="{{ type.value }}" {% if filters.task_type == type %}selected{% endif %}>{{ type | status_zh }}</option>{% endfor %}</select></label>
     <label>服务日期<input type="date" name="service_date" value="{{ filters.service_date or '' }}"></label>
     <label>房源<select name="property_id"><option value="">全部房源</option>{% for property in properties %}<option value="{{ property.id }}" {% if filters.property_id == property.id %}selected{% endif %}>{{ property.title }}</option>{% endfor %}</select></label>
     {% if is_admin %}<label>执行员工<select name="assigned_employee_id"><option value="">全部员工</option>{% for employee in employees %}<option value="{{ employee.id }}" {% if filters.assigned_employee_id == employee.id %}selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select></label>{% endif %}
+    <label class="checkbox"><input type="checkbox" name="overdue" value="true" {% if filters.overdue %}checked{% endif %}>只看逾期</label>
     <div class="button-row"><button type="submit">筛选</button><a class="button button--secondary" href="/employee/tasks">重置</a></div>
   </form>
   <div class="responsive-table"><table class="data-table"><caption class="visually-hidden">待办任务调度列表</caption><thead><tr><th scope="col">任务</th><th scope="col">服务日期</th><th scope="col">房源</th><th scope="col">执行员工</th><th scope="col">状态</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead><tbody>

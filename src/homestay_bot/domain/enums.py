@@ -93,6 +93,32 @@ class BusinessTaskStatus(StrEnum):
     PENDING_INSPECTION = "pending_inspection"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class BusinessTaskOrigin(StrEnum):
+    """标记任务来自订单周转、提醒失败、模型建议或历史未知来源。"""
+
+    TURNOVER = "turnover"
+    LIFECYCLE_REMINDER = "lifecycle_reminder"
+    AI_SUGGESTION = "ai_suggestion"
+    UNKNOWN = "unknown"
+
+
+class TaskClosureReason(StrEnum):
+    """记录任务失去业务价值的确定性原因。"""
+
+    ORDER_CANCELLED = "order_cancelled"
+    WINDOW_EXPIRED = "window_expired"
+    SUPERSEDED = "superseded"
+
+
+class TaskClosureSource(StrEnum):
+    """区分任务由系统、员工还是历史治理批次关闭。"""
+
+    SYSTEM = "system"
+    EMPLOYEE = "employee"
+    MIGRATION = "migration"
 
 
 class RoomOperationalStatus(StrEnum):
@@ -104,6 +130,17 @@ class RoomOperationalStatus(StrEnum):
     READY = "ready"
     OCCUPIED = "occupied"
     MAINTENANCE = "maintenance"
+
+
+class RoomOccupancyStatus(StrEnum):
+    """表示由百居易订单事实推导出的房间近期入住状态。"""
+
+    UNKNOWN = "unknown"
+    VACANT = "vacant"
+    ARRIVING_TODAY = "arriving_today"
+    OCCUPIED = "occupied"
+    DEPARTING_TODAY = "departing_today"
+    TURNOVER_TODAY = "turnover_today"
 
 
 class CredentialDeliveryStatus(StrEnum):

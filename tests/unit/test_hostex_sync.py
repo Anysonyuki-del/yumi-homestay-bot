@@ -91,6 +91,20 @@ class LifecycleStub:
         return []
 
 
+class TaskLifecycleStub:
+    """记录订单同步后触发的任务失效复核。"""
+
+    def __init__(self) -> None:
+        """初始化复核参数。"""
+        self.order_ids: list[int] = []
+
+    async def sweep(self, *, order_id: int, limit: int):
+        """记录有限订单级扫描，不执行真实任务写入。"""
+        self.order_ids.append(order_id)
+        assert limit == 100
+        return SimpleNamespace(scanned=1, expired=1, skipped=0)
+
+
 @pytest.mark.asyncio
 async def test_hostex_event_upserts_exact_reservation() -> None:
     """事件必须精确命中一笔订单后才允许 upsert 和完成。"""
@@ -174,17 +188,20 @@ async def test_cancelled_reservation_does_not_create_turnover() -> None:
 
 @pytest.mark.asyncio
 async def test_cancelled_reservation_updates_lifecycle_schedule() -> None:
-    """取消订单仍需进入生命周期服务撤销既有提醒。"""
+    """取消订单应同时撤销提醒并立即复核既有业务任务。"""
     lifecycle = LifecycleStub()
+    task_lifecycle = TaskLifecycleStub()
     service = HostexSyncService(
         HostexStub([reservation(status="cancelled")]),
         OperationsStub(),
         lifecycle=lifecycle,
+        task_lifecycle=task_lifecycle,
     )
 
     await service.handle_event("event-1")
 
     assert lifecycle.order_ids == [1]
+    assert task_lifecycle.order_ids == [1]
 
 
 @pytest.mark.asyncio

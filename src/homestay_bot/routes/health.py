@@ -63,6 +63,7 @@ class UnconfiguredHealthService:
             "hostex_webhook_sync": "not_configured",
             "context_maintenance": "not_configured",
             "lifecycle_scheduler": "not_configured",
+            "task_lifecycle": "not_configured",
             "configuration": "incomplete",
             "web_search": "not_configured",
             "wecom_contact_sync": "not_configured",
@@ -83,6 +84,7 @@ class OperationalHealthService:
         lifecycle_heartbeat_getter: Callable[[], datetime | None],
         configuration_ok: bool | Callable[[], bool],
         web_search_status_getter: Callable[[], str],
+        task_lifecycle_heartbeat_getter: Callable[[], datetime | None] | None = None,
         contact_sync_configured: bool = False,
         heartbeat_max_age: timedelta = timedelta(minutes=2),
         poll_max_age: timedelta = timedelta(minutes=1),
@@ -102,6 +104,7 @@ class OperationalHealthService:
         self._hostex_heartbeat_getter = hostex_heartbeat_getter
         self._context_heartbeat_getter = context_heartbeat_getter
         self._lifecycle_heartbeat_getter = lifecycle_heartbeat_getter
+        self._task_lifecycle_heartbeat_getter = task_lifecycle_heartbeat_getter
         self._configuration_ok_getter = (
             configuration_ok if callable(configuration_ok) else lambda: configuration_ok
         )
@@ -181,6 +184,14 @@ class OperationalHealthService:
             self._lifecycle_heartbeat_getter(),
             lifecycle_max_age,
         )
+        task_lifecycle_ok = (
+            True
+            if self._task_lifecycle_heartbeat_getter is None
+            else self._is_recent(
+                self._task_lifecycle_heartbeat_getter(),
+                timedelta(hours=2, minutes=30),
+            )
+        )
         web_search_status = self._web_search_status_getter()
         web_search_ok = web_search_status in {"unknown", "ok"}
         configuration_ok = self._configuration_ok_getter()
@@ -202,6 +213,7 @@ class OperationalHealthService:
                 and hostex_ok
                 and context_ok
                 and lifecycle_ok
+                and task_lifecycle_ok
                 and configuration_ok
                 and web_search_ok
                 else "degraded"
@@ -213,6 +225,11 @@ class OperationalHealthService:
             "context_maintenance": "ok" if context_ok else "stale",
             "lifecycle_scheduler": (
                 "ok" if lifecycle_ok else "stale"
+            ),
+            "task_lifecycle": (
+                "not_configured"
+                if self._task_lifecycle_heartbeat_getter is None
+                else "ok" if task_lifecycle_ok else "stale"
             ),
             "configuration": "ok" if configuration_ok else "incomplete",
             "web_search": web_search_status,

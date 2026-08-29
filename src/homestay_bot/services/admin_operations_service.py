@@ -1,4 +1,4 @@
-"""管理员今日运营与七日房态的安全页面投影。"""
+"""管理员待关注事项与房间近期运营的安全页面投影。"""
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -14,6 +14,7 @@ from homestay_bot.domain.enums import (
     CredentialDeliveryStatus,
     CustomerMergeStatus,
     ReminderStatus,
+    RoomOccupancyStatus,
     RoomOperationalStatus,
 )
 from homestay_bot.repositories.admin_operations import (
@@ -79,6 +80,11 @@ class RoomOperationItem:
     today_departure_count: int
     open_task_count: int
     next_arrival: date | None
+    occupancy_status: RoomOccupancyStatus = RoomOccupancyStatus.UNKNOWN
+    overdue_task_count: int = 0
+    next_departure: date | None = None
+    next_action: str = "暂无近期运营动作"
+    source_stale: bool = True
 
     @property
     def today_arrival(self) -> bool:
@@ -93,7 +99,7 @@ class RoomOperationItem:
 
 @dataclass(frozen=True, slots=True)
 class SevenDayRoomItem:
-    """表示一个房间连续七日的紧凑运营矩阵。"""
+    """表示一个房间近期运营时间轴；保留类名以兼容既有调用方。"""
 
     property_id: int
     room_number: str | None
@@ -109,6 +115,9 @@ class OperationsSnapshot:
     attention_items: tuple[AttentionItem, ...]
     rooms: tuple[RoomOperationItem, ...]
     seven_day_rooms: tuple[SevenDayRoomItem, ...]
+    horizon_days: int = 3
+    source_synced_at: datetime | None = None
+    source_stale: bool = True
 
     @property
     def attention_count(self) -> int:
@@ -128,10 +137,17 @@ class AdminOperationsRepositoryPort(Protocol):
     async def list_active_rooms(self) -> tuple[ActiveRoomRecord, ...]:
         """返回启用房间与当前房态。"""
 
-    async def list_current_and_future_stays(self, local_date: date) -> tuple[StayRecord, ...]:
-        """返回当前及未来有效订单日期。"""
+    async def list_room_stays(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> tuple[StayRecord, ...]:
+        """返回与近期运营窗口相交的有效订单日期。"""
 
-    async def list_open_task_counts(self) -> tuple[RoomTaskCountRecord, ...]:
+    async def list_open_task_counts(
+        self,
+        local_date: date,
+    ) -> tuple[RoomTaskCountRecord, ...]:
         """返回各房间未完成任务数。"""
 
 
@@ -250,23 +266,48 @@ class AdminOperationsService:
         rooms: tuple[ActiveRoomRecord, ...],
         stays: tuple[StayRecord, ...],
         task_counts: tuple[RoomTaskCountRecord, ...],
+        *,
+        horizon_days: int,
+        source_stale: bool,
     ) -> tuple[tuple[RoomOperationItem, ...], tuple[SevenDayRoomItem, ...]]:
-        """在内存中一次构造今日摘要及七日矩阵，避免逐房查询。"""
+        """在内存中一次构造房间行动摘要及近期时间轴。"""
         stays_by_room: dict[int, list[StayRecord]] = defaultdict(list)
         for stay in stays:
             stays_by_room[stay.property_id].append(stay)
-        open_tasks = {item.property_id: item.count for item in task_counts}
+        counts_by_room = {item.property_id: item for item in task_counts}
         room_items: list[RoomOperationItem] = []
         matrix_items: list[SevenDayRoomItem] = []
-        days = tuple(local_date + timedelta(days=offset) for offset in range(7))
+        days = tuple(
+            local_date + timedelta(days=offset)
+            for offset in range(-2, horizon_days + 1)
+        )
 
         for room in rooms:
             room_stays = stays_by_room.get(room.property_id, [])
             today_arrivals = sum(stay.check_in_date == local_date for stay in room_stays)
             today_departures = sum(stay.check_out_date == local_date for stay in room_stays)
+            occupied_today = any(
+                stay.check_in_date <= local_date < stay.check_out_date
+                for stay in room_stays
+            )
             future_arrivals = [
                 stay.check_in_date for stay in room_stays if stay.check_in_date >= local_date
             ]
+            future_departures = [
+                stay.check_out_date for stay in room_stays if stay.check_out_date >= local_date
+            ]
+            task_count = counts_by_room.get(
+                room.property_id,
+                RoomTaskCountRecord(room.property_id, 0, 0),
+            )
+            occupancy_status = AdminOperationsService._occupancy_status(
+                source_stale=source_stale,
+                arrivals=today_arrivals,
+                departures=today_departures,
+                occupied=occupied_today,
+            )
+            next_arrival = min(future_arrivals, default=None)
+            next_departure = min(future_departures, default=None)
             room_items.append(
                 RoomOperationItem(
                     property_id=room.property_id,
@@ -275,8 +316,21 @@ class AdminOperationsService:
                     status=room.status,
                     today_arrival_count=today_arrivals,
                     today_departure_count=today_departures,
-                    open_task_count=open_tasks.get(room.property_id, 0),
-                    next_arrival=min(future_arrivals, default=None),
+                    open_task_count=task_count.count,
+                    next_arrival=next_arrival,
+                    occupancy_status=occupancy_status,
+                    overdue_task_count=task_count.overdue_count,
+                    next_departure=next_departure,
+                    next_action=AdminOperationsService._next_action(
+                        source_stale=source_stale,
+                        operational_status=room.status,
+                        arrivals=today_arrivals,
+                        departures=today_departures,
+                        occupied=occupied_today,
+                        task_count=task_count,
+                        next_arrival=next_arrival,
+                    ),
+                    source_stale=source_stale,
                 )
             )
             matrix_items.append(
@@ -300,21 +354,116 @@ class AdminOperationsService:
             )
         return tuple(room_items), tuple(matrix_items)
 
-    async def snapshot(self, now: datetime | None = None) -> OperationsSnapshot:
+    @staticmethod
+    def _occupancy_status(
+        *,
+        source_stale: bool,
+        arrivals: int,
+        departures: int,
+        occupied: bool,
+    ) -> RoomOccupancyStatus:
+        """按当日订单事实推导入住状态，同步过旧时明确返回未知。"""
+        if source_stale:
+            return RoomOccupancyStatus.UNKNOWN
+        if arrivals and departures:
+            return RoomOccupancyStatus.TURNOVER_TODAY
+        if arrivals:
+            return RoomOccupancyStatus.ARRIVING_TODAY
+        if departures:
+            return RoomOccupancyStatus.DEPARTING_TODAY
+        if occupied:
+            return RoomOccupancyStatus.OCCUPIED
+        return RoomOccupancyStatus.VACANT
+
+    @staticmethod
+    def _next_action(
+        *,
+        source_stale: bool,
+        operational_status: RoomOperationalStatus,
+        arrivals: int,
+        departures: int,
+        occupied: bool,
+        task_count: RoomTaskCountRecord,
+        next_arrival: date | None,
+    ) -> str:
+        """根据确定性事实给出单一优先行动，不替代员工经营判断。"""
+        if source_stale:
+            return "先确认百居易实时房态"
+        if task_count.overdue_count:
+            return f"优先处理 {task_count.overdue_count} 项逾期任务"
+        if arrivals and departures:
+            return "安排退房周转并核对今日入住"
+        if departures:
+            return "安排退房检查与周转"
+        if arrivals:
+            return (
+                "核对入住资料并接待"
+                if operational_status is RoomOperationalStatus.READY
+                else "优先完成房间准备并接待入住"
+            )
+        if operational_status is RoomOperationalStatus.MAINTENANCE:
+            return "跟进维修并确认房间可用性"
+        if task_count.count:
+            return f"推进 {task_count.count} 项开放任务"
+        if occupied:
+            return "关注在住服务"
+        if next_arrival is not None:
+            return f"{next_arrival.month}月{next_arrival.day}日前完成房间准备"
+        return "暂无近期运营动作"
+
+    @staticmethod
+    def _source_is_stale(
+        observed_at: datetime,
+        source_synced_at: datetime | None,
+    ) -> bool:
+        """以六小时窗口判断本地房态来源能否代表近期同步结果。"""
+        if source_synced_at is None:
+            return True
+        aware_source = (
+            source_synced_at.replace(tzinfo=UTC)
+            if source_synced_at.tzinfo is None
+            else source_synced_at
+        )
+        age = observed_at - aware_source.astimezone(UTC)
+        return not timedelta(0) <= age <= timedelta(hours=6)
+
+    async def snapshot(
+        self,
+        now: datetime | None = None,
+        *,
+        horizon_days: int = 3,
+        source_synced_at: datetime | None = None,
+    ) -> OperationsSnapshot:
         """按武汉本地日界线生成一致、只读且可直接渲染的运营快照。"""
+        if horizon_days not in {3, 7, 14}:
+            raise ValueError("近期房态范围仅支持 3、7 或 14 天")
         await self._repository.prepare_consistent_read()
         observed_at = now or datetime.now(UTC)
         if observed_at.tzinfo is None:
             observed_at = observed_at.replace(tzinfo=UTC)
         local_date = observed_at.astimezone(WUHAN_TIMEZONE).date()
+        source_stale = self._source_is_stale(observed_at, source_synced_at)
         attention = await self._repository.list_attention()
         rooms = await self._repository.list_active_rooms()
-        stays = await self._repository.list_current_and_future_stays(local_date)
-        task_counts = await self._repository.list_open_task_counts()
-        room_items, matrix_items = self._room_items(local_date, rooms, stays, task_counts)
+        stays = await self._repository.list_room_stays(
+            local_date - timedelta(days=2),
+            local_date + timedelta(days=horizon_days + 1),
+        )
+        task_counts = await self._repository.list_open_task_counts(local_date)
+        room_items, matrix_items = self._room_items(
+            local_date,
+            rooms,
+            stays,
+            task_counts,
+            horizon_days=horizon_days,
+            source_stale=source_stale,
+        )
         return OperationsSnapshot(
             local_date=local_date,
             attention_items=self._attention_items(attention),
             rooms=room_items,
             seven_day_rooms=matrix_items,
+            horizon_days=horizon_days,
+            source_synced_at=source_synced_at,
+            source_stale=source_stale,
         )

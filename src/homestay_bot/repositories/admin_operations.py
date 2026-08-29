@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import String, case, exists, func, literal, select
+from sqlalchemy import cast as sa_cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import (
@@ -65,7 +66,7 @@ class ActiveRoomRecord:
 
 @dataclass(frozen=True, slots=True)
 class StayRecord:
-    """保存七日矩阵及下一笔入住所需的订单日期事实。"""
+    """保存近期运营时间轴与下一笔行动所需的订单日期事实。"""
 
     property_id: int
     check_in_date: date
@@ -74,10 +75,11 @@ class StayRecord:
 
 @dataclass(frozen=True, slots=True)
 class RoomTaskCountRecord:
-    """保存单个启用房间的未完成任务数。"""
+    """保存单个启用房间的开放任务与逾期任务数。"""
 
     property_id: int
     count: int
+    overdue_count: int = 0
 
 
 class SQLAlchemyAdminOperationsRepository:
@@ -152,6 +154,14 @@ class SQLAlchemyAdminOperationsRepository:
             for record_id, status, property_id, room_title, updated_at in credential_rows
         )
 
+        derived_manual_task_exists = exists(
+            select(BusinessTask.id).where(
+                BusinessTask.dedupe_key
+                == literal("lifecycle-manual:")
+                + sa_cast(LifecycleReminder.id, String),
+                BusinessTask.status == BusinessTaskStatus.PENDING_CONFIRMATION,
+            )
+        )
         reminder_rows = await self._session.execute(
             select(
                 LifecycleReminder.id,
@@ -162,7 +172,10 @@ class SQLAlchemyAdminOperationsRepository:
             )
             .join(StayOrder, StayOrder.id == LifecycleReminder.order_id)
             .join(PropertyProfile, PropertyProfile.id == StayOrder.property_id)
-            .where(LifecycleReminder.status == ReminderStatus.MANUAL_FOLLOWUP)
+            .where(
+                LifecycleReminder.status == ReminderStatus.MANUAL_FOLLOWUP,
+                ~derived_manual_task_exists,
+            )
             .order_by(LifecycleReminder.updated_at, LifecycleReminder.id)
         )
         records.extend(
@@ -235,8 +248,12 @@ class SQLAlchemyAdminOperationsRepository:
             for property_id, room_number, room_title, status in rows
         )
 
-    async def list_current_and_future_stays(self, local_date: date) -> tuple[StayRecord, ...]:
-        """批量读取启用房间当前及未来有效订单，供七日与下一入住共用。"""
+    async def list_room_stays(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> tuple[StayRecord, ...]:
+        """批量读取时间窗内与启用房间相交的有效订单。"""
         rows = await self._session.execute(
             select(
                 StayOrder.property_id,
@@ -246,7 +263,8 @@ class SQLAlchemyAdminOperationsRepository:
             .join(PropertyProfile, PropertyProfile.id == StayOrder.property_id)
             .where(
                 PropertyProfile.is_active.is_(True),
-                StayOrder.check_out_date > local_date,
+                StayOrder.check_out_date > start_date,
+                StayOrder.check_in_date < end_date,
                 func.lower(func.trim(StayOrder.status)).not_in(TERMINAL_STAY_STATUSES),
             )
             .order_by(StayOrder.property_id, StayOrder.check_in_date, StayOrder.id)
@@ -260,21 +278,41 @@ class SQLAlchemyAdminOperationsRepository:
             for property_id, check_in_date, check_out_date in rows
         )
 
-    async def list_open_task_counts(self) -> tuple[RoomTaskCountRecord, ...]:
-        """按启用房间批量统计未完成且未取消的任务。"""
+    async def list_open_task_counts(
+        self,
+        local_date: date,
+    ) -> tuple[RoomTaskCountRecord, ...]:
+        """按启用房间批量统计开放任务及其中已经逾期的数量。"""
         rows = await self._session.execute(
-            select(BusinessTask.property_id, func.count(BusinessTask.id))
+            select(
+                BusinessTask.property_id,
+                func.count(BusinessTask.id),
+                func.sum(
+                    case(
+                        (BusinessTask.service_date < local_date, 1),
+                        else_=0,
+                    )
+                ),
+            )
             .join(PropertyProfile, PropertyProfile.id == BusinessTask.property_id)
             .where(
                 PropertyProfile.is_active.is_(True),
                 BusinessTask.status.not_in(
-                    (BusinessTaskStatus.COMPLETED, BusinessTaskStatus.CANCELLED)
+                    (
+                        BusinessTaskStatus.COMPLETED,
+                        BusinessTaskStatus.CANCELLED,
+                        BusinessTaskStatus.EXPIRED,
+                    )
                 ),
             )
             .group_by(BusinessTask.property_id)
         )
         return tuple(
-            RoomTaskCountRecord(property_id=property_id, count=int(count))
-            for property_id, count in rows
+            RoomTaskCountRecord(
+                property_id=property_id,
+                count=int(count),
+                overdue_count=int(overdue_count or 0),
+            )
+            for property_id, count, overdue_count in rows
             if property_id is not None
         )

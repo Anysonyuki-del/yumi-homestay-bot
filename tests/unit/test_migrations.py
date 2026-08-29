@@ -37,6 +37,10 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "CREATE INDEX ix_stay_orders_check_out_status" in result.stdout
     assert "checkout_observed_on" in result.stdout
     assert "0020_memory_trust_timeline" in result.stdout
+    assert "0021_task_lifecycle_room_operations" in result.stdout
+    assert "origin_kind" in result.stdout
+    assert "closure_reason_code" in result.stdout
+    assert "ix_business_tasks_status_expires_at" in result.stdout
     assert "customer_memory_events" in result.stdout
     assert "source_excerpt_hash" in result.stdout
     assert "uq_customer_memory_active_subject" in result.stdout
@@ -112,6 +116,19 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
         message_columns = {
             row[1] for row in connection.execute("PRAGMA table_info('messages')")
         }
+        business_task_ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("business_tasks",),
+        ).fetchone()[0]
+        business_task_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info('business_tasks')")
+        }
+        business_task_indexes = connection.execute(
+            "PRAGMA index_list('business_tasks')"
+        ).fetchall()
+        business_task_foreign_keys = connection.execute(
+            "PRAGMA foreign_key_list('business_tasks')"
+        ).fetchall()
         csrf_foreign_keys = connection.execute(
             "PRAGMA foreign_key_list('admin_csrf_nonces')"
         ).fetchall()
@@ -177,6 +194,23 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     )
     assert "checkout_observed_on" in stay_columns
     assert "memory_processed_at" in message_columns
+    assert {
+        "origin_kind",
+        "expires_at",
+        "closed_at",
+        "closure_reason_code",
+        "closure_source",
+        "closed_by_employee_id",
+    } <= business_task_columns
+    assert "EXPIRED" in business_task_ddl
+    assert any(
+        row[1] == "ix_business_tasks_status_expires_at"
+        for row in business_task_indexes
+    )
+    assert any(
+        row[2] == "employees" and row[3] == "closed_by_employee_id"
+        for row in business_task_foreign_keys
+    )
     assert any(row[2] == "employees" and row[3] == "employee_id" for row in admin_foreign_keys)
     assert any(row[2] == "admin_credentials" and row[3] == "admin_id" for row in csrf_foreign_keys)
     assert sum(row[2] == "runtime_config_versions" for row in state_foreign_keys) == 2
@@ -244,7 +278,7 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0020_memory_trust_timeline (head)" in current.stdout
+    assert "0021_task_lifecycle_room_operations (head)" in current.stdout
 
 
 def test_customer_memory_trust_migration_quarantines_unverified_history(

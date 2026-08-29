@@ -10,7 +10,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
-from homestay_bot.domain.enums import BusinessTaskStatus, EmployeeRole, RoomOperationalStatus
+from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    EmployeeRole,
+    RoomOccupancyStatus,
+    RoomOperationalStatus,
+)
 from homestay_bot.routes.admin import router as admin_router
 from homestay_bot.routes.employee_auth import router as auth_router
 from homestay_bot.services.admin_dashboard_service import Snapshot
@@ -68,12 +73,19 @@ class HealthStub:
 class OperationsStub:
     """返回不含客户身份和入住凭证的固定运营工作台。"""
 
-    async def snapshot(self, now: datetime | None = None) -> OperationsSnapshot:
-        """构造一项待确认任务和一间房的七日安全投影。"""
+    async def snapshot(
+        self,
+        now: datetime | None = None,
+        *,
+        horizon_days: int = 3,
+        source_synced_at: datetime | None = None,
+    ) -> OperationsSnapshot:
+        """构造一项待确认任务和一间房的近期安全投影。"""
         local_date = date(2026, 8, 11)
+        source_stale = source_synced_at is None
         days = tuple(
             RoomDayOperation(local_date, 1, 0, True)
-            for _ in range(7)
+            for _ in range(horizon_days + 3)
         )
         return OperationsSnapshot(
             local_date=local_date,
@@ -100,11 +112,25 @@ class OperationsStub:
                     today_departure_count=0,
                     open_task_count=1,
                     next_arrival=local_date,
+                    occupancy_status=(
+                        RoomOccupancyStatus.UNKNOWN
+                        if source_stale
+                        else RoomOccupancyStatus.ARRIVING_TODAY
+                    ),
+                    next_action=(
+                        "先确认百居易实时房态"
+                        if source_stale
+                        else "核对入住资料并接待"
+                    ),
+                    source_stale=source_stale,
                 ),
             ),
             seven_day_rooms=(
                 SevenDayRoomItem(101, "101", "长江中心", days),
             ),
+            horizon_days=horizon_days,
+            source_synced_at=source_synced_at,
+            source_stale=source_stale,
         )
 
 
@@ -202,7 +228,7 @@ def build_client() -> TestClient:
 
 
 def test_attention_and_operations_pages_form_actionable_workflow() -> None:
-    """待关注事项和房态页面必须提供可执行入口与七日矩阵。"""
+    """待关注事项和房态页面必须提供可执行入口与近期运营板。"""
     client = build_client()
     login_admin(client, next_path="/employee/admin")
 
@@ -213,8 +239,10 @@ def test_attention_and_operations_pages_form_actionable_workflow() -> None:
     assert 'href="/employee/tasks/7"' in attention.text
     assert "任务 #7：等待管理员确认" in attention.text
     assert operations.status_code == 200
-    assert "今日入住 1" in operations.text
-    assert "7 日房态" in operations.text
+    assert "房态待确认" in operations.text
+    assert "房间近期运营" in operations.text
+    assert "先确认百居易实时房态" in operations.text
+    assert "未来 3 天" in operations.text
     assert 'href="/employee/properties/101"' in operations.text
 
 

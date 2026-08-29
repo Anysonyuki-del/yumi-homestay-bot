@@ -288,6 +288,7 @@ class SQLAlchemyCustomerRepository:
                     [
                         BusinessTaskStatus.COMPLETED,
                         BusinessTaskStatus.CANCELLED,
+                        BusinessTaskStatus.EXPIRED,
                     ]
                 ),
             )
@@ -464,6 +465,7 @@ class SQLAlchemyCustomerRepository:
                         [
                             BusinessTaskStatus.COMPLETED,
                             BusinessTaskStatus.CANCELLED,
+                            BusinessTaskStatus.EXPIRED,
                         ]
                     ),
                 )

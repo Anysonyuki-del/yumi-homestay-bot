@@ -162,6 +162,33 @@ tbody tr:hover { background: #fafcff; }
 .operations-matrix th, .operations-matrix td { text-align: center; }
 .operations-matrix th:first-child { position: sticky; left: 0; z-index: 1; text-align: left; background: #f8fafc; }
 .operations-matrix td span { display: inline-block; margin: 1px; padding: 2px 4px; border-radius: 4px; color: var(--primary-hover); background: var(--primary-soft); font-size: .75rem; }
+.operations-heading { margin-bottom: 12px; }
+.operations-heading .section-heading { align-items: flex-start; }
+.operations-heading .section-heading p { margin: 5px 0 0; }
+.operations-source { margin: 0 0 10px; color: var(--muted); font-size: .8rem; }
+.operations-range { margin: 0; }
+.room-operations-list { display: grid; gap: 12px; }
+.room-operation-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; box-shadow: 0 1px 2px rgb(15 23 42 / 5%); }
+.room-operation-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.room-operation-card__header a { color: #0f172a; text-decoration: none; }
+.room-operation-card__header small { display: block; margin-top: 3px; color: var(--muted); }
+.room-status-pair { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.room-next-action { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 10px; margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--primary); background: var(--primary-soft); }
+.room-next-action span { color: var(--muted); font-size: .75rem; font-weight: 650; }
+.room-operation-facts { display: grid; gap: 8px; margin: 0 0 12px; }
+.room-operation-facts > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
+.room-operation-facts dt { color: var(--muted); font-size: .78rem; }
+.room-operation-facts dd { margin: 0; font-size: .82rem; }
+.room-timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(86px, 1fr)); gap: 6px; }
+.room-day { display: grid; min-height: 66px; align-content: start; gap: 2px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: #f8fafc; }
+.room-day strong { display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: .78rem; font-variant-numeric: tabular-nums; }
+.room-day strong span { color: var(--primary-hover); font-size: .66rem; }
+.room-day small { color: var(--muted); font-size: .7rem; }
+.room-day--occupied { border-color: #99f6e4; background: var(--primary-soft); }
+.room-day--today { outline: 2px solid var(--primary); outline-offset: -2px; }
+.operations-overview { margin-top: 12px; }
+.operations-overview summary { cursor: pointer; font-weight: 700; }
+.operations-overview[open] summary { margin-bottom: 12px; }
 
 /* 移动优先的统一后台外壳。 */
 .admin-shell { min-height: 100vh; }
@@ -260,6 +287,9 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
   .entry-card { grid-template-columns: minmax(0, 1fr) auto; }
   .filter-toolbar { grid-template-columns: repeat(3, minmax(140px, 1fr)); align-items: end; }
   .attention-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .room-operation-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .room-operation-facts > div { display: block; }
+  .room-operation-facts dd { margin-top: 3px; }
 }
 
 @media (min-width: 1024px) {
@@ -269,6 +299,7 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
   .topbar { grid-template-columns: 1fr auto; }
   .topbar__brand { visibility: hidden; }
   .dashboard-grid { grid-template-columns: minmax(0, 1.7fr) minmax(270px, .7fr); }
+  .room-operations-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .property-grid { display: block; }
   .filter-toolbar { grid-template-columns: repeat(5, minmax(120px, 1fr)) auto; }
 }

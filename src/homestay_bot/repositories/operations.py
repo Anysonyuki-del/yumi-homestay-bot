@@ -3,17 +3,21 @@ from datetime import UTC, date, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
+from sqlalchemy import String, and_, exists, func, literal, or_, select, update
+from sqlalchemy import cast as sa_cast
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
 from homestay_bot.domain.enums import (
+    BusinessTaskOrigin,
     BusinessTaskStatus,
     BusinessTaskType,
     CustomerIdentityProvider,
     RoomOperationalStatus,
+    TaskClosureReason,
+    TaskClosureSource,
 )
 from homestay_bot.domain.models import (
     AuditLog,
@@ -32,6 +36,11 @@ from homestay_bot.domain.models import (
 from homestay_bot.domain.stay_status import (
     is_checked_out_stay_status,
     is_excluded_stay_status,
+)
+from homestay_bot.domain.task_lifecycle import (
+    TaskLifecycleCandidate,
+    local_service_window_expires_at,
+    manual_contact_expires_at,
 )
 from homestay_bot.integrations.hostex_client import Reservation
 
@@ -93,6 +102,7 @@ class SQLAlchemyOperationsRepository:
             dedupe_key=dedupe_key,
             task_type=BusinessTaskType.CLEANING,
             status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+            origin_kind=BusinessTaskOrigin.TURNOVER,
             order_id=order_id,
             property_id=property_id,
             service_date=service_date,
@@ -132,6 +142,7 @@ class SQLAlchemyOperationsRepository:
             dedupe_key=dedupe_key,
             task_type=BusinessTaskType.MANUAL_CONTACT,
             status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            origin_kind=BusinessTaskOrigin.LIFECYCLE_REMINDER,
             customer_id=order.customer_id,
             order_id=order.id,
             property_id=order.property_id,
@@ -139,6 +150,10 @@ class SQLAlchemyOperationsRepository:
             description=(
                 f"主动入住提醒未能自动发送（{reason_label}），"
                 "请人工联系客户。"
+            ),
+            expires_at=manual_contact_expires_at(
+                reminder.reminder_type,
+                reminder.scheduled_at,
             ),
         )
         task, created = await self._add_business_task_once(task, lookup)
@@ -169,15 +184,21 @@ class SQLAlchemyOperationsRepository:
         service_date: date | None = None,
         property_id: int | None = None,
         assigned_employee_id: int | None = None,
+        overdue_before: date | None = None,
     ) -> list[BusinessTask]:
         """按稳定顺序分页返回未关闭任务。"""
-        conditions: list[Any] = [
-            BusinessTask.status.not_in(
-                [BusinessTaskStatus.COMPLETED, BusinessTaskStatus.CANCELLED]
+        conditions: list[Any] = []
+        if status is None:
+            conditions.append(
+                BusinessTask.status.not_in(
+                    [
+                        BusinessTaskStatus.COMPLETED,
+                        BusinessTaskStatus.CANCELLED,
+                        BusinessTaskStatus.EXPIRED,
+                    ]
+                )
             )
-        ]
         for value, column in (
-            (status, BusinessTask.status),
             (task_type, BusinessTask.task_type),
             (service_date, BusinessTask.service_date),
             (property_id, BusinessTask.property_id),
@@ -185,6 +206,11 @@ class SQLAlchemyOperationsRepository:
         ):
             if value is not None:
                 conditions.append(column == value)
+        if overdue_before is not None:
+            conditions.append(BusinessTask.service_date < overdue_before)
+        if status is not None:
+            # 显式筛选终态时允许管理员查看历史；默认列表仍只展示开放任务。
+            conditions.append(BusinessTask.status == status)
         return list(
             (
                 await self._session.scalars(
@@ -209,22 +235,32 @@ class SQLAlchemyOperationsRepository:
         task_type: BusinessTaskType | None = None,
         service_date: date | None = None,
         property_id: int | None = None,
+        overdue_before: date | None = None,
     ) -> list[BusinessTask]:
         """分页返回分派给指定员工的未关闭任务。"""
-        conditions: list[Any] = [
-            BusinessTask.assigned_employee_id == employee_id,
-            BusinessTask.status.not_in(
-                [BusinessTaskStatus.COMPLETED, BusinessTaskStatus.CANCELLED]
-            ),
-        ]
+        conditions: list[Any] = [BusinessTask.assigned_employee_id == employee_id]
+        if status is None:
+            conditions.append(
+                BusinessTask.status.not_in(
+                    [
+                        BusinessTaskStatus.COMPLETED,
+                        BusinessTaskStatus.CANCELLED,
+                        BusinessTaskStatus.EXPIRED,
+                    ]
+                )
+            )
         for value, column in (
-            (status, BusinessTask.status),
             (task_type, BusinessTask.task_type),
             (service_date, BusinessTask.service_date),
             (property_id, BusinessTask.property_id),
         ):
             if value is not None:
                 conditions.append(column == value)
+        if overdue_before is not None:
+            conditions.append(BusinessTask.service_date < overdue_before)
+        if status is not None:
+            # 普通员工只能看到曾经分派给自己的终态任务。
+            conditions.append(BusinessTask.status == status)
         return list(
             (
                 await self._session.scalars(
@@ -533,10 +569,21 @@ class SQLAlchemyOperationsRepository:
             source_message_id=source_message_id,
             task_type=task_type,
             status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            origin_kind=BusinessTaskOrigin.AI_SUGGESTION,
             customer_id=customer_id,
             property_id=property_id,
             service_date=service_date,
             description=description,
+            expires_at=(
+                local_service_window_expires_at(service_date)
+                if service_date is not None
+                and task_type
+                in {
+                    BusinessTaskType.EARLY_CHECK_IN,
+                    BusinessTaskType.LATE_CHECK_OUT,
+                }
+                else None
+            ),
         )
         task, created = await self._add_business_task_once(task, lookup)
         if not created:
@@ -576,6 +623,14 @@ class SQLAlchemyOperationsRepository:
         """保存任务状态并写入不含描述正文的安全审计。"""
         previous = task.status
         task.status = target
+        if target in {
+            BusinessTaskStatus.COMPLETED,
+            BusinessTaskStatus.CANCELLED,
+        }:
+            # 人工完成或取消也写入统一关闭元数据，便于审计区分系统失效。
+            task.closed_at = datetime.now(UTC)
+            task.closure_source = TaskClosureSource.EMPLOYEE
+            task.closed_by_employee_id = actor_employee_id
         self._session.add(
             AuditLog(
                 actor_employee_id=actor_employee_id,
@@ -591,6 +646,206 @@ class SQLAlchemyOperationsRepository:
         )
         await self._session.flush()
         return task
+
+    async def list_lifecycle_candidates(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+        order_id: int | None = None,
+    ) -> tuple[TaskLifecycleCandidate, ...]:
+        """批量读取任务治理需要的最小投影，不读取任务描述。"""
+        reminder_key = literal("lifecycle-manual:") + sa_cast(
+            LifecycleReminder.id,
+            String(),
+        )
+        attachment_exists = exists(
+            select(TaskAttachment.id).where(TaskAttachment.task_id == BusinessTask.id)
+        )
+        local_today = now.astimezone(WUHAN_TIMEZONE).date()
+        cancelled_order = and_(
+            func.lower(func.trim(StayOrder.status)).in_(
+                ("cancelled", "canceled", "declined", "expired", "deleted")
+            ),
+            BusinessTask.task_type.in_(
+                (
+                    BusinessTaskType.CLEANING,
+                    BusinessTaskType.MANUAL_CONTACT,
+                    BusinessTaskType.EARLY_CHECK_IN,
+                    BusinessTaskType.LATE_CHECK_OUT,
+                )
+            ),
+        )
+        expired_window = or_(
+            BusinessTask.expires_at <= now,
+            and_(
+                BusinessTask.task_type == BusinessTaskType.MANUAL_CONTACT,
+                LifecycleReminder.scheduled_at <= now,
+            ),
+            and_(
+                BusinessTask.task_type.in_(
+                    (
+                        BusinessTaskType.EARLY_CHECK_IN,
+                        BusinessTaskType.LATE_CHECK_OUT,
+                    )
+                ),
+                BusinessTask.service_date < local_today,
+            ),
+        )
+        statement = (
+            select(
+                BusinessTask.id,
+                BusinessTask.order_id,
+                BusinessTask.task_type,
+                BusinessTask.status,
+                BusinessTask.origin_kind,
+                StayOrder.status,
+                BusinessTask.service_date,
+                BusinessTask.assigned_employee_id,
+                BusinessTask.checklist,
+                attachment_exists.label("has_attachments"),
+                LifecycleReminder.reminder_type,
+                LifecycleReminder.scheduled_at,
+                BusinessTask.expires_at,
+            )
+            .outerjoin(StayOrder, StayOrder.id == BusinessTask.order_id)
+            .outerjoin(
+                LifecycleReminder,
+                BusinessTask.dedupe_key == reminder_key,
+            )
+            .where(
+                BusinessTask.status.in_(
+                    (
+                        BusinessTaskStatus.PENDING_CONFIRMATION,
+                        BusinessTaskStatus.PENDING_ASSIGNMENT,
+                    )
+                ),
+                or_(cancelled_order, expired_window),
+            )
+            .order_by(BusinessTask.updated_at, BusinessTask.id)
+            .limit(limit)
+        )
+        if order_id is not None:
+            statement = statement.where(BusinessTask.order_id == order_id)
+        rows = await self._session.execute(statement)
+        return tuple(
+            TaskLifecycleCandidate(
+                task_id=task_id,
+                order_id=selected_order_id,
+                task_type=task_type,
+                status=status,
+                origin_kind=origin_kind,
+                order_status=order_status,
+                service_date=service_date,
+                assigned_employee_id=assigned_employee_id,
+                has_checklist=bool(checklist),
+                has_attachments=bool(has_attachments),
+                reminder_type=reminder_type,
+                reminder_scheduled_at=reminder_scheduled_at,
+                expires_at=expires_at,
+            )
+            for (
+                task_id,
+                selected_order_id,
+                task_type,
+                status,
+                origin_kind,
+                order_status,
+                service_date,
+                assigned_employee_id,
+                checklist,
+                has_attachments,
+                reminder_type,
+                reminder_scheduled_at,
+                expires_at,
+            ) in rows
+        )
+
+    async def expire_if_safe(
+        self,
+        task_id: int,
+        *,
+        reason: TaskClosureReason,
+        now: datetime,
+    ) -> bool:
+        """锁定后再次校验执行证据，再把任务写入失效终态。"""
+        task = await self._session.scalar(
+            select(BusinessTask)
+            .where(BusinessTask.id == task_id)
+            .with_for_update()
+        )
+        if task is None or task.status not in {
+            BusinessTaskStatus.PENDING_CONFIRMATION,
+            BusinessTaskStatus.PENDING_ASSIGNMENT,
+        }:
+            return False
+        if task.assigned_employee_id is not None or bool(task.checklist):
+            return False
+        if await self._session.scalar(
+            select(exists().where(TaskAttachment.task_id == task.id))
+        ):
+            return False
+        if reason is TaskClosureReason.ORDER_CANCELLED:
+            order_status = await self._session.scalar(
+                select(StayOrder.status).where(StayOrder.id == task.order_id)
+            )
+            if not is_excluded_stay_status(order_status):
+                return False
+        if reason is TaskClosureReason.WINDOW_EXPIRED:
+            deadline = task.expires_at
+            if deadline is None and task.task_type is BusinessTaskType.MANUAL_CONTACT:
+                reminder = await self._session.scalar(
+                    select(LifecycleReminder).where(
+                        literal("lifecycle-manual:")
+                        + sa_cast(LifecycleReminder.id, String())
+                        == task.dedupe_key
+                    )
+                )
+                if reminder is not None:
+                    deadline = manual_contact_expires_at(
+                        reminder.reminder_type,
+                        reminder.scheduled_at,
+                    )
+            if (
+                deadline is None
+                and task.task_type
+                in {
+                    BusinessTaskType.EARLY_CHECK_IN,
+                    BusinessTaskType.LATE_CHECK_OUT,
+                }
+                and task.service_date is not None
+            ):
+                deadline = local_service_window_expires_at(task.service_date)
+            if deadline is None:
+                return False
+            aware_deadline = (
+                deadline.replace(tzinfo=UTC)
+                if deadline.tzinfo is None
+                else deadline
+            )
+            if now < aware_deadline:
+                return False
+        previous = task.status
+        task.status = BusinessTaskStatus.EXPIRED
+        task.closed_at = now
+        task.closure_reason_code = reason
+        task.closure_source = TaskClosureSource.SYSTEM
+        task.closed_by_employee_id = None
+        self._session.add(
+            AuditLog(
+                actor_employee_id=None,
+                action="business_task_expired",
+                target_type="business_task",
+                target_id=str(task.id),
+                details={
+                    "from_status": previous.value,
+                    "reason": reason.value,
+                    "task_type": task.task_type.value,
+                },
+            )
+        )
+        await self._session.flush()
+        return True
 
     async def record_handoff(
         self,

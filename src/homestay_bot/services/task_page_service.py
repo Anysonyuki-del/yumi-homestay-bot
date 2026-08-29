@@ -1,7 +1,8 @@
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol, cast
+from zoneinfo import ZoneInfo
 
 from homestay_bot.domain.enums import (
     BusinessTaskStatus,
@@ -15,6 +16,8 @@ from homestay_bot.domain.models import (
     TaskAttachment,
 )
 from homestay_bot.services.business_task_service import BusinessTaskService
+
+WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 class TaskPageRepository(Protocol):
@@ -30,6 +33,7 @@ class TaskPageRepository(Protocol):
         service_date: date | None = None,
         property_id: int | None = None,
         assigned_employee_id: int | None = None,
+        overdue_before: date | None = None,
     ) -> list[BusinessTask]:
         """分页返回未关闭任务。"""
 
@@ -43,6 +47,7 @@ class TaskPageRepository(Protocol):
         task_type: BusinessTaskType | None = None,
         service_date: date | None = None,
         property_id: int | None = None,
+        overdue_before: date | None = None,
     ) -> list[BusinessTask]:
         """分页返回分派给指定员工的未关闭任务。"""
 
@@ -97,11 +102,12 @@ class TaskFilters:
     service_date: date | None = None
     property_id: int | None = None
     assigned_employee_id: int | None = None
+    overdue: bool = False
 
     @property
     def active(self) -> bool:
         """判断是否至少启用一项筛选。"""
-        return any(
+        return self.overdue or any(
             value is not None
             for value in (
                 self.status,
@@ -157,6 +163,7 @@ class TaskPageService:
         """按分页边界返回管理员全部或普通员工自己的任务。"""
         self._require_active(employee)
         selected = filters or TaskFilters()
+        today = datetime.now(WUHAN_TIMEZONE).date()
         if employee.role is EmployeeRole.ADMIN:
             tasks = (
                 await self._tasks.list_all_open(
@@ -167,6 +174,7 @@ class TaskPageService:
                     service_date=selected.service_date,
                     property_id=selected.property_id,
                     assigned_employee_id=selected.assigned_employee_id,
+                    overdue_before=today if selected.overdue else None,
                 )
                 if selected.active
                 else await self._tasks.list_all_open(
@@ -184,6 +192,7 @@ class TaskPageService:
                     task_type=selected.task_type,
                     service_date=selected.service_date,
                     property_id=selected.property_id,
+                    overdue_before=today if selected.overdue else None,
                 )
                 if selected.active
                 else await self._tasks.list_assigned_open(
@@ -195,7 +204,6 @@ class TaskPageService:
         options = await self._display_options()
         property_titles = self._option_labels(options["properties"], "title")
         employee_names = self._option_labels(options["employees"], "name")
-        today = date.today()
         return [
             TaskListItem(
                 id=int(task.id),
@@ -214,7 +222,16 @@ class TaskPageService:
                     if task.assigned_employee_id is not None
                     else "待分派"
                 ),
-                is_overdue=bool(task.service_date and task.service_date < today),
+                is_overdue=bool(
+                    task.status
+                    not in {
+                        BusinessTaskStatus.COMPLETED,
+                        BusinessTaskStatus.CANCELLED,
+                        BusinessTaskStatus.EXPIRED,
+                    }
+                    and task.service_date
+                    and task.service_date < today
+                ),
             )
             for task in tasks
         ]
