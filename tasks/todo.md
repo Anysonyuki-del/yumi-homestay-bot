@@ -78,10 +78,10 @@
 - [x] HARD-GATE：用户明确要求直接发布
 - [x] 将应用版本升级为 `1.1.0` 并建立正式发布日志
 - [x] 运行发布级静态检查、构建检查和全量测试
-- [ ] 提交发布代码、创建 `v1.1.0` 标签并推送 GitHub
-- [ ] 创建并验证生产源码、配置和 PostgreSQL 备份
-- [ ] 仅重建 API，保持 PostgreSQL 容器连续运行
-- [ ] 验收生产 HEAD、版本、迁移、健康、重启次数、日志和后台页面
+- [x] 提交发布代码、创建 `v1.1.0` 标签并推送 GitHub
+- [x] 创建并验证生产源码、配置和 PostgreSQL 备份
+- [x] 仅重建 API，保持 PostgreSQL 容器连续运行
+- [x] 验收生产 HEAD、版本、迁移、健康、重启次数、日志和后台页面
 
 ## 发布边界
 
@@ -92,4 +92,15 @@
 
 ## Review
 
-- 待发布和生产验收完成后填写。
+- 发布提交和 `v1.1.0` 标签均为 `618c1b109f4f629fa8dedde372e2079b56b39394`，已推送 GitHub。
+- wheel 构建产物为 `homestay_bot-1.1.0-py3-none-any.whl`，元数据版本为 `1.1.0`。
+- 发布门禁：Ruff、mypy（109 个源文件）、compileall、pip check、Alembic 单一 head、diff 检查和全量回归通过；全量结果为 `1159 passed, 15 skipped`。
+- 生产备份位于 `/opt/yumi-backups/v1.1.0-20260829T060436Z`，包含 `.env`、Compose、旧源码 bundle 和 PostgreSQL custom dump；dump 已通过 `pg_restore -l`，敏感文件权限为 `600`。
+- 生产源码以已验证 Git bundle fast-forward 到发布提交；tracked worktree 干净，3 个既存 `.env` 备份保持未跟踪且未改。
+- 只重建 API；PostgreSQL 容器 ID 仍为 `af11bb4a411f`，启动时间仍为 `2026-08-10T16:43:53Z`，未发生重启。
+- 生产容器版本与公网 OpenAPI 版本均为 `1.1.0`；Alembic current/head 均为 `0020_memory_trust_timeline`。
+- 本地及公网 `/health` 均返回 `ok`；API restart count 为 `0`，部署后十分钟日志异常标记为 `0`。
+- 实际公网后台登录页已通过浏览器渲染，标题为“管理员登录 · YuMi”；管理员诊断地址未登录返回预期 `401`。
+- 当前浏览器没有管理员登录态，未读取登录后侧栏版本；该展示与容器/OpenAPI 共用 `pyproject.toml` 的安装包版本源。
+- 真实 DeepSeek、Hostex、企业微信契约测试保持关闭，本次未发送真实企业微信消息。
+- 本地未跟踪 `YuMi民宿AI项目总结.txt` 保持未改且未进入发布提交。
