@@ -98,6 +98,10 @@ from homestay_bot.services.admin_debug_service import (
     DebugProperty,
 )
 from homestay_bot.services.admin_diagnostics_service import AdminDiagnosticsService
+from homestay_bot.services.admin_operations_service import (
+    AdminOperationsService,
+    OperationsSnapshot,
+)
 from homestay_bot.services.admin_passwords import (
     ADMIN_PASSWORD_HASHER,
     validate_admin_password_hash,
@@ -1200,6 +1204,22 @@ class SessionAdminDashboardService:
             return await AdminDashboardService(session).snapshot(now)
 
 
+class SessionAdminOperationsService:
+    """为每次运营工作台读取创建独立只读数据库会话。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def snapshot(
+        self,
+        now: datetime | None = None,
+    ) -> OperationsSnapshot:
+        """在短会话中构造待关注事项与房态快照。"""
+        async with self._factory() as session:
+            return await AdminOperationsService(session).snapshot(now)
+
+
 class SessionDebugPropertyRepository:
     """用独立短会话读取调试房源，模型外联期间不持有数据库事务。"""
 
@@ -1307,6 +1327,7 @@ class SessionTaskPageService:
         *,
         offset: int,
         limit: int,
+        filters: Any | None = None,
     ) -> list[Any]:
         """按分页边界返回当前员工可见的未关闭任务。"""
         async with self._factory() as session:
@@ -1314,6 +1335,7 @@ class SessionTaskPageService:
                 employee,
                 offset=offset,
                 limit=limit,
+                filters=filters,
             )
 
     async def detail_for(
@@ -1597,7 +1619,7 @@ class SessionCustomerAdminService:
 
     async def list_customers(
         self,
-        query: str | None,
+        query: Any | None,
         administrator: Employee,
         *,
         offset: int,
@@ -1614,7 +1636,7 @@ class SessionCustomerAdminService:
 
     async def get_detail(
         self,
-        customer_id: int,
+        customer_id: Any,
         administrator: Employee,
     ) -> dict[str, Any]:
         """返回脱敏客户详情。"""
@@ -1767,12 +1789,23 @@ class SessionKnowledgeAdminService:
         """保存数据库会话工厂。"""
         self._factory = factory
 
-    async def list_all(self, *, offset: int, limit: int) -> list[Any]:
+    async def list_all(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        query: str | None = None,
+        enabled: bool | None = None,
+        category: str | None = None,
+    ) -> list[Any]:
         """按分页边界返回知识条目。"""
         async with self._factory() as session:
             return await KnowledgeAdminService(session).list_all(
                 offset=offset,
                 limit=limit,
+                query=query,
+                enabled=enabled,
+                category=category,
             )
 
     async def get_detail(self, entry_id: int) -> Any:
@@ -1836,6 +1869,14 @@ class SessionComplaintAdminService:
     def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
         """保存数据库会话工厂。"""
         self._factory = factory
+
+    async def list_open(self, *, offset: int, limit: int) -> list[Any]:
+        """在独立只读会话中分页读取待处理客诉。"""
+        async with self._factory() as session:
+            return await ComplaintAdminService(
+                session,
+                TransactionalOutboxWeCom(session, source_message_id="complaint:list"),
+            ).list_open(offset=offset, limit=limit)
 
     async def get_detail(
         self,
@@ -2601,6 +2642,7 @@ def _clear_lifespan_state(app: FastAPI) -> None:
         "employee_access_verifier",
         "approval_page_service",
         "admin_dashboard_service",
+        "admin_operations_service",
         "admin_debug_service",
         "admin_debug_rate_limiter",
         "admin_diagnostics_service",
@@ -2722,6 +2764,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     sensitive_data = SensitiveDataCipher(bootstrap.data_encryption_key)
     private_file_storage = PrivateFileStorage(bootstrap.private_upload_dir)
     app.state.admin_dashboard_service = SessionAdminDashboardService(factory)
+    app.state.admin_operations_service = SessionAdminOperationsService(factory)
     app.state.task_page_service = SessionTaskPageService(
         factory,
         private_file_storage,

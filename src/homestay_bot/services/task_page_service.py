@@ -1,8 +1,13 @@
 import re
+from dataclasses import dataclass
 from datetime import date
-from typing import Protocol
+from typing import Protocol, cast
 
-from homestay_bot.domain.enums import BusinessTaskStatus, EmployeeRole
+from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    BusinessTaskType,
+    EmployeeRole,
+)
 from homestay_bot.domain.models import (
     BusinessTask,
     Employee,
@@ -16,7 +21,15 @@ class TaskPageRepository(Protocol):
     """定义任务移动页所需的查询和分派操作。"""
 
     async def list_all_open(
-        self, *, offset: int, limit: int
+        self,
+        *,
+        offset: int,
+        limit: int,
+        status: BusinessTaskStatus | None = None,
+        task_type: BusinessTaskType | None = None,
+        service_date: date | None = None,
+        property_id: int | None = None,
+        assigned_employee_id: int | None = None,
     ) -> list[BusinessTask]:
         """分页返回未关闭任务。"""
 
@@ -26,6 +39,10 @@ class TaskPageRepository(Protocol):
         *,
         offset: int,
         limit: int,
+        status: BusinessTaskStatus | None = None,
+        task_type: BusinessTaskType | None = None,
+        service_date: date | None = None,
+        property_id: int | None = None,
     ) -> list[BusinessTask]:
         """分页返回分派给指定员工的未关闭任务。"""
 
@@ -71,6 +88,46 @@ class TaskPageRepository(Protocol):
         """读取房间当前运营状态。"""
 
 
+@dataclass(frozen=True, slots=True)
+class TaskFilters:
+    """保存任务列表可进入 URL 的调度筛选条件。"""
+
+    status: BusinessTaskStatus | None = None
+    task_type: BusinessTaskType | None = None
+    service_date: date | None = None
+    property_id: int | None = None
+    assigned_employee_id: int | None = None
+
+    @property
+    def active(self) -> bool:
+        """判断是否至少启用一项筛选。"""
+        return any(
+            value is not None
+            for value in (
+                self.status,
+                self.task_type,
+                self.service_date,
+                self.property_id,
+                self.assigned_employee_id,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskListItem:
+    """提供任务调度列表所需的安全可读字段。"""
+
+    id: int
+    task_type: BusinessTaskType
+    status: BusinessTaskStatus
+    property_id: int | None
+    property_title: str
+    service_date: date | None
+    assigned_employee_id: int | None
+    assigned_employee_name: str
+    is_overdue: bool
+
+
 class TaskPageService:
     """执行两级员工任务可见性和操作权限。"""
 
@@ -95,16 +152,72 @@ class TaskPageService:
         *,
         offset: int,
         limit: int,
-    ) -> list[BusinessTask]:
+        filters: TaskFilters | None = None,
+    ) -> list[TaskListItem]:
         """按分页边界返回管理员全部或普通员工自己的任务。"""
         self._require_active(employee)
+        selected = filters or TaskFilters()
         if employee.role is EmployeeRole.ADMIN:
-            return await self._tasks.list_all_open(offset=offset, limit=limit)
-        return await self._tasks.list_assigned_open(
-            employee.id,
-            offset=offset,
-            limit=limit,
-        )
+            tasks = (
+                await self._tasks.list_all_open(
+                    offset=offset,
+                    limit=limit,
+                    status=selected.status,
+                    task_type=selected.task_type,
+                    service_date=selected.service_date,
+                    property_id=selected.property_id,
+                    assigned_employee_id=selected.assigned_employee_id,
+                )
+                if selected.active
+                else await self._tasks.list_all_open(
+                    offset=offset,
+                    limit=limit,
+                )
+            )
+        else:
+            tasks = (
+                await self._tasks.list_assigned_open(
+                    employee.id,
+                    offset=offset,
+                    limit=limit,
+                    status=selected.status,
+                    task_type=selected.task_type,
+                    service_date=selected.service_date,
+                    property_id=selected.property_id,
+                )
+                if selected.active
+                else await self._tasks.list_assigned_open(
+                    employee.id,
+                    offset=offset,
+                    limit=limit,
+                )
+            )
+        options = await self._display_options()
+        property_titles = self._option_labels(options["properties"], "title")
+        employee_names = self._option_labels(options["employees"], "name")
+        today = date.today()
+        return [
+            TaskListItem(
+                id=int(task.id),
+                task_type=task.task_type,
+                status=task.status,
+                property_id=task.property_id,
+                property_title=(
+                    property_titles.get(task.property_id, "待确认房间")
+                    if task.property_id is not None
+                    else "待确认房间"
+                ),
+                service_date=task.service_date,
+                assigned_employee_id=task.assigned_employee_id,
+                assigned_employee_name=(
+                    employee_names.get(task.assigned_employee_id, "待分派")
+                    if task.assigned_employee_id is not None
+                    else "待分派"
+                ),
+                is_overdue=bool(task.service_date and task.service_date < today),
+            )
+            for task in tasks
+        ]
 
     async def detail_for(
         self,
@@ -113,8 +226,21 @@ class TaskPageService:
     ) -> dict[str, object]:
         """返回当前员工可见的最小任务详情。"""
         task = await self._require_visible(task_id, employee)
+        options = await self._display_options()
+        property_titles = self._option_labels(options["properties"], "title")
+        employee_names = self._option_labels(options["employees"], "name")
         return {
             "task": task,
+            "property_title": (
+                property_titles.get(task.property_id, "待管理员确认")
+                if task.property_id is not None
+                else "待管理员确认"
+            ),
+            "assigned_employee_name": (
+                employee_names.get(task.assigned_employee_id, "待分派")
+                if task.assigned_employee_id is not None
+                else "待分派"
+            ),
             "safe_description": self._safe_description(task.description),
             "attachments": await self._tasks.list_task_attachments(task.id),
             "room_state": (
@@ -123,6 +249,24 @@ class TaskPageService:
                 else None
             ),
         }
+
+    async def _display_options(self) -> dict[str, list[object]]:
+        """读取名称投影；兼容尚未实现选项查询的只读仓储适配器。"""
+        loader = getattr(self._tasks, "assignment_options", None)
+        if loader is None:
+            return {"properties": [], "employees": []}
+        return cast(dict[str, list[object]], await loader())
+
+    @staticmethod
+    def _option_labels(items: list[object], label_name: str) -> dict[int, str]:
+        """把通用选项对象安全转换为编号到中文展示名称的映射。"""
+        labels: dict[int, str] = {}
+        for item in items:
+            item_id = getattr(item, "id", None)
+            label = getattr(item, label_name, None)
+            if isinstance(item_id, int) and label is not None:
+                labels[item_id] = str(label)
+        return labels
 
     async def transition(
         self,

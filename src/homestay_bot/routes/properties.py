@@ -1,6 +1,6 @@
 import logging
 import secrets
-from typing import Annotated, Any, Protocol, cast
+from typing import Annotated, Any, Literal, Protocol, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -144,7 +144,11 @@ async def property_index(request: Request) -> Response:
 
 
 @router.get("/{property_id}", response_class=HTMLResponse)
-async def property_detail(request: Request, property_id: int) -> Response:
+async def property_detail(
+    request: Request,
+    property_id: int,
+    tab: Literal["overview", "profile", "credentials"] = "overview",
+) -> Response:
     """展示公开配置和凭证版本，绝不回显密码或指南。"""
     administrator = await _current_admin(request)
     try:
@@ -159,6 +163,7 @@ async def property_detail(request: Request, property_id: int) -> Response:
         name="properties/detail.html",
         context={
             **detail,
+            "tab": tab,
             "csrf_token": _issue_csrf(request, property_id),
             "page_title": getattr(
                 detail["property"],
@@ -203,7 +208,7 @@ async def update_property_profile(
     except Exception as error:
         _raise_page_error(error)
     return RedirectResponse(
-        f"/employee/properties/{property_id}",
+        f"/employee/properties/{property_id}?tab=profile",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -234,7 +239,7 @@ async def replace_property_credentials(
     finally:
         await qr_image.close()
     return RedirectResponse(
-        f"/employee/properties/{property_id}",
+        f"/employee/properties/{property_id}?tab=credentials",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

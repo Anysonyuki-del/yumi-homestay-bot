@@ -486,6 +486,19 @@ def test_complaint_page_uses_shell_and_safe_editing_controls() -> None:
     class PageServiceStub:
         """返回固定客诉详情供真实路由渲染。"""
 
+        async def list_open(self, *, offset: int, limit: int):
+            """返回一条可从交班列表重新发现的待复核客诉。"""
+            assert (offset, limit) == (0, 51)
+            return [
+                SimpleNamespace(
+                    id=7,
+                    status="ready_for_review",
+                    risk_level="high",
+                    reason="complaint",
+                    updated_at="2026-08-29 10:00",
+                )
+            ]
+
         async def get_detail(self, review_id: int, **kwargs):
             """返回不含敏感身份的分页详情。"""
             return {
@@ -494,7 +507,15 @@ def test_complaint_page_uses_shell_and_safe_editing_controls() -> None:
                     version=2,
                     status="ready_for_review",
                     risk_level="high",
-                    analysis={"core_issue": "入住延迟"},
+                    analysis={
+                        "core_issue": "入住延迟",
+                        "customer_request": "尽快入住",
+                        "known_facts": ["房间仍在检查"],
+                        "facts_to_verify": ["预计完成时间"],
+                        "responsibility_risk": "待核实",
+                        "refund_or_compensation": False,
+                        "platform_escalation_risk": True,
+                    },
                     draft="请允许我们继续核实。",
                 ),
                 "messages": [SimpleNamespace(origin="guest", content="很长的客诉内容")],
@@ -511,11 +532,18 @@ def test_complaint_page_uses_shell_and_safe_editing_controls() -> None:
 
     with TestClient(app) as client:
         client.get("/test/session")
+        index = client.get("/employee/complaints")
         response = client.get("/employee/complaints/7")
 
+    assert index.status_code == 200
+    assert 'href="/employee/complaints/7"' in index.text
+    assert "待处理客诉" in index.text
     assert response.status_code == 200
     assert '/static/admin.js' in response.text
-    assert 'data-safe-pre' in response.text
+    assert 'data-safe-pre' not in response.text
+    assert "核心问题" in response.text
+    assert "待核实事实" in response.text
+    assert "平台升级风险" in response.text
     assert 'data-unsaved-warning' in response.text
     for action in ("send", "return", "cancel"):
         assert f'action="/employee/complaints/7/{action}" data-confirm=' in response.text

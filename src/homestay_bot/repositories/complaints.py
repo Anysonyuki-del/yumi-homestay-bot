@@ -54,6 +54,24 @@ class SQLAlchemyComplaintRepository:
         """按主键读取客诉记录。"""
         return await self._session.get(ComplaintReview, review_id)
 
+    async def list_open(self, *, offset: int, limit: int) -> list[ComplaintReview]:
+        """按最近更新时间分页返回尚未结束的客诉复核。"""
+        statement = (
+            select(ComplaintReview)
+            .where(
+                ComplaintReview.status.not_in(
+                    (
+                        ComplaintReviewStatus.SENT,
+                        ComplaintReviewStatus.CANCELLED,
+                    )
+                )
+            )
+            .order_by(ComplaintReview.updated_at.desc(), ComplaintReview.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list((await self._session.scalars(statement)).all())
+
     async def create_or_get(
         self,
         *,

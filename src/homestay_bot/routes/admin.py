@@ -12,6 +12,7 @@ from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.services.admin_dashboard_service import WUHAN_TIMEZONE, Snapshot
 from homestay_bot.services.admin_diagnostics_service import AuditPage, DiagnosticsSnapshot
+from homestay_bot.services.admin_operations_service import OperationsSnapshot
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/admin")
@@ -23,6 +24,13 @@ class AdminDashboardServicePort(Protocol):
 
     async def snapshot(self, now: datetime | None = None) -> Snapshot:
         """返回指定观察时间的运营快照。"""
+
+
+class AdminOperationsServicePort(Protocol):
+    """定义待关注中心与房态工作台的只读快照接口。"""
+
+    async def snapshot(self, now: datetime | None = None) -> OperationsSnapshot:
+        """返回同一观察时间下的待办与房态快照。"""
 
 
 class HealthServicePort(Protocol):
@@ -83,6 +91,14 @@ def _dashboard_service(request: Request) -> AdminDashboardServicePort:
     if service is None:
         raise HTTPException(status_code=503, detail="运营总览服务尚未配置")
     return cast(AdminDashboardServicePort, service)
+
+
+def _operations_service(request: Request) -> AdminOperationsServicePort:
+    """读取生命周期装配的本地运营聚合服务。"""
+    service = getattr(request.app.state, "admin_operations_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="运营工作台服务尚未配置")
+    return cast(AdminOperationsServicePort, service)
 
 
 def _health_service(request: Request) -> HealthServicePort:
@@ -146,6 +162,38 @@ async def admin_dashboard(request: Request) -> Response:
             "snapshot": snapshot,
             "health_degraded": snapshot_error is not None or health.get("status") != "ok",
             "error": snapshot_error,
+        },
+    )
+
+
+@router.get("/attention", response_class=HTMLResponse)
+async def admin_attention(request: Request) -> Response:
+    """展示所有需要管理员采取行动的本地安全投影。"""
+    await _require_admin(request)
+    snapshot = await _operations_service(request).snapshot(_clock(request))
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/attention.html",
+        context={
+            "page_title": "待我关注",
+            "active_nav": "attention",
+            "snapshot": snapshot,
+        },
+    )
+
+
+@router.get("/operations", response_class=HTMLResponse)
+async def admin_operations(request: Request) -> Response:
+    """展示今日房态、开放任务与连续七日入住矩阵。"""
+    await _require_admin(request)
+    snapshot = await _operations_service(request).snapshot(_clock(request))
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/operations.html",
+        context={
+            "page_title": "房态与运营",
+            "active_nav": "operations",
+            "snapshot": snapshot,
         },
     )
 

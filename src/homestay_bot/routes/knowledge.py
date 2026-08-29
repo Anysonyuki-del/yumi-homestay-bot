@@ -1,10 +1,11 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import EmployeeRole, KnowledgeCandidateStatus
@@ -25,7 +26,15 @@ _KNOWLEDGE_CSRF_PURPOSE = "knowledge-write"
 class KnowledgeAdminServicePort(Protocol):
     """定义知识管理路由所需接口。"""
 
-    async def list_all(self, *, offset: int, limit: int) -> list[Any]:
+    async def list_all(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        query: str | None = None,
+        enabled: bool | None = None,
+        category: str | None = None,
+    ) -> list[Any]:
         """分页返回包括停用项在内的知识。"""
 
     async def get_detail(self, entry_id: int) -> Any:
@@ -77,14 +86,38 @@ class KnowledgeAdminService:
         self._now = now or (lambda: datetime.now(UTC))
 
     async def list_all(
-        self, *, offset: int, limit: int
+        self,
+        *,
+        offset: int,
+        limit: int,
+        query: str | None = None,
+        enabled: bool | None = None,
+        category: str | None = None,
     ) -> list[KnowledgeEntry]:
-        """按主键分页返回知识，供员工审核。"""
+        """按关键词、分类和启用状态稳定分页返回知识。"""
+        statement = select(KnowledgeEntry)
+        cleaned_query = (query or "").strip()[:100]
+        if cleaned_query:
+            escaped = (
+                cleaned_query.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            pattern = f"%{escaped}%"
+            statement = statement.where(
+                or_(
+                    KnowledgeEntry.question_zh.ilike(pattern, escape="\\"),
+                    KnowledgeEntry.answer_zh.ilike(pattern, escape="\\"),
+                    KnowledgeEntry.question_en.ilike(pattern, escape="\\"),
+                )
+            )
+        if enabled is not None:
+            statement = statement.where(KnowledgeEntry.is_enabled.is_(enabled))
+        cleaned_category = (category or "").strip()[:64]
+        if cleaned_category:
+            statement = statement.where(KnowledgeEntry.category == cleaned_category)
         result = await self._session.scalars(
-            select(KnowledgeEntry)
-            .order_by(KnowledgeEntry.id)
-            .offset(offset)
-            .limit(limit)
+            statement.order_by(KnowledgeEntry.id).offset(offset).limit(limit)
         )
         return list(result.all())
 
@@ -358,11 +391,21 @@ async def knowledge_index(
     request: Request,
     page: int = Query(1, ge=1, le=10_000),
     candidate_page: int = Query(1, ge=1, le=10_000),
+    query: str | None = Query(None, max_length=100),
+    enabled: Literal["enabled", "disabled"] | None = None,
+    category: str | None = Query(None, max_length=64),
 ) -> Response:
     """允许全部已登录员工查看知识及启停状态。"""
     _, role = await require_employee_session(request)
     service = _get_service(request)
-    entries = await service.list_all(offset=(page - 1) * 50, limit=51)
+    enabled_value = None if enabled is None else enabled == "enabled"
+    entries = await service.list_all(
+        offset=(page - 1) * 50,
+        limit=51,
+        query=query,
+        enabled=enabled_value,
+        category=category,
+    )
     candidates = (
         await service.list_candidates(
             offset=(candidate_page - 1) * 50,
@@ -372,6 +415,22 @@ async def knowledge_index(
         else []
     )
     csrf_token = await _issue_csrf(request) if role is EmployeeRole.ADMIN else ""
+    filters = {
+        key: value
+        for key, value in {
+            "query": query or "",
+            "enabled": enabled or "",
+            "category": category or "",
+        }.items()
+        if value
+    }
+
+    def list_url(entry_page: int, faq_page: int) -> str:
+        """生成同时保留正式知识、候选页码与筛选条件的链接。"""
+        return "/employee/knowledge?" + urlencode(
+            {"page": entry_page, "candidate_page": faq_page, **filters}
+        )
+
     return templates.TemplateResponse(
         request=request,
         name="knowledge/index.html",
@@ -382,13 +441,34 @@ async def knowledge_index(
             "csrf_token": csrf_token,
             "page": page,
             "candidate_page": candidate_page,
+            "query": query or "",
+            "enabled_filter": enabled or "",
+            "category_filter": category or "",
             "previous_page": page - 1 if page > 1 else None,
             "next_page": page + 1 if len(entries) > 50 else None,
+            "previous_url": (
+                list_url(page - 1, candidate_page) if page > 1 else None
+            ),
+            "next_url": (
+                list_url(page + 1, candidate_page)
+                if len(entries) > 50
+                else None
+            ),
             "previous_candidate_page": (
                 candidate_page - 1 if candidate_page > 1 else None
             ),
             "next_candidate_page": (
                 candidate_page + 1 if len(candidates) > 50 else None
+            ),
+            "previous_candidate_url": (
+                list_url(page, candidate_page - 1)
+                if candidate_page > 1
+                else None
+            ),
+            "next_candidate_url": (
+                list_url(page, candidate_page + 1)
+                if len(candidates) > 50
+                else None
             ),
             "page_title": "民宿知识库",
             "active_nav": "knowledge",
@@ -534,8 +614,8 @@ async def toggle_knowledge(
     entry_id: int,
     action: str,
     csrf_token: str = Form(min_length=1, max_length=128),
-) -> Response:
-    """管理员启用或停用知识，成功后不返回正文。"""
+) -> RedirectResponse:
+    """管理员启用或停用知识，成功后返回可见的列表页面。"""
     if action not in {"enable", "disable"}:
         raise HTTPException(status_code=404, detail="未知知识操作")
     employee_id = await _require_admin(request)
@@ -543,4 +623,7 @@ async def toggle_knowledge(
     await _get_service(request).set_enabled(
         entry_id, employee_id, enabled=action == "enable"
     )
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return RedirectResponse(
+        "/employee/knowledge#knowledge-entries",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )

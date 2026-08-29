@@ -8,7 +8,7 @@
   <article class="metric-item"><span>启用房间</span><strong>{{ snapshot.active_room_count }}</strong><small>当前运营房源</small></article>
   <article class="metric-item"><span>待办任务</span><strong>{{ snapshot.pending_task_count }}</strong><a href="/employee/tasks">查看任务</a></article>
   <article class="metric-item"><span>待审批</span><strong>{{ snapshot.pending_approval_count }}</strong><a href="/employee/approvals">查看审批</a></article>
-  <article class="metric-item metric-item--attention"><span>需人工关注</span><strong>{{ snapshot.manual_attention_count }}</strong><small>客诉、凭证与提醒</small></article>
+  <article class="metric-item metric-item--attention"><span>需人工关注</span><strong>{{ snapshot.manual_attention_count }}</strong><a href="/employee/admin/attention">进入待我关注</a></article>
 </section>
 
 <div class="dashboard-grid">
@@ -27,7 +27,7 @@
   </section>
 
   <section class="panel">
-    <div class="panel__header"><div><p class="eyebrow">7 间房一眼看清</p><h2>当前房态</h2></div><span class="panel__total">{{ snapshot.active_room_count }} 间启用</span></div>
+    <div class="panel__header"><div><p class="eyebrow">房间状态一眼看清</p><h2>当前房态</h2></div><a href="/employee/admin/operations">查看 7 日房态</a></div>
     {% if snapshot.active_room_count %}
     <ul class="room-status-list">
       {% for status, count in snapshot.room_status_counts.items() %}

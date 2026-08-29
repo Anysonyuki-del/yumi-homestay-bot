@@ -150,6 +150,19 @@ tbody tr:hover { background: #fafcff; }
 .collapsible-section[open] > summary { border-bottom: 1px solid var(--line); }
 .collapsible-section__content { padding: 16px; }
 
+/* 运营筛选、页签和房态矩阵保持紧凑，移动端可横向查看而不挤压字段。 */
+.filter-toolbar { display: grid; gap: 10px; margin-bottom: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: #f8fafc; }
+.filter-toolbar label { margin: 0; }
+.filter-toolbar .checkbox { align-self: end; }
+.tab-nav { display: flex; gap: 4px; margin-bottom: 12px; padding: 4px; overflow-x: auto; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.tab-nav a { min-height: 38px; padding: 9px 12px; border-radius: 5px; color: var(--muted); font-weight: 600; text-decoration: none; white-space: nowrap; }
+.tab-nav a:hover { color: var(--text); background: #f8fafc; }
+.tab-nav a[aria-current="page"] { color: var(--primary-hover); background: var(--primary-soft); }
+.attention-grid { display: grid; gap: 10px; }
+.operations-matrix th, .operations-matrix td { text-align: center; }
+.operations-matrix th:first-child { position: sticky; left: 0; z-index: 1; text-align: left; background: #f8fafc; }
+.operations-matrix td span { display: inline-block; margin: 1px; padding: 2px 4px; border-radius: 4px; color: var(--primary-hover); background: var(--primary-soft); font-size: .75rem; }
+
 /* 移动优先的统一后台外壳。 */
 .admin-shell { min-height: 100vh; }
 .admin-workspace, .metric-item, .panel, .clean-list li, .diagnostics-list dd { min-width: 0; overflow-wrap: anywhere; }
@@ -245,6 +258,8 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
   .responsive-table, .table-scroll { display: block; }
   .mobile-card-list { display: none; }
   .entry-card { grid-template-columns: minmax(0, 1fr) auto; }
+  .filter-toolbar { grid-template-columns: repeat(3, minmax(140px, 1fr)); align-items: end; }
+  .attention-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (min-width: 1024px) {
@@ -255,6 +270,7 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
   .topbar__brand { visibility: hidden; }
   .dashboard-grid { grid-template-columns: minmax(0, 1.7fr) minmax(270px, .7fr); }
   .property-grid { display: block; }
+  .filter-toolbar { grid-template-columns: repeat(5, minmax(120px, 1fr)) auto; }
 }
 
 @media (min-width: 1440px) {

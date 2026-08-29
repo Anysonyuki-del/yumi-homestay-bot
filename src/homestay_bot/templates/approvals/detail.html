@@ -5,5 +5,30 @@
 {% block content %}
 <section class="detail-section panel panel--padded"><div class="section-heading"><h2>预订资料</h2>{{ ui.badge(approval.status | status_zh, "warning") }}</div><dl class="detail-grid"><dt>客人</dt><dd>{{ approval.guest_name }}</dd><dt>手机号</dt><dd>{{ masked_mobile }}</dd><dt>入住日期</dt><dd>{{ approval.check_in_date | date_zh }}</dd><dt>退房日期</dt><dd>{{ approval.check_out_date | date_zh }}</dd><dt>入住人数</dt><dd>{{ approval.number_of_guests }}</dd><dt>房型偏好</dt><dd>{{ approval.room_type_preference }}</dd><dt>备注</dt><dd class="long-text">{{ approval.special_requests or "无" }}</dd></dl></section>
 <section class="detail-section panel panel--padded"><h2>渠道日历参考价</h2><p>仅供人工参考，最终成交金额以确认值为准（人民币）。</p><ul class="price-list">{% for item in reference_prices %}<li><span>{{ item.date }}</span><strong>¥{{ item.price }}</strong></li>{% else %}<li>暂无参考价</li>{% endfor %}</ul></section>
-<section class="decision-panel panel panel--padded"><p class="eyebrow">高风险确认</p><h2>金额与收款确认</h2><form method="post" action="/employee/approvals/{{ approval.id }}/confirm" data-confirm="确定房态、成交金额与收款均已核对，并创建百居易订单吗？" data-unsaved-warning><input type="hidden" name="confirmation_nonce" value="{{ confirmation_nonce }}"><div class="form-grid"><label>具体房间<select name="property_id" required>{% for item in properties %}<option value="{{ item.id }}">{{ item.title }}</option>{% endfor %}</select></label><label>收款方式<select name="income_method_id" required>{% for item in income_methods %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label><label>最终房费（人民币）<input name="final_rate_amount" type="number" min="1" required></label><label>已收金额（人民币）<input name="received_amount" type="number" min="0" required></label></div><label class="confirmation-check"><input name="payment_confirmed" type="checkbox" value="true" required><span><strong>我已核对房态、金额并确认收款</strong><small>提交后将进入真实订单创建流程。</small></span></label><button class="button button--danger" type="submit">确认并创建百居易订单</button></form></section>
+{% if approval.status.value == "pending" %}
+<section class="decision-panel panel panel--padded">
+  <p class="eyebrow">高风险确认</p>
+  <h2>金额与收款确认</h2>
+  <form method="post" action="/employee/approvals/{{ approval.id }}/confirm" data-confirm="确定房态、成交金额与收款均已核对，并创建百居易订单吗？" data-unsaved-warning>
+    <input type="hidden" name="confirmation_nonce" value="{{ confirmation_nonce }}">
+    <div class="form-grid">
+      <label>具体房间<select name="property_id" autocomplete="off" required><option value="" selected disabled>请选择房间</option>{% for item in properties %}<option value="{{ item.id }}">{{ item.title }}</option>{% endfor %}</select></label>
+      <label>收款方式<select name="income_method_id" autocomplete="off" required><option value="" selected disabled>请选择收款方式</option>{% for item in income_methods %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label>
+      <label>最终房费（人民币）<input name="final_rate_amount" type="number" inputmode="numeric" min="1" step="1" autocomplete="off" required></label>
+      <label>已收金额（人民币）<input name="received_amount" type="number" inputmode="numeric" min="0" step="1" autocomplete="off" required></label>
+    </div>
+    <label class="confirmation-check"><input name="payment_confirmed" type="checkbox" value="true" required><span><strong>我已核对房态、金额并确认收款</strong><small>提交后将进入真实订单创建流程。</small></span></label>
+    <button class="button button--danger" type="submit">确认并创建百居易订单</button>
+  </form>
+</section>
+{% else %}
+<section class="decision-panel panel panel--padded">
+  <p class="eyebrow">状态处理</p>
+  <h2>当前审批需要人工处理</h2>
+  {% if approval.status.value == "creating" %}<p>订单正在创建，请等待处理结果，不要重复提交。</p>
+  {% elif approval.status.value == "conflict" %}<p>房态或订单状态发生冲突，请先核对百居易中的实际订单和房态。</p>
+  {% elif approval.status.value == "needs_review" %}<p>订单创建结果需要人工核对，请先确认百居易是否已经生成订单。</p>
+  {% else %}<p>该审批已结束，无需再次创建订单。</p>{% endif %}
+</section>
+{% endif %}
 {% endblock %}

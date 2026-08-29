@@ -57,6 +57,7 @@ def test_admin_javascript_contract_covers_accessible_progressive_enhancements() 
     assert "focusBeforeDrawer" in script
     assert "focusBeforeDrawer.focus()" in script
     assert "window.confirm" in script
+    assert 'form[data-confirm], form[data-danger-confirm]' in script
     assert 'addEventListener("beforeunload"' in script
     assert "const dirtyForms = new Set();" in script
     assert "dirtyForms.add(form)" in script
@@ -67,6 +68,7 @@ def test_admin_javascript_contract_covers_accessible_progressive_enhancements() 
     assert 'submitter.dataset.originalLabel' in script
     assert 'submitter.textContent = "正在处理…"' in script
     assert 'submitter.setAttribute("aria-busy", "true")' in script
+    assert 'form.setAttribute("aria-busy", "true")' in script
     assert "event.preventDefault()" in script
     assert 'workspace.setAttribute("aria-hidden", "true")' in script
     assert "workspace.inert = true" in script

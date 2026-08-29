@@ -1,20 +1,35 @@
 {% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
 
 {% block page_actions %}<a class="button button--secondary" href="/employee/properties">返回房源列表</a>{% endblock %}
 {% block content %}
-<div class="detail-sections">
-  <section class="detail-section panel panel--padded"><p class="eyebrow">百居易房间 #{{ property.id }}</p><h2>基础资料</h2>
-    <form method="post" action="/employee/properties/{{ property.id }}/profile" data-unsaved-warning>
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="form-grid"><label>房源名称<input name="title" value="{{ property.title }}" maxlength="128" required></label><label>真实房间号<input name="room_number" value="{{ property.room_number or '' }}" maxlength="64"></label><label>房型<input name="room_type" value="{{ property.room_type or '' }}" maxlength="128"></label><label>区域<input name="district" value="{{ property.district or '' }}" maxlength="64"></label></div>
-      <label>地址提示<textarea name="address_hint" maxlength="1000">{{ property.address_hint or "" }}</textarea></label><label>停车说明<textarea name="parking_instructions" maxlength="2000">{{ property.parking_instructions or "" }}</textarea></label><label class="checkbox"><input type="checkbox" name="is_active" value="true" {% if property.is_active %}checked{% endif %}>启用该房源</label><button type="submit">保存房源资料</button>
-    </form>
-  </section>
-  <section class="detail-section panel panel--padded"><h2>入住凭证</h2>
-    {% if credential %}<div class="alert alert--warning"><span>当前凭证版本 {{ credential.version }}。密码和入住指南不会在页面回显。</span></div><a href="/employee/properties/{{ property.id }}/qr" target="_blank" rel="noopener">查看当前二维码</a>{% else %}<p>尚未配置入住凭证。</p>{% endif %}
-    <form method="post" enctype="multipart/form-data" action="/employee/properties/{{ property.id }}/credentials" data-confirm="确定替换整套入住凭证吗？旧版本将立即停用。" data-unsaved-warning>
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>新门锁密码<input type="password" name="password" maxlength="256" autocomplete="new-password" required></label><label>新入住指南<textarea name="guide" maxlength="10000" required></textarea></label><label>新入住二维码<input type="file" name="qr_image" accept="image/png,image/jpeg,image/webp" required></label><p class="help-text">提交后创建新版本并停用旧版本，请完整填写以上三项。</p><button class="button button--danger" type="submit">替换入住凭证</button>
-    </form>
-  </section>
-</div>
+<nav class="tab-nav" aria-label="房源详情页签">
+  <a href="/employee/properties/{{ property.id }}" {% if tab == "overview" %}aria-current="page"{% endif %}>运营概览</a>
+  <a href="/employee/properties/{{ property.id }}?tab=profile" {% if tab == "profile" %}aria-current="page"{% endif %}>公开资料</a>
+  <a href="/employee/properties/{{ property.id }}?tab=credentials" {% if tab == "credentials" %}aria-current="page"{% endif %}>入住凭证</a>
+</nav>
+
+{% if tab == "overview" %}
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<section class="detail-section panel panel--padded">
+  <p class="eyebrow">百居易房间 #{{ property.id }}</p>
+  <div class="section-heading"><h2>运营概览</h2>{{ ui.badge(overview.operational_status | status_zh, "success" if (overview.operational_status.value if overview.operational_status.value is defined else overview.operational_status) == "ready" else "warning") }}</div>
+  <dl class="detail-grid"><dt>今日安排</dt><dd>{{ overview.today_stay_labels|join("、") if overview.today_stay_labels else "今日无入住退房" }}</dd><dt>开放任务</dt><dd>{{ overview.open_task_count }} 项待处理</dd><dt>下次入住</dt><dd>{{ overview.next_check_in_date | date_zh if overview.next_check_in_date else "暂无" }}</dd><dt>凭证状态</dt><dd>{% if credential %}凭证版本 {{ credential.version }}{% else %}尚未配置{% endif %}</dd><dt>资料完整度</dt><dd>{{ overview.profile_completeness }}%</dd><dt>待补资料</dt><dd>{{ overview.missing_profile_labels|join("、") if overview.missing_profile_labels else "资料完整" }}</dd></dl>
+</section>
+{% elif tab == "profile" %}
+<section class="detail-section panel panel--padded"><p class="eyebrow">百居易房间 #{{ property.id }}</p><h2>公开运营资料</h2>
+  <form method="post" action="/employee/properties/{{ property.id }}/profile" data-unsaved-warning>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid"><label>房源名称<input name="title" value="{{ property.title }}" maxlength="128" required></label><label>真实房间号<input name="room_number" value="{{ property.room_number or '' }}" maxlength="64"></label><label>房型<input name="room_type" value="{{ property.room_type or '' }}" maxlength="128"></label><label>区域<input name="district" value="{{ property.district or '' }}" maxlength="64"></label></div>
+    <label>地址提示<textarea name="address_hint" maxlength="1000">{{ property.address_hint or "" }}</textarea></label><label>停车说明<textarea name="parking_instructions" maxlength="2000">{{ property.parking_instructions or "" }}</textarea></label><label class="checkbox"><input type="checkbox" name="is_active" value="true" {% if property.is_active %}checked{% endif %}>启用该房源</label><button type="submit">保存房源资料</button>
+  </form>
+</section>
+{% else %}
+<section class="detail-section panel panel--padded"><h2>入住凭证</h2>
+  {% if credential %}<div class="alert alert--warning"><span>当前凭证版本 {{ credential.version }}。密码和入住指南不会在页面回显。</span></div><a href="/employee/properties/{{ property.id }}/qr" target="_blank" rel="noopener">查看当前二维码</a>{% else %}<p>尚未配置入住凭证。</p>{% endif %}
+  <form method="post" enctype="multipart/form-data" action="/employee/properties/{{ property.id }}/credentials" data-confirm="确定替换整套入住凭证吗？旧版本将立即停用。" data-unsaved-warning>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>新门锁密码<input type="password" name="password" maxlength="256" autocomplete="new-password" required></label><label>新入住指南<textarea name="guide" maxlength="10000" required></textarea></label><label>新入住二维码<input type="file" name="qr_image" accept="image/png,image/jpeg,image/webp" required></label><p class="help-text">提交后创建新版本并停用旧版本，请完整填写以上三项。</p><button class="button button--danger" type="submit">替换入住凭证</button>
+  </form>
+</section>
+{% endif %}
 {% endblock %}

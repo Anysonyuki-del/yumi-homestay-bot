@@ -54,10 +54,12 @@ class TaskPageStub:
         self.list_error: Exception | None = None
         self.assignment_error: Exception | None = None
         self.list_calls: list[tuple[int, int]] = []
+        self.filter_calls: list[object] = []
 
-    async def list_for(self, employee, *, offset: int, limit: int):
+    async def list_for(self, employee, *, offset: int, limit: int, filters=None):
         """返回当前角色可见任务。"""
         self.list_calls.append((offset, limit))
+        self.filter_calls.append(filters)
         if self.list_error is not None:
             raise self.list_error
         return [self.item] * (limit if offset == 50 else 1)
@@ -253,6 +255,34 @@ def test_task_list_uses_bounded_pagination() -> None:
     assert tasks.list_calls == [(50, 51)]
     assert 'href="/employee/tasks?page=1"' in response.text
     assert 'href="/employee/tasks?page=3"' in response.text
+
+
+def test_task_filters_are_forwarded_and_persist_in_pagination() -> None:
+    """任务筛选必须进入查询对象，并在翻页链接中保持。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get(
+        "/employee/tasks",
+        params={
+            "page": 2,
+            "status_filter": "pending_assignment",
+            "task_type": "cleaning",
+            "service_date": "2026-08-02",
+            "property_id": 101,
+            "assigned_employee_id": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    filters = tasks.filter_calls[-1]
+    assert filters.status is BusinessTaskStatus.PENDING_ASSIGNMENT
+    assert filters.task_type is BusinessTaskType.CLEANING
+    assert filters.service_date == date(2026, 8, 2)
+    assert filters.property_id == 101
+    assert filters.assigned_employee_id == 2
+    assert "status_filter=pending_assignment" in response.text
+    assert "task_type=cleaning" in response.text
 
 
 def test_staff_cannot_view_other_task_id() -> None:

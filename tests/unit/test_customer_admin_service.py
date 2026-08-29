@@ -5,7 +5,11 @@ import pytest
 from cryptography.fernet import Fernet
 
 from homestay_bot.domain.enums import EmployeeRole
-from homestay_bot.services.customer_admin_service import CustomerAdminService
+from homestay_bot.services.customer_admin_service import (
+    CustomerAdminService,
+    CustomerDetailRequest,
+    CustomerListFilters,
+)
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 
 
@@ -55,6 +59,22 @@ class CustomerAdminRepositoryStub:
         """记录批量备注读取，并返回固定自动入住备注。"""
         self.latest_stay_note_calls.append((list(customer_ids), today))
         return {7: "8.14-8.16春和景明"}
+
+    async def customer_list_facts(self, customer_ids, *, today):
+        """返回列表所需的批量运营事实。"""
+        return {
+            7: {
+                "stay_status": "in_house",
+                "stay_status_label": "在住",
+                "property_title": "春和景明",
+                "stay_date_label": "2026年8月14日入住，8月16日退房",
+                "open_task_count": 1,
+                "has_attention": True,
+                "has_memory_review": True,
+                "has_merge_review": False,
+                "tag_names": ["老客户"],
+            }
+        }
 
     async def merge_detail(self, suggestion_id):
         """返回不含电话、备注或 ORM 对象的复核安全投影。"""
@@ -249,6 +269,94 @@ async def test_list_loads_latest_stay_notes_in_one_batch() -> None:
     assert repository.latest_stay_note_calls == [
         ([7, 8], date(2026, 8, 14))
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_accepts_operational_filters_and_returns_safe_facts() -> None:
+    """列表筛选透传到仓储，客户卡片只增加安全运营字段。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    captured: list[object] = []
+
+    async def filtered_customers(filters, *, offset, limit):
+        """记录结构化筛选并返回一位客户。"""
+        captured.append(filters)
+        return [repository.customer]
+
+    repository.list_customers = filtered_customers
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+        local_date_provider=lambda: date(2026, 8, 14),
+    )
+    filters = CustomerListFilters(
+        query="安静",
+        stay_status="in_house",
+        attention=True,
+        memory_review=True,
+        merge_review=False,
+        tag_id=3,
+    )
+
+    cards = await service.list_customers(
+        filters,
+        employee(),
+        offset=0,
+        limit=51,
+    )
+
+    assert captured == [filters]
+    assert cards[0].stay_status_label == "在住"
+    assert cards[0].property_title == "春和景明"
+    assert cards[0].open_task_count == 1
+    assert cards[0].tag_names == ("老客户",)
+    assert "phone_ciphertext" not in repr(cards[0])
+
+
+@pytest.mark.asyncio
+async def test_detail_request_only_loads_requested_tab() -> None:
+    """服务按详情页签查询，住宿页不得顺带读取记忆或治理数据。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    calls: list[tuple[int, str | None]] = []
+
+    async def tab_detail(customer_id, *, tab=None):
+        """返回住宿页最小投影并记录页签。"""
+        calls.append((customer_id, tab))
+        return {
+            "customer": repository.customer,
+            "orders": [
+                {
+                    "id": 5,
+                    "property_title": "春和景明",
+                    "check_in_date": date(2026, 8, 14),
+                    "check_out_date": date(2026, 8, 16),
+                    "status": "confirmed",
+                }
+            ],
+        }
+
+    repository.customer_detail = tab_detail
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+    )
+
+    detail = await service.get_detail(
+        CustomerDetailRequest(customer_id=7, tab="stays"),
+        employee(),
+    )
+
+    assert calls == [(7, "stays")]
+    assert detail["active_tab"] == "stays"
+    assert detail["orders"][0]["status_label"] == "已确认"
+    assert detail["orders"][0]["date_label"] == "2026年8月14日—8月16日"
+    assert "memories" not in detail
+    assert "merge_suggestions" not in detail
 
 
 @pytest.mark.asyncio

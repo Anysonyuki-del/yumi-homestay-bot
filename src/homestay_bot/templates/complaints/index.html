@@ -1,0 +1,16 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+
+{% block content %}
+<section class="panel panel--padded">
+  <div class="section-heading">
+    <div><p class="eyebrow">需要人工判断</p><h2>待处理客诉</h2></div>
+    {{ ui.badge(complaints | length ~ " 项", "warning" if complaints else "neutral") }}
+  </div>
+  <div class="responsive-table"><table class="data-table"><caption class="visually-hidden">待处理客诉列表</caption><thead><tr><th scope="col">编号</th><th scope="col">风险</th><th scope="col">原因</th><th scope="col">状态</th><th scope="col">更新时间</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead><tbody>
+    {% for item in complaints %}<tr><td><strong>#{{ item.id }}</strong></td><td>{{ ui.badge(item.risk_level, "danger" if item.risk_level in ["high", "critical"] else "warning") }}</td><td>{{ item.reason | status_zh }}</td><td>{{ ui.badge(item.status | status_zh, "warning") }}</td><td>{{ item.updated_at | datetime_zh }}</td><td><a class="table-action" href="/employee/complaints/{{ item.id }}">进入复核</a></td></tr>{% else %}<tr><td colspan="6">当前没有待处理客诉。</td></tr>{% endfor %}
+  </tbody></table></div>
+  <ul class="mobile-card-list clean-list">{% for item in complaints %}<li><a class="mobile-record-card" href="/employee/complaints/{{ item.id }}"><span><strong>客诉 #{{ item.id }}</strong> {{ ui.badge(item.status | status_zh, "warning") }}</span><small>{{ item.reason | status_zh }} · 风险 {{ item.risk_level }} · {{ item.updated_at | datetime_zh }}</small></a></li>{% else %}<li>{{ ui.empty("当前没有待处理客诉", "新客诉或发送失败会出现在这里。") }}</li>{% endfor %}</ul>
+  {{ ui.pagination("/employee/complaints", page, previous_page, next_page) }}
+</section>
+{% endblock %}

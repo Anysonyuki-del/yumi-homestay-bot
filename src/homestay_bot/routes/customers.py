@@ -1,5 +1,5 @@
 import secrets
-from typing import Annotated, Any, Protocol, cast
+from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
@@ -8,6 +8,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.services.customer_admin_service import (
+    CustomerDetailRequest,
+    CustomerListFilters,
+)
 from homestay_bot.services.customer_errors import (
     CustomerConflictError,
     CustomerNotFoundError,
@@ -23,7 +27,7 @@ class CustomerAdminServicePort(Protocol):
 
     async def list_customers(
         self,
-        query: str | None,
+        query: str | CustomerListFilters | None,
         administrator: Employee,
         *,
         offset: int,
@@ -33,7 +37,7 @@ class CustomerAdminServicePort(Protocol):
 
     async def get_detail(
         self,
-        customer_id: int,
+        customer_id: int | CustomerDetailRequest,
         administrator: Employee,
     ) -> dict[str, Any]:
         """返回脱敏客户详情。"""
@@ -181,34 +185,64 @@ def _raise_page_error(error: Exception) -> None:
 async def customer_index(
     request: Request,
     query: Annotated[str | None, Query(max_length=100)] = None,
+    stay_status: Literal["upcoming", "in_house", "departed", "none"] | None = None,
+    attention: bool = False,
+    memory_review: bool = False,
+    merge_review: bool = False,
+    tag_id: Annotated[int | None, Query(ge=1)] = None,
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,
 ) -> Response:
     """展示管理员可搜索的脱敏客户列表。"""
     administrator = await _current_admin(request)
     try:
+        filters = CustomerListFilters(
+            query=query,
+            stay_status=stay_status,
+            attention=attention,
+            memory_review=memory_review,
+            merge_review=merge_review,
+            tag_id=tag_id,
+        )
+        # 纯关键词查询保留旧服务协议；启用运营筛选时传递完整可恢复对象。
+        service_query: str | CustomerListFilters | None = (
+            filters
+            if any((stay_status, attention, memory_review, merge_review, tag_id))
+            else query
+        )
         customers = await _get_service(request).list_customers(
-            query,
+            service_query,
             administrator,
             offset=(page - 1) * 50,
             limit=51,
         )
     except Exception as error:
         _raise_page_error(error)
+    query_params = {
+        "query": query or "",
+        "stay_status": stay_status or "",
+        "attention": "1" if attention else "",
+        "memory_review": "1" if memory_review else "",
+        "merge_review": "1" if merge_review else "",
+        "tag_id": str(tag_id) if tag_id is not None else "",
+    }
+    # 空筛选不写入地址，避免产生无意义参数并兼容既有链接。
+    active_params = {key: value for key, value in query_params.items() if value}
     return templates.TemplateResponse(
         request=request,
         name="customers/index.html",
         context={
             "customers": customers[:50],
             "query": query or "",
+            "filters": filters,
             "previous_url": (
                 "/employee/customers?"
-                + urlencode({"query": query or "", "page": page - 1})
+                + urlencode({**active_params, "page": page - 1})
                 if page > 1
                 else None
             ),
             "next_url": (
                 "/employee/customers?"
-                + urlencode({"query": query or "", "page": page + 1})
+                + urlencode({**active_params, "page": page + 1})
                 if len(customers) > 50
                 else None
             ),
@@ -284,13 +318,14 @@ async def customer_detail(
     request: Request,
     customer_id: int,
     merge_query: Annotated[str | None, Query(max_length=100)] = None,
+    tab: Literal["overview", "stays", "service", "memory", "governance"] | None = None,
 ) -> Response:
     """展示脱敏手机号、标签、备注、摘要和待合并建议。"""
     administrator = await _current_admin(request)
     service = _get_service(request)
     try:
         detail = await service.get_detail(
-            customer_id,
+            CustomerDetailRequest(customer_id, tab) if tab else customer_id,
             administrator,
         )
         merge_targets = (
@@ -316,6 +351,7 @@ async def customer_detail(
             **detail,
             "merge_query": merge_query or "",
             "merge_targets": merge_targets,
+            "legacy_full": tab is None,
             "csrf_token": _issue_csrf(
                 request,
                 namespace="customer_csrf",

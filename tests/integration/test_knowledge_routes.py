@@ -96,10 +96,29 @@ class KnowledgeAdminStub:
         self.converted: tuple[int, int, dict[str, object]] | None = None
         self.snoozed: tuple[int, int] | None = None
 
-    async def list_all(self, *, offset: int, limit: int) -> list[EntryStub]:
-        """返回全部条目供管理页展示。"""
+    async def list_all(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        query: str | None = None,
+        enabled: bool | None = None,
+        category: str | None = None,
+    ) -> list[EntryStub]:
+        """按管理页筛选返回条目并记录分页边界。"""
         self.list_all_calls.append((offset, limit))
-        return self.entries * (limit if offset == 50 else 1)
+        entries = [
+            entry
+            for entry in self.entries
+            if (enabled is None or entry.is_enabled is enabled)
+            and (not category or entry.category == category)
+            and (
+                not query
+                or query in entry.question_zh
+                or query in entry.answer_zh
+            )
+        ]
+        return entries * (limit if offset == 50 else 1)
 
     async def list_active(self) -> list[EntryStub]:
         """只返回启用条目供机器人使用。"""
@@ -305,7 +324,7 @@ def test_knowledge_csrf_token_collection_is_bounded() -> None:
     )
 
     assert oldest.status_code == 409
-    assert newest.status_code == 204
+    assert newest.status_code == 200
 
 
 def test_knowledge_csrf_survives_interleaved_get_cookie_updates() -> None:
@@ -329,7 +348,7 @@ def test_knowledge_csrf_survives_interleaved_get_cookie_updates() -> None:
         data={"csrf_token": index_token},
     )
 
-    assert submitted.status_code == 204
+    assert submitted.status_code == 200
 
 
 def test_knowledge_csrf_is_atomically_consumed_across_same_cookie_posts() -> None:
@@ -383,7 +402,7 @@ def test_knowledge_csrf_cookie_metadata_is_not_an_authorization_source() -> None
         "/employee/knowledge/1/disable", data={"csrf_token": token}
     )
 
-    assert first.status_code == 204
+    assert first.status_code == 200
     assert replay.status_code == 409
 
 
@@ -458,7 +477,7 @@ async def test_disabling_knowledge_removes_it_from_bot_context() -> None:
     )
     context = await knowledge_service.build_context(Language.ZH)
 
-    assert response.status_code == 204
+    assert response.status_code == 200
     assert 1 not in {item.source_id for item in context}
 
 

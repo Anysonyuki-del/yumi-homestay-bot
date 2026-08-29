@@ -75,9 +75,11 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-document.querySelectorAll("form[data-confirm]").forEach((form) => {
+document.querySelectorAll("form[data-confirm], form[data-danger-confirm]").forEach((form) => {
   form.addEventListener("submit", (event) => {
-    const prompt = form.getAttribute("data-confirm") || "确定继续吗？";
+    const prompt = form.getAttribute("data-confirm")
+      || form.getAttribute("data-danger-confirm")
+      || "确定继续吗？";
     if (!window.confirm(prompt)) event.preventDefault();
   });
 });
@@ -150,6 +152,7 @@ document.querySelectorAll("form").forEach((form) => {
       return;
     }
     form.dataset.submitting = "true";
+    form.setAttribute("aria-busy", "true");
     const requestedSubmitter = event.submitter;
     const submitter = requestedSubmitter instanceof HTMLElement
       ? requestedSubmitter

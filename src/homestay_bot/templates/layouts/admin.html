@@ -23,6 +23,8 @@
             <p class="nav-group__label">运营</p>
           {% if nav_is_admin %}
           <a href="/employee/admin" {% if active_nav == "dashboard" %}aria-current="page"{% endif %}>{{ icons.icon("home") }}<span>总览</span></a>
+          <a href="/employee/admin/attention" {% if active_nav == "attention" %}aria-current="page"{% endif %}>{{ icons.icon("warning") }}<span>待我关注</span></a>
+          <a href="/employee/admin/operations" {% if active_nav == "operations" %}aria-current="page"{% endif %}>{{ icons.icon("rooms") }}<span>房态与运营</span></a>
           {% endif %}
           <a href="/employee/tasks" {% if active_nav == "tasks" %}aria-current="page"{% endif %}>{{ icons.icon("tasks") }}<span>任务中心</span></a>
           {% if nav_is_admin %}
@@ -34,6 +36,7 @@
             <p class="nav-group__label">客户与内容</p>
           {% if nav_is_admin %}
           <a href="/employee/customers" {% if active_nav == "customers" %}aria-current="page"{% endif %}>{{ icons.icon("people") }}<span>客户管理</span></a>
+          <a href="/employee/complaints" {% if active_nav == "complaints" %}aria-current="page"{% endif %}>{{ icons.icon("warning") }}<span>投诉处理</span></a>
           {% endif %}
           <a href="/employee/knowledge" {% if active_nav == "knowledge" %}aria-current="page"{% endif %}>{{ icons.icon("book") }}<span>知识库</span></a>
           </div>
@@ -60,7 +63,7 @@
         </header>
         <details class="no-script-nav">
           <summary>打开页面导航</summary>
-          {% if nav_is_admin %}<a href="/employee/admin">总览</a><a href="/employee/properties">房源管理</a>{% endif %}<a href="/employee/knowledge">知识库</a>{% if nav_is_admin %}<a href="/employee/customers">客户管理</a>{% endif %}<a href="/employee/tasks">任务中心</a>{% if nav_is_admin %}<a href="/employee/approvals">预订审批</a><a href="/employee/admin/debug">AI 调试台</a><a href="/employee/admin/diagnostics">系统诊断</a><a href="/employee/admin/settings">接口设置</a>{% endif %}<a href="/employee/account">账号安全</a>
+          {% if nav_is_admin %}<a href="/employee/admin">总览</a><a href="/employee/admin/attention">待我关注</a><a href="/employee/admin/operations">房态与运营</a><a href="/employee/properties">房源管理</a>{% endif %}<a href="/employee/knowledge">知识库</a>{% if nav_is_admin %}<a href="/employee/customers">客户管理</a><a href="/employee/complaints">投诉处理</a>{% endif %}<a href="/employee/tasks">任务中心</a>{% if nav_is_admin %}<a href="/employee/approvals">预订审批</a><a href="/employee/admin/debug">AI 调试台</a><a href="/employee/admin/diagnostics">系统诊断</a><a href="/employee/admin/settings">接口设置</a>{% endif %}<a href="/employee/account">账号安全</a>
         </details>
         <main class="page-content" id="main-content" tabindex="-1">
           {% if health_degraded %}<div class="alert alert--warning" role="alert">{{ icons.icon("warning") }}<span>系统当前处于降级状态，部分自动化能力可能不可用。请查看<a href="/employee/admin/diagnostics">系统诊断</a>。</span></div>{% endif %}

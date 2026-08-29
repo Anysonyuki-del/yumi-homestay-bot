@@ -6,7 +6,8 @@
 <section class="detail-section panel panel--padded">
   <div class="section-heading"><h2>{{ task.task_type | status_zh }}</h2>{{ ui.badge(task.status | status_zh, "warning") }}</div>
   <dl class="detail-grid">
-    <dt>房间</dt><dd>{{ task.property_id or "待管理员确认" }}</dd>
+    <dt>房间</dt><dd>{{ property_title }}</dd>
+    <dt>执行员工</dt><dd>{{ assigned_employee_name }}</dd>
     <dt>服务日期</dt><dd>{{ task.service_date | date_zh }}</dd>
     <dt>房间状态</dt><dd>{{ room_state.status | status_zh if room_state else "未开始" }}</dd>
     <dt>任务说明</dt><dd class="long-text">{{ safe_description }}</dd>

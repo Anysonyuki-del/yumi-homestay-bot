@@ -160,21 +160,35 @@ class SQLAlchemyOperationsRepository:
         return task
 
     async def list_all_open(
-        self, *, offset: int, limit: int
+        self,
+        *,
+        offset: int,
+        limit: int,
+        status: BusinessTaskStatus | None = None,
+        task_type: BusinessTaskType | None = None,
+        service_date: date | None = None,
+        property_id: int | None = None,
+        assigned_employee_id: int | None = None,
     ) -> list[BusinessTask]:
         """按稳定顺序分页返回未关闭任务。"""
+        conditions: list[Any] = [
+            BusinessTask.status.not_in(
+                [BusinessTaskStatus.COMPLETED, BusinessTaskStatus.CANCELLED]
+            )
+        ]
+        for value, column in (
+            (status, BusinessTask.status),
+            (task_type, BusinessTask.task_type),
+            (service_date, BusinessTask.service_date),
+            (property_id, BusinessTask.property_id),
+            (assigned_employee_id, BusinessTask.assigned_employee_id),
+        ):
+            if value is not None:
+                conditions.append(column == value)
         return list(
             (
                 await self._session.scalars(
-                    select(BusinessTask)
-                    .where(
-                        BusinessTask.status.not_in(
-                            [
-                                BusinessTaskStatus.COMPLETED,
-                                BusinessTaskStatus.CANCELLED,
-                            ]
-                        )
-                    )
+                    select(BusinessTask).where(*conditions)
                     .order_by(
                         BusinessTask.service_date.asc().nullsfirst(),
                         BusinessTask.id,
@@ -191,21 +205,30 @@ class SQLAlchemyOperationsRepository:
         *,
         offset: int,
         limit: int,
+        status: BusinessTaskStatus | None = None,
+        task_type: BusinessTaskType | None = None,
+        service_date: date | None = None,
+        property_id: int | None = None,
     ) -> list[BusinessTask]:
         """分页返回分派给指定员工的未关闭任务。"""
+        conditions: list[Any] = [
+            BusinessTask.assigned_employee_id == employee_id,
+            BusinessTask.status.not_in(
+                [BusinessTaskStatus.COMPLETED, BusinessTaskStatus.CANCELLED]
+            ),
+        ]
+        for value, column in (
+            (status, BusinessTask.status),
+            (task_type, BusinessTask.task_type),
+            (service_date, BusinessTask.service_date),
+            (property_id, BusinessTask.property_id),
+        ):
+            if value is not None:
+                conditions.append(column == value)
         return list(
             (
                 await self._session.scalars(
-                    select(BusinessTask)
-                    .where(
-                        BusinessTask.assigned_employee_id == employee_id,
-                        BusinessTask.status.not_in(
-                            [
-                                BusinessTaskStatus.COMPLETED,
-                                BusinessTaskStatus.CANCELLED,
-                            ]
-                        ),
-                    )
+                    select(BusinessTask).where(*conditions)
                     .order_by(
                         BusinessTask.service_date.asc().nullsfirst(),
                         BusinessTask.id,

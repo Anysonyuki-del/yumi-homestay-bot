@@ -4,7 +4,8 @@
 {% block content %}
 <section class="panel panel--padded knowledge-filter" aria-labelledby="knowledge-filter-title">
   <div class="section-heading"><div><p class="eyebrow">内容边界</p><h2 id="knowledge-filter-title">知识筛选</h2></div>{{ ui.badge("只使用已启用内容", "success") }}</div>
-  <p>机器人只会使用已启用且经过审核的双语条目。可从下方候选与正式条目分区快速定位内容。</p>
+  <p>机器人只会使用已启用且经过审核的双语条目。筛选只影响管理页面，不改变模型使用范围。</p>
+  <form class="filter-toolbar" method="get" action="/employee/knowledge"><label>搜索内容<input type="search" name="query" value="{{ query }}" maxlength="100" placeholder="问题或答案"></label><label>启用状态<select name="enabled"><option value="">全部状态</option><option value="enabled" {% if enabled_filter == "enabled" %}selected{% endif %}>已启用</option><option value="disabled" {% if enabled_filter == "disabled" %}selected{% endif %}>已停用</option></select></label><label>分类<input name="category" value="{{ category_filter }}" maxlength="64" placeholder="精确分类"></label><div class="button-row"><button type="submit">筛选</button><a class="button button--secondary" href="/employee/knowledge">重置</a></div></form>
   <nav class="filter-links" aria-label="知识页面分区"><a href="#knowledge-candidates">待归纳候选</a><a href="#knowledge-entries">现有条目</a></nav>
 </section>
 
@@ -25,7 +26,7 @@
     </article>
     {% else %}{{ ui.empty("暂无待归纳问题") }}{% endfor %}
   </div>
-  <nav class="pagination" aria-label="FAQ 候选分页">{% if previous_candidate_page %}<a class="button button--secondary" href="/employee/knowledge?page={{ page }}&amp;candidate_page={{ previous_candidate_page }}">上一页</a>{% endif %}<span>候选第 {{ candidate_page }} 页</span>{% if next_candidate_page %}<a class="button button--secondary" href="/employee/knowledge?page={{ page }}&amp;candidate_page={{ next_candidate_page }}">下一页</a>{% endif %}</nav>
+  <nav class="pagination" aria-label="FAQ 候选分页">{% if previous_candidate_url %}<a class="button button--secondary" href="{{ previous_candidate_url }}">上一页</a>{% endif %}<span>候选第 {{ candidate_page }} 页</span>{% if next_candidate_url %}<a class="button button--secondary" href="{{ next_candidate_url }}">下一页</a>{% endif %}</nav>
 </section>
 
 <details class="panel collapsible-section"><summary>新增知识条目</summary><div class="collapsible-section__content"><p class="muted">展开后填写中英文问答，保存后将立即启用。</p><form method="post" action="/employee/knowledge" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>分类<input name="category" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required></textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required></textarea></label><label>English question<textarea name="question_en" maxlength="500" required></textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required></textarea></label><label>关键词（逗号分隔）<input name="keywords" maxlength="1000"></label><button type="submit">新增并启用</button></form></div></details>
@@ -33,6 +34,6 @@
 
 <section class="panel panel--padded" id="knowledge-entries"><div class="section-heading"><h2>现有条目</h2>{{ ui.badge(entries | length ~ " 项", "neutral") }}</div>
   <div class="entry-list">{% for entry in entries %}<article class="entry-card"><div><p class="eyebrow">{{ entry.category }}</p><h3><a href="/employee/knowledge/{{ entry.id }}">{{ entry.question_zh }}</a></h3><p class="long-text">{{ entry.answer_zh }}</p></div><div class="entry-card__actions">{{ ui.badge("已启用" if entry.is_enabled else "已停用", "success" if entry.is_enabled else "neutral") }}{% if can_edit %}<form method="post" action="/employee/knowledge/{{ entry.id }}/{{ 'disable' if entry.is_enabled else 'enable' }}" {% if entry.is_enabled %}data-confirm="确定停用该知识吗？机器人将立即停止使用。"{% endif %}><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button {{ 'button--danger' if entry.is_enabled else 'button--secondary' }}" type="submit">{{ "停用" if entry.is_enabled else "启用" }}</button></form>{% endif %}</div></article>{% else %}{{ ui.empty("暂无知识条目") }}{% endfor %}</div>
-  <nav class="pagination" aria-label="知识条目分页">{% if previous_page %}<a class="button button--secondary" href="/employee/knowledge?page={{ previous_page }}&amp;candidate_page={{ candidate_page }}">上一页</a>{% endif %}<span>第 {{ page }} 页</span>{% if next_page %}<a class="button button--secondary" href="/employee/knowledge?page={{ next_page }}&amp;candidate_page={{ candidate_page }}">下一页</a>{% endif %}</nav>
+  <nav class="pagination" aria-label="知识条目分页">{% if previous_url %}<a class="button button--secondary" href="{{ previous_url }}">上一页</a>{% endif %}<span>第 {{ page }} 页</span>{% if next_url %}<a class="button button--secondary" href="{{ next_url }}">下一页</a>{% endif %}</nav>
 </section>
 {% endblock %}

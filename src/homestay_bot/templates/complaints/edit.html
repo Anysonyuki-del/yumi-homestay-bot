@@ -1,8 +1,23 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
 
+{% block page_actions %}<a class="button button--secondary" href="/employee/complaints">返回客诉列表</a>{% endblock %}
 {% block content %}
-<section class="detail-section panel panel--padded"><div class="section-heading"><h2>风险概览</h2><div>{{ ui.badge(review.status | status_zh, "warning") }} {{ ui.badge(review.risk_level, "danger") }}</div></div><h3>AI 分析</h3><pre class="safe-pre" data-safe-pre>{{ review.analysis | tojson(indent=2) }}</pre></section>
+{% set analysis = review.analysis or {} %}
+<section class="detail-section panel panel--padded">
+  <div class="section-heading"><div><p class="eyebrow">人工判断优先</p><h2>风险概览</h2></div><div>{{ ui.badge(review.status | status_zh, "warning") }} {{ ui.badge(review.risk_level, "danger") }}</div></div>
+  <div class="summary-grid">
+    <div><span class="muted">核心问题</span><strong class="long-text">{{ analysis.get("core_issue", "尚未生成分析") }}</strong></div>
+    <div><span class="muted">客人诉求</span><strong class="long-text">{{ analysis.get("customer_request", "待核实") }}</strong></div>
+    <div><span class="muted">责任风险</span><strong>{{ analysis.get("responsibility_risk", "待核实") }}</strong></div>
+    <div><span class="muted">平台升级风险</span><strong>{{ "存在" if analysis.get("platform_escalation_risk") else "未识别" }}</strong></div>
+  </div>
+  <div class="analysis-grid">
+    <div><h3>已知事实</h3><ul class="plain-list">{% for item in analysis.get("known_facts", []) %}<li>{{ item }}</li>{% else %}<li>暂无已核实事实。</li>{% endfor %}</ul></div>
+    <div><h3>待核实事实</h3><ul class="plain-list">{% for item in analysis.get("facts_to_verify", []) %}<li>{{ item }}</li>{% else %}<li>暂无模型列出的待核实项。</li>{% endfor %}</ul></div>
+  </div>
+  <p class="field-help">AI 分析仅用于整理信息，责任、退款、赔偿和最终回复均由管理员确认。</p>
+</section>
 <section class="detail-section panel panel--padded"><div class="section-heading"><h2>完整对话</h2><div>{% if has_older_messages %}<a href="/employee/complaints/{{ review.id }}?before_message_id={{ older_before_message_id }}">查看更早消息</a>{% endif %}{% if not is_latest_message_page %}<a href="/employee/complaints/{{ review.id }}">返回最新消息</a>{% endif %}</div></div><div class="message-list">{% for message in messages %}<article class="message-item"><strong>{{ message.origin | status_zh }}：</strong><p class="long-text">{{ message.content }}</p></article>{% else %}<p>本页没有对话消息。</p>{% endfor %}</div></section>
 <section class="detail-section panel panel--padded"><h2>人工回复草稿</h2><form method="post" action="/employee/complaints/{{ review.id }}/save" data-unsaved-warning><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>回复草稿<textarea name="draft" rows="10" maxlength="4000">{{ review.draft or '' }}</textarea></label><button type="submit">保存草稿</button></form></section>
 <section class="decision-panel panel panel--padded"><h2>客诉处理</h2><div class="action-stack"><form method="post" action="/employee/complaints/{{ review.id }}/send" data-confirm="确定把当前已保存草稿发送给客人吗？"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="draft" value="{{ review.draft or '' }}"><button type="submit">发送给客人</button></form><form method="post" action="/employee/complaints/{{ review.id }}/return" data-confirm="确定退回并重新生成分析吗？"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">退回重新分析</button></form><form method="post" action="/employee/complaints/{{ review.id }}/cancel" data-confirm="确定关闭当前客诉吗？关闭后将停止本次复核流程。"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">关闭客诉</button></form></div></section>

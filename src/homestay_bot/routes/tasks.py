@@ -2,6 +2,7 @@ import logging
 import secrets
 from datetime import date
 from typing import Annotated, Any, Protocol, cast
+from urllib.parse import urlencode
 
 from fastapi import (
     APIRouter,
@@ -15,9 +16,14 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    BusinessTaskType,
+    EmployeeRole,
+)
 from homestay_bot.domain.models import BusinessTask, Employee
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.services.task_page_service import TaskFilters
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/tasks")
@@ -33,7 +39,8 @@ class TaskPageServicePort(Protocol):
         *,
         offset: int,
         limit: int,
-    ) -> list[BusinessTask]:
+        filters: TaskFilters | None = None,
+    ) -> list[Any]:
         """分页返回当前员工可见任务。"""
 
     async def detail_for(
@@ -159,17 +166,51 @@ def _raise_page_error(error: Exception) -> None:
 async def task_index(
     request: Request,
     page: int = Query(1, ge=1, le=10_000),
+    status_filter: BusinessTaskStatus | None = None,
+    task_type: BusinessTaskType | None = None,
+    service_date: date | None = None,
+    property_id: int | None = Query(None, ge=1),
+    assigned_employee_id: int | None = Query(None, ge=1),
 ) -> Response:
     """展示管理员全部待办或员工自己的任务。"""
     employee = await _current_employee(request)
     try:
+        selected_filters = TaskFilters(
+            status=status_filter,
+            task_type=task_type,
+            service_date=service_date,
+            property_id=property_id,
+            assigned_employee_id=(
+                assigned_employee_id
+                if employee.role is EmployeeRole.ADMIN
+                else None
+            ),
+        )
         items = await _get_service(request).list_for(
             employee,
             offset=(page - 1) * 50,
             limit=51,
+            filters=selected_filters,
         )
+        options = await _get_service(request).assignment_options()
     except Exception as error:
         _raise_page_error(error)
+    params = {
+        "status_filter": status_filter.value if status_filter else "",
+        "task_type": task_type.value if task_type else "",
+        "service_date": service_date.isoformat() if service_date else "",
+        "property_id": str(property_id) if property_id else "",
+        "assigned_employee_id": (
+            str(assigned_employee_id) if assigned_employee_id else ""
+        ),
+    }
+    active_params = {key: value for key, value in params.items() if value}
+
+    def page_url(target_page: int) -> str:
+        """生成保留当前筛选条件的稳定分页链接。"""
+        query_string = urlencode({**active_params, "page": target_page})
+        return f"/employee/tasks?{query_string}"
+
     return templates.TemplateResponse(
         request=request,
         name="tasks/index.html",
@@ -177,8 +218,13 @@ async def task_index(
             "tasks": items[:50],
             "is_admin": employee.role is EmployeeRole.ADMIN,
             "page": page,
-            "previous_page": page - 1 if page > 1 else None,
-            "next_page": page + 1 if len(items) > 50 else None,
+            "previous_url": page_url(page - 1) if page > 1 else None,
+            "next_url": page_url(page + 1) if len(items) > 50 else None,
+            "filters": selected_filters,
+            "task_statuses": list(BusinessTaskStatus),
+            "task_types": list(BusinessTaskType),
+            "properties": options.get("properties", []),
+            "employees": options.get("employees", []),
             "page_title": (
                 "全部待办任务"
                 if employee.role is EmployeeRole.ADMIN

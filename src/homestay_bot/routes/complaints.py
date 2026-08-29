@@ -15,6 +15,7 @@ router = APIRouter(prefix="/employee/complaints")
 class ComplaintAdminServicePort(Protocol):
     """定义客诉编辑页面所需业务接口。"""
 
+    async def list_open(self, *, offset: int, limit: int) -> list[Any]: ...
     async def get_detail(
         self,
         review_id: int,
@@ -64,6 +65,31 @@ async def _require_admin(request: Request) -> int:
     return employee_id
 
 
+@router.get("", response_class=HTMLResponse)
+async def complaint_index(
+    request: Request,
+    page: int = Query(1, ge=1, le=10_000),
+) -> Response:
+    """展示管理员可重新发现的待处理客诉列表。"""
+    await _require_admin(request)
+    items = await _service(request).list_open(
+        offset=(page - 1) * 50,
+        limit=51,
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="complaints/index.html",
+        context={
+            "complaints": items[:50],
+            "page": page,
+            "previous_page": page - 1 if page > 1 else None,
+            "next_page": page + 1 if len(items) > 50 else None,
+            "page_title": "待处理客诉",
+            "active_nav": "complaints",
+        },
+    )
+
+
 @router.get("/{review_id}", response_class=HTMLResponse)
 async def complaint_detail(
     request: Request,
@@ -84,7 +110,7 @@ async def complaint_detail(
             "employee_id": employee_id,
             "csrf_token": _csrf(request, review_id),
             "page_title": f"客诉复核 #{review_id}",
-            "active_nav": None,
+            "active_nav": "complaints",
         },
     )
 

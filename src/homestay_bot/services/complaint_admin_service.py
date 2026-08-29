@@ -31,6 +31,10 @@ class ComplaintAdminService:
         self._jobs = SQLAlchemyJobRepository(session)
         self._sender = sender
 
+    async def list_open(self, *, offset: int, limit: int) -> list[Any]:
+        """返回交班时需要继续处理的客诉，终态记录不进入列表。"""
+        return await self._reviews.list_open(offset=offset, limit=limit)
+
     async def get_detail(
         self,
         review_id: int,

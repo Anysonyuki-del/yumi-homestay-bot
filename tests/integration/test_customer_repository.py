@@ -37,6 +37,7 @@ from homestay_bot.domain.models import (
     StayOrder,
 )
 from homestay_bot.repositories.customers import SQLAlchemyCustomerRepository
+from homestay_bot.services.customer_admin_service import CustomerListFilters
 from homestay_bot.services.customer_errors import CustomerConflictError
 from homestay_bot.services.customer_service import CustomerService
 from homestay_bot.services.message_service import IncomingMessage
@@ -228,7 +229,10 @@ async def test_customer_search_escapes_wildcards_and_limits_results() -> None:
             ]
         )
         await session.commit()
-        repository = SQLAlchemyCustomerRepository(session)
+        repository = SQLAlchemyCustomerRepository(
+            session,
+            local_date_provider=lambda: date(2026, 8, 14),
+        )
 
         percent_matches = await repository.list_customers(
             "%", offset=0, limit=50
@@ -353,6 +357,130 @@ async def test_latest_stay_notes_batch_query_uses_property_title_and_fallback(
         assert len(executed_sql) == 1
         assert "latest_stay_note_invalid_candidate" in caplog.text
         assert "CRM-INVALID-DATE" not in caplog.text
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_customer_list_filters_operational_attention_and_reviews() -> None:
+    """客户列表可组合筛选住宿状态、待办、记忆复核和合并复核。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        administrator = Employee(
+            wecom_userid="customer-filter-admin",
+            name="管理员",
+            role=EmployeeRole.ADMIN,
+        )
+        customer = Customer(display_name="需关注客户")
+        other = Customer(display_name="普通客户")
+        room = PropertyProfile(id=701, title="春和景明")
+        session.add_all([administrator, customer, other, room])
+        await session.flush()
+        session.add_all(
+            [
+                StayOrder(
+                    hostex_reservation_code="FILTER-STAY",
+                    stay_code="FILTER-STAY",
+                    customer_id=customer.id,
+                    property_id=room.id,
+                    check_in_date=date(2026, 8, 14),
+                    check_out_date=date(2026, 8, 16),
+                    status="confirmed",
+                ),
+                BusinessTask(
+                    task_type=BusinessTaskType.SPECIAL_SERVICE,
+                    status=BusinessTaskStatus.ASSIGNED,
+                    customer_id=customer.id,
+                    property_id=room.id,
+                    service_date=date(2026, 8, 14),
+                    description="准备儿童用品",
+                ),
+                CustomerMemoryItem(
+                    customer_id=customer.id,
+                    subject_key="quiet_room",
+                    category=CustomerMemoryCategory.PREFERENCE,
+                    statement="偏好安静",
+                    status=CustomerMemoryStatus.CANDIDATE,
+                    evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
+                    confidence=0.8,
+                    review_at=datetime.now(UTC),
+                    expires_at=datetime.now(UTC),
+                ),
+                CustomerMergeSuggestion(
+                    source_customer_id=customer.id,
+                    target_customer_id=other.id,
+                    reason="verified_phone",
+                ),
+            ]
+        )
+        await session.commit()
+        repository = SQLAlchemyCustomerRepository(
+            session,
+            local_date_provider=lambda: date(2026, 8, 14),
+        )
+        filters = CustomerListFilters(
+            stay_status="in_house",
+            attention=True,
+            memory_review=True,
+            merge_review=True,
+        )
+
+        customers = await repository.list_customers(
+            filters,
+            offset=0,
+            limit=50,
+        )
+        facts = await repository.customer_list_facts(
+            [customer.id],
+            today=date(2026, 8, 14),
+        )
+
+        assert [item.id for item in customers] == [customer.id]
+        assert facts[customer.id]["stay_status"] == "in_house"
+        assert facts[customer.id]["property_title"] == "春和景明"
+        assert facts[customer.id]["open_task_count"] == 1
+        assert facts[customer.id]["has_memory_review"] is True
+        assert facts[customer.id]["has_merge_review"] is True
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_customer_detail_stays_tab_does_not_load_other_domains() -> None:
+    """住宿页签只返回订单与房间投影，不包含消息正文或记忆治理对象。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer = Customer(display_name="住宿客户")
+        room = PropertyProfile(id=702, title="春和景明")
+        session.add_all([customer, room])
+        await session.flush()
+        session.add(
+            StayOrder(
+                hostex_reservation_code="DETAIL-STAY",
+                stay_code="DETAIL-STAY",
+                customer_id=customer.id,
+                property_id=room.id,
+                check_in_date=date(2026, 8, 14),
+                check_out_date=date(2026, 8, 16),
+                status="confirmed",
+            )
+        )
+        await session.commit()
+
+        detail = await SQLAlchemyCustomerRepository(session).customer_detail(
+            customer.id,
+            tab="stays",
+        )
+
+        assert detail["orders"][0]["property_title"] == "春和景明"
+        assert "memories" not in detail
+        assert "summary" not in detail
+        assert "merge_suggestions" not in detail
+        assert "content" not in repr(detail)
 
     await engine.dispose()
 

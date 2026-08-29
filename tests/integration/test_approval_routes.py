@@ -169,4 +169,19 @@ def test_approval_pages_use_shell_and_emphasize_money_confirmation() -> None:
     assert 'class="decision-panel' in detail.text
     assert 'data-unsaved-warning' in detail.text
     assert 'data-confirm=' in detail.text
+    assert '<option value="" selected disabled>请选择房间</option>' in detail.text
+    assert '<option value="" selected disabled>请选择收款方式</option>' in detail.text
     assert "13800138000" not in detail.text
+
+
+def test_non_pending_approval_cannot_render_real_order_form() -> None:
+    """冲突或需复核审批只能展示处理说明，不能继续提交真实订单。"""
+    client, approvals = build_client(EmployeeRole.ADMIN)
+    approvals.approval.status = ApprovalStatus.CONFLICT
+    login(client)
+
+    detail = client.get("/employee/approvals/1")
+
+    assert detail.status_code == 200
+    assert 'action="/employee/approvals/1/confirm"' not in detail.text
+    assert "当前审批需要人工处理" in detail.text

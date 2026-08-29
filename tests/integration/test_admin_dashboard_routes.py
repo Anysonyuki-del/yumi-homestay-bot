@@ -10,11 +10,18 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import BusinessTaskStatus, EmployeeRole, RoomOperationalStatus
 from homestay_bot.routes.admin import router as admin_router
 from homestay_bot.routes.employee_auth import router as auth_router
 from homestay_bot.services.admin_dashboard_service import Snapshot
 from homestay_bot.services.admin_diagnostics_service import AuditPage, DiagnosticsSnapshot
+from homestay_bot.services.admin_operations_service import (
+    AttentionItem,
+    OperationsSnapshot,
+    RoomDayOperation,
+    RoomOperationItem,
+    SevenDayRoomItem,
+)
 
 
 class DashboardStub:
@@ -56,6 +63,49 @@ class HealthStub:
             "worker_heartbeat": "stale",
             "configuration": "incomplete",
         }
+
+
+class OperationsStub:
+    """返回不含客户身份和入住凭证的固定运营工作台。"""
+
+    async def snapshot(self, now: datetime | None = None) -> OperationsSnapshot:
+        """构造一项待确认任务和一间房的七日安全投影。"""
+        local_date = date(2026, 8, 11)
+        days = tuple(
+            RoomDayOperation(local_date, 1, 0, True)
+            for _ in range(7)
+        )
+        return OperationsSnapshot(
+            local_date=local_date,
+            attention_items=(
+                AttentionItem(
+                    kind="task",
+                    record_id=7,
+                    status=BusinessTaskStatus.PENDING_CONFIRMATION,
+                    title="业务任务待确认",
+                    summary="任务 #7：等待管理员确认",
+                    target_url="/employee/tasks/7",
+                    property_id=101,
+                    room_title="长江中心",
+                    updated_at=datetime(2026, 8, 11, tzinfo=UTC),
+                ),
+            ),
+            rooms=(
+                RoomOperationItem(
+                    property_id=101,
+                    room_number="101",
+                    room_title="长江中心",
+                    status=RoomOperationalStatus.READY,
+                    today_arrival_count=1,
+                    today_departure_count=0,
+                    open_task_count=1,
+                    next_arrival=local_date,
+                ),
+            ),
+            seven_day_rooms=(
+                SevenDayRoomItem(101, "101", "长江中心", days),
+            ),
+        )
 
 
 class DiagnosticsStub:
@@ -145,9 +195,27 @@ def build_client() -> TestClient:
     app.include_router(admin_router)
     configure_admin_auth(app, EmployeeRole.ADMIN)
     app.state.admin_dashboard_service = DashboardStub()
+    app.state.admin_operations_service = OperationsStub()
     app.state.health_service = HealthStub()
     app.state.started_at = datetime(2026, 8, 11, tzinfo=UTC)
     return TestClient(app)
+
+
+def test_attention_and_operations_pages_form_actionable_workflow() -> None:
+    """待关注事项和房态页面必须提供可执行入口与七日矩阵。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    attention = client.get("/employee/admin/attention")
+    operations = client.get("/employee/admin/operations")
+
+    assert attention.status_code == 200
+    assert 'href="/employee/tasks/7"' in attention.text
+    assert "任务 #7：等待管理员确认" in attention.text
+    assert operations.status_code == 200
+    assert "今日入住 1" in operations.text
+    assert "7 日房态" in operations.text
+    assert 'href="/employee/properties/101"' in operations.text
 
 
 def test_dashboard_requires_login_and_first_password_change() -> None:

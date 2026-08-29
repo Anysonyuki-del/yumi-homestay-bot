@@ -46,11 +46,19 @@ class PropertyAdminStub:
         self.property = SimpleNamespace(
             id=101,
             title="长江中心",
+            room_number=None,
             room_type="江景大床房",
             district="武昌区",
             address_hint="地铁站附近",
             parking_instructions="停车前联系管理员",
             is_active=True,
+            operational_status="ready",
+            today_stay_labels=("今日入住",),
+            open_task_count=2,
+            credential_version=3,
+            profile_completeness=67,
+            missing_profile_labels=("真实房间号", "停车说明"),
+            next_check_in_date=None,
         )
         self.credential = SimpleNamespace(version=3, is_active=True)
         self.profile_calls: list[dict[str, object]] = []
@@ -85,6 +93,7 @@ class PropertyAdminStub:
         return {
             "property": self.property,
             "credential": self.credential,
+            "overview": self.property,
         }
 
     async def update_profile(self, property_id, employee, fields):
@@ -192,7 +201,7 @@ def test_admin_page_never_echoes_room_password(tmp_path) -> None:
     client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
     login(client)
 
-    response = client.get("/employee/properties/101")
+    response = client.get("/employee/properties/101?tab=credentials")
 
     assert response.status_code == 200
     assert "凭证版本 3" in response.text
@@ -209,13 +218,14 @@ def test_property_pages_use_admin_shell_and_protect_credential_replacement(
     login(client)
 
     index = client.get("/employee/properties")
-    detail = client.get("/employee/properties/101")
+    detail = client.get("/employee/properties/101?tab=credentials")
+    profile = client.get("/employee/properties/101?tab=profile")
 
     assert '/static/admin.js' in index.text
     assert 'href="/employee/properties" aria-current="page"' in detail.text
     assert 'class="data-table"' in index.text
     assert 'class="mobile-card-list clean-list"' in index.text
-    assert detail.text.count('data-unsaved-warning') >= 2
+    assert detail.text.count('data-unsaved-warning') == 1
     assert (
         'action="/employee/properties/101/credentials" data-confirm='
         in detail.text
@@ -223,7 +233,44 @@ def test_property_pages_use_admin_shell_and_protect_credential_replacement(
     assert 'name="password" value=' not in detail.text
     assert 'name="guide">入住后' not in detail.text
     assert 'name="password" maxlength="256"' in detail.text
-    assert 'name="room_number" value="" maxlength="64"' in detail.text
+    assert 'name="room_number" value="" maxlength="64"' in profile.text
+
+
+def test_property_index_shows_operational_health_summary(tmp_path) -> None:
+    """房源列表直接呈现运营、任务、凭证和资料完整度。"""
+    client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+
+    response = client.get("/employee/properties")
+
+    assert response.status_code == 200
+    assert "可入住" in response.text
+    assert "今日入住" in response.text
+    assert "2 项待处理" in response.text
+    assert "凭证 v3" in response.text
+    assert "资料完整度 67%" in response.text
+
+
+def test_property_detail_uses_url_tabs_and_keeps_writes_separate(tmp_path) -> None:
+    """详情默认只读，资料和凭证表单只出现在对应 URL 页签。"""
+    client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+
+    overview = client.get("/employee/properties/101")
+    profile = client.get("/employee/properties/101?tab=profile")
+    credentials = client.get("/employee/properties/101?tab=credentials")
+
+    assert overview.status_code == 200
+    assert 'aria-current="page">运营概览' in overview.text
+    assert 'action="/employee/properties/101/profile"' not in overview.text
+    assert 'action="/employee/properties/101/credentials"' not in overview.text
+    assert 'aria-current="page">公开资料' in profile.text
+    assert 'action="/employee/properties/101/profile"' in profile.text
+    assert 'action="/employee/properties/101/credentials"' not in profile.text
+    assert 'aria-current="page">入住凭证' in credentials.text
+    assert 'action="/employee/properties/101/credentials"' in credentials.text
+    assert 'name="password" value=' not in credentials.text
+    assert "入住后请先核对房号" not in credentials.text
 
 
 def test_admin_updates_profile_and_replaces_credentials(tmp_path) -> None:
@@ -265,8 +312,12 @@ def test_admin_updates_profile_and_replaces_credentials(tmp_path) -> None:
     )
 
     assert profile.status_code == 303
+    assert profile.headers["location"] == "/employee/properties/101?tab=profile"
     assert replay.status_code == 409
     assert credential.status_code == 303
+    assert credential.headers["location"] == (
+        "/employee/properties/101?tab=credentials"
+    )
     assert service.profile_calls[0]["property_id"] == 101
     assert service.credential_calls[0]["content"] == PNG_BYTES
 

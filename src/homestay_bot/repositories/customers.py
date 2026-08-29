@@ -8,6 +8,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    ComplaintReviewStatus,
     CustomerIdentityProvider,
     CustomerMemoryCategory,
     CustomerMemoryEvidenceType,
@@ -18,6 +20,7 @@ from homestay_bot.domain.enums import (
 from homestay_bot.domain.models import (
     AuditLog,
     BusinessTask,
+    ComplaintReview,
     Conversation,
     Customer,
     CustomerContextSummary,
@@ -221,16 +224,17 @@ class SQLAlchemyCustomerRepository:
 
     async def list_customers(
         self,
-        query: str | None,
+        query: object | None,
         *,
         offset: int,
         limit: int,
     ) -> list[Customer]:
-        """按姓名或备注稳定分页搜索尚未合并的客户。"""
+        """按姓名、住宿和待处理条件稳定分页搜索未合并客户。"""
         statement = select(Customer).where(
             Customer.merged_into_customer_id.is_(None)
         )
-        cleaned = (query or "").strip()
+        query_text = getattr(query, "query", query)
+        cleaned = str(query_text or "").strip()
         if cleaned:
             # 先转义转义符自身，再把 SQL 通配符按普通字符搜索。
             escaped = (
@@ -244,6 +248,116 @@ class SQLAlchemyCustomerRepository:
                 Customer.display_name.ilike(pattern, escape="\\")
                 | Customer.note.ilike(pattern, escape="\\")
             )
+        today = self._local_date_provider()
+        stay_status = getattr(query, "stay_status", None)
+        active_order = (
+            select(StayOrder.id)
+            .where(
+                StayOrder.customer_id == Customer.id,
+                StayOrder.status != "cancelled",
+            )
+            .correlate(Customer)
+        )
+        if stay_status == "upcoming":
+            statement = statement.where(
+                active_order.where(StayOrder.check_in_date > today).exists()
+            )
+        elif stay_status == "in_house":
+            statement = statement.where(
+                active_order.where(
+                    StayOrder.check_in_date <= today,
+                    StayOrder.check_out_date > today,
+                    StayOrder.checkout_observed_on.is_(None),
+                ).exists()
+            )
+        elif stay_status == "departed":
+            statement = statement.where(
+                active_order.where(
+                    (StayOrder.check_out_date <= today)
+                    | StayOrder.checkout_observed_on.is_not(None)
+                ).exists()
+            )
+        elif stay_status == "none":
+            statement = statement.where(~active_order.exists())
+
+        open_task = (
+            select(BusinessTask.id)
+            .where(
+                BusinessTask.customer_id == Customer.id,
+                BusinessTask.status.not_in(
+                    [
+                        BusinessTaskStatus.COMPLETED,
+                        BusinessTaskStatus.CANCELLED,
+                    ]
+                ),
+            )
+            .correlate(Customer)
+        )
+        open_complaint = (
+            select(ComplaintReview.id)
+            .join(
+                Conversation,
+                Conversation.id == ComplaintReview.conversation_id,
+            )
+            .where(
+                Conversation.customer_id == Customer.id,
+                ComplaintReview.status.not_in(
+                    [
+                        ComplaintReviewStatus.SENT,
+                        ComplaintReviewStatus.CANCELLED,
+                    ]
+                ),
+            )
+            .correlate(Customer)
+        )
+        if bool(getattr(query, "attention", False)):
+            statement = statement.where(
+                open_task.exists() | open_complaint.exists()
+            )
+        if bool(getattr(query, "memory_review", False)):
+            statement = statement.where(
+                select(CustomerMemoryItem.id)
+                .where(
+                    CustomerMemoryItem.customer_id == Customer.id,
+                    CustomerMemoryItem.status.in_(
+                        [
+                            CustomerMemoryStatus.CANDIDATE,
+                            CustomerMemoryStatus.DISPUTED,
+                        ]
+                    ),
+                )
+                .correlate(Customer)
+                .exists()
+            )
+        if bool(getattr(query, "merge_review", False)):
+            statement = statement.where(
+                select(CustomerMergeSuggestion.id)
+                .where(
+                    (
+                        CustomerMergeSuggestion.source_customer_id
+                        == Customer.id
+                    )
+                    | (
+                        CustomerMergeSuggestion.target_customer_id
+                        == Customer.id
+                    ),
+                    CustomerMergeSuggestion.status
+                    == CustomerMergeStatus.PENDING,
+                )
+                .correlate(Customer)
+                .exists()
+            )
+        tag_id = getattr(query, "tag_id", None)
+        if tag_id is not None:
+            statement = statement.where(
+                select(CustomerTagLink.customer_id)
+                .where(
+                    CustomerTagLink.customer_id == Customer.id,
+                    CustomerTagLink.tag_id == tag_id,
+                )
+                .correlate(Customer)
+                .exists()
+            )
         return list(
             (
                 await self._session.scalars(
@@ -256,6 +370,173 @@ class SQLAlchemyCustomerRepository:
                 )
             ).all()
         )
+
+    async def customer_list_facts(
+        self,
+        customer_ids: list[int],
+        *,
+        today: date,
+    ) -> dict[int, dict[str, object]]:
+        """使用固定数量批量查询组装客户列表的安全运营事实。"""
+        unique_ids = list(dict.fromkeys(customer_ids))
+        if not unique_ids:
+            return {}
+        facts: dict[int, dict[str, object]] = {
+            customer_id: {
+                "stay_status": "none",
+                "stay_status_label": "暂无有效订单",
+                "property_title": None,
+                "stay_date_label": None,
+                "open_task_count": 0,
+                "has_attention": False,
+                "has_memory_review": False,
+                "has_merge_review": False,
+                "tag_names": [],
+            }
+            for customer_id in unique_ids
+        }
+        order_rows = (
+            await self._session.execute(
+                select(
+                    StayOrder.customer_id,
+                    StayOrder.check_in_date,
+                    StayOrder.check_out_date,
+                    StayOrder.checkout_observed_on,
+                    PropertyProfile.title.label("property_title"),
+                )
+                .join(
+                    PropertyProfile,
+                    PropertyProfile.id == StayOrder.property_id,
+                )
+                .where(
+                    StayOrder.customer_id.in_(unique_ids),
+                    StayOrder.status != "cancelled",
+                )
+                .order_by(StayOrder.check_in_date.desc(), StayOrder.id.desc())
+            )
+        ).mappings().all()
+        for row in order_rows:
+            customer_id = int(row["customer_id"])
+            current = facts[customer_id]
+            candidate_status = "departed"
+            candidate_label = "已离店"
+            priority = 1
+            if (
+                row["check_in_date"] <= today < row["check_out_date"]
+                and row["checkout_observed_on"] is None
+            ):
+                candidate_status = "in_house"
+                candidate_label = "在住"
+                priority = 3
+            elif row["check_in_date"] > today:
+                candidate_status = "upcoming"
+                candidate_label = "即将入住"
+                priority = 2
+            current_priority = current.get("_stay_priority", 0)
+            if priority <= (
+                current_priority if isinstance(current_priority, int) else 0
+            ):
+                continue
+            current.update(
+                {
+                    "_stay_priority": priority,
+                    "stay_status": candidate_status,
+                    "stay_status_label": candidate_label,
+                    "property_title": row["property_title"],
+                    "stay_date_label": (
+                        f"{row['check_in_date'].year}年"
+                        f"{row['check_in_date'].month}月"
+                        f"{row['check_in_date'].day}日入住，"
+                        f"{row['check_out_date'].month}月"
+                        f"{row['check_out_date'].day}日退房"
+                    ),
+                }
+            )
+        task_rows = (
+            await self._session.execute(
+                select(
+                    BusinessTask.customer_id,
+                    func.count(BusinessTask.id).label("open_count"),
+                )
+                .where(
+                    BusinessTask.customer_id.in_(unique_ids),
+                    BusinessTask.status.not_in(
+                        [
+                            BusinessTaskStatus.COMPLETED,
+                            BusinessTaskStatus.CANCELLED,
+                        ]
+                    ),
+                )
+                .group_by(BusinessTask.customer_id)
+            )
+        ).all()
+        for customer_id, open_count in task_rows:
+            facts[int(customer_id)]["open_task_count"] = int(open_count)
+            facts[int(customer_id)]["has_attention"] = True
+        memory_ids = set(
+            (
+                await self._session.scalars(
+                    select(CustomerMemoryItem.customer_id)
+                    .where(
+                        CustomerMemoryItem.customer_id.in_(unique_ids),
+                        CustomerMemoryItem.status.in_(
+                            [
+                                CustomerMemoryStatus.CANDIDATE,
+                                CustomerMemoryStatus.DISPUTED,
+                            ]
+                        ),
+                    )
+                    .distinct()
+                )
+            ).all()
+        )
+        merge_rows = (
+            await self._session.execute(
+                select(
+                    CustomerMergeSuggestion.source_customer_id,
+                    CustomerMergeSuggestion.target_customer_id,
+                ).where(
+                    CustomerMergeSuggestion.status
+                    == CustomerMergeStatus.PENDING,
+                    (
+                        CustomerMergeSuggestion.source_customer_id.in_(
+                            unique_ids
+                        )
+                    )
+                    | (
+                        CustomerMergeSuggestion.target_customer_id.in_(
+                            unique_ids
+                        )
+                    ),
+                )
+            )
+        ).all()
+        merge_ids = {
+            customer_id
+            for row in merge_rows
+            for customer_id in row
+            if customer_id in facts
+        }
+        tag_rows = (
+            await self._session.execute(
+                select(CustomerTagLink.customer_id, CustomerTag.name)
+                .join(CustomerTag, CustomerTag.id == CustomerTagLink.tag_id)
+                .where(
+                    CustomerTagLink.customer_id.in_(unique_ids),
+                    CustomerTag.is_active.is_(True),
+                )
+                .order_by(CustomerTag.name, CustomerTag.id)
+            )
+        ).all()
+        for customer_id, tag_name in tag_rows:
+            tags = facts[int(customer_id)]["tag_names"]
+            if isinstance(tags, list):
+                tags.append(str(tag_name))
+        for customer_id in unique_ids:
+            facts[customer_id].pop("_stay_priority", None)
+            facts[customer_id]["has_memory_review"] = customer_id in memory_ids
+            facts[customer_id]["has_merge_review"] = customer_id in merge_ids
+        return facts
 
     async def latest_stay_notes(
         self,
@@ -345,82 +626,186 @@ class SQLAlchemyCustomerRepository:
         )
         return _notification_label(employee_note)
 
-    async def customer_detail(self, customer_id: int) -> dict[str, object]:
-        """返回管理员 CRM 需要的标签、摘要和待合并建议。"""
+    async def customer_detail(
+        self,
+        customer_id: int,
+        *,
+        tab: str | None = None,
+    ) -> dict[str, object]:
+        """按页签返回客户安全投影；空页签兼容旧版完整详情。"""
         customer = await self._session.get(Customer, customer_id)
         if customer is None or customer.merged_into_customer_id is not None:
             raise CustomerNotFoundError("客户不存在或已经合并")
-        tags = list(
-            (
-                await self._session.scalars(
-                    select(CustomerTag)
-                    .where(CustomerTag.is_active.is_(True))
-                    .order_by(CustomerTag.name, CustomerTag.id)
-                )
-            ).all()
-        )
-        selected_tag_ids = list(
-            (
-                await self._session.scalars(
-                    select(CustomerTagLink.tag_id).where(
-                        CustomerTagLink.customer_id == customer_id
+        detail: dict[str, object] = {"customer": customer}
+        if tab == "stays":
+            rows = (
+                await self._session.execute(
+                    select(
+                        StayOrder.id,
+                        PropertyProfile.title.label("property_title"),
+                        StayOrder.check_in_date,
+                        StayOrder.check_out_date,
+                        StayOrder.status,
                     )
-                )
-            ).all()
-        )
-        summary = await self._session.scalar(
-            select(CustomerContextSummary).where(
-                CustomerContextSummary.customer_id == customer_id
-            )
-        )
-        memories = list(
-            (
-                await self._session.scalars(
-                    select(CustomerMemoryItem)
-                    .where(CustomerMemoryItem.customer_id == customer_id)
+                    .join(
+                        PropertyProfile,
+                        PropertyProfile.id == StayOrder.property_id,
+                    )
+                    .where(StayOrder.customer_id == customer_id)
                     .order_by(
-                        CustomerMemoryItem.status,
-                        CustomerMemoryItem.updated_at.desc(),
-                        CustomerMemoryItem.id.desc(),
+                        StayOrder.check_in_date.desc(),
+                        StayOrder.id.desc(),
                     )
-                    .limit(100)
+                    .limit(50)
                 )
-            ).all()
-        )
-        current_memories = {
-            memory.subject_key: memory
-            for memory in memories
-            if memory.status is CustomerMemoryStatus.ACTIVE
-        }
-        merge_suggestions = list(
-            (
-                await self._session.scalars(
-                    select(CustomerMergeSuggestion)
-                    .where(
-                        (
-                            CustomerMergeSuggestion.source_customer_id
-                            == customer_id
+            ).mappings().all()
+            detail["orders"] = [dict(row) for row in rows]
+            return detail
+        if tab == "service":
+            task_rows = (
+                await self._session.execute(
+                    select(
+                        BusinessTask.id,
+                        BusinessTask.task_type,
+                        BusinessTask.status,
+                        BusinessTask.service_date,
+                        BusinessTask.assigned_employee_id,
+                        PropertyProfile.title.label("property_title"),
+                    )
+                    .outerjoin(
+                        PropertyProfile,
+                        PropertyProfile.id == BusinessTask.property_id,
+                    )
+                    .where(BusinessTask.customer_id == customer_id)
+                    .order_by(
+                        BusinessTask.service_date.desc(),
+                        BusinessTask.id.desc(),
+                    )
+                    .limit(50)
+                )
+            ).mappings().all()
+            complaint_rows = (
+                await self._session.execute(
+                    select(
+                        ComplaintReview.id,
+                        ComplaintReview.reason,
+                        ComplaintReview.risk_level,
+                        ComplaintReview.status,
+                        ComplaintReview.updated_at,
+                    )
+                    .join(
+                        Conversation,
+                        Conversation.id == ComplaintReview.conversation_id,
+                    )
+                    .where(Conversation.customer_id == customer_id)
+                    .order_by(
+                        ComplaintReview.updated_at.desc(),
+                        ComplaintReview.id.desc(),
+                    )
+                    .limit(50)
+                )
+            ).mappings().all()
+            conversation_rows = (
+                await self._session.execute(
+                    select(
+                        Conversation.id,
+                        Conversation.mode,
+                        Conversation.assigned_employee_id,
+                        Conversation.updated_at,
+                    )
+                    .where(Conversation.customer_id == customer_id)
+                    .order_by(
+                        Conversation.updated_at.desc(),
+                        Conversation.id.desc(),
+                    )
+                    .limit(20)
+                )
+            ).mappings().all()
+            detail.update(
+                {
+                    "tasks": [dict(row) for row in task_rows],
+                    "complaints": [dict(row) for row in complaint_rows],
+                    # 会话只返回处理模式、负责人和时间，禁止选择消息表正文。
+                    "conversations": [dict(row) for row in conversation_rows],
+                }
+            )
+            return detail
+
+        load_overview = tab in {None, "overview"}
+        load_memory = tab in {None, "memory"}
+        load_governance = tab in {None, "governance"}
+        if load_overview:
+            detail["tags"] = list(
+                (
+                    await self._session.scalars(
+                        select(CustomerTag)
+                        .where(CustomerTag.is_active.is_(True))
+                        .order_by(CustomerTag.name, CustomerTag.id)
+                    )
+                ).all()
+            )
+            detail["selected_tag_ids"] = list(
+                (
+                    await self._session.scalars(
+                        select(CustomerTagLink.tag_id).where(
+                            CustomerTagLink.customer_id == customer_id
                         )
-                        | (
-                            CustomerMergeSuggestion.target_customer_id
-                            == customer_id
-                        ),
-                        CustomerMergeSuggestion.status
-                        == CustomerMergeStatus.PENDING,
                     )
-                    .order_by(CustomerMergeSuggestion.created_at.desc())
+                ).all()
+            )
+        if load_memory:
+            summary = await self._session.scalar(
+                select(CustomerContextSummary).where(
+                    CustomerContextSummary.customer_id == customer_id
                 )
-            ).all()
-        )
-        return {
-            "customer": customer,
-            "tags": tags,
-            "selected_tag_ids": selected_tag_ids,
-            "summary": summary,
-            "memories": memories,
-            "current_memories": current_memories,
-            "merge_suggestions": merge_suggestions,
-        }
+            )
+            memories = list(
+                (
+                    await self._session.scalars(
+                        select(CustomerMemoryItem)
+                        .where(CustomerMemoryItem.customer_id == customer_id)
+                        .order_by(
+                            CustomerMemoryItem.status,
+                            CustomerMemoryItem.updated_at.desc(),
+                            CustomerMemoryItem.id.desc(),
+                        )
+                        .limit(100)
+                    )
+                ).all()
+            )
+            detail.update(
+                {
+                    "summary": summary,
+                    "memories": memories,
+                    "current_memories": {
+                        memory.subject_key: memory
+                        for memory in memories
+                        if memory.status is CustomerMemoryStatus.ACTIVE
+                    },
+                }
+            )
+        if load_governance:
+            detail["merge_suggestions"] = list(
+                (
+                    await self._session.scalars(
+                        select(CustomerMergeSuggestion)
+                        .where(
+                            (
+                                CustomerMergeSuggestion.source_customer_id
+                                == customer_id
+                            )
+                            | (
+                                CustomerMergeSuggestion.target_customer_id
+                                == customer_id
+                            ),
+                            CustomerMergeSuggestion.status
+                            == CustomerMergeStatus.PENDING,
+                        )
+                        .order_by(CustomerMergeSuggestion.created_at.desc())
+                    )
+                ).all()
+            )
+        return detail
 
     async def merge_detail(self, suggestion_id: int) -> dict[str, object]:
         """返回待审核建议和两个客户，供管理员合并前人工对比。"""

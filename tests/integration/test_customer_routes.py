@@ -15,7 +15,11 @@ from homestay_bot.domain.enums import (
 )
 from homestay_bot.routes.customers import router as customers_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
-from homestay_bot.services.customer_admin_service import CustomerCard
+from homestay_bot.services.customer_admin_service import (
+    CustomerCard,
+    CustomerDetailRequest,
+    CustomerListFilters,
+)
 from homestay_bot.services.customer_errors import (
     CustomerConflictError,
     CustomerNotFoundError,
@@ -94,19 +98,59 @@ class CustomerAdminStub:
         """按测试查询返回安全客户卡片并记录管理员编号。"""
         self._require_admin(administrator)
         self.list_calls.append((query, administrator.id, offset, limit))
-        if query == "订单":
+        query_text = query.query if isinstance(query, CustomerListFilters) else query
+        if query_text == "订单":
             return [self.card, self.target_card]
         return [self.card] * (limit if offset == 50 else 1)
 
     async def get_detail(self, customer_id, administrator):
         """返回不包含手机号明文和密文的客户详情。"""
         self._require_admin(administrator)
+        if isinstance(customer_id, CustomerDetailRequest):
+            tab = customer_id.tab
+            customer_id = customer_id.customer_id
+        else:
+            tab = "overview"
         if customer_id not in {7, 8}:
             raise CustomerNotFoundError("客户不存在")
         customer = self.card if customer_id == 7 else self.target_card
-        return {
+        base = {
             "customer": customer,
             "masked_phone": customer.masked_phone,
+            "active_tab": tab,
+        }
+        if tab == "stays":
+            return {
+                **base,
+                "orders": [
+                    {
+                        "id": 31,
+                        "property_title": "春和景明",
+                        "date_label": "2026年8月14日—8月16日",
+                        "status_label": "已确认",
+                    }
+                ],
+            }
+        if tab == "service":
+            return {
+                **base,
+                "tasks": [],
+                "complaints": [],
+                "conversations": [
+                    {
+                        "id": 4,
+                        "mode_label": "机器人接待",
+                        "updated_at_label": "2026年8月14日 09:30",
+                    }
+                ],
+            }
+        if tab == "governance":
+            return {
+                **base,
+                "merge_suggestions": [self.suggestion],
+            }
+        return {
+            **base,
             "tags": self.tags,
             "selected_tag_ids": [1],
             "summary": self.summary,
@@ -331,7 +375,7 @@ def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
     assert 'class="mobile-card-list clean-list"' in index.text
     assert 'data-unsaved-warning' in detail.text
     assert (
-        'action="/employee/customers/7/summary/delete" data-confirm='
+        'action="/employee/customers/7/summary/delete" data-danger-confirm='
         in detail.text
     )
     assert (
@@ -517,10 +561,61 @@ def test_customer_list_uses_bounded_pagination_and_preserves_search() -> None:
         'href="/employee/customers?query=%E8%80%81%E5%AE%A2%E6%88%B7&amp;page=1"'
         in response.text
     )
-    assert (
-        'href="/employee/customers?query=%E8%80%81%E5%AE%A2%E6%88%B7&amp;page=3"'
-        in response.text
+
+
+def test_customer_list_preserves_operational_filters_in_url() -> None:
+    """列表把运营筛选传给服务，并在分页链接中完整保留。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get(
+        "/employee/customers",
+        params={
+            "query": "订单",
+            "stay_status": "in_house",
+            "attention": "1",
+            "memory_review": "1",
+            "merge_review": "1",
+            "page": "2",
+        },
     )
+
+    assert response.status_code == 200
+    filters = customers.list_calls[0][0]
+    assert isinstance(filters, CustomerListFilters)
+    assert filters.stay_status == "in_house"
+    assert filters.attention is True
+    assert "stay_status=in_house" in response.text
+    assert "memory_review=1" in response.text
+    assert "merge_review=1" in response.text
+
+
+def test_customer_detail_tabs_load_separate_safe_views() -> None:
+    """详情页签进入 URL，服务页只展示会话元数据且不展示消息正文。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    stays = client.get("/employee/customers/7?tab=stays")
+    service = client.get("/employee/customers/7?tab=service")
+
+    assert stays.status_code == 200
+    assert "春和景明" in stays.text
+    assert "AI 客户摘要" not in stays.text
+    assert 'aria-current="page">住宿记录' in stays.text
+    assert service.status_code == 200
+    assert "机器人接待" in service.text
+    assert "消息正文" not in service.text
+    assert "ROUTE_SOURCE_SECRET_NOTE" not in service.text
+
+
+def test_customer_detail_rejects_unknown_tab() -> None:
+    """未知页签返回参数错误，避免静默加载全部客户资料。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/customers/7?tab=unknown")
+
+    assert response.status_code == 422
 
 
 def test_manual_merge_uses_one_time_csrf_and_redirects_to_review() -> None:

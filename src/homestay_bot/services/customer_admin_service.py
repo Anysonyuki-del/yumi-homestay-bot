@@ -22,6 +22,26 @@ def _wuhan_today() -> date:
 
 
 @dataclass(frozen=True)
+class CustomerListFilters:
+    """保存客户列表可通过 URL 恢复的运营筛选条件。"""
+
+    query: str | None = None
+    stay_status: str | None = None
+    attention: bool = False
+    memory_review: bool = False
+    merge_review: bool = False
+    tag_id: int | None = None
+
+
+@dataclass(frozen=True)
+class CustomerDetailRequest:
+    """通过既有应用服务位置参数传递客户编号和详情页签。"""
+
+    customer_id: int
+    tab: str
+
+
+@dataclass(frozen=True)
 class CustomerCard:
     """只包含 CRM 页面允许渲染的客户字段。"""
 
@@ -30,6 +50,15 @@ class CustomerCard:
     note: str
     masked_phone: str
     latest_stay_note: str | None = None
+    stay_status: str = "none"
+    stay_status_label: str = "暂无有效订单"
+    property_title: str | None = None
+    stay_date_label: str | None = None
+    open_task_count: int = 0
+    has_attention: bool = False
+    has_memory_review: bool = False
+    has_merge_review: bool = False
+    tag_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,14 +78,27 @@ class CustomerAdminRepositoryPort(Protocol):
 
     async def list_customers(
         self,
-        query: str | None,
+        query: str | CustomerListFilters | None,
         *,
         offset: int,
         limit: int,
     ) -> list[Any]:
         """按分页边界搜索未合并客户。"""
 
-    async def customer_detail(self, customer_id: int) -> dict[str, Any]:
+    async def customer_list_facts(
+        self,
+        customer_ids: list[int],
+        *,
+        today: date,
+    ) -> dict[int, dict[str, Any]]:
+        """批量返回列表所需的住宿、任务和治理事实。"""
+
+    async def customer_detail(
+        self,
+        customer_id: int,
+        *,
+        tab: str | None = None,
+    ) -> dict[str, Any]:
         """返回客户关联标签、摘要和合并建议。"""
 
     async def latest_stay_notes(
@@ -175,7 +217,7 @@ class CustomerAdminService:
 
     async def list_customers(
         self,
-        query: str | None,
+        query: str | CustomerListFilters | None,
         administrator: Employee,
         *,
         offset: int,
@@ -189,39 +231,61 @@ class CustomerAdminService:
             limit=limit,
         )
         customer_ids = [int(item.id) for item in customers]
+        today = self._local_date_provider()
         notes = await self._repository.latest_stay_notes(
             customer_ids,
-            today=self._local_date_provider(),
+            today=today,
+        )
+        facts = await self._repository.customer_list_facts(
+            customer_ids,
+            today=today,
         )
         return [
             self._card(
                 item,
                 latest_stay_note=notes.get(int(item.id)),
+                facts=facts.get(int(item.id)),
             )
             for item in customers
         ]
 
     async def get_detail(
         self,
-        customer_id: int,
+        customer_id: int | CustomerDetailRequest,
         administrator: Employee,
     ) -> dict[str, Any]:
-        """返回脱敏客户详情并移除原始客户 ORM 对象。"""
+        """按页签返回脱敏详情；旧调用仍保留完整详情兼容性。"""
         self._require_admin(administrator)
-        detail = await self._repository.customer_detail(customer_id)
+        if isinstance(customer_id, CustomerDetailRequest):
+            actual_customer_id = customer_id.customer_id
+            tab: str | None = customer_id.tab
+        else:
+            actual_customer_id = customer_id
+            tab = None
+        detail = (
+            await self._repository.customer_detail(actual_customer_id)
+            if tab is None
+            else await self._repository.customer_detail(
+                actual_customer_id,
+                tab=tab,
+            )
+        )
         customer = detail["customer"]
         notes = await self._repository.latest_stay_notes(
             [int(customer.id)],
             today=self._local_date_provider(),
         )
-        return {
+        result = {
             **detail,
             "customer": self._card(
                 customer,
                 latest_stay_note=notes.get(int(customer.id)),
             ),
             "masked_phone": self._masked_phone(customer.phone_ciphertext),
+            "active_tab": tab or "overview",
         }
+        self._localize_detail(result)
+        return result
 
     async def set_tags(
         self,
@@ -383,15 +447,174 @@ class CustomerAdminService:
         customer: Any,
         *,
         latest_stay_note: str | None = None,
+        facts: dict[str, Any] | None = None,
     ) -> CustomerCard:
         """从 ORM 或测试对象提取无密文客户卡片。"""
+        safe_facts = facts or {}
         return CustomerCard(
             id=int(customer.id),
             display_name=str(customer.display_name),
             note=str(customer.note or ""),
             masked_phone=self._masked_phone(customer.phone_ciphertext),
             latest_stay_note=latest_stay_note,
+            stay_status=str(safe_facts.get("stay_status", "none")),
+            stay_status_label=str(
+                safe_facts.get("stay_status_label", "暂无有效订单")
+            ),
+            property_title=safe_facts.get("property_title"),
+            stay_date_label=safe_facts.get("stay_date_label"),
+            open_task_count=int(safe_facts.get("open_task_count", 0)),
+            has_attention=bool(safe_facts.get("has_attention", False)),
+            has_memory_review=bool(
+                safe_facts.get("has_memory_review", False)
+            ),
+            has_merge_review=bool(
+                safe_facts.get("has_merge_review", False)
+            ),
+            tag_names=tuple(safe_facts.get("tag_names", ())),
         )
+
+    @staticmethod
+    def _localize_detail(detail: dict[str, Any]) -> None:
+        """就地补充中文状态与武汉日期文本，不改动领域原始状态。"""
+        order_statuses = {
+            "accepted": "已确认",
+            "confirmed": "已确认",
+            "booked": "已预订",
+            "cancelled": "已取消",
+        }
+        task_statuses = {
+            "pending_confirmation": "待确认",
+            "pending_assignment": "待分配",
+            "assigned": "已分配",
+            "in_progress": "进行中",
+            "pending_inspection": "待检查",
+            "completed": "已完成",
+            "cancelled": "已取消",
+        }
+        task_types = {
+            "cleaning": "保洁",
+            "maintenance": "维修",
+            "supplies": "补给",
+            "special_service": "特殊服务",
+            "early_check_in": "提前入住",
+            "late_check_out": "延迟退房",
+            "manual_contact": "人工联系",
+        }
+        complaint_statuses = {
+            "pending_analysis": "待分析",
+            "ready_for_review": "待复核",
+            "editing": "编辑中",
+            "send_queued": "待发送",
+            "delivery_failed": "投递失败",
+            "sent": "已发送",
+            "returned": "已退回",
+            "analysis_failed": "分析失败",
+            "cancelled": "已取消",
+        }
+        memory_statuses = {
+            "candidate": "候选",
+            "active": "有效",
+            "disputed": "有争议",
+            "stale": "已失效",
+            "superseded": "已替代",
+            "rejected": "已拒绝",
+        }
+        memory_categories = {
+            "preference": "偏好",
+            "confirmed_fact": "已确认事实",
+            "unresolved": "待确认事项",
+            "service_history": "服务记录",
+        }
+        evidence_types = {
+            "user_explicit": "客户明确表达",
+            "employee_confirmed": "员工确认",
+            "model_inference": "模型推断",
+        }
+        for order in detail.get("orders", []):
+            status = CustomerAdminService._value(order.get("status"))
+            order["status_label"] = order_statuses.get(status, "其他状态")
+            order["date_label"] = CustomerAdminService._date_range_label(
+                order.get("check_in_date"),
+                order.get("check_out_date"),
+            )
+        for task in detail.get("tasks", []):
+            status = CustomerAdminService._value(task.get("status"))
+            task_type = CustomerAdminService._value(task.get("task_type"))
+            task["status_label"] = task_statuses.get(status, "其他状态")
+            task["type_label"] = task_types.get(task_type, "其他任务")
+            task["service_date_label"] = CustomerAdminService._date_label(
+                task.get("service_date")
+            )
+        for complaint in detail.get("complaints", []):
+            status = CustomerAdminService._value(complaint.get("status"))
+            complaint["status_label"] = complaint_statuses.get(
+                status,
+                "其他状态",
+            )
+            complaint["updated_at_label"] = CustomerAdminService._time_label(
+                complaint.get("updated_at")
+            )
+        for conversation in detail.get("conversations", []):
+            mode = CustomerAdminService._value(conversation.get("mode"))
+            conversation["mode_label"] = (
+                "人工接待" if mode == "human_active" else "机器人接待"
+            )
+            conversation["updated_at_label"] = CustomerAdminService._time_label(
+                conversation.get("updated_at")
+            )
+        for memory in detail.get("memories", []):
+            memory.status_label = memory_statuses.get(
+                CustomerAdminService._value(memory.status),
+                "其他状态",
+            )
+            memory.category_label = memory_categories.get(
+                CustomerAdminService._value(memory.category),
+                "其他类别",
+            )
+            memory.evidence_label = evidence_types.get(
+                CustomerAdminService._value(memory.evidence_type),
+                "其他证据",
+            )
+            memory.source_time_label = CustomerAdminService._time_label(
+                memory.source_occurred_at
+            )
+
+    @staticmethod
+    def _value(value: Any) -> str:
+        """从枚举或标量中提取稳定字符串值。"""
+        return str(getattr(value, "value", value or "")).lower()
+
+    @staticmethod
+    def _date_label(value: date | None) -> str:
+        """将日期转换为中文年月日。"""
+        if value is None:
+            return "日期未定"
+        return f"{value.year}年{value.month}月{value.day}日"
+
+    @staticmethod
+    def _date_range_label(start: date | None, end: date | None) -> str:
+        """将入住和退房日期转换为紧凑中文区间。"""
+        if start is None or end is None:
+            return "日期未定"
+        end_label = (
+            f"{end.year}年{end.month}月{end.day}日"
+            if end.year != start.year
+            else f"{end.month}月{end.day}日"
+        )
+        return f"{start.year}年{start.month}月{start.day}日—{end_label}"
+
+    @staticmethod
+    def _time_label(value: datetime | None) -> str:
+        """将数据库时间统一转换为武汉本地时间。"""
+        if value is None:
+            return "时间未知"
+        localized = (
+            value.replace(tzinfo=WUHAN_TIMEZONE)
+            if value.tzinfo is None
+            else value.astimezone(WUHAN_TIMEZONE)
+        )
+        return localized.strftime("%Y年%-m月%-d日 %H:%M")
 
     def _masked_phone(self, ciphertext: bytes | None) -> str:
         """仅在内存解密手机号并立即转换为脱敏格式。"""
