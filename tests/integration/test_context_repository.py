@@ -93,6 +93,7 @@ async def test_explicit_memory_is_recalled_only_for_owner_and_relevant_query() -
                         evidence_type=CustomerMemoryEvidenceType.USER_EXPLICIT,
                         source_message_id=source.external_message_id,
                         confidence=0.98,
+                        source_excerpt="我的狗叫查理",
                     )
                 ],
             ),
@@ -125,6 +126,48 @@ async def test_explicit_memory_is_recalled_only_for_owner_and_relevant_query() -
 
 
 @pytest.mark.asyncio
+async def test_summary_version_conflict_keeps_source_message_unprocessed() -> None:
+    """模型期间摘要版本变化时，不得覆盖摘要或标记来源已处理。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="并发摘要客户",
+            external_message_id="summary-version-conflict",
+            content="我喜欢安静",
+        )
+        repository = SQLAlchemyContextRepository(session)
+        first_saved = await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult("管理员已更新的摘要", []),
+            [source],
+            now,
+            expected_version=0,
+        )
+        source.short_summarized_at = None
+        stale_saved = await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult("过期模型结果", []),
+            [source],
+            now + timedelta(minutes=1),
+            expected_version=0,
+        )
+        summary = await repository.get_summary(customer.id)
+
+        assert first_saved is True
+        assert stale_saved is False
+        assert summary is not None
+        assert summary.short_summary == "管理员已更新的摘要"
+        assert source.short_summarized_at is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_single_recent_message_becomes_cross_conversation_memory() -> None:
     """最近原文无需等待退出三条窗口，也能在维护后供新会话召回。"""
 
@@ -146,6 +189,7 @@ async def test_single_recent_message_becomes_cross_conversation_memory() -> None
                         CustomerMemoryEvidenceType.USER_EXPLICIT,
                         messages[0].message_id,
                         0.99,
+                        source_excerpt="我的狗叫查理",
                     )
                 ],
             )
@@ -234,6 +278,7 @@ async def test_model_inference_stays_candidate_and_explicit_correction_supersede
                         CustomerMemoryEvidenceType.USER_EXPLICIT,
                         first.external_message_id,
                         0.95,
+                        source_excerpt="我喜欢高楼层",
                     )
                 ],
             ),
@@ -254,6 +299,7 @@ async def test_model_inference_stays_candidate_and_explicit_correction_supersede
                         correction.external_message_id,
                         0.99,
                         is_correction=True,
+                        source_excerpt="更正一下，我喜欢低楼层",
                     )
                 ],
             ),
@@ -303,6 +349,7 @@ async def test_unresolved_items_merge_and_active_memory_expires_to_stale() -> No
             CustomerMemoryEvidenceType.USER_EXPLICIT,
             source.external_message_id,
             0.9,
+            source_excerpt="我喜欢安静",
         )
         await repository.save_short_summary(
             customer.id,
@@ -322,11 +369,234 @@ async def test_unresolved_items_merge_and_active_memory_expires_to_stale() -> No
         summary = await repository.get_summary(customer.id)
         memory = await session.scalar(select(CustomerMemoryItem))
 
-        assert summary.unresolved_items == ["待确认到达时间", "待确认开票抬头"]
+        assert summary.unresolved_items == []
         assert memory.status is CustomerMemoryStatus.STALE
         assert (
             await repository.load_model_context(customer.id, query="我喜欢什么环境？")
         ).memories == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_guest_message_origin_does_not_prove_unrelated_memory_statement() -> None:
+    """客人消息身份不能单独证明与原文无关的记忆。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="伪造证据客户",
+            external_message_id="memory-unrelated-source",
+            content="我不养狗",
+        )
+        repository = SQLAlchemyContextRepository(session)
+        await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult(
+                "无新增摘要",
+                [],
+                [
+                    CustomerMemoryCandidate(
+                        "pet_dog_name",
+                        CustomerMemoryCategory.CONFIRMED_FACT,
+                        "客户的狗叫查理",
+                        CustomerMemoryEvidenceType.USER_EXPLICIT,
+                        source.external_message_id,
+                        0.99,
+                    )
+                ],
+            ),
+            [source],
+            now,
+        )
+
+        memory = await session.scalar(select(CustomerMemoryItem))
+        assert memory is not None
+        assert memory.status is CustomerMemoryStatus.CANDIDATE
+        assert memory.evidence_type is CustomerMemoryEvidenceType.MODEL_INFERENCE
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_model_inference_cannot_downgrade_explicit_evidence() -> None:
+    """重复推断不得覆盖已核验的客人明示证据。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="证据单调客户",
+            external_message_id="memory-strong-source",
+            content="我喜欢安静",
+        )
+        repository = SQLAlchemyContextRepository(session)
+        explicit = CustomerMemoryCandidate(
+            "quiet_preference",
+            CustomerMemoryCategory.PREFERENCE,
+            "客户喜欢安静",
+            CustomerMemoryEvidenceType.USER_EXPLICIT,
+            source.external_message_id,
+            0.95,
+            source_excerpt="我喜欢安静",
+        )
+        inferred = CustomerMemoryCandidate(
+            "quiet_preference",
+            CustomerMemoryCategory.PREFERENCE,
+            "客户喜欢安静",
+            CustomerMemoryEvidenceType.MODEL_INFERENCE,
+            source.external_message_id,
+            0.99,
+        )
+        await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult("偏好安静", [], [explicit]),
+            [source],
+            now,
+        )
+        await repository.save_memory_observations(
+            customer.id,
+            ContextSummaryResult("无新增摘要", [], [inferred]),
+            [source],
+            now + timedelta(minutes=1),
+        )
+
+        memory = await session.scalar(select(CustomerMemoryItem))
+        assert memory is not None
+        assert memory.status is CustomerMemoryStatus.ACTIVE
+        assert memory.evidence_type is CustomerMemoryEvidenceType.USER_EXPLICIT
+        assert memory.source_message_id == source.external_message_id
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reverified_duplicate_cannot_bypass_active_subject_conflict() -> None:
+    """历史候选重新获证时若撞上当前值，必须隔离争议而非产生双有效值。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="历史冲突客户",
+            external_message_id="memory-legacy-conflict",
+            content="我喜欢低楼层",
+        )
+        session.add_all(
+            [
+                CustomerMemoryItem(
+                    customer_id=customer.id,
+                    subject_key="floor_preference",
+                    category=CustomerMemoryCategory.PREFERENCE,
+                    statement="客户喜欢高楼层",
+                    status=CustomerMemoryStatus.ACTIVE,
+                    evidence_type=CustomerMemoryEvidenceType.USER_EXPLICIT,
+                    verified_at=now,
+                    confidence=0.95,
+                    confirmed_at=now,
+                    review_at=now + timedelta(days=180),
+                    expires_at=now + timedelta(days=365),
+                ),
+                CustomerMemoryItem(
+                    customer_id=customer.id,
+                    subject_key="floor_preference",
+                    category=CustomerMemoryCategory.PREFERENCE,
+                    statement="客户喜欢低楼层",
+                    status=CustomerMemoryStatus.CANDIDATE,
+                    evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
+                    confidence=0.7,
+                    review_at=now + timedelta(days=30),
+                    expires_at=now + timedelta(days=60),
+                ),
+            ]
+        )
+        await session.flush()
+        repository = SQLAlchemyContextRepository(session)
+        candidate = CustomerMemoryCandidate(
+            "floor_preference",
+            CustomerMemoryCategory.PREFERENCE,
+            "客户喜欢低楼层",
+            CustomerMemoryEvidenceType.USER_EXPLICIT,
+            source.external_message_id,
+            0.99,
+            source_excerpt="我喜欢低楼层",
+        )
+
+        await repository.save_memory_observations(
+            customer.id,
+            ContextSummaryResult("无新增摘要", [], [candidate]),
+            [source],
+            now + timedelta(minutes=1),
+        )
+        memories = list(
+            (
+                await session.scalars(
+                    select(CustomerMemoryItem).order_by(CustomerMemoryItem.id)
+                )
+            ).all()
+        )
+
+        assert [memory.status for memory in memories] == [
+            CustomerMemoryStatus.DISPUTED,
+            CustomerMemoryStatus.DISPUTED,
+        ]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_expired_candidate_leaves_pending_review_pool() -> None:
+    """超过有效期的候选记忆必须退出待复核池。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="过期候选客户",
+            external_message_id="memory-expired-candidate",
+            content="我可能喜欢喝茶",
+        )
+        repository = SQLAlchemyContextRepository(session)
+        await repository.save_memory_observations(
+            customer.id,
+            ContextSummaryResult(
+                "无新增摘要",
+                [],
+                [
+                    CustomerMemoryCandidate(
+                        "drink_preference",
+                        CustomerMemoryCategory.PREFERENCE,
+                        "客户可能喜欢茶",
+                        CustomerMemoryEvidenceType.MODEL_INFERENCE,
+                        source.external_message_id,
+                        0.7,
+                    )
+                ],
+            ),
+            [source],
+            now,
+        )
+        await repository.expire_customer_memories(
+            customer.id,
+            now + timedelta(days=1_000),
+        )
+
+        memory = await session.scalar(select(CustomerMemoryItem))
+        assert memory is not None
+        assert memory.status is CustomerMemoryStatus.STALE
 
     await engine.dispose()
 

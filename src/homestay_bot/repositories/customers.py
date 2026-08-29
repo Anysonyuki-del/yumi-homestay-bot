@@ -3,7 +3,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from homestay_bot.domain.models import (
     Customer,
     CustomerContextSummary,
     CustomerIdentity,
+    CustomerMemoryEvent,
     CustomerMemoryItem,
     CustomerMergeSuggestion,
     CustomerTag,
@@ -386,6 +387,11 @@ class SQLAlchemyCustomerRepository:
                 )
             ).all()
         )
+        current_memories = {
+            memory.subject_key: memory
+            for memory in memories
+            if memory.status is CustomerMemoryStatus.ACTIVE
+        }
         merge_suggestions = list(
             (
                 await self._session.scalars(
@@ -412,6 +418,7 @@ class SQLAlchemyCustomerRepository:
             "selected_tag_ids": selected_tag_ids,
             "summary": summary,
             "memories": memories,
+            "current_memories": current_memories,
             "merge_suggestions": merge_suggestions,
         }
 
@@ -587,9 +594,9 @@ class SQLAlchemyCustomerRepository:
         administrator_id: int,
         short_summary: str,
         long_summary: str,
-        unresolved_items: list[str],
+        expected_version: int,
     ) -> None:
-        """更正客户摘要并递增版本，审计不复制摘要正文。"""
+        """按页面读取版本更正摘要，拒绝覆盖并发自动维护结果。"""
         await self._require_admin(administrator_id)
         summary = await self._session.scalar(
             select(CustomerContextSummary)
@@ -599,11 +606,15 @@ class SQLAlchemyCustomerRepository:
         if summary is None:
             if await self._session.get(Customer, customer_id) is None:
                 raise CustomerNotFoundError("客户不存在")
+            if expected_version != 0:
+                raise CustomerConflictError("客户摘要已发生变化，请刷新后重试")
             summary = CustomerContextSummary(customer_id=customer_id)
             self._session.add(summary)
+        elif summary.version != expected_version:
+            raise CustomerConflictError("客户摘要已发生变化，请刷新后重试")
         summary.short_summary = short_summary
         summary.long_summary = long_summary
-        summary.unresolved_items = unresolved_items
+        # 历史待确认项仅供查看；自动摘要和人工编辑均不再向该旧字段追加内容。
         # 新建 ORM 对象在 flush 前尚未应用数据库默认值。
         summary.version = (summary.version or 0) + 1
         self._add_customer_audit(
@@ -628,6 +639,11 @@ class SQLAlchemyCustomerRepository:
         )
         if summary is not None:
             await self._session.delete(summary)
+        await self._session.execute(
+            delete(CustomerMemoryEvent)
+            .where(CustomerMemoryEvent.customer_id == customer_id)
+            .execution_options(synchronize_session=False)
+        )
         memories = list(
             (
                 await self._session.scalars(
@@ -652,8 +668,9 @@ class SQLAlchemyCustomerRepository:
         memory_id: int,
         administrator_id: int,
         decision: str,
+        expected_version: int,
     ) -> None:
-        """以管理员判断结束候选、冲突或过期记忆的治理状态。"""
+        """按记忆版本执行合法状态转换，并记录管理员审核时间线。"""
         await self._require_admin(administrator_id)
         memory = await self._session.scalar(
             select(CustomerMemoryItem)
@@ -665,8 +682,16 @@ class SQLAlchemyCustomerRepository:
         )
         if memory is None:
             raise CustomerNotFoundError("客户记忆不存在")
+        if memory.version != expected_version:
+            raise CustomerConflictError("客户记忆已发生变化，请刷新后重试")
         now = datetime.now(UTC)
         if decision == "approve":
+            if memory.status not in {
+                CustomerMemoryStatus.CANDIDATE,
+                CustomerMemoryStatus.DISPUTED,
+                CustomerMemoryStatus.STALE,
+            }:
+                raise CustomerConflictError("当前客户记忆状态不能批准")
             conflicts = list(
                 (
                     await self._session.scalars(
@@ -687,23 +712,56 @@ class SQLAlchemyCustomerRepository:
                 ).all()
             )
             for conflict in conflicts:
+                previous_status = conflict.status
                 conflict.status = CustomerMemoryStatus.SUPERSEDED
                 conflict.status_reason = "管理员批准同主题记忆"
+                conflict.version += 1
+                self._add_memory_review_event(
+                    conflict,
+                    event_type="superseded",
+                    previous_status=previous_status,
+                    administrator_id=administrator_id,
+                    reason=conflict.status_reason,
+                    occurred_at=now,
+                )
+            previous_status = memory.status
             memory.status = CustomerMemoryStatus.ACTIVE
             memory.evidence_type = CustomerMemoryEvidenceType.EMPLOYEE_CONFIRMED
             memory.confirmed_at = now
+            memory.verified_at = now
             review_days, expiry_days = self._memory_review_days(memory.category)
             memory.review_at = now + timedelta(days=review_days)
             memory.expires_at = now + timedelta(days=expiry_days)
             memory.status_reason = None
+            event_type = "approved"
         elif decision == "reject":
+            if memory.status not in {
+                CustomerMemoryStatus.CANDIDATE,
+                CustomerMemoryStatus.DISPUTED,
+            }:
+                raise CustomerConflictError("当前客户记忆状态不能拒绝")
+            previous_status = memory.status
             memory.status = CustomerMemoryStatus.REJECTED
             memory.status_reason = "管理员拒绝"
+            event_type = "rejected"
         elif decision == "stale":
+            if memory.status is not CustomerMemoryStatus.ACTIVE:
+                raise CustomerConflictError("只有当前有效记忆可以标记失效")
+            previous_status = memory.status
             memory.status = CustomerMemoryStatus.STALE
             memory.status_reason = "管理员标记失效"
+            event_type = "staled"
         else:
             raise CustomerConflictError("不支持的客户记忆复核操作")
+        memory.version += 1
+        self._add_memory_review_event(
+            memory,
+            event_type=event_type,
+            previous_status=previous_status,
+            administrator_id=administrator_id,
+            reason=memory.status_reason,
+            occurred_at=now,
+        )
         self._add_customer_audit(
             administrator_id,
             "customer_memory_reviewed",
@@ -711,6 +769,33 @@ class SQLAlchemyCustomerRepository:
             {"memory_id": memory_id, "decision": decision},
         )
         await self._session.flush()
+
+    def _add_memory_review_event(
+        self,
+        memory: CustomerMemoryItem,
+        *,
+        event_type: str,
+        previous_status: CustomerMemoryStatus,
+        administrator_id: int,
+        reason: str | None,
+        occurred_at: datetime,
+    ) -> None:
+        """记录不含额外敏感字段的管理员记忆状态变化。"""
+        self._session.add(
+            CustomerMemoryEvent(
+                customer_id=memory.customer_id,
+                memory_item_id=memory.id,
+                subject_key=memory.subject_key,
+                event_type=event_type,
+                previous_status=previous_status.name,
+                new_status=memory.status.name,
+                statement_snapshot=memory.statement,
+                source_message_id=memory.source_message_id,
+                actor_employee_id=administrator_id,
+                reason=reason,
+                occurred_at=occurred_at,
+            )
+        )
 
     @staticmethod
     def _memory_review_days(

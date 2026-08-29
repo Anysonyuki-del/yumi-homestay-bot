@@ -6,8 +6,38 @@
 <section class="detail-section panel panel--padded"><h2>最新入住备注</h2><p class="long-text">{{ customer.latest_stay_note or "暂无入住记录" }}</p><p class="field-help">该内容按入住订单自动计算，不会覆盖员工备注。</p></section>
 <section class="detail-section panel panel--padded"><h2>客户标签</h2><form method="post" action="/employee/customers/{{ customer.id }}/tags" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="tag-grid">{% for tag in tags %}<label class="checkbox"><input type="checkbox" name="tag_ids" value="{{ tag.id }}" {% if tag.id in selected_tag_ids %}checked{% endif %}><span>{{ tag.name }}</span></label>{% else %}<p>尚未配置客户标签。</p>{% endfor %}</div><button type="submit">保存标签</button></form></section>
 <section class="detail-section panel panel--padded"><h2>员工备注</h2><form method="post" action="/employee/customers/{{ customer.id }}/note" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>备注<textarea name="note" maxlength="2000">{{ customer.note }}</textarea></label><button type="submit">保存备注</button></form></section>
-<section class="detail-section panel panel--padded"><h2>AI 客户摘要</h2><form method="post" action="/employee/customers/{{ customer.id }}/summary" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>七天内摘要<textarea name="short_summary" maxlength="4000">{{ summary.short_summary if summary else "" }}</textarea></label><label>长期摘要<textarea name="long_summary" maxlength="4000">{{ summary.long_summary if summary else "" }}</textarea></label><label>待确认事项（每行一项）<textarea name="unresolved_items" maxlength="4000">{% if summary %}{{ summary.unresolved_items | join("\n") }}{% endif %}</textarea></label><button type="submit">保存摘要</button></form>{% if summary or memories %}<form method="post" action="/employee/customers/{{ customer.id }}/summary/delete" data-confirm="确定永久删除这份客户摘要及全部结构化记忆吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">删除摘要与记忆</button></form>{% endif %}</section>
-<section class="detail-section panel panel--padded"><h2>结构化客户记忆</h2><p class="field-help">只有“有效”记忆会按当前问题限量提供给客服模型；候选、争议和失效内容不会参与回答。</p><div class="record-list">{% for memory in memories %}<article class="candidate-card"><h3>{{ memory.subject_key }}</h3><p class="long-text">{{ memory.statement }}</p><dl class="detail-grid"><dt>类别</dt><dd>{{ memory.category.value }}</dd><dt>状态</dt><dd>{{ memory.status.value }}</dd><dt>证据</dt><dd>{{ memory.evidence_type.value }}</dd><dt>置信度</dt><dd>{{ "%.2f" | format(memory.confidence) }}</dd></dl><div class="button-row">{% if memory.status.value != "active" %}<form method="post" action="/employee/customers/{{ customer.id }}/memories/{{ memory.id }}/approve"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">批准</button></form>{% endif %}{% if memory.status.value not in ["rejected", "superseded"] %}<form method="post" action="/employee/customers/{{ customer.id }}/memories/{{ memory.id }}/reject"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">拒绝</button></form>{% endif %}{% if memory.status.value == "active" %}<form method="post" action="/employee/customers/{{ customer.id }}/memories/{{ memory.id }}/stale"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">标记失效</button></form>{% endif %}</div></article>{% else %}<p>尚无结构化客户记忆。</p>{% endfor %}</div></section>
+<section class="detail-section panel panel--padded">
+  <h2>AI 客户摘要</h2>
+  <form method="post" action="/employee/customers/{{ customer.id }}/summary" data-unsaved-warning>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="expected_version" value="{{ summary.version if summary else 0 }}">
+    <label>七天内摘要<textarea name="short_summary" maxlength="4000">{{ summary.short_summary if summary else "" }}</textarea></label>
+    <label>长期摘要<textarea name="long_summary" maxlength="4000">{{ summary.long_summary if summary else "" }}</textarea></label>
+    <button type="submit">保存摘要</button>
+  </form>
+  {% if summary and summary.unresolved_items %}<p class="field-help">历史待确认项（只读）：{{ summary.unresolved_items | join("；") }}</p>{% endif %}
+  {% if summary or memories %}<form method="post" action="/employee/customers/{{ customer.id }}/summary/delete" data-confirm="确定永久删除这份客户摘要及全部结构化记忆吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">删除摘要与记忆</button></form>{% endif %}
+</section>
+<section class="detail-section panel panel--padded">
+  <h2>结构化客户记忆</h2>
+  <p class="field-help">只有“有效”且已核验证据的记忆会按当前问题限量提供给客服模型；候选、争议和失效内容不会参与回答。</p>
+  <div class="record-list">{% for memory in memories %}<article class="candidate-card">
+    <h3>{{ memory.subject_key }}</h3><p class="long-text">{{ memory.statement }}</p>
+    <dl class="detail-grid">
+      <dt>类别</dt><dd>{{ memory.category.value }}</dd><dt>状态</dt><dd>{{ memory.status.value }}</dd>
+      <dt>证据</dt><dd>{{ memory.evidence_type.value }}</dd><dt>置信度</dt><dd>{{ "%.2f" | format(memory.confidence) }}</dd>
+      <dt>来源摘录</dt><dd>{{ memory.source_excerpt or "无可核验来源" }}</dd>
+      <dt>来源时间</dt><dd>{{ memory.source_occurred_at or "未知" }}</dd>
+      <dt>状态原因</dt><dd>{{ memory.status_reason or "无" }}</dd>
+      <dt>当前有效值</dt><dd>{% set current = current_memories.get(memory.subject_key) %}{{ current.statement if current else "暂无" }}</dd>
+    </dl>
+    <div class="button-row">
+      {% if memory.status.value in ["candidate", "disputed", "stale"] %}<form method="post" action="/employee/customers/{{ customer.id }}/memories/{{ memory.id }}/approve"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="expected_version" value="{{ memory.version }}"><button type="submit">批准</button></form>{% endif %}
+      {% if memory.status.value in ["candidate", "disputed"] %}<form method="post" action="/employee/customers/{{ customer.id }}/memories/{{ memory.id }}/reject"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="expected_version" value="{{ memory.version }}"><button class="button button--secondary" type="submit">拒绝</button></form>{% endif %}
+      {% if memory.status.value == "active" %}<form method="post" action="/employee/customers/{{ customer.id }}/memories/{{ memory.id }}/stale"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="expected_version" value="{{ memory.version }}"><button class="button button--secondary" type="submit">标记失效</button></form>{% endif %}
+    </div>
+  </article>{% else %}<p>尚无结构化客户记忆。</p>{% endfor %}</div>
+</section>
 {% if merge_suggestions %}<section class="detail-section panel panel--padded"><h2>待审核合并</h2><ul class="clean-list">{% for suggestion in merge_suggestions %}<li><a class="record-link" href="/employee/customers/merge/{{ suggestion.id }}">复核合并建议 #{{ suggestion.id }}</a></li>{% endfor %}</ul></section>{% endif %}
 <section class="detail-section panel panel--padded"><h2>合并客户档案</h2><p>先搜索另一份档案，选择后仍需在复核页再次确认，本页不会直接合并。</p><form method="get" action="/employee/customers/{{ customer.id }}"><label>按客户名称或备注搜索<input type="search" name="merge_query" maxlength="100" value="{{ merge_query }}"></label><button type="submit">查找目标档案</button></form>{% if merge_query %}<div class="merge-targets"><p><strong>来源档案：{{ customer.display_name }}（客户 #{{ customer.id }}）</strong></p>{% for target in merge_targets %}<article class="candidate-card"><h3>目标档案：{{ target.display_name }}（客户 #{{ target.id }}）</h3><p>电话：{{ target.masked_phone }}</p><form method="post" action="/employee/customers/{{ customer.id }}/merge/manual" data-confirm="确认选择此目标并进入合并复核吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target_customer_id" value="{{ target.id }}"><button type="submit">选择此目标并进入复核</button></form></article>{% else %}<p>没有找到其他可合并的客户档案。</p>{% endfor %}</div>{% endif %}</section>
 {% endblock %}

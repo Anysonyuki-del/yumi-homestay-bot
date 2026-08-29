@@ -26,6 +26,7 @@ from homestay_bot.domain.models import (
     Customer,
     CustomerContextSummary,
     CustomerIdentity,
+    CustomerMemoryEvent,
     CustomerMemoryItem,
     CustomerMergeSuggestion,
     CustomerTag,
@@ -36,6 +37,7 @@ from homestay_bot.domain.models import (
     StayOrder,
 )
 from homestay_bot.repositories.customers import SQLAlchemyCustomerRepository
+from homestay_bot.services.customer_errors import CustomerConflictError
 from homestay_bot.services.customer_service import CustomerService
 from homestay_bot.services.message_service import IncomingMessage
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
@@ -530,7 +532,7 @@ async def test_admin_can_edit_customer_crm_with_safe_audits() -> None:
             administrator_id=administrator.id,
             short_summary="偏好安静",
             long_summary="过往咨询正文不应进入审计",
-            unresolved_items=["待确认到店时间"],
+            expected_version=0,
         )
         await session.commit()
 
@@ -561,6 +563,15 @@ async def test_admin_can_edit_customer_crm_with_safe_audits() -> None:
         assert link.sync_pending is True
         assert summary is not None
         assert summary.version == 1
+        with pytest.raises(CustomerConflictError, match="刷新"):
+            await repository.update_summary(
+                customer_id=customer.id,
+                administrator_id=administrator.id,
+                short_summary="过期页面内容",
+                long_summary="不得覆盖",
+                expected_version=0,
+            )
+        assert summary.short_summary == "偏好安静"
         assert customer.note == "客户明确要求安静房间"
         audit_payload = repr([audit.details for audit in audits])
         assert "客户明确要求安静房间" not in audit_payload
@@ -606,12 +617,28 @@ async def test_admin_reviews_and_physically_deletes_customer_memory() -> None:
             memory.id,
             administrator.id,
             "approve",
+            0,
         )
         detail = await repository.customer_detail(customer.id)
 
         assert memory.status is CustomerMemoryStatus.ACTIVE
         assert memory.evidence_type is CustomerMemoryEvidenceType.EMPLOYEE_CONFIRMED
+        assert memory.verified_at is not None
+        assert memory.version == 1
         assert detail["memories"] == [memory]
+        event_row = await session.scalar(select(CustomerMemoryEvent))
+        assert event_row is not None
+        assert event_row.event_type == "approved"
+        assert event_row.actor_employee_id == administrator.id
+
+        with pytest.raises(CustomerConflictError, match="刷新"):
+            await repository.review_memory(
+                customer.id,
+                memory.id,
+                administrator.id,
+                "stale",
+                0,
+            )
 
         await repository.delete_summary(customer.id, administrator.id)
         await session.flush()

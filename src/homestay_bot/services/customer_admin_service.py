@@ -93,7 +93,7 @@ class CustomerAdminRepositoryPort(Protocol):
         administrator_id: int,
         short_summary: str,
         long_summary: str,
-        unresolved_items: list[str],
+        expected_version: int,
     ) -> None:
         """管理员更正客户摘要。"""
 
@@ -110,6 +110,7 @@ class CustomerAdminRepositoryPort(Protocol):
         memory_id: int,
         administrator_id: int,
         decision: str,
+        expected_version: int,
     ) -> None:
         """复核单条结构化客户记忆。"""
 
@@ -313,9 +314,9 @@ class CustomerAdminService:
         *,
         short_summary: str,
         long_summary: str,
-        unresolved_items: list[str],
+        expected_version: int,
     ) -> None:
-        """由管理员更正摘要，限制长度并清除空待办。"""
+        """由管理员按读取版本更正摘要，并限制正文长度。"""
         self._require_admin(administrator)
         short_value = short_summary.strip()
         long_value = long_summary.strip()
@@ -326,11 +327,7 @@ class CustomerAdminService:
             administrator_id=administrator.id,
             short_summary=short_value,
             long_summary=long_value,
-            unresolved_items=[
-                item.strip()[:500]
-                for item in unresolved_items
-                if item.strip()
-            ][:20],
+            expected_version=expected_version,
         )
 
     async def delete_summary(
@@ -352,6 +349,7 @@ class CustomerAdminService:
         administrator: Employee,
         *,
         decision: str,
+        expected_version: int,
     ) -> None:
         """只允许管理员批准、拒绝或标记单条客户记忆失效。"""
         self._require_admin(administrator)
@@ -362,6 +360,7 @@ class CustomerAdminService:
             memory_id,
             administrator.id,
             decision,
+            expected_version,
         )
 
     async def review_merge(

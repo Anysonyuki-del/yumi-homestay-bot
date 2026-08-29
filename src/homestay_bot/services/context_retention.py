@@ -31,6 +31,7 @@ class CustomerMemoryCandidate:
     source_message_id: str | None
     confidence: float
     is_correction: bool = False
+    source_excerpt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,11 +46,10 @@ class ContextSummaryResult:
 
 @dataclass(frozen=True)
 class CustomerModelContext:
-    """表示可安全传给客服模型的客户摘要上下文。"""
+    """表示可安全传给客服模型的限量客户上下文。"""
 
-    short_summary: str
-    long_summary: str
-    unresolved_items: list[str]
+    recent_episode: str = ""
+    historical_episode: str = ""
     memories: list[dict[str, str | float]] = field(default_factory=list)
     active_orders: list[dict[str, str | int]] = field(default_factory=list)
     open_tasks: list[dict[str, str | int | None]] = field(default_factory=list)
@@ -62,7 +62,12 @@ class ContextRepository(Protocol):
         """读取客户当前分层摘要。"""
 
     async def expire_customer_memories(self, customer_id: int, now: datetime) -> None:
-        """把已经到期或进入复核期的有效记忆标记为失效。"""
+        """维护记忆到期、终态正文和事件保留期。"""
+
+    async def reconcile_legacy_memories(
+        self, customer_id: int, now: datetime
+    ) -> None:
+        """使用本地证据规则重新核验历史候选。"""
 
     async def list_short_candidates(
         self, customer_id: int, now: datetime, raw_limit: int
@@ -88,8 +93,9 @@ class ContextRepository(Protocol):
         *,
         source_messages: list[Message] | None = None,
         observed_messages: list[Message] | None = None,
-    ) -> None:
-        """保存短摘要并标记已覆盖消息。"""
+        expected_version: int | None = None,
+    ) -> bool:
+        """版本一致时保存短摘要并标记已覆盖消息。"""
 
     async def save_memory_observations(
         self,
@@ -106,8 +112,10 @@ class ContextRepository(Protocol):
         result: ContextSummaryResult,
         messages: list[Message],
         now: datetime,
-    ) -> None:
-        """原子保存长期摘要并清除已覆盖原文。"""
+        *,
+        expected_version: int | None = None,
+    ) -> bool:
+        """版本一致时原子保存长期摘要并清除原文。"""
 
 
 class ContextSummarizer(Protocol):
@@ -142,8 +150,10 @@ class ContextRetentionService:
 
     async def maintain_customer(self, customer_id: int, now: datetime) -> None:
         """依次更新短摘要和长期摘要，任一步失败都保留相应原文。"""
+        await self._repository.reconcile_legacy_memories(customer_id, now)
         await self._repository.expire_customer_memories(customer_id, now)
         summary = await self._repository.get_summary(customer_id)
+        summary_version = summary.version if summary else 0
         short_candidates = await self._repository.list_short_candidates(
             customer_id,
             now,
@@ -172,14 +182,19 @@ class ContextRetentionService:
                 [*processed_short, *processed_recent]
             )
             if processed_short:
-                await self._repository.save_short_summary(
+                saved = await self._repository.save_short_summary(
                     customer_id,
                     result,
                     processed_short,
                     now,
                     source_messages=processed_sources,
                     observed_messages=processed_recent,
+                    expected_version=summary_version,
                 )
+                if not saved:
+                    # 模型调用期间摘要已被人工或其他任务更改；
+                    # 保留原文给下一维护周期，本轮不追加模型请求。
+                    return
             elif processed_recent:
                 await self._repository.save_memory_observations(
                     customer_id,
@@ -199,6 +214,7 @@ class ContextRetentionService:
             await self._before_external()
         # 短摘要可能已在本轮更新，重新读取可避免长期摘要基于过期版本合并。
         summary = await self._repository.get_summary(customer_id)
+        summary_version = summary.version if summary else 0
         result = await self._summarizer.summarize(
             tier="long",
             existing_summary=summary.long_summary if summary else "",
@@ -213,6 +229,7 @@ class ContextRetentionService:
             result,
             processed_expired,
             now,
+            expected_version=summary_version,
         )
 
     @staticmethod

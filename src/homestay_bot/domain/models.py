@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -329,6 +330,14 @@ class CustomerMemoryItem(TimestampMixin, Base):
             "customer_id",
             "subject_key",
         ),
+        Index(
+            "uq_customer_memory_active_subject",
+            "customer_id",
+            "subject_key",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+            sqlite_where=text("status = 'ACTIVE'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -352,6 +361,14 @@ class CustomerMemoryItem(TimestampMixin, Base):
         ForeignKey("messages.external_message_id", ondelete="SET NULL"),
         nullable=True,
     )
+    source_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_excerpt_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_occurred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -366,6 +383,54 @@ class CustomerMemoryItem(TimestampMixin, Base):
         ForeignKey("customer_memory_items.id", ondelete="SET NULL"), nullable=True
     )
     status_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    content_redacted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class CustomerMemoryEvent(Base):
+    """保存客户记忆状态变化的可清理审计时间线。"""
+
+    __tablename__ = "customer_memory_events"
+    __table_args__ = (
+        Index(
+            "ix_customer_memory_event_customer_occurred",
+            "customer_id",
+            "occurred_at",
+        ),
+        Index(
+            "ix_customer_memory_event_memory_occurred",
+            "memory_item_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="CASCADE"), nullable=False
+    )
+    memory_item_id: Mapped[int] = mapped_column(
+        ForeignKey("customer_memory_items.id", ondelete="CASCADE"), nullable=False
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    previous_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    statement_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.external_message_id", ondelete="SET NULL"), nullable=True
+    )
+    actor_employee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
+    reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    content_redacted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Conversation(TimestampMixin, Base):

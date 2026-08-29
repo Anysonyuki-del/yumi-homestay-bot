@@ -1386,7 +1386,7 @@ async def test_customer_summary_is_passed_to_assistant() -> None:
 
     await service.handle_message(incoming())
 
-    assert assistant.last_kwargs["customer_context"].short_summary == "偏好安静"
+    assert assistant.last_kwargs["customer_context"].recent_episode == "偏好安静"
 
 
 @pytest.mark.asyncio
@@ -1620,6 +1620,34 @@ async def test_ai_task_is_recorded_after_guest_reply_and_notifies_staff() -> Non
     assert tasks.calls[0]["customer_id"] == 42
     assert tasks.calls[0]["source_message_id"] == "msg-1"
     assert "新任务待确认" in wecom.internal_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_ai_task_is_ignored_without_current_service_request() -> None:
+    """即使模型受历史记忆诱导，本轮未请求服务也不得创建任务。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="下午三点后可以入住。",
+            language=Language.ZH,
+            intent="faq",
+            confidence=0.96,
+            task_suggestion=TaskSuggestion(
+                task_type=BusinessTaskType.SUPPLIES,
+                description="补两瓶矿泉水",
+            ),
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="几点入住？"))
+
+    assert tasks.calls == []
+    assert wecom.internal_messages == []
 
 
 @pytest.mark.asyncio
@@ -1900,6 +1928,37 @@ async def test_confirmed_booking_details_create_pending_approval_only() -> None:
     assert len(approvals.calls) == 1
     assert approvals.calls[0][1].guest_name == "张三"
     assert "待审批单" in wecom.internal_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_booking_approval_is_ignored_without_current_confirmation() -> None:
+    """模型不得根据历史资料把普通咨询升级为待审批单。"""
+    approvals = ApprovalServiceStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="可以先了解房型和日期。",
+            language=Language.ZH,
+            intent="booking_confirmed",
+            confidence=0.99,
+            booking_fields=BookingFields(
+                check_in_date="2026-08-01",
+                check_out_date="2026-08-02",
+                number_of_guests=2,
+                guest_name="张三",
+                guest_mobile="13800138000",
+            ),
+        )
+    )
+    service, conversations, _, wecom = build_service(
+        assistant=assistant,
+        approvals=approvals,
+    )
+
+    await service.handle_message(incoming(content="我想先了解怎么预订"))
+
+    assert approvals.calls == []
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+    assert wecom.internal_messages == []
 
 
 @pytest.mark.asyncio

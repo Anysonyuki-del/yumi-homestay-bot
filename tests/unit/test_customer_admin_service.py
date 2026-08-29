@@ -29,7 +29,7 @@ class CustomerAdminRepositoryStub:
         self.note_calls: list[tuple[int, str, int]] = []
         self.summary_calls: list[dict[str, object]] = []
         self.deleted_summaries: list[tuple[int, int]] = []
-        self.memory_reviews: list[tuple[int, int, int, str]] = []
+        self.memory_reviews: list[tuple[int, int, int, str, int]] = []
         self.merge_calls: list[tuple[int, int, bool]] = []
         self.manual_merge_calls: list[tuple[int, int, int]] = []
         self.sync_completed: list[int] = []
@@ -95,11 +95,11 @@ class CustomerAdminRepositoryStub:
         self.deleted_summaries.append((customer_id, administrator_id))
 
     async def review_memory(
-        self, customer_id, memory_id, administrator_id, decision
+        self, customer_id, memory_id, administrator_id, decision, expected_version
     ):
         """记录结构化客户记忆复核。"""
         self.memory_reviews.append(
-            (customer_id, memory_id, administrator_id, decision)
+            (customer_id, memory_id, administrator_id, decision, expected_version)
         )
 
     async def review_merge(self, suggestion_id, administrator_id, accepted):
@@ -412,9 +412,15 @@ async def test_admin_reviews_structured_memory_through_existing_customer_service
         tag_sync_enabled=False,
     )
 
-    await service.review_memory(7, 12, employee(), decision="approve")
+    await service.review_memory(
+        7,
+        12,
+        employee(),
+        decision="approve",
+        expected_version=3,
+    )
 
-    assert repository.memory_reviews == [(7, 12, 1, "approve")]
+    assert repository.memory_reviews == [(7, 12, 1, "approve", 3)]
 
 
 @pytest.mark.asyncio
@@ -430,6 +436,12 @@ async def test_structured_memory_review_rejects_unknown_decision() -> None:
     )
 
     with pytest.raises(ValueError, match="不支持"):
-        await service.review_memory(7, 12, employee(), decision="archive")
+        await service.review_memory(
+            7,
+            12,
+            employee(),
+            decision="archive",
+            expected_version=3,
+        )
 
     assert repository.memory_reviews == []

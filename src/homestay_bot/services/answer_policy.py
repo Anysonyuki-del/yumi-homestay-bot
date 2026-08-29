@@ -70,6 +70,32 @@ _CLEARLY_UNRELATED_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_SERVICE_REQUEST_PATTERN = re.compile(
+    r"(?:请|帮|麻烦|需要|想要|能否|可以).{0,10}"
+    r"(?:保洁|打扫|清洁|换洗|更换|维修|修理|补充|补|送|拿|加床|布置|接送)|"
+    r"(?:保洁|打扫|清洁|换洗|更换|维修|修理|补充|补|送|拿|加床|布置|接送)"
+    r".{0,10}(?:一下|一份|一个|一床|一点|一些|吗|么|吧|谢谢)|"
+    r"(?:空调|热水|门锁|洗衣机|投影|WiFi|无线网).{0,10}"
+    r"(?:坏了|打不开|不工作|不能用|没反应|故障|锁住)|"
+    r"(?:床单|被子|枕头|矿泉水|纸巾|毛巾|洗漱用品).{0,10}"
+    r"(?:脏了|没有了|没了|不够|需要|补|换)|"
+    r"(?:补|换|送|拿).{0,6}(?:床单|被子|枕头|矿泉水|纸巾|毛巾|洗漱用品)|"
+    r"房间.{0,6}(?:没水|缺水|没有热水)|"
+    r"(?:提前入住|延迟退房|晚点退房)|"
+    r"(?:clean|repair|replace|bring|deliver|extra bed|early check[ -]?in|late check[ -]?out)",
+    re.IGNORECASE,
+)
+
+_BOOKING_CONFIRMATION_PATTERN = re.compile(
+    r"(?:以上|上述|这些|预订|入住|订单).{0,10}(?:资料|信息|内容|日期)?"
+    r".{0,6}(?:确认无误|都对|没问题|可以提交|确认预订)|"
+    r"(?:确认无误|资料无误|信息无误)|"
+    r"(?:就按|按这个|按以上|按上述).{0,6}(?:订|预订|提交)|"
+    r"(?:confirm|confirmed).{0,12}(?:booking|reservation|details)|"
+    r"(?:booking|reservation).{0,12}(?:confirm|confirmed)",
+    re.IGNORECASE,
+)
+
 
 def is_transaction_sensitive(text: str) -> bool:
     """判断文本是否涉及不能依靠模型猜测的交易事实。"""
@@ -98,3 +124,13 @@ def is_homestay_related(text: str) -> bool:
     # “好的”“两个人”等短承接语缺少主题词，继续交给会话上下文判断；
     # 只对明确落在其他专业领域的问题执行本地拒答。
     return _CLEARLY_UNRELATED_PATTERN.search(text) is None
+
+
+def is_service_request(text: str) -> bool:
+    """判断本轮客人是否明确提出需要执行的民宿服务。"""
+    return _SERVICE_REQUEST_PATTERN.search(text) is not None
+
+
+def is_booking_action_request(text: str) -> bool:
+    """判断本轮客人是否明确确认提交预订资料，而非仅咨询预订。"""
+    return _BOOKING_CONFIRMATION_PATTERN.search(text) is not None

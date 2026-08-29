@@ -1,5 +1,4 @@
 import json
-import re
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -12,6 +11,13 @@ from homestay_bot.services.context_retention import (
     ContextSummaryResult,
     CustomerMemoryCandidate,
     MemorySource,
+)
+from homestay_bot.services.customer_memory_policy import (
+    contains_sensitive_memory_text,
+    is_dynamic_memory_text,
+    is_instruction_like_memory,
+    normalize_subject_key,
+    redact_memory_text,
 )
 
 
@@ -27,6 +33,7 @@ class _MemoryCandidatePayload(BaseModel):
     statement: str = Field(min_length=1, max_length=500)
     evidence_type: CustomerMemoryEvidenceType
     source_message_id: str | None = Field(default=None, max_length=128)
+    source_excerpt: str = Field(min_length=1, max_length=300)
     confidence: float = Field(ge=0, le=1)
     is_correction: bool = False
 
@@ -35,9 +42,8 @@ class _SummaryPayload(BaseModel):
     """校验 DeepSeek 分层摘要的固定 JSON 结构。"""
 
     summary: str = Field(min_length=1, max_length=2000)
-    unresolved_items: list[str] = Field(default_factory=list, max_length=20)
     memory_candidates: list[_MemoryCandidatePayload] = Field(
-        default_factory=list, max_length=20
+        default_factory=list, max_length=10
     )
 
 
@@ -46,27 +52,9 @@ class DeepSeekContextSummarizer:
 
     # 限制单条和总消息输入，避免高频会话耗尽模型上下文或请求预算。
     _MAX_MESSAGE_CHARS = 2_000
-    _MAX_MESSAGES_CHARS = 12_000
-    _MAX_EXISTING_SUMMARY_CHARS = 4_000
-
-    _SENSITIVE_PATTERNS = (
-        re.compile(r"(?<!\d)(?:\+?86[\s-]?)?1[3-9]\d{9}(?!\d)"),
-        re.compile(r"(?<!\d)\d{17}[\dXx](?!\w)"),
-        re.compile(
-            r"(?:地址\s*)?(?:湖北省)?武汉市?"
-            r"(?:洪山区|武昌区|青山区|汉阳区|江汉区|江岸区|硚口区|"
-            r"蔡甸区|东西湖区|黄陂区|新洲区|江夏区)"
-            r"[^，。\n]{0,40}(?:路|街|大道|小区|号|栋|室)[^，。\n]{0,20}"
-        ),
-        re.compile(r"(?:门锁|房门|密码|验证码)\s*(?:密码|码)?\s*[:：]?\s*[A-Za-z0-9]{4,}"),
-        re.compile(r"(?:二维码|QR\s*code)\s*[:：]?\s*\S+", re.IGNORECASE),
-    )
-    _DYNAMIC_MEMORY_PATTERN = re.compile(
-        r"(?:价格|房价|房态|空房|库存|付款|支付|退款|退订|取消|改期|"
-        r"订单|预订|入住日期|退房日期|入住时间|退房时间|"
-        r"\d+(?:\.\d+)?\s*元|门锁|密码|验证码|二维码|QR\s*code)",
-        re.IGNORECASE,
-    )
+    _MAX_MESSAGES_CHARS = 6_000
+    _MAX_EXISTING_SUMMARY_CHARS = 2_000
+    _MAX_OUTPUT_TOKENS = 1_200
 
     def __init__(self, client: Any, model: str) -> None:
         """注入 OpenAI 兼容客户端和 DeepSeek 模型名称。"""
@@ -81,7 +69,7 @@ class DeepSeekContextSummarizer:
         messages: list[MemorySource],
     ) -> ContextSummaryResult:
         """合并脱敏消息，并拒绝任何重新出现敏感特征的输出。"""
-        safe_existing = self._redact(existing_summary)[
+        safe_existing = redact_memory_text(existing_summary)[
             : self._MAX_EXISTING_SUMMARY_CHARS
         ]
         safe_messages = self._bound_messages(messages)
@@ -91,7 +79,8 @@ class DeepSeekContextSummarizer:
                 {
                     "role": "system",
                     "content": (
-                        "你负责整理民宿客户上下文。只保留偏好、已确认事实和待确认项；"
+                        "你负责整理民宿客户上下文。只保留可跨会话复用的情节、稳定偏好和"
+                        "已确认事实；运营待办不得进入摘要。"
                         "禁止输出手机号、身份证、详细地址、门锁密码、验证码或二维码。"
                         "价格、房态、付款退款、当前订单状态和临时承诺不得成为记忆。"
                         "memory_candidates 仅提取可跨会话复用的稳定客户事实；"
@@ -100,9 +89,11 @@ class DeepSeekContextSummarizer:
                         "如果没有可进入 summary 的消息，保持 existing_summary；它为空时"
                         "令 summary 为“无新增摘要”。"
                         "subject_key 使用稳定简短的 snake_case 主题；source_message_id 必须"
-                        "引用输入消息编号；无法证明为客户明示或员工确认时 evidence_type"
+                        "引用输入消息编号；source_excerpt 必须逐字引用该消息中能证明候选的"
+                        "脱敏连续原文，不能改写或概括；无法证明为客户明示或员工确认时 evidence_type"
                         "必须为 model_inference。客户明确纠正同一主题时 is_correction=true。"
-                        "只输出 JSON：summary、unresolved_items 和 memory_candidates。"
+                        "不要生成任何待办字段；只输出 JSON：summary 和"
+                        "memory_candidates。memory_candidates 最多 10 条。"
                     ),
                 },
                 {
@@ -118,6 +109,7 @@ class DeepSeekContextSummarizer:
                 },
             ],
             response_format={"type": "json_object"},
+            max_tokens=self._MAX_OUTPUT_TOKENS,
             extra_body={"thinking": {"type": "disabled"}},
         )
         payload = _SummaryPayload.model_validate_json(
@@ -126,23 +118,25 @@ class DeepSeekContextSummarizer:
         output = "\n".join(
             [
                 payload.summary,
-                *payload.unresolved_items,
                 *(item.subject_key for item in payload.memory_candidates),
                 *(item.statement for item in payload.memory_candidates),
+                *(item.source_excerpt for item in payload.memory_candidates),
             ]
         )
-        if self._contains_sensitive(output):
+        if contains_sensitive_memory_text(output):
             raise ContextSummarySafetyError("摘要输出包含敏感字段")
         allowed_source_ids = {str(item["message_id"]) for item in safe_messages}
         safe_candidates: list[CustomerMemoryCandidate] = []
         for item in payload.memory_candidates:
             candidate_text = f"{item.subject_key} {item.statement}"
-            if self._DYNAMIC_MEMORY_PATTERN.search(candidate_text):
+            if is_dynamic_memory_text(candidate_text) or is_instruction_like_memory(
+                f"{candidate_text} {item.source_excerpt}"
+            ):
                 continue
             source_is_visible = item.source_message_id in allowed_source_ids
             safe_candidates.append(
                 CustomerMemoryCandidate(
-                    subject_key=self._normalize_subject(item.subject_key),
+                    subject_key=normalize_subject_key(item.subject_key),
                     category=item.category,
                     statement=item.statement.strip(),
                     evidence_type=(
@@ -155,22 +149,15 @@ class DeepSeekContextSummarizer:
                     ),
                     confidence=item.confidence,
                     is_correction=item.is_correction,
+                    source_excerpt=item.source_excerpt.strip(),
                 )
             )
         return ContextSummaryResult(
             summary=payload.summary,
-            unresolved_items=payload.unresolved_items,
+            unresolved_items=[],
             memory_candidates=safe_candidates,
             processed_source_ids=frozenset(allowed_source_ids),
         )
-
-    @classmethod
-    def _redact(cls, text: str) -> str:
-        """用固定占位符删除本地可识别的敏感片段。"""
-        cleaned = text
-        for pattern in cls._SENSITIVE_PATTERNS:
-            cleaned = pattern.sub("[已脱敏]", cleaned)
-        return cleaned
 
     @classmethod
     def _bound_messages(
@@ -185,7 +172,7 @@ class DeepSeekContextSummarizer:
                 {
                     "message_id": item.message_id,
                     "origin": item.origin,
-                    "content": cls._redact(item.content)[: cls._MAX_MESSAGE_CHARS],
+                    "content": redact_memory_text(item.content)[: cls._MAX_MESSAGE_CHARS],
                     "summary_eligible": item.summary_eligible,
                 }
             )
@@ -200,14 +187,3 @@ class DeepSeekContextSummarizer:
             total += len(content)
         bounded.reverse()
         return bounded
-
-    @classmethod
-    def _contains_sensitive(cls, text: str) -> bool:
-        """检查摘要是否包含任何禁止的敏感特征。"""
-        return any(pattern.search(text) for pattern in cls._SENSITIVE_PATTERNS)
-
-    @staticmethod
-    def _normalize_subject(subject_key: str) -> str:
-        """把模型主题键收敛为可比较的稳定小写键。"""
-        normalized = re.sub(r"[^a-z0-9_\u4e00-\u9fff]+", "_", subject_key.lower())
-        return normalized.strip("_")[:128] or "general"

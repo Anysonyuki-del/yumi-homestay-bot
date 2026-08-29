@@ -1697,7 +1697,7 @@ class SessionCustomerAdminService:
         *,
         short_summary: str,
         long_summary: str,
-        unresolved_items: list[str],
+        expected_version: int,
     ) -> None:
         """提交管理员更正后的客户摘要。"""
         async with self._factory() as session:
@@ -1706,7 +1706,7 @@ class SessionCustomerAdminService:
                 administrator,
                 short_summary=short_summary,
                 long_summary=long_summary,
-                unresolved_items=unresolved_items,
+                expected_version=expected_version,
             )
             await session.commit()
 
@@ -1720,6 +1720,26 @@ class SessionCustomerAdminService:
             await self._service(session).delete_summary(
                 customer_id,
                 administrator,
+            )
+            await session.commit()
+
+    async def review_memory(
+        self,
+        customer_id: int,
+        memory_id: int,
+        administrator: Employee,
+        *,
+        decision: str,
+        expected_version: int,
+    ) -> None:
+        """按页面版本提交管理员对单条客户记忆的复核决定。"""
+        async with self._factory() as session:
+            await self._service(session).review_memory(
+                customer_id,
+                memory_id,
+                administrator,
+                decision=decision,
+                expected_version=expected_version,
             )
             await session.commit()
 

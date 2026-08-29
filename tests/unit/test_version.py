@@ -34,8 +34,10 @@ def test_long_lived_docs_do_not_copy_current_release_version() -> None:
     handbook = (PROJECT_ROOT / "YuMi民宿AI开发经验与防回归手册.md").read_text()
 
     assert declared_version not in readme
-    assert declared_version not in handbook
     assert "当前稳定发布版本" not in readme
+    # 长期手册可以用任意合法版本号解释语义化版本规则，
+    # 这里只禁止把当前运行版本声明成第二份权威来源。
+    assert f"当前稳定发布版本：{declared_version}" not in handbook
     assert "\nversion:" not in handbook
 
 

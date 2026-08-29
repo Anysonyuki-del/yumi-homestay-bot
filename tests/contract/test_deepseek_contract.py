@@ -14,6 +14,7 @@ from homestay_bot.integrations.deepseek_context_summarizer import (
 )
 from homestay_bot.integrations.deepseek_faq_drafter import DeepSeekFaqDrafter
 from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
+from homestay_bot.services.context_retention import MemorySource
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
 
 pytestmark = pytest.mark.skipif(
@@ -258,14 +259,20 @@ async def test_live_context_summary_removes_sensitive_details() -> None:
             tier="long",
             existing_summary="",
             messages=[
-                "客户偏好安静，手机号13800138000，"
-                "门锁密码839201，地址武汉市武昌区中北路12号。"
+                MemorySource(
+                    message_id="contract-sensitive-1",
+                    origin="guest",
+                    content=(
+                        "客户偏好安静，手机号13800138000，"
+                        "门锁密码839201，地址武汉市武昌区中北路12号。"
+                    ),
+                )
             ],
         )
     finally:
         await chat.close()
 
-    serialized = result.summary + str(result.unresolved_items)
+    serialized = result.summary + str(result.memory_candidates)
     assert "安静" in serialized
     assert "13800138000" not in serialized
     assert "839201" not in serialized

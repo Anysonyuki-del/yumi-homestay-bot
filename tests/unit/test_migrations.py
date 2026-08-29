@@ -36,6 +36,10 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "CREATE INDEX ix_stay_orders_check_in_status" in result.stdout
     assert "CREATE INDEX ix_stay_orders_check_out_status" in result.stdout
     assert "checkout_observed_on" in result.stdout
+    assert "0020_memory_trust_timeline" in result.stdout
+    assert "customer_memory_events" in result.stdout
+    assert "source_excerpt_hash" in result.stdout
+    assert "uq_customer_memory_active_subject" in result.stdout
     assert "FOREIGN KEY(employee_id) REFERENCES employees (id) ON DELETE CASCADE" in (result.stdout)
 
 
@@ -96,6 +100,12 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
         memory_indexes = connection.execute(
             "PRAGMA index_list('customer_memory_items')"
         ).fetchall()
+        memory_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info('customer_memory_items')")
+        }
+        memory_event_indexes = connection.execute(
+            "PRAGMA index_list('customer_memory_events')"
+        ).fetchall()
         stay_columns = {
             row[1] for row in connection.execute("PRAGMA table_info('stay_orders')")
         }
@@ -121,6 +131,7 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
         "runtime_config_versions",
         "runtime_config_state",
         "customer_memory_items",
+        "customer_memory_events",
     } <= tables_after_upgrade
     assert "ck_admin_credentials_singleton" in admin_ddl
     assert "ck_admin_csrf_quota_singleton" in quota_ddl
@@ -143,6 +154,26 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert any(
         row[1] == "ix_customer_memory_customer_subject"
         for row in memory_indexes
+    )
+    assert any(
+        row[1] == "uq_customer_memory_active_subject" and row[2]
+        for row in memory_indexes
+    )
+    assert {
+        "source_excerpt",
+        "source_excerpt_hash",
+        "source_occurred_at",
+        "verified_at",
+        "version",
+        "content_redacted_at",
+    } <= memory_columns
+    assert any(
+        row[1] == "ix_customer_memory_event_customer_occurred"
+        for row in memory_event_indexes
+    )
+    assert any(
+        row[1] == "ix_customer_memory_event_memory_occurred"
+        for row in memory_event_indexes
     )
     assert "checkout_observed_on" in stay_columns
     assert "memory_processed_at" in message_columns
@@ -213,7 +244,130 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0019_customer_memory_items (head)" in current.stdout
+    assert "0020_memory_trust_timeline (head)" in current.stdout
+
+
+def test_customer_memory_trust_migration_quarantines_unverified_history(
+    tmp_path: Path,
+) -> None:
+    """0020 只保留可证明的管理员批准记忆，并在建唯一索引前治理冲突。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "customer-memory-trust-existing.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+    alembic = str(project_root / ".venv/bin/alembic")
+
+    def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
+        """在隔离 SQLite 数据库运行记忆迁移生命周期。"""
+        return subprocess.run(
+            [alembic, *arguments],
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    before = run_alembic("upgrade", "0019_customer_memory_items")
+    assert before.returncode == 0, before.stderr
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO customers (id, display_name, created_at, updated_at) "
+            "VALUES (1, '迁移客户', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        rows = (
+            (1, "pet_dog_name", "客户的狗叫查理", "MODEL_INFERENCE"),
+            (2, "quiet_preference", "客户偏好安静", "USER_EXPLICIT"),
+            (3, "bed_preference", "客户偏好大床", "EMPLOYEE_CONFIRMED"),
+            (4, "floor_preference", "客户偏好低楼层", "EMPLOYEE_CONFIRMED"),
+            (5, "floor_preference", "客户偏好高楼层", "EMPLOYEE_CONFIRMED"),
+            (6, "dietary_preference", "客户不吃花生", "EMPLOYEE_CONFIRMED"),
+            (7, "dietary_preference", "  客户不吃花生  ", "EMPLOYEE_CONFIRMED"),
+        )
+        connection.executemany(
+            "INSERT INTO customer_memory_items "
+            "(id, customer_id, subject_key, category, statement, status, evidence_type, "
+            "confidence, confirmed_at, review_at, expires_at, created_at, updated_at) "
+            "VALUES (?, 1, ?, 'CONFIRMED_FACT', ?, 'ACTIVE', ?, 0.9, "
+            "CURRENT_TIMESTAMP, '2030-01-01', '2031-01-01', "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            rows,
+        )
+        for memory_id in (3, 4, 5, 6, 7):
+            connection.execute(
+                "INSERT INTO audit_logs "
+                "(action, target_type, target_id, details, created_at) "
+                "VALUES ('customer_memory_reviewed', 'customer', '1', ?, CURRENT_TIMESTAMP)",
+                (f'{{"customer_id": 1, "memory_id": {memory_id}, "decision": "approve"}}',),
+            )
+        connection.commit()
+
+    after = run_alembic("upgrade", "head")
+    assert after.returncode == 0, after.stderr
+    with sqlite3.connect(database_path) as connection:
+        statuses = dict(
+            connection.execute(
+                "SELECT id, status FROM customer_memory_items ORDER BY id"
+            ).fetchall()
+        )
+        reasons = dict(
+            connection.execute(
+                "SELECT id, status_reason FROM customer_memory_items ORDER BY id"
+            ).fetchall()
+        )
+        events = connection.execute(
+            "SELECT memory_item_id, event_type, new_status "
+            "FROM customer_memory_events ORDER BY memory_item_id"
+        ).fetchall()
+
+        duplicate_active_rejected = False
+        try:
+            connection.execute(
+                "INSERT INTO customer_memory_items "
+                "(customer_id, subject_key, category, statement, status, evidence_type, "
+                "confidence, review_at, expires_at, version, created_at, updated_at) "
+                "VALUES (1, 'bed_preference', 'CONFIRMED_FACT', '冲突大床偏好', "
+                "'ACTIVE', 'EMPLOYEE_CONFIRMED', 0.9, '2030-01-01', '2031-01-01', 0, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        except sqlite3.IntegrityError:
+            duplicate_active_rejected = True
+
+    assert statuses == {
+        1: "CANDIDATE",
+        2: "CANDIDATE",
+        3: "ACTIVE",
+        4: "DISPUTED",
+        5: "DISPUTED",
+        6: "SUPERSEDED",
+        7: "ACTIVE",
+    }
+    assert reasons[1] == "历史证据不可验证"
+    assert reasons[2] == "历史证据不可验证"
+    assert reasons[4] == "历史同主题存在冲突陈述"
+    assert reasons[6] == "历史重复记忆已合并"
+    assert events == [
+        (memory_id, "legacy_migrated", statuses[memory_id])
+        for memory_id in range(1, 8)
+    ]
+    assert duplicate_active_rejected is True
+
+    downgrade = run_alembic("downgrade", "0019_customer_memory_items")
+    assert downgrade.returncode == 0, downgrade.stderr
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info('customer_memory_items')")
+        }
+        indexes = connection.execute("PRAGMA index_list('customer_memory_items')").fetchall()
+
+    assert "customer_memory_events" not in tables
+    assert "source_excerpt" not in columns
+    assert "version" not in columns
+    assert not any(row[1] == "uq_customer_memory_active_subject" for row in indexes)
 
 
 def test_runtime_config_lifecycle_backfills_existing_versions_with_orm_enum_name(

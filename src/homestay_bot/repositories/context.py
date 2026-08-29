@@ -1,7 +1,7 @@
-import re
+import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import (
@@ -15,6 +15,7 @@ from homestay_bot.domain.models import (
     BusinessTask,
     Conversation,
     CustomerContextSummary,
+    CustomerMemoryEvent,
     CustomerMemoryItem,
     Message,
     PropertyProfile,
@@ -24,6 +25,24 @@ from homestay_bot.services.context_retention import (
     ContextSummaryResult,
     CustomerModelContext,
 )
+from homestay_bot.services.customer_memory_policy import (
+    can_auto_activate_subject,
+    candidate_value_is_grounded,
+    contains_sensitive_memory_text,
+    is_dynamic_memory_text,
+    is_explicit_correction,
+    is_historical_query,
+    is_instruction_like_memory,
+    memory_relevance_score,
+    normalize_source_text,
+    normalize_subject_key,
+    redact_memory_text,
+    source_excerpt_hash,
+    stronger_evidence,
+    verify_source_excerpt,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class SQLAlchemyContextRepository:
@@ -31,8 +50,15 @@ class SQLAlchemyContextRepository:
 
     # 摘要任务按批处理，避免单个高频客户一次性载入全部历史正文。
     SUMMARY_BATCH_LIMIT = 50
-    MEMORY_RECALL_LIMIT = 8
-    MEMORY_RECALL_CHARS = 2_400
+    MEMORY_RECALL_LIMIT = 6
+    MEMORY_RECALL_CHARS = 900
+    RECENT_EPISODE_CHARS = 1_000
+    HISTORICAL_EPISODE_CHARS = 800
+    DYNAMIC_CONTEXT_CHARS = 3_000
+    CANDIDATE_RETENTION_DAYS = 30
+    DISPUTED_RETENTION_DAYS = 90
+    TERMINAL_CONTENT_DAYS = 90
+    EVENT_RETENTION_DAYS = 365
 
     def __init__(self, session: AsyncSession) -> None:
         """绑定当前维护事务。"""
@@ -52,24 +78,193 @@ class SQLAlchemyContextRepository:
     async def expire_customer_memories(
         self, customer_id: int, now: datetime
     ) -> None:
-        """把到期或进入复核期的有效记忆标记为失效。"""
+        """统一失效超期记忆、清理终态正文并限制事件保留期。"""
         memories = list(
             (
                 await self._session.scalars(
                     select(CustomerMemoryItem).where(
                         CustomerMemoryItem.customer_id == customer_id,
-                        CustomerMemoryItem.status == CustomerMemoryStatus.ACTIVE,
-                        (CustomerMemoryItem.review_at <= now)
-                        | (CustomerMemoryItem.expires_at <= now),
+                        (
+                            (
+                                CustomerMemoryItem.status
+                                == CustomerMemoryStatus.ACTIVE
+                            )
+                            & (
+                                (CustomerMemoryItem.review_at <= now)
+                                | (CustomerMemoryItem.expires_at <= now)
+                            )
+                        )
+                        | (
+                            (
+                                CustomerMemoryItem.status
+                                == CustomerMemoryStatus.CANDIDATE
+                            )
+                            & (
+                                CustomerMemoryItem.created_at
+                                <= now - timedelta(days=self.CANDIDATE_RETENTION_DAYS)
+                            )
+                        )
+                        | (
+                            (
+                                CustomerMemoryItem.status
+                                == CustomerMemoryStatus.DISPUTED
+                            )
+                            & (
+                                CustomerMemoryItem.created_at
+                                <= now - timedelta(days=self.DISPUTED_RETENTION_DAYS)
+                            )
+                        ),
                     )
                 )
             ).all()
         )
         for memory in memories:
+            previous_status = memory.status
             memory.status = CustomerMemoryStatus.STALE
-            memory.status_reason = "到达复核期或有效期"
-        if memories:
-            await self._session.flush()
+            memory.status_reason = "到达复核期或治理保留期"
+            memory.version += 1
+            self._add_memory_event(
+                memory,
+                "expired",
+                previous_status=previous_status,
+                reason=memory.status_reason,
+                occurred_at=now,
+            )
+
+        terminal_statuses = (
+            CustomerMemoryStatus.STALE,
+            CustomerMemoryStatus.REJECTED,
+            CustomerMemoryStatus.SUPERSEDED,
+        )
+        terminal_memories = list(
+            (
+                await self._session.scalars(
+                    select(CustomerMemoryItem).where(
+                        CustomerMemoryItem.customer_id == customer_id,
+                        CustomerMemoryItem.status.in_(terminal_statuses),
+                        CustomerMemoryItem.content_redacted_at.is_(None),
+                        CustomerMemoryItem.updated_at
+                        <= now - timedelta(days=self.TERMINAL_CONTENT_DAYS),
+                    )
+                )
+            ).all()
+        )
+        for memory in terminal_memories:
+            memory.statement = "[历史内容已清理]"
+            memory.source_excerpt = None
+            memory.content_redacted_at = now
+            memory.version += 1
+
+        old_events = list(
+            (
+                await self._session.scalars(
+                    select(CustomerMemoryEvent).where(
+                        CustomerMemoryEvent.customer_id == customer_id,
+                        CustomerMemoryEvent.occurred_at
+                        <= now - timedelta(days=self.TERMINAL_CONTENT_DAYS),
+                        CustomerMemoryEvent.content_redacted_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        for event in old_events:
+            event.statement_snapshot = None
+            event.content_redacted_at = now
+
+        await self._session.execute(
+            delete(CustomerMemoryEvent).where(
+                CustomerMemoryEvent.customer_id == customer_id,
+                CustomerMemoryEvent.occurred_at
+                <= now - timedelta(days=self.EVENT_RETENTION_DAYS),
+            ).execution_options(synchronize_session=False)
+        )
+        await self._session.flush()
+
+    async def reconcile_legacy_memories(
+        self, customer_id: int, now: datetime
+    ) -> None:
+        """只用尚存的来源原文重验证历史候选，不调用模型。"""
+        rows = list(
+            (
+                await self._session.scalars(
+                    select(CustomerMemoryItem)
+                    .where(
+                        CustomerMemoryItem.customer_id == customer_id,
+                        CustomerMemoryItem.status == CustomerMemoryStatus.CANDIDATE,
+                        CustomerMemoryItem.status_reason == "历史证据不可验证",
+                        CustomerMemoryItem.source_message_id.is_not(None),
+                    )
+                    .order_by(CustomerMemoryItem.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        if not rows:
+            return
+        source_ids = [item.source_message_id for item in rows if item.source_message_id]
+        sources = {
+            item.external_message_id: item
+            for item in (
+                await self._session.scalars(
+                    select(Message).where(Message.external_message_id.in_(source_ids))
+                )
+            ).all()
+        }
+        for memory in rows:
+            source = sources.get(memory.source_message_id or "")
+            if source is None or not source.content:
+                continue
+            excerpt = redact_memory_text(source.content)[:300]
+            if not self._candidate_is_grounded(
+                subject_key=memory.subject_key,
+                statement=memory.statement,
+                source_excerpt=excerpt,
+                source=source,
+            ):
+                continue
+            memory.source_excerpt = excerpt
+            memory.source_excerpt_hash = source_excerpt_hash(excerpt)
+            memory.source_occurred_at = source.sent_at
+            memory.verified_at = now
+            evidence = self._grounded_evidence(
+                memory.evidence_type,
+                source,
+                grounded=True,
+            )
+            memory.evidence_type = evidence
+            proposed_status = self._initial_memory_status(
+                memory.subject_key,
+                memory.category,
+                evidence,
+                memory.confidence,
+                grounded=True,
+            )
+            active_conflict = await self._session.scalar(
+                select(CustomerMemoryItem.id).where(
+                    CustomerMemoryItem.customer_id == customer_id,
+                    CustomerMemoryItem.subject_key == memory.subject_key,
+                    CustomerMemoryItem.status == CustomerMemoryStatus.ACTIVE,
+                    CustomerMemoryItem.id != memory.id,
+                )
+            )
+            if (
+                proposed_status is CustomerMemoryStatus.ACTIVE
+                and active_conflict is None
+            ):
+                memory.status = CustomerMemoryStatus.ACTIVE
+                memory.confirmed_at = now
+                memory.status_reason = None
+            else:
+                memory.status_reason = "历史证据已核验，等待人工复核"
+            memory.version += 1
+            self._add_memory_event(
+                memory,
+                "legacy_reverified",
+                previous_status=CustomerMemoryStatus.CANDIDATE,
+                reason=memory.status_reason,
+                occurred_at=now,
+            )
+        await self._session.flush()
 
     async def list_customer_ids_with_messages(self) -> list[int]:
         """返回至少拥有一条消息的正式客户主键。"""
@@ -169,13 +364,16 @@ class SQLAlchemyContextRepository:
         *,
         source_messages: list[Message] | None = None,
         observed_messages: list[Message] | None = None,
-    ) -> None:
-        """保存短摘要并标记已覆盖消息，提交由维护循环负责。"""
-        summary = await self._get_or_create_summary(customer_id)
-        summary.short_summary = result.summary
-        summary.unresolved_items = self._merge_unresolved(
-            summary.unresolved_items, result.unresolved_items
+        expected_version: int | None = None,
+    ) -> bool:
+        """版本一致时保存短摘要；冲突时不标记任何消息。"""
+        summary = await self._get_or_create_summary(
+            customer_id,
+            expected_version=expected_version,
         )
+        if summary is None:
+            return False
+        summary.short_summary = result.summary
         summary.short_cutoff_at = max(item.sent_at for item in messages)
         summary.version += 1
         for item in messages:
@@ -189,6 +387,7 @@ class SQLAlchemyContextRepository:
         for item in observed_messages or messages:
             item.memory_processed_at = now
         await self._session.flush()
+        return True
 
     async def save_memory_observations(
         self,
@@ -209,13 +408,17 @@ class SQLAlchemyContextRepository:
         result: ContextSummaryResult,
         messages: list[Message],
         now: datetime,
-    ) -> None:
-        """在同一事务写长期摘要并清除已覆盖正文。"""
-        summary = await self._get_or_create_summary(customer_id)
-        summary.long_summary = result.summary
-        summary.unresolved_items = self._merge_unresolved(
-            summary.unresolved_items, result.unresolved_items
+        *,
+        expected_version: int | None = None,
+    ) -> bool:
+        """版本一致时原子写长摘要并清除已覆盖正文。"""
+        summary = await self._get_or_create_summary(
+            customer_id,
+            expected_version=expected_version,
         )
+        if summary is None:
+            return False
+        summary.long_summary = result.summary
         summary.long_cutoff_at = max(item.sent_at for item in messages)
         summary.version += 1
         for item in messages:
@@ -224,11 +427,12 @@ class SQLAlchemyContextRepository:
             item.memory_processed_at = now
         await self._save_memory_candidates(customer_id, result, messages, now)
         await self._session.flush()
+        return True
 
     async def load_model_context(
         self, customer_id: int, *, query: str = ""
     ) -> CustomerModelContext:
-        """读取不含原文和敏感字段的客户摘要上下文。"""
+        """按实时运营优先级和硬预算构建客户上下文。"""
         summary = await self.get_summary(customer_id)
         memories = await self._recall_memories(customer_id, query, datetime.now(UTC))
         order_rows = (
@@ -266,12 +470,7 @@ class SQLAlchemyContextRepository:
                 )
             ).all()
         )
-        return CustomerModelContext(
-            short_summary=summary.short_summary if summary else "",
-            long_summary=summary.long_summary if summary else "",
-            unresolved_items=list(summary.unresolved_items) if summary else [],
-            memories=memories,
-            active_orders=[
+        active_orders = [
                 {
                     "property_id": order.property_id,
                     "property_title": property_title,
@@ -280,8 +479,8 @@ class SQLAlchemyContextRepository:
                     "status": order.status,
                 }
                 for order, property_title in order_rows
-            ],
-            open_tasks=[
+            ]
+        open_tasks = [
                 {
                     "task_type": task.task_type.value,
                     "status": task.status.value,
@@ -293,7 +492,56 @@ class SQLAlchemyContextRepository:
                     ),
                 }
                 for task in tasks
-            ],
+            ]
+        operational_chars = len(str(active_orders)) + len(str(open_tasks))
+        memory_chars = sum(
+            len(str(item.get("subject_key", "")))
+            + len(str(item.get("statement", "")))
+            for item in memories
+        )
+        episode_budget = max(
+            0,
+            self.DYNAMIC_CONTEXT_CHARS - operational_chars - memory_chars,
+        )
+        recent_episode = self._relevant_episode(
+            query,
+            summary.short_summary if summary else "",
+            min(self.RECENT_EPISODE_CHARS, episode_budget),
+        )
+        episode_budget -= len(recent_episode)
+        historical_episode = ""
+        if is_historical_query(query):
+            historical_episode = self._relevant_episode(
+                query,
+                summary.long_summary if summary else "",
+                min(self.HISTORICAL_EPISODE_CHARS, max(0, episode_budget)),
+                allow_history=True,
+            )
+        logger.info(
+            "customer_context_recalled",
+            extra={
+                "customer_id": customer_id,
+                "memory_count": len(memories),
+                "memory_ids": [item["memory_id"] for item in memories],
+                "summary_version": summary.version if summary else 0,
+                "used_chars": (
+                    operational_chars
+                    + memory_chars
+                    + len(recent_episode)
+                    + len(historical_episode)
+                ),
+            },
+        )
+        safe_memories = [
+            {key: value for key, value in item.items() if key != "memory_id"}
+            for item in memories
+        ]
+        return CustomerModelContext(
+            recent_episode=recent_episode,
+            historical_episode=historical_episode,
+            memories=safe_memories,
+            active_orders=active_orders,
+            open_tasks=open_tasks,
         )
 
     async def get_customer_room_number(self, customer_id: int) -> str | None:
@@ -327,15 +575,28 @@ class SQLAlchemyContextRepository:
         messages: list[Message],
         now: datetime,
     ) -> None:
-        """核验候选证据并在当前摘要事务中完成晋级、冲突或覆盖。"""
+        """在同一事务核验引用、保持证据单调并记录状态时间线。"""
         sources = {item.external_message_id: item for item in messages}
         for candidate in result.memory_candidates:
             source = sources.get(candidate.source_message_id or "")
-            evidence = self._verified_evidence(candidate.evidence_type, source)
+            subject_key = normalize_subject_key(candidate.subject_key)
+            grounded = self._candidate_is_grounded(
+                subject_key=subject_key,
+                statement=candidate.statement,
+                source_excerpt=candidate.source_excerpt,
+                source=source,
+            )
+            evidence = self._grounded_evidence(
+                candidate.evidence_type,
+                source,
+                grounded=grounded,
+            )
             status = self._initial_memory_status(
+                subject_key,
                 candidate.category,
                 evidence,
                 candidate.confidence,
+                grounded=grounded,
             )
             existing = list(
                 (
@@ -343,7 +604,7 @@ class SQLAlchemyContextRepository:
                         select(CustomerMemoryItem)
                         .where(
                             CustomerMemoryItem.customer_id == customer_id,
-                            CustomerMemoryItem.subject_key == candidate.subject_key,
+                            CustomerMemoryItem.subject_key == subject_key,
                             CustomerMemoryItem.status.in_(
                                 [
                                     CustomerMemoryStatus.CANDIDATE,
@@ -367,59 +628,171 @@ class SQLAlchemyContextRepository:
                 None,
             )
             review_at, expires_at = self._memory_deadlines(candidate.category, now)
+            active_conflicts = [
+                item
+                for item in existing
+                if item.status is CustomerMemoryStatus.ACTIVE and item is not duplicate
+            ]
+            correction_is_proven = bool(
+                candidate.is_correction
+                and grounded
+                and source is not None
+                and source.content
+                and is_explicit_correction(source.content)
+            )
             if duplicate is not None:
                 duplicate.confidence = max(duplicate.confidence, candidate.confidence)
-                duplicate.source_message_id = source.external_message_id if source else None
-                duplicate.evidence_type = evidence
-                duplicate.review_at = review_at
-                duplicate.expires_at = expires_at
+                selected_evidence = stronger_evidence(duplicate.evidence_type, evidence)
+                if selected_evidence is evidence and evidence is not duplicate.evidence_type:
+                    duplicate.evidence_type = evidence
+                    duplicate.source_message_id = (
+                        source.external_message_id if source else None
+                    )
+                    duplicate.source_excerpt = (
+                        redact_memory_text(candidate.source_excerpt or "") or None
+                    )
+                    duplicate.source_excerpt_hash = (
+                        source_excerpt_hash(candidate.source_excerpt or "")
+                        if candidate.source_excerpt
+                        else None
+                    )
+                    duplicate.source_occurred_at = source.sent_at if source else None
+                    duplicate.verified_at = now if grounded else duplicate.verified_at
+                if evidence is not CustomerMemoryEvidenceType.MODEL_INFERENCE:
+                    duplicate.review_at = self._later_datetime(
+                        duplicate.review_at,
+                        review_at,
+                    )
+                    duplicate.expires_at = self._later_datetime(
+                        duplicate.expires_at,
+                        expires_at,
+                    )
                 if status is CustomerMemoryStatus.ACTIVE:
-                    duplicate.status = CustomerMemoryStatus.ACTIVE
-                    duplicate.confirmed_at = now
-                    duplicate.status_reason = None
+                    previous_status = duplicate.status
+                    if active_conflicts and not correction_is_proven:
+                        duplicate.status = CustomerMemoryStatus.DISPUTED
+                        duplicate.status_reason = "同一主题存在冲突陈述"
+                        for item in active_conflicts:
+                            active_previous_status = item.status
+                            item.status = CustomerMemoryStatus.DISPUTED
+                            item.status_reason = "同一主题存在冲突陈述"
+                            item.version += 1
+                            self._add_memory_event(
+                                item,
+                                "disputed",
+                                previous_status=active_previous_status,
+                                reason=item.status_reason,
+                                occurred_at=now,
+                            )
+                    else:
+                        for item in active_conflicts:
+                            active_previous_status = item.status
+                            item.status = CustomerMemoryStatus.SUPERSEDED
+                            item.status_reason = "客户或员工明确纠正"
+                            item.version += 1
+                            self._add_memory_event(
+                                item,
+                                "superseded",
+                                previous_status=active_previous_status,
+                                reason=item.status_reason,
+                                occurred_at=now,
+                            )
+                        duplicate.status = CustomerMemoryStatus.ACTIVE
+                        duplicate.confirmed_at = now
+                        duplicate.status_reason = None
+                        duplicate.verified_at = duplicate.verified_at or now
+                    if previous_status is not duplicate.status:
+                        self._add_memory_event(
+                            duplicate,
+                            (
+                                "activated"
+                                if duplicate.status is CustomerMemoryStatus.ACTIVE
+                                else "disputed"
+                            ),
+                            previous_status=previous_status,
+                            reason=duplicate.status_reason,
+                            occurred_at=now,
+                        )
+                duplicate.version += 1
                 continue
 
-            active_conflicts = [
-                item for item in existing if item.status is CustomerMemoryStatus.ACTIVE
-            ]
             supersedes_id = None
             if status is CustomerMemoryStatus.ACTIVE and active_conflicts:
-                if candidate.is_correction:
+                if correction_is_proven:
                     for item in active_conflicts:
+                        previous_status = item.status
                         item.status = CustomerMemoryStatus.SUPERSEDED
                         item.status_reason = "客户或员工明确纠正"
+                        item.version += 1
+                        self._add_memory_event(
+                            item,
+                            "superseded",
+                            previous_status=previous_status,
+                            reason=item.status_reason,
+                            occurred_at=now,
+                        )
                     supersedes_id = active_conflicts[-1].id
                 else:
                     status = CustomerMemoryStatus.DISPUTED
                     for item in active_conflicts:
+                        previous_status = item.status
                         item.status = CustomerMemoryStatus.DISPUTED
                         item.status_reason = "同一主题存在冲突陈述"
+                        item.version += 1
+                        self._add_memory_event(
+                            item,
+                            "disputed",
+                            previous_status=previous_status,
+                            reason=item.status_reason,
+                            occurred_at=now,
+                        )
 
-            self._session.add(
-                CustomerMemoryItem(
-                    customer_id=customer_id,
-                    subject_key=candidate.subject_key,
-                    category=candidate.category,
-                    statement=candidate.statement,
-                    status=status,
-                    evidence_type=evidence,
-                    source_message_id=source.external_message_id if source else None,
-                    confidence=candidate.confidence,
-                    confirmed_at=now if status is CustomerMemoryStatus.ACTIVE else None,
-                    review_at=review_at,
-                    expires_at=expires_at,
-                    supersedes_id=supersedes_id,
-                    status_reason=(
-                        "等待人工复核"
-                        if status is CustomerMemoryStatus.CANDIDATE
-                        else "同一主题存在冲突陈述"
-                        if status is CustomerMemoryStatus.DISPUTED
-                        else None
-                    ),
-                )
+            memory = CustomerMemoryItem(
+                customer_id=customer_id,
+                subject_key=subject_key,
+                category=candidate.category,
+                statement=candidate.statement.strip(),
+                status=status,
+                evidence_type=evidence,
+                source_message_id=source.external_message_id if source else None,
+                source_excerpt=(
+                    redact_memory_text(candidate.source_excerpt or "") or None
+                ),
+                source_excerpt_hash=(
+                    source_excerpt_hash(candidate.source_excerpt or "")
+                    if candidate.source_excerpt
+                    else None
+                ),
+                source_occurred_at=source.sent_at if source else None,
+                verified_at=(
+                    now
+                    if grounded
+                    and evidence is not CustomerMemoryEvidenceType.MODEL_INFERENCE
+                    else None
+                ),
+                confidence=candidate.confidence,
+                confirmed_at=now if status is CustomerMemoryStatus.ACTIVE else None,
+                review_at=review_at,
+                expires_at=expires_at,
+                supersedes_id=supersedes_id,
+                status_reason=(
+                    "等待人工复核"
+                    if status is CustomerMemoryStatus.CANDIDATE
+                    else "同一主题存在冲突陈述"
+                    if status is CustomerMemoryStatus.DISPUTED
+                    else None
+                ),
             )
+            self._session.add(memory)
             # 纠正关系依赖旧行主键；刷新可让后续同批候选看见本条记录。
             await self._session.flush()
+            self._add_memory_event(
+                memory,
+                "created",
+                previous_status=None,
+                reason=memory.status_reason,
+                occurred_at=now,
+            )
 
     async def _recall_memories(
         self, customer_id: int, query: str, now: datetime
@@ -432,6 +805,7 @@ class SQLAlchemyContextRepository:
                     .where(
                         CustomerMemoryItem.customer_id == customer_id,
                         CustomerMemoryItem.status == CustomerMemoryStatus.ACTIVE,
+                        CustomerMemoryItem.verified_at.is_not(None),
                         CustomerMemoryItem.review_at > now,
                         CustomerMemoryItem.expires_at > now,
                     )
@@ -445,7 +819,14 @@ class SQLAlchemyContextRepository:
         )
         scored = sorted(
             (
-                (self._relevance_score(query, item), item)
+                (
+                    memory_relevance_score(
+                        query,
+                        subject_key=item.subject_key,
+                        statement=item.statement,
+                    ),
+                    item,
+                )
                 for item in rows
             ),
             key=lambda pair: (pair[0], pair[1].confirmed_at or pair[1].created_at),
@@ -457,11 +838,18 @@ class SQLAlchemyContextRepository:
             # 有查询时不注入完全无关的历史事实，避免客户画像污染当前回答。
             if query.strip() and score <= 0:
                 continue
+            if (
+                contains_sensitive_memory_text(item.statement)
+                or is_dynamic_memory_text(f"{item.subject_key} {item.statement}")
+                or is_instruction_like_memory(item.statement)
+            ):
+                continue
             item_chars = len(item.subject_key) + len(item.statement)
             if used_chars + item_chars > self.MEMORY_RECALL_CHARS:
                 continue
             recalled.append(
                 {
+                    "memory_id": item.id,
                     "subject_key": item.subject_key,
                     "category": item.category.value,
                     "statement": item.statement,
@@ -473,12 +861,48 @@ class SQLAlchemyContextRepository:
                 break
         return recalled
 
+    @classmethod
+    def _candidate_is_grounded(
+        cls,
+        *,
+        subject_key: str,
+        statement: str,
+        source_excerpt: str | None,
+        source: Message | None,
+    ) -> bool:
+        """校验引用、候选值和安全边界，不信任模型自证。"""
+        if source is None or not source.content:
+            return False
+        candidate_text = f"{subject_key} {statement} {source_excerpt or ''}"
+        return bool(
+            verify_source_excerpt(source_excerpt, source.content)
+            and candidate_value_is_grounded(
+                statement,
+                source_excerpt or "",
+                subject_key=subject_key,
+            )
+            and not contains_sensitive_memory_text(statement)
+            and not is_dynamic_memory_text(candidate_text)
+            and not is_instruction_like_memory(candidate_text)
+        )
+
     @staticmethod
-    def _verified_evidence(
+    def _later_datetime(left: datetime, right: datetime) -> datetime:
+        """兼容 SQLite 返回的无时区时间，选择实际更晚的截止时间。"""
+        comparable_left = left if left.tzinfo else left.replace(tzinfo=UTC)
+        comparable_right = right if right.tzinfo else right.replace(tzinfo=UTC)
+        return left if comparable_left >= comparable_right else right
+
+    @staticmethod
+    def _grounded_evidence(
         requested: CustomerMemoryEvidenceType,
         source: Message | None,
+        *,
+        grounded: bool,
     ) -> CustomerMemoryEvidenceType:
-        """只在消息来源与模型声明一致时承认证据等级。"""
+        """只在身份、引用和候选值同时成立时承认证据等级。"""
+        if not grounded:
+            return CustomerMemoryEvidenceType.MODEL_INFERENCE
         if (
             requested is CustomerMemoryEvidenceType.USER_EXPLICIT
             and source is not None
@@ -495,9 +919,12 @@ class SQLAlchemyContextRepository:
 
     @staticmethod
     def _initial_memory_status(
+        subject_key: str,
         category: CustomerMemoryCategory,
         evidence: CustomerMemoryEvidenceType,
         confidence: float,
+        *,
+        grounded: bool,
     ) -> CustomerMemoryStatus:
         """仅让高置信的稳定明示事实自动晋级，推断永远等待复核。"""
         stable_category = category in {
@@ -506,6 +933,8 @@ class SQLAlchemyContextRepository:
         }
         if (
             stable_category
+            and grounded
+            and can_auto_activate_subject(subject_key)
             and evidence is not CustomerMemoryEvidenceType.MODEL_INFERENCE
             and confidence >= 0.8
         ):
@@ -532,40 +961,75 @@ class SQLAlchemyContextRepository:
         return now + timedelta(days=review_days), now + timedelta(days=expiry_days)
 
     @staticmethod
-    def _merge_unresolved(existing: list[str], incoming: list[str]) -> list[str]:
-        """稳定去重两个摘要层级的待确认项，避免后写层覆盖前写层。"""
-        cleaned = [item.strip()[:500] for item in [*existing, *incoming] if item.strip()]
-        return list(dict.fromkeys(cleaned))[:20]
-
-    @staticmethod
     def _normalize_statement(statement: str) -> str:
         """忽略空白和常见标点比较候选陈述。"""
-        return re.sub(r"[\s，。！？、,.!?]+", "", statement).lower()
+        return normalize_source_text(statement).replace(" ", "")
 
-    @classmethod
-    def _relevance_score(cls, query: str, memory: CustomerMemoryItem) -> int:
-        """使用可解释的字符片段匹配中文和英文主题，不引入向量旁路。"""
-        compact_query = cls._normalize_statement(query)
-        if not compact_query:
-            return 1
-        compact_memory = cls._normalize_statement(
-            f"{memory.subject_key}{memory.statement}"
+    @staticmethod
+    def _relevant_episode(
+        query: str,
+        episode: str,
+        budget: int,
+        *,
+        allow_history: bool = False,
+    ) -> str:
+        """只在当前问题相关或明确查历史时返回限量情节摘要。"""
+        if budget <= 0 or not episode.strip():
+            return ""
+        score = memory_relevance_score(
+            query,
+            subject_key="episodic_summary",
+            statement=episode,
         )
-        tokens = {
-            compact_query[index : index + 2]
-            for index in range(max(len(compact_query) - 1, 0))
-        }
-        if len(compact_query) == 1:
-            tokens.add(compact_query)
-        return sum(1 for token in tokens if token and token in compact_memory)
+        if query.strip() and score <= 0 and not allow_history:
+            return ""
+        return redact_memory_text(episode)[:budget]
+
+    def _add_memory_event(
+        self,
+        memory: CustomerMemoryItem,
+        event_type: str,
+        *,
+        previous_status: CustomerMemoryStatus | None,
+        reason: str | None = None,
+        occurred_at: datetime,
+        actor_employee_id: int | None = None,
+    ) -> None:
+        """写入不包含原始消息正文的记忆状态事件。"""
+        self._session.add(
+            CustomerMemoryEvent(
+                customer_id=memory.customer_id,
+                memory_item_id=memory.id,
+                subject_key=memory.subject_key,
+                event_type=event_type,
+                previous_status=(previous_status.name if previous_status else None),
+                new_status=memory.status.name,
+                statement_snapshot=redact_memory_text(memory.statement),
+                source_message_id=memory.source_message_id,
+                actor_employee_id=actor_employee_id,
+                reason=reason,
+                occurred_at=occurred_at,
+            )
+        )
 
     async def _get_or_create_summary(
-        self, customer_id: int
-    ) -> CustomerContextSummary:
-        """在当前事务幂等返回客户摘要行。"""
-        summary = await self.get_summary(customer_id)
+        self,
+        customer_id: int,
+        *,
+        expected_version: int | None = None,
+    ) -> CustomerContextSummary | None:
+        """锁定客户摘要，期望版本不匹配时返回空值。"""
+        summary = await self._session.scalar(
+            select(CustomerContextSummary)
+            .where(CustomerContextSummary.customer_id == customer_id)
+            .with_for_update()
+        )
         if summary is not None:
+            if expected_version is not None and summary.version != expected_version:
+                return None
             return summary
+        if expected_version not in {None, 0}:
+            return None
         summary = CustomerContextSummary(customer_id=customer_id)
         self._session.add(summary)
         await self._session.flush()

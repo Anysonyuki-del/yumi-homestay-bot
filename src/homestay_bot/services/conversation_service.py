@@ -32,7 +32,9 @@ from homestay_bot.services.answer_policy import (
     handoff_reason as determine_handoff_reason,
 )
 from homestay_bot.services.answer_policy import (
+    is_booking_action_request,
     is_homestay_related,
+    is_service_request,
 )
 from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.emergency_service import (
@@ -798,12 +800,14 @@ class ConversationService:
         ):
             return
         local_handoff_reason = self._determine_handoff_reason(message.content)
+        service_requested = is_service_request(message.content)
+        booking_action_requested = is_booking_action_request(message.content)
         requires_human = bool(
             local_handoff_reason
             or decision.handoff_reason
             or decision.staff_confirmation_required
-            or decision.task_suggestion is not None
-            or decision.intent == "booking_confirmed"
+            or (decision.task_suggestion is not None and service_requested)
+            or (decision.intent == "booking_confirmed" and booking_action_requested)
             or self._should_send_fast_ack(message.content)
         )
         reply_text = self._clean_guest_reply_topics(
@@ -836,7 +840,7 @@ class ConversationService:
                 audit_reason=reason,
             )
             return
-        if decision.intent == "booking_confirmed":
+        if decision.intent == "booking_confirmed" and booking_action_requested:
             await self._create_pending_approval(conversation, message, decision)
             return
         # 未确认的普通交易事实只提醒员工核实，机器人继续承接后续对话。
@@ -876,6 +880,7 @@ class ConversationService:
             self._business_tasks is None
             or conversation.customer_id is None
             or suggestion is None
+            or not is_service_request(message.content)
         ):
             return
         try:
@@ -927,6 +932,9 @@ class ConversationService:
         decision: AssistantDecision,
     ) -> None:
         """把模型提取的完整资料转换为待审批单，缺项时强制转人工。"""
+        if not is_booking_action_request(message.content):
+            # 业务层再次校验本轮确认语义，隔离错误模型或其他 Assistant 实现。
+            return
         fields = decision.booking_fields
         if self._approvals is None or fields is None:
             await self._activate_human(

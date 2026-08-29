@@ -68,7 +68,7 @@ class CustomerAdminServicePort(Protocol):
         *,
         short_summary: str,
         long_summary: str,
-        unresolved_items: list[str],
+        expected_version: int,
     ) -> None:
         """更正客户摘要。"""
 
@@ -86,6 +86,7 @@ class CustomerAdminServicePort(Protocol):
         administrator: Employee,
         *,
         decision: str,
+        expected_version: int,
     ) -> None:
         """复核单条结构化客户记忆。"""
 
@@ -427,10 +428,10 @@ async def update_customer_summary(
     customer_id: int,
     short_summary: str = Form("", max_length=4000),
     long_summary: str = Form("", max_length=4000),
-    unresolved_items: str = Form("", max_length=4000),
+    expected_version: int = Form(ge=0),
     csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
-    """更正客户短期、长期摘要和待确认事项。"""
+    """按页面版本更正客户短期和长期摘要。"""
     administrator, service = await _customer_form_context(
         request,
         customer_id,
@@ -442,7 +443,7 @@ async def update_customer_summary(
             administrator,
             short_summary=short_summary,
             long_summary=long_summary,
-            unresolved_items=unresolved_items.splitlines(),
+            expected_version=expected_version,
         )
     except Exception as error:
         _raise_page_error(error)
@@ -474,6 +475,7 @@ async def review_customer_memory(
     customer_id: int,
     memory_id: int,
     decision: str,
+    expected_version: int = Form(ge=0),
     csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
     """消耗一次性令牌后复核一条结构化客户记忆。"""
@@ -488,6 +490,7 @@ async def review_customer_memory(
             memory_id,
             administrator,
             decision=decision,
+            expected_version=expected_version,
         )
     except Exception as error:
         _raise_page_error(error)

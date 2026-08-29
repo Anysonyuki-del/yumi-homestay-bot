@@ -50,6 +50,7 @@ class CustomerAdminStub:
             short_summary="偏好安静",
             long_summary="曾咨询武汉旅游安排",
             unresolved_items=["待确认到达时间"],
+            version=4,
         )
         self.memories = [
             SimpleNamespace(
@@ -60,6 +61,10 @@ class CustomerAdminStub:
                 status=CustomerMemoryStatus.CANDIDATE,
                 evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
                 confidence=0.86,
+                source_excerpt="我的狗叫查理",
+                source_occurred_at=None,
+                status_reason="等待人工复核",
+                version=2,
             )
         ]
         self.suggestion = SimpleNamespace(
@@ -72,7 +77,7 @@ class CustomerAdminStub:
         self.note_calls: list[tuple[int, str, int]] = []
         self.summary_calls: list[dict[str, object]] = []
         self.delete_calls: list[tuple[int, int]] = []
-        self.memory_calls: list[tuple[int, int, int, str]] = []
+        self.memory_calls: list[tuple[int, int, int, str, int]] = []
         self.merge_calls: list[tuple[int, int, bool]] = []
         self.manual_merge_calls: list[tuple[int, int, int]] = []
         self.list_calls: list[tuple[str | None, int, int, int]] = []
@@ -106,6 +111,7 @@ class CustomerAdminStub:
             "selected_tag_ids": [1],
             "summary": self.summary,
             "memories": self.memories,
+            "current_memories": {},
             "merge_suggestions": [self.suggestion],
         }
 
@@ -168,7 +174,7 @@ class CustomerAdminStub:
         *,
         short_summary,
         long_summary,
-        unresolved_items,
+        expected_version,
     ):
         """记录摘要更正提交。"""
         self._require_admin(administrator)
@@ -178,7 +184,7 @@ class CustomerAdminStub:
                 "administrator_id": administrator.id,
                 "short_summary": short_summary,
                 "long_summary": long_summary,
-                "unresolved_items": unresolved_items,
+                "expected_version": expected_version,
             }
         )
 
@@ -188,12 +194,18 @@ class CustomerAdminStub:
         self.delete_calls.append((customer_id, administrator.id))
 
     async def review_memory(
-        self, customer_id, memory_id, administrator, *, decision
+        self,
+        customer_id,
+        memory_id,
+        administrator,
+        *,
+        decision,
+        expected_version,
     ):
         """记录结构化客户记忆复核。"""
         self._require_admin(administrator)
         self.memory_calls.append(
-            (customer_id, memory_id, administrator.id, decision)
+            (customer_id, memory_id, administrator.id, decision, expected_version)
         )
 
     async def review_merge(
@@ -408,7 +420,7 @@ def test_admin_can_update_tags_note_and_summary_with_one_time_csrf() -> None:
         data={
             "short_summary": "短摘要",
             "long_summary": "长期摘要",
-            "unresolved_items": "待确认时间\n待确认停车",
+            "expected_version": "4",
             "csrf_token": summary_token,
         },
         follow_redirects=False,
@@ -420,10 +432,7 @@ def test_admin_can_update_tags_note_and_summary_with_one_time_csrf() -> None:
     assert summary.status_code == 303
     assert customers.tag_calls == [(7, [1, 2], 1)]
     assert customers.note_calls == [(7, " 新备注 ", 1)]
-    assert customers.summary_calls[0]["unresolved_items"] == [
-        "待确认时间",
-        "待确认停车",
-    ]
+    assert customers.summary_calls[0]["expected_version"] == 4
 
 
 def test_admin_can_delete_summary_and_review_merge() -> None:
@@ -465,12 +474,12 @@ def test_admin_can_review_structured_customer_memory() -> None:
     token = detail_csrf(client)
     reviewed = client.post(
         "/employee/customers/7/memories/12/approve",
-        data={"csrf_token": token},
+        data={"csrf_token": token, "expected_version": "2"},
         follow_redirects=False,
     )
 
     assert reviewed.status_code == 303
-    assert customers.memory_calls == [(7, 12, 1, "approve")]
+    assert customers.memory_calls == [(7, 12, 1, "approve", 2)]
 
 
 def test_admin_searches_masked_manual_merge_targets_from_detail() -> None:

@@ -27,7 +27,7 @@ YuMi 民宿 AI 是面向武汉小型民宿的半人工、半智能客服及运�
 
 应用发布版本唯一来源是 [`pyproject.toml`](pyproject.toml) 的 `project.version`，运行时由 `src/homestay_bot/version.py::get_app_version()` 读取安装包元数据。数据库结构以 `alembic current` 为准；实际生效的配置 revision、组件健康和任务异常在管理员“系统诊断”页面查看。
 
-发布流程、工程约束和变更检查见 [YuMi 民宿 AI 开发经验与防回归手册](YuMi民宿AI开发经验与防回归手册.md)。尚未归并的新教训记录在 [tasks/lessons.md](tasks/lessons.md)，[tasks/todo.md](tasks/todo.md) 只保存当前工作单。
+版本更新内容见 [CHANGELOG](CHANGELOG.md)，发布流程、工程约束和变更检查见 [YuMi 民宿 AI 开发经验与防回归手册](YuMi民宿AI开发经验与防回归手册.md)。尚未归并的新教训记录在 [tasks/lessons.md](tasks/lessons.md)，[tasks/todo.md](tasks/todo.md) 只保存当前工作单。
 
 ## 本地运行
 
