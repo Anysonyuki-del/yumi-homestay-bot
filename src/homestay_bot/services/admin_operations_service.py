@@ -54,6 +54,7 @@ class AttentionItem:
     property_id: int | None
     room_title: str | None
     updated_at: datetime
+    related_count: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,8 +112,8 @@ class OperationsSnapshot:
 
     @property
     def attention_count(self) -> int:
-        """返回全部待处理事项数量。"""
-        return len(self.attention_items)
+        """返回汇总卡片背后的真实待处理事项数量。"""
+        return sum(item.related_count for item in self.attention_items)
 
 
 class AdminOperationsRepositoryPort(Protocol):
@@ -147,7 +148,11 @@ class AdminOperationsService:
         self._repository = repository or SQLAlchemyAdminOperationsRepository(session)
 
     @staticmethod
-    def _attention_item(record: AttentionRecord) -> AttentionItem:
+    def _attention_item(
+        record: AttentionRecord,
+        *,
+        related_count: int = 1,
+    ) -> AttentionItem:
         """按领域状态生成安全中文文案和可靠页面入口。"""
         room_context = f"，关联房间：{record.room_title}" if record.room_title else ""
         status_text = ATTENTION_STATUS_TEXT[record.status]
@@ -157,12 +162,28 @@ class AdminOperationsService:
             target_url = f"/employee/complaints/{record.record_id}"
         elif record.kind == "credential":
             title = "入住凭证需要跟进"
-            summary = f"凭证投递 #{record.record_id}：{status_text}{room_context}"
-            target_url = "/employee/tasks"
+            summary = (
+                f"该房源共有 {related_count} 项凭证投递需要跟进{room_context}"
+                if related_count > 1
+                else f"凭证投递 #{record.record_id}：{status_text}{room_context}"
+            )
+            target_url = (
+                f"/employee/tasks?property_id={record.property_id}"
+                if record.property_id is not None
+                else "/employee/tasks"
+            )
         elif record.kind == "reminder":
             title = "入住提醒需要跟进"
-            summary = f"提醒 #{record.record_id}：{status_text}{room_context}"
-            target_url = "/employee/tasks"
+            summary = (
+                f"该房源共有 {related_count} 项入住提醒需要跟进{room_context}"
+                if related_count > 1
+                else f"提醒 #{record.record_id}：{status_text}{room_context}"
+            )
+            target_url = (
+                f"/employee/tasks?property_id={record.property_id}"
+                if record.property_id is not None
+                else "/employee/tasks"
+            )
         elif record.kind == "customer_merge":
             title = "客户档案合并待复核"
             summary = f"合并建议 #{record.record_id}：{status_text}"
@@ -181,6 +202,37 @@ class AdminOperationsService:
             property_id=record.property_id,
             room_title=record.room_title,
             updated_at=record.updated_at,
+            related_count=related_count,
+        )
+
+    @classmethod
+    def _attention_items(
+        cls,
+        records: tuple[AttentionRecord, ...],
+    ) -> tuple[AttentionItem, ...]:
+        """按房源归并重复跟进，个体投诉、合并与任务仍保持独立。"""
+        grouped: dict[
+            tuple[AttentionKind, int | None, AttentionStatus],
+            list[AttentionRecord],
+        ] = defaultdict(list)
+        items: list[AttentionItem] = []
+        for record in records:
+            if record.kind in {"credential", "reminder"}:
+                grouped[(record.kind, record.property_id, record.status)].append(
+                    record
+                )
+            else:
+                items.append(cls._attention_item(record))
+        for records_in_group in grouped.values():
+            latest = max(records_in_group, key=lambda item: item.updated_at)
+            items.append(
+                cls._attention_item(
+                    latest,
+                    related_count=len(records_in_group),
+                )
+            )
+        return tuple(
+            sorted(items, key=lambda item: item.updated_at, reverse=True)
         )
 
     @staticmethod
@@ -253,7 +305,7 @@ class AdminOperationsService:
         room_items, matrix_items = self._room_items(local_date, rooms, stays, task_counts)
         return OperationsSnapshot(
             local_date=local_date,
-            attention_items=tuple(self._attention_item(record) for record in attention),
+            attention_items=self._attention_items(attention),
             rooms=room_items,
             seven_day_rooms=matrix_items,
         )

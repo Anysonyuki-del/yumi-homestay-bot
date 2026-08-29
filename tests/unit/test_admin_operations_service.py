@@ -27,6 +27,12 @@ from homestay_bot.domain.models import (
     RoomOperationalState,
     StayOrder,
 )
+from homestay_bot.repositories.admin_operations import (
+    ActiveRoomRecord,
+    AttentionRecord,
+    RoomTaskCountRecord,
+    StayRecord,
+)
 from homestay_bot.services.admin_operations_service import AdminOperationsService
 
 
@@ -119,8 +125,8 @@ async def test_snapshot_keeps_attention_statuses_separate_and_returns_safe_links
     assert items["complaint"].target_url.startswith("/employee/complaints/")
     assert items["customer_merge"].target_url.startswith("/employee/customers/merge/")
     assert items["task"].target_url.startswith("/employee/tasks/")
-    assert items["credential"].target_url == "/employee/tasks"
-    assert items["reminder"].target_url == "/employee/tasks"
+    assert items["credential"].target_url.startswith("/employee/tasks")
+    assert items["reminder"].target_url.startswith("/employee/tasks")
     assert all(item.title and item.summary for item in snapshot.attention_items)
     snapshot_text = repr(snapshot)
     for secret in (
@@ -136,6 +142,58 @@ async def test_snapshot_keeps_attention_statuses_separate_and_returns_safe_links
     ):
         assert secret not in snapshot_text
     await engine.dispose()  # type: ignore[attr-defined]
+
+
+async def test_snapshot_groups_repeated_room_followups_without_hiding_total() -> None:
+    """同房源的提醒应汇总为一张卡，同时保留真实待处理数量。"""
+
+    class RepositoryStub:
+        """提供重复提醒并实现运营服务所需的空房态查询。"""
+
+        async def prepare_consistent_read(self) -> None:
+            """测试仓储无需准备事务。"""
+
+        async def list_attention(self) -> tuple[AttentionRecord, ...]:
+            """返回同一房源的三条历史人工提醒。"""
+            return tuple(
+                AttentionRecord(
+                    kind="reminder",
+                    record_id=record_id,
+                    status=ReminderStatus.MANUAL_FOLLOWUP,
+                    property_id=7,
+                    room_title="江景大床房",
+                    updated_at=datetime(2026, 8, record_id, tzinfo=UTC),
+                )
+                for record_id in (1, 2, 3)
+            )
+
+        async def list_active_rooms(self) -> tuple[ActiveRoomRecord, ...]:
+            """当前场景不需要房间矩阵。"""
+            return ()
+
+        async def list_current_and_future_stays(
+            self,
+            local_date: date,
+        ) -> tuple[StayRecord, ...]:
+            """当前场景不需要订单。"""
+            return ()
+
+        async def list_open_task_counts(self) -> tuple[RoomTaskCountRecord, ...]:
+            """当前场景不需要任务统计。"""
+            return ()
+
+    service = AdminOperationsService(  # type: ignore[arg-type]
+        None,
+        repository=RepositoryStub(),
+    )
+
+    snapshot = await service.snapshot(datetime(2026, 8, 29, tzinfo=UTC))
+
+    assert snapshot.attention_count == 3
+    assert len(snapshot.attention_items) == 1
+    assert snapshot.attention_items[0].related_count == 3
+    assert "3 项" in snapshot.attention_items[0].summary
+    assert snapshot.attention_items[0].target_url == "/employee/tasks?property_id=7"
 
 
 async def test_snapshot_batches_room_today_next_arrival_and_seven_day_facts() -> None:

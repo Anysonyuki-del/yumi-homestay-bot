@@ -5,6 +5,6 @@
 <section class="panel panel--padded">
   <div class="section-heading"><div><p class="eyebrow">{{ snapshot.local_date | date_zh }}</p><h2>需要人工采取行动</h2></div>{{ ui.badge(snapshot.attention_count ~ " 项", "warning" if snapshot.attention_count else "success") }}</div>
   <p class="muted">只汇总本地数据库中明确需要人工处理的事项，不读取客户消息正文或入住凭证。</p>
-  <div class="attention-grid">{% for item in snapshot.attention_items %}<article class="candidate-card"><div class="section-heading"><h3>{{ item.title }}</h3>{{ ui.badge(item.status | status_zh, "warning") }}</div><p>{{ item.summary }}</p>{% if item.room_title %}<p class="muted">{{ item.room_title }}</p>{% endif %}<p class="muted">更新于 {{ item.updated_at | datetime_zh }}</p><a class="button" href="{{ item.target_url }}">立即处理</a></article>{% else %}{{ ui.empty("当前没有需要人工关注的事项", "自动化流程会继续运行，新事项会出现在这里。") }}{% endfor %}</div>
+  <div class="attention-grid">{% for item in snapshot.attention_items %}<article class="candidate-card"><div class="section-heading"><h3>{{ item.title }}</h3>{{ ui.badge((item.related_count ~ " 项") if item.related_count > 1 else (item.status | status_zh), "warning") }}</div><p>{{ item.summary }}</p>{% if item.room_title %}<p class="muted">{{ item.room_title }}</p>{% endif %}<p class="muted">最近更新于 {{ item.updated_at | datetime_zh }}</p><a class="button" href="{{ item.target_url }}">立即处理</a></article>{% else %}{{ ui.empty("当前没有需要人工关注的事项", "自动化流程会继续运行，新事项会出现在这里。") }}{% endfor %}</div>
 </section>
 {% endblock %}
