@@ -196,6 +196,58 @@ async def test_snapshot_groups_repeated_room_followups_without_hiding_total() ->
     assert snapshot.attention_items[0].target_url == "/employee/tasks?property_id=7"
 
 
+async def test_snapshot_groups_repeated_business_tasks_into_one_work_queue() -> None:
+    """待确认业务任务应汇总为工作队列，避免历史任务铺满关注页。"""
+
+    class RepositoryStub:
+        """提供重复业务任务并实现运营服务所需的空房态查询。"""
+
+        async def prepare_consistent_read(self) -> None:
+            """测试仓储无需准备事务。"""
+
+        async def list_attention(self) -> tuple[AttentionRecord, ...]:
+            """返回三条等待管理员确认的业务任务。"""
+            return tuple(
+                AttentionRecord(
+                    kind="task",
+                    record_id=record_id,
+                    status=BusinessTaskStatus.PENDING_CONFIRMATION,
+                    property_id=None,
+                    room_title=None,
+                    updated_at=datetime(2026, 8, record_id, tzinfo=UTC),
+                )
+                for record_id in (1, 2, 3)
+            )
+
+        async def list_active_rooms(self) -> tuple[ActiveRoomRecord, ...]:
+            """当前场景不需要房间矩阵。"""
+            return ()
+
+        async def list_current_and_future_stays(
+            self,
+            local_date: date,
+        ) -> tuple[StayRecord, ...]:
+            """当前场景不需要订单。"""
+            return ()
+
+        async def list_open_task_counts(self) -> tuple[RoomTaskCountRecord, ...]:
+            """当前场景不需要任务统计。"""
+            return ()
+
+    service = AdminOperationsService(  # type: ignore[arg-type]
+        None,
+        repository=RepositoryStub(),
+    )
+
+    snapshot = await service.snapshot(datetime(2026, 8, 29, tzinfo=UTC))
+
+    assert snapshot.attention_count == 3
+    assert len(snapshot.attention_items) == 1
+    assert snapshot.attention_items[0].related_count == 3
+    assert "3 项" in snapshot.attention_items[0].summary
+    assert snapshot.attention_items[0].target_url == "/employee/tasks"
+
+
 async def test_snapshot_batches_room_today_next_arrival_and_seven_day_facts() -> None:
     """逐房和七日矩阵应批量聚合，并排除停用房间及终止订单。"""
     engine, factory = await _factory()

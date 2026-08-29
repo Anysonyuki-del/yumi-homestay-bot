@@ -190,8 +190,17 @@ class AdminOperationsService:
             target_url = f"/employee/customers/merge/{record.record_id}"
         else:
             title = "业务任务待确认"
-            summary = f"任务 #{record.record_id}：{status_text}{room_context}"
-            target_url = f"/employee/tasks/{record.record_id}"
+            summary = (
+                f"共有 {related_count} 项业务任务等待确认{room_context}"
+                if related_count > 1
+                else f"任务 #{record.record_id}：{status_text}{room_context}"
+            )
+            if related_count == 1:
+                target_url = f"/employee/tasks/{record.record_id}"
+            elif record.property_id is not None:
+                target_url = f"/employee/tasks?property_id={record.property_id}"
+            else:
+                target_url = "/employee/tasks"
         return AttentionItem(
             kind=record.kind,
             record_id=record.record_id,
@@ -210,14 +219,14 @@ class AdminOperationsService:
         cls,
         records: tuple[AttentionRecord, ...],
     ) -> tuple[AttentionItem, ...]:
-        """按房源归并重复跟进，个体投诉、合并与任务仍保持独立。"""
+        """按房源和事项类型归并重复工作，投诉与合并仍保持独立。"""
         grouped: dict[
             tuple[AttentionKind, int | None, AttentionStatus],
             list[AttentionRecord],
         ] = defaultdict(list)
         items: list[AttentionItem] = []
         for record in records:
-            if record.kind in {"credential", "reminder"}:
+            if record.kind in {"credential", "reminder", "task"}:
                 grouped[(record.kind, record.property_id, record.status)].append(
                     record
                 )
