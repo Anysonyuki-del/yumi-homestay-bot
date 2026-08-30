@@ -59,6 +59,11 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "origin_kind" in result.stdout
     assert "closure_reason_code" in result.stdout
     assert "ix_business_tasks_status_expires_at" in result.stdout
+    assert "0022_approval_pii" in result.stdout
+    assert "guest_name_ciphertext" in result.stdout
+    assert "guest_mobile_ciphertext" in result.stdout
+    assert "special_requests_ciphertext" in result.stdout
+    assert "pii_purged_at" in result.stdout
     assert "customer_memory_events" in result.stdout
     assert "source_excerpt_hash" in result.stdout
     assert "uq_customer_memory_active_subject" in result.stdout
@@ -296,7 +301,62 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0021_task_lifecycle (head)" in current.stdout
+    assert "0022_approval_pii (head)" in current.stdout
+
+
+def test_sqlite_approval_pii_migration_downgrades_and_reupgrades(
+    tmp_path: Path,
+) -> None:
+    """0022 必须支持 SQLite 升级、降级到 0021 后再次升级。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "approval-pii.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+    alembic = str(project_root / ".venv/bin/alembic")
+
+    def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
+        """在隔离审批数据库执行一次 Alembic 命令。"""
+        return subprocess.run(
+            [alembic, *arguments],
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    expected_columns = {
+        "guest_name_ciphertext",
+        "guest_mobile_ciphertext",
+        "special_requests_ciphertext",
+        "pii_purged_at",
+    }
+    first_upgrade = run_alembic("upgrade", "head")
+    assert first_upgrade.returncode == 0, first_upgrade.stderr
+    with sqlite3.connect(database_path) as connection:
+        first_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info('booking_approvals')")
+        }
+    assert expected_columns <= first_columns
+
+    downgrade = run_alembic("downgrade", "0021_task_lifecycle")
+    assert downgrade.returncode == 0, downgrade.stderr
+    with sqlite3.connect(database_path) as connection:
+        downgraded_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info('booking_approvals')")
+        }
+    assert expected_columns.isdisjoint(downgraded_columns)
+
+    second_upgrade = run_alembic("upgrade", "head")
+    assert second_upgrade.returncode == 0, second_upgrade.stderr
+    with sqlite3.connect(database_path) as connection:
+        second_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info('booking_approvals')")
+        }
+    assert expected_columns <= second_columns
 
 
 def test_customer_memory_trust_migration_quarantines_unverified_history(

@@ -106,7 +106,11 @@ from homestay_bot.services.admin_passwords import (
     ADMIN_PASSWORD_HASHER,
     validate_admin_password_hash,
 )
-from homestay_bot.services.approval_page_service import ApprovalPageService
+from homestay_bot.services.approval_page_service import (
+    ApprovalPageService,
+    ApprovalPageView,
+)
+from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
 from homestay_bot.services.business_task_service import BusinessTaskService
@@ -1146,23 +1150,26 @@ class SessionApprovalPageService:
         *,
         factory: async_sessionmaker[AsyncSession],
         registry: RuntimeClientRegistry,
+        sensitive_data: ApprovalSensitiveData,
     ) -> None:
-        """保存数据库会话工厂和运行客户端provider。"""
+        """保存数据库会话工厂、运行客户端 provider 和审批密钥服务。"""
         self._factory = factory
         self._registry = registry
+        self._sensitive_data = sensitive_data
 
-    @staticmethod
-    def _service(session: AsyncSession, hostex: HostexClient) -> ApprovalPageService:
+    def _service(self, session: AsyncSession, hostex: HostexClient) -> ApprovalPageService:
         """用同一会话组装权限、审批仓储和下单状态机。"""
         booking = BookingService(
             SQLAlchemyApprovalRepository(session),
             SQLAlchemyPermissionChecker(session),
             hostex,
+            self._sensitive_data,
         )
         return ApprovalPageService(
             session=session,
             hostex=hostex,
             booking=booking,
+            sensitive_data=self._sensitive_data,
         )
 
     async def get_detail(self, approval_id: int) -> dict[str, Any]:
@@ -1170,7 +1177,7 @@ class SessionApprovalPageService:
         async with self._registry.acquire() as bundle, self._factory() as session:
             return await self._service(session, bundle.hostex).get_detail(approval_id)
 
-    async def list_pending(self, *, offset: int, limit: int) -> list[BookingApproval]:
+    async def list_pending(self, *, offset: int, limit: int) -> list[ApprovalPageView]:
         """在短会话中按分页边界读取待处理审批。"""
         async with self._registry.acquire() as bundle, self._factory() as session:
             return await self._service(session, bundle.hostex).list_pending(
@@ -2819,6 +2826,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.runtime_config_service = runtime_config_service
 
     sensitive_data = SensitiveDataCipher(bootstrap.data_encryption_key)
+    approval_sensitive_data = ApprovalSensitiveData(sensitive_data)
     app.state.admin_dashboard_service = SessionAdminDashboardService(factory)
     app.state.admin_operations_service = SessionAdminOperationsService(factory)
     app.state.task_page_service = SessionTaskPageService(
@@ -2954,7 +2962,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ),
                 agent_id=bundle.agent_id,
                 duty_employee_userids=list(bundle.duty_userids),
-                approvals=ApprovalService(SQLAlchemyApprovalRepository(session)),
+                approvals=ApprovalService(
+                    SQLAlchemyApprovalRepository(session),
+                    sensitive_data=approval_sensitive_data,
+                ),
                 approval_base_url=bootstrap.public_base_url,
                 frequent_faq=FrequentFaqService(
                     candidates=faq_candidates,
@@ -3296,6 +3307,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             approval_service = SessionApprovalPageService(
                 factory=factory,
                 registry=candidate_registry,
+                sensitive_data=approval_sensitive_data,
             )
             customer_service = SessionCustomerAdminService(
                 factory,

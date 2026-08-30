@@ -14,6 +14,7 @@ from homestay_bot.integrations.hostex_client import (
     Reservation,
     ReservationQuery,
 )
+from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 
 
 class ApprovalRepository(Protocol):
@@ -64,11 +65,13 @@ class BookingService:
         approvals: ApprovalRepository,
         permissions: PermissionChecker,
         hostex: HostexBookingPort,
+        sensitive_data: ApprovalSensitiveData,
     ) -> None:
-        """注入仓储、权限和百居易端口，便于隔离验证。"""
+        """注入仓储、权限、百居易端口和审批敏感数据服务。"""
         self._approvals = approvals
         self._permissions = permissions
         self._hostex = hostex
+        self._sensitive_data = sensitive_data
 
     async def confirm_and_create(
         self,
@@ -154,14 +157,15 @@ class BookingService:
         ):
             raise ValueError("审批单缺少创建订单所需字段")
 
+        sensitive = self._sensitive_data.read(approval)
         return CreateReservationRequest(
             property_id=approval.property_id,
             custom_channel_id=1,
             check_in_date=approval.check_in_date,
             check_out_date=approval.check_out_date,
             number_of_guests=approval.number_of_guests,
-            guest_name=approval.guest_name,
-            mobile=approval.guest_mobile,
+            guest_name=sensitive.guest_name,
+            mobile=sensitive.guest_mobile,
             currency="CNY",
             rate_amount=approval.final_rate_amount,
             commission_amount=0,
@@ -193,13 +197,14 @@ class BookingService:
                 approval,
                 failure_message="创建结果暂时无法自动核验",
             )
+        sensitive = self._sensitive_data.read(approval)
         matches = [
             item
             for item in candidates
             if item.check_in_date == approval.check_in_date
             and item.check_out_date == approval.check_out_date
-            and item.guest_name == approval.guest_name
-            and item.guest_phone == approval.guest_mobile
+            and item.guest_name == sensitive.guest_name
+            and item.guest_phone == sensitive.guest_mobile
             and self._matches_creation_window(approval, item)
             and self._matches_rate_when_reported(approval, item)
         ]

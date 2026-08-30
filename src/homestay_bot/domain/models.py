@@ -652,8 +652,24 @@ class BookingApproval(TimestampMixin, Base):
     number_of_guests: Mapped[int] = mapped_column(Integer, nullable=False)
     guest_name: Mapped[str] = mapped_column(String(100), nullable=False)
     guest_mobile: Mapped[str] = mapped_column(String(32), nullable=False)
+    guest_name_ciphertext: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+    )
+    guest_mobile_ciphertext: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+    )
     room_type_preference: Mapped[str] = mapped_column(String(128), nullable=False)
     special_requests: Mapped[str | None] = mapped_column(Text, nullable=True)
+    special_requests_ciphertext: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+    )
+    pii_purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     property_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     final_rate_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
     received_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)

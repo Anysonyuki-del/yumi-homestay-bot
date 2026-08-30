@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
 
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from homestay_bot.domain.enums import ApprovalStatus
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
+from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.booking_service import BookingService
 
 
@@ -26,6 +28,21 @@ class ApprovalHostexPort(Protocol):
         """返回百居易账户可用的收入方式。"""
 
 
+@dataclass(frozen=True)
+class ApprovalPageView:
+    """仅暴露审批模板需要的只读字段，避免 ORM 密文进入视图层。"""
+
+    id: int
+    approval_code: str
+    status: ApprovalStatus
+    check_in_date: date
+    check_out_date: date
+    number_of_guests: int
+    guest_name: str
+    room_type_preference: str
+    special_requests: str | None
+
+
 class ApprovalPageService:
     """汇总审批详情，并把确认动作交给安全下单状态机。"""
 
@@ -35,11 +52,13 @@ class ApprovalPageService:
         session: AsyncSession,
         hostex: ApprovalHostexPort,
         booking: BookingService,
+        sensitive_data: ApprovalSensitiveData,
     ) -> None:
-        """注入当前会话、百居易只读接口和下单服务。"""
+        """注入当前会话、百居易只读接口、下单与敏感数据服务。"""
         self._session = session
         self._hostex = hostex
         self._booking = booking
+        self._sensitive_data = sensitive_data
 
     async def get_detail(self, approval_id: int) -> dict[str, Any]:
         """读取审批单，并并行所需小规模参考数据。"""
@@ -51,9 +70,10 @@ class ApprovalPageService:
             approval.check_in_date, approval.check_out_date
         )
         income_methods = await self._hostex.list_income_methods()
+        sensitive = self._sensitive_data.read(approval)
         return {
-            "approval": approval,
-            "masked_mobile": self.mask_mobile(approval.guest_mobile),
+            "approval": self._to_view(approval),
+            "masked_mobile": self.mask_mobile(sensitive.guest_mobile),
             "properties": [item.model_dump(mode="json") for item in properties],
             "reference_prices": [
                 item.model_dump(mode="json") for item in prices
@@ -65,7 +85,7 @@ class ApprovalPageService:
 
     async def list_pending(
         self, *, offset: int, limit: int
-    ) -> list[BookingApproval]:
+    ) -> list[ApprovalPageView]:
         """按稳定顺序分页返回需要员工关注的审批单。"""
         statement = (
             select(BookingApproval)
@@ -83,7 +103,8 @@ class ApprovalPageService:
             .offset(offset)
             .limit(limit)
         )
-        return list((await self._session.scalars(statement)).all())
+        approvals = list((await self._session.scalars(statement)).all())
+        return [self._to_view(approval) for approval in approvals]
 
     async def confirm(
         self,
@@ -102,3 +123,18 @@ class ApprovalPageService:
         if len(mobile) >= 7:
             return f"{mobile[:3]}{'*' * (len(mobile) - 7)}{mobile[-4:]}"
         return "*" * len(mobile)
+
+    def _to_view(self, approval: BookingApproval) -> ApprovalPageView:
+        """解密模板所需字段并复制到不可变视图，禁止泄露 ORM 密文字段。"""
+        sensitive = self._sensitive_data.read(approval)
+        return ApprovalPageView(
+            id=approval.id,
+            approval_code=approval.approval_code,
+            status=approval.status,
+            check_in_date=approval.check_in_date,
+            check_out_date=approval.check_out_date,
+            number_of_guests=approval.number_of_guests,
+            guest_name=sensitive.guest_name,
+            room_type_preference=approval.room_type_preference,
+            special_requests=sensitive.special_requests,
+        )

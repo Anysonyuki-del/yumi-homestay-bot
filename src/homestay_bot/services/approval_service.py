@@ -5,6 +5,7 @@ from typing import Protocol
 from homestay_bot.domain.enums import ApprovalStatus
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.domain.schemas import BookingRequest
+from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 
 
 class PendingApprovalRepository(Protocol):
@@ -31,10 +32,12 @@ class ApprovalService:
         self,
         repository: PendingApprovalRepository,
         *,
+        sensitive_data: ApprovalSensitiveData,
         code_factory: Callable[[], str] = generate_approval_code,
     ) -> None:
-        """注入仓储和编号生成器，保证测试可重复。"""
+        """注入仓储、敏感数据服务和编号生成器，保证测试可重复。"""
         self._repository = repository
+        self._sensitive_data = sensitive_data
         self._code_factory = code_factory
 
     async def create_pending(
@@ -65,6 +68,13 @@ class ApprovalService:
             guest_name=request.guest_name,
             guest_mobile=request.guest_mobile,
             room_type_preference=request.room_type_preference,
+            special_requests=request.special_requests,
+        )
+        # 阶段 2A 保留旧明文以支持回滚，同时所有新审批立即双写独立密文。
+        self._sensitive_data.write(
+            approval,
+            guest_name=request.guest_name,
+            guest_mobile=request.guest_mobile,
             special_requests=request.special_requests,
         )
         return await self._repository.add(approval)

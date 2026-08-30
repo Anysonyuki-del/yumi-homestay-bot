@@ -8,6 +8,7 @@ from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.services.approval_page_service import ApprovalPageView
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/approvals")
@@ -21,7 +22,7 @@ class ApprovalPageServicePort(Protocol):
 
     async def list_pending(
         self, *, offset: int, limit: int
-    ) -> list[BookingApproval]:
+    ) -> list[ApprovalPageView]:
         """分页返回员工需要处理的审批单。"""
 
     async def confirm(

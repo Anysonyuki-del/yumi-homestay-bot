@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
+from cryptography.fernet import Fernet
 
 from homestay_bot.domain.enums import ApprovalStatus
 from homestay_bot.domain.models import BookingApproval
@@ -14,8 +15,17 @@ from homestay_bot.integrations.hostex_client import (
     PropertyAvailability,
     Reservation,
 )
+from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
+from homestay_bot.services.sensitive_data import SensitiveDataCipher
+
+
+def sensitive_data() -> ApprovalSensitiveData:
+    """构造使用随机测试密钥的审批敏感数据服务。"""
+    return ApprovalSensitiveData(
+        SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    )
 
 
 class InMemoryApprovalRepository:
@@ -65,6 +75,7 @@ class HostexStub:
             reservation_created_at or datetime.now(UTC).isoformat()
         )
         self.create_calls = 0
+        self.last_create_request = None
 
     async def list_availabilities(
         self,
@@ -84,6 +95,7 @@ class HostexStub:
     async def create_reservation(self, request) -> CreateReservationResult:
         """记录真实写调用次数，并可模拟结果不明确。"""
         self.create_calls += 1
+        self.last_create_request = request
         if self.business_error:
             raise HostexBusinessError(422, "RT-FAIL", "invalid request")
         if self.ambiguous:
@@ -156,7 +168,11 @@ def valid_command() -> ConfirmBookingCommand:
 async def test_create_pending_approval_maps_guest_request() -> None:
     """客人确认资料后只生成待审批单，不直接创建订单。"""
     repository = CaptureApprovalRepository()
-    service = ApprovalService(repository, code_factory=lambda: "APP-NEW")
+    service = ApprovalService(
+        repository,
+        sensitive_data=sensitive_data(),
+        code_factory=lambda: "APP-NEW",
+    )
     request = BookingRequest(
         check_in_date=date(2026, 8, 1),
         check_out_date=date(2026, 8, 2),
@@ -171,6 +187,8 @@ async def test_create_pending_approval_maps_guest_request() -> None:
     assert approval.approval_code == "APP-NEW"
     assert approval.status == ApprovalStatus.PENDING
     assert approval.property_id is None
+    assert approval.guest_name_ciphertext is not None
+    assert approval.guest_mobile_ciphertext is not None
 
 
 @pytest.mark.asyncio
@@ -179,7 +197,7 @@ async def test_confirming_same_approval_twice_creates_one_reservation() -> None:
     approval = pending_approval()
     repository = InMemoryApprovalRepository(approval)
     hostex = HostexStub()
-    service = BookingService(repository, AllowApprover(), hostex)
+    service = BookingService(repository, AllowApprover(), hostex, sensitive_data())
 
     first = await service.confirm_and_create(1, employee_id=1, command=valid_command())
     second = await service.confirm_and_create(1, employee_id=1, command=valid_command())
@@ -191,11 +209,39 @@ async def test_confirming_same_approval_twice_creates_one_reservation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_booking_prefers_ciphertext_over_legacy_plaintext() -> None:
+    """已有密文时，下单与写后核验都不得继续读取旧明文。"""
+    approval = pending_approval()
+    approval.guest_name = "旧姓名"
+    approval.guest_mobile = "10000000000"
+    sensitive = sensitive_data()
+    sensitive.write(
+        approval,
+        guest_name="张三",
+        guest_mobile="13800138000",
+        special_requests=None,
+    )
+    repository = InMemoryApprovalRepository(approval)
+    hostex = HostexStub()
+    service = BookingService(repository, AllowApprover(), hostex, sensitive)
+
+    result = await service.confirm_and_create(
+        1,
+        employee_id=1,
+        command=valid_command(),
+    )
+
+    assert result.status is ApprovalStatus.BOOKED
+    assert hostex.last_create_request.guest_name == "张三"
+    assert hostex.last_create_request.mobile == "13800138000"
+
+
+@pytest.mark.asyncio
 async def test_room_conflict_stops_before_create() -> None:
     """下单前房态冲突时不得调用创建订单接口。"""
     repository = InMemoryApprovalRepository(pending_approval())
     hostex = HostexStub(available=False)
-    service = BookingService(repository, AllowApprover(), hostex)
+    service = BookingService(repository, AllowApprover(), hostex, sensitive_data())
 
     result = await service.confirm_and_create(1, employee_id=1, command=valid_command())
 
@@ -208,7 +254,7 @@ async def test_ambiguous_create_result_requires_manual_review_without_retry() ->
     """创建订单超时后不得自动重放写请求。"""
     repository = InMemoryApprovalRepository(pending_approval())
     hostex = HostexStub(ambiguous=True)
-    service = BookingService(repository, AllowApprover(), hostex)
+    service = BookingService(repository, AllowApprover(), hostex, sensitive_data())
 
     result = await service.confirm_and_create(1, employee_id=1, command=valid_command())
 
@@ -221,7 +267,7 @@ async def test_business_create_error_moves_to_review_instead_of_stuck_creating()
     """明确业务失败也必须离开 CREATING 并保留可解释错误码。"""
     repository = InMemoryApprovalRepository(pending_approval())
     hostex = HostexStub(business_error=True)
-    service = BookingService(repository, AllowApprover(), hostex)
+    service = BookingService(repository, AllowApprover(), hostex, sensitive_data())
 
     result = await service.confirm_and_create(
         1, employee_id=1, command=valid_command()
@@ -244,7 +290,7 @@ async def test_repeated_confirmation_reconciles_creating_without_new_write() -> 
     approval.approved_at = datetime.now(UTC)
     repository = InMemoryApprovalRepository(approval)
     hostex = HostexStub()
-    service = BookingService(repository, AllowApprover(), hostex)
+    service = BookingService(repository, AllowApprover(), hostex, sensitive_data())
 
     result = await service.confirm_and_create(
         1, employee_id=1, command=valid_command()
@@ -270,7 +316,7 @@ async def test_reconciliation_does_not_link_an_old_matching_order() -> None:
             approval.approved_at - timedelta(days=1)
         ).isoformat()
     )
-    service = BookingService(repository, AllowApprover(), hostex)
+    service = BookingService(repository, AllowApprover(), hostex, sensitive_data())
 
     result = await service.confirm_and_create(
         1, employee_id=1, command=valid_command()
