@@ -32,6 +32,7 @@ from homestay_bot.routes.wecom_callback import (
     WeComCallbackService,
     get_callback_service,
 )
+from homestay_bot.services.private_file_storage import PrivateFileStorage
 from homestay_bot.services.runtime_clients import RuntimeClientBundle
 from homestay_bot.services.runtime_config_cipher import RuntimeConfigCipher
 from homestay_bot.services.runtime_config_service import (
@@ -190,6 +191,41 @@ def _clear_runtime_environment(monkeypatch) -> None:
     """清除全部可网页编辑字段，证明启动不依赖空凭据占位。"""
     for key in RUNTIME_ENVIRONMENT_KEYS:
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_startup_verifies_private_upload_directory_once(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """应用装配附件服务前必须验证私有上传目录真实可写。"""
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'storage-probe.db'}"
+    await _create_runtime_database(database_url)
+    _set_bootstrap_environment(
+        monkeypatch,
+        database_url=database_url,
+        config_encryption_key=Fernet.generate_key().decode(),
+    )
+    _clear_runtime_environment(monkeypatch)
+    monkeypatch.setenv("PRIVATE_UPLOAD_DIR", str(tmp_path / "private"))
+    calls: list[object] = []
+
+    def record_probe(storage: PrivateFileStorage) -> None:
+        """记录生命周期对当前私有存储实例的启动探测。"""
+        calls.append(storage)
+
+    monkeypatch.setattr(
+        PrivateFileStorage,
+        "verify_writable",
+        record_probe,
+        raising=False,
+    )
+
+    test_app = FastAPI()
+    async with application_lifespan(test_app):
+        assert test_app.state.private_file_service is not None
+
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio

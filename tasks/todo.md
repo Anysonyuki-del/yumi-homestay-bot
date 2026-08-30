@@ -1,3 +1,154 @@
+# 当前任务：综合审查风险修复 Spec（HARD-GATE）
+
+- [x] 完成综合代码审查并保留代码、迁移和测试证据
+- [x] 第一段确认：修复目标、范围边界和四阶段发布顺序
+- [x] 第二段确认：功能规则、资源预算和精确文件/函数计划
+- [x] 第三段确认：迁移、回滚、验证和生产验收门禁
+- [x] 用户明确回复“开始”后，才进入红测与业务代码实现
+- [x] 阶段 0 红测：Compose 持久挂载与私有目录写入探针
+- [x] 阶段 0 实现：单一容器目录、宿主机挂载与启动失败保护
+- [x] 阶段 0 本地最小验证与差异自审
+- [ ] 阶段 0 提交、推送、生产文件迁移与双重重建验收
+
+## 第一段：推荐修复边界
+
+- 阶段 0（最高优先级）：先抢救并持久化私有上传文件。部署前从真实运行容器导出并校验既有文件，再为 `data/private_uploads` 增加持久卷和备份/恢复检查；这一阶段不混入模型、数据库或前端改动。
+- 阶段 1（高优先级）：给所有 DeepSeek 生产调用增加显式输出上限、单消息调用次数和上下文字符预算；把知识注入改为有相关性排序且受总量限制的检索；所有日期和房源工具参数必须在调用百居易前完成本地校验。
+- 阶段 2（高优先级、独立迁移）：将预订审批的姓名、手机号和特殊需求迁移为密文，并增加终态记录的保留期清理；采用可验证的分阶段回填，禁止在未备份、未核对数量时直接删除明文字段。
+- 阶段 3（中优先级）：锁定依赖与基础镜像、移除不安全的可信镜像配置、补充构建上下文排除规则与非 root 运行；在应用层补防嵌套响应头，并与生产 Nginx 的真实响应联合验收。
+- 四个阶段分别提交、验证、发布和回滚，不合并成一次大版本；受保护的未跟踪 `YuMi民宿AI项目总结.txt` 始终保持未读、未改、未提交。
+
+## 当前状态
+
+- 本轮只写入任务计划，没有修改业务代码、数据库、Compose、依赖或生产环境。
+- 用户以“继续”确认第一段；当前等待第二段确认。
+
+## 第二段：待确认的功能规则与精确修改面
+
+### 私有上传持久化
+
+- `compose.yaml` 为 API 固定容器目录 `/app/data/private_uploads`，宿主机目录使用 `${PRIVATE_UPLOAD_HOST_DIR:-./data/private_uploads}`；生产 `.env` 指向 `/opt/yumi-data/private_uploads`，避免把生产路径硬编码进本地开发配置。
+- `BootstrapSettings.private_upload_dir` 保留非容器默认值；Compose 显式覆盖 `PRIVATE_UPLOAD_DIR=/app/data/private_uploads`，容器内只有一个目录真相。
+- `PrivateFileStorage.verify_writable()` 在应用生命周期启动时执行一次真实创建/删除探针；不可写时拒绝启动，不让系统在数据库可写但附件必丢的状态下继续运行。
+- 部署前从旧容器导出当前目录，核对文件数量和 SHA-256；迁移后重建 API 两次并证明文件仍存在。`deploy/start.sh` 继续负责本机 SQLite 路径，生产容器备份流程单独包含宿主机上传目录。
+
+### 模型资源预算
+
+- 新增唯一的 `ModelBudget` 规则：单个主请求最多 48,000 字符，主链累计最多 120,000 字符，主链最多 3 次模型调用、最多 2 轮工具结果回填；必要精炼最多额外 1 次，投递拒绝后的安全改写最多 1 次且不能递归。
+- 主回复 `max_tokens=1800`，精炼和投递改写各 `max_tokens=900`；这是在原建议基础上按用户允许放宽 50% 后的硬上限，不随所选 OpenAI 兼容模型自动扩大。
+- 历史对话最多保留最近 6 条、每条 1,000 字符且合计不超过 6,000；当前问题最多 2,000；客户治理上下文最多 6,000；FAQ 候选最多 20 条且合计 4,000。
+- 工具结果单次最多 24,000 字符；超过时按结构裁剪，不截断成无效 JSON。任何请求超出单次或累计预算时停止继续调用，优先返回已有确定性房态回执，否则转人工。
+- `src/homestay_bot/services/model_budget.py` 保存统一常量与计数器；`DeepSeekGuestAssistant.respond()`、`_refine_reply()` 和 `DeepSeekDeliveryRewriter.rewrite()` 必须共用该规则，不在各模块复制第二套数字。
+
+### 相关性知识检索
+
+- `KnowledgeService.build_context()` 收敛为 `retrieve(language, query, limit=8, char_budget=12_000)`；每条问题最多 300 字符、答案最多 1,200 字符。
+- 首期使用确定性的中英文词元、中文二元组、关键词、分类和问题字段混合评分；分数降序、同分按较新主键排序。无相关命中时返回空，不用旧的前 100 条兜底。
+- `DeepSeekGuestAssistant.respond()` 只用当前问题检索；`FaqDraftJobService._build_approved_knowledge()` 用候选标准问题分别检索中英文，避免 FAQ 草稿链继续注入全部知识。
+- `SQLAlchemyKnowledgeRepository.list_active()` 继续作为唯一审核知识来源；首期不增加向量数据库、Embedding 调用或第二套索引，待数据规模和召回证据确实需要时再升级。
+
+### 百居易工具边界
+
+- 新增共享 `validate_stay_date_range()`：先解析严格 ISO 日期，再检查入住日不早于武汉当天、提前不超过 365 天、退房晚于入住、住宿不超过 30 天。
+- `HostexReadOnlyToolExecutor.execute()` 必须在任何 `list_properties()`、`list_availabilities()` 或 `list_reference_prices()` 调用前完成校验；非法参数对应百居易调用次数必须为 0。
+- `AdminDebugService._validate_context()` 复用同一验证器，删除重复日期规则；工具 JSON schema 同步声明边界，但本地验证仍是最终安全门。
+
+### 审批隐私数据
+
+- `BookingApproval` 增加 `guest_name_ciphertext`、`guest_mobile_ciphertext`、`special_requests_ciphertext` 和 `pii_purged_at`；三个密文用途分别为 `approval_guest_name`、`approval_guest_mobile`、`approval_special_requests`。
+- 新增 `ApprovalSensitiveData`，统一负责从 `BookingRequest` 加密和按需解密；`ApprovalService.create_pending()`、`BookingService._build_create_request()`、`_reconcile_or_mark_review()`、`ApprovalPageService.get_detail()` 和 `list_pending()` 只通过该服务接触明文。
+- 审批模板改用不含密文字段的只读视图模型，不直接把 SQLAlchemy 实体交给 Jinja。
+- 真实历史数据要求两次发布：`0022` 增加密文字段并提供临时双读/双写和有界回填；核对全部成功后，`0023` 删除明文字段及兼容分支。兼容层只服务真实旧数据，不能永久保留。
+- 保留策略：`BOOKED` 在退房 30 天后清空审批 PII；`REJECTED`、`CONFLICT` 在终态 90 天后清空；`PENDING`、`CREATING`、`NEEDS_REVIEW` 永不自动清空。保留审批状态、日期、金额、百居易编号和审计证据。
+
+### 构建与浏览器安全
+
+- `requirements.lock` 使用精确版本和哈希；`Dockerfile` 使用固定 digest、TLS 校验索引、锁文件安装、非 root 用户，并删除 `PIP_TRUSTED_HOST`。
+- 新增 `.dockerignore` 排除 `.env`、`.git`、虚拟环境、数据、备份、worktree 和受保护项目总结文件；不改变运行时业务行为。
+- `AdminNoStoreMiddleware.__call__()` 只为 `/employee` 增加 `Content-Security-Policy: frame-ancestors 'none'`、`X-Frame-Options: DENY` 和 `Referrer-Policy: no-referrer`；本阶段不扩展为全站完整 CSP。
+- 新增最小 CI，覆盖 Ruff、Mypy、无真实外联的 Pytest、全新 Alembic 升级和 Docker 构建；仍按风险指纹只运行一次最终综合门禁。
+
+### 预定修改文件
+
+- 阶段 0：`compose.yaml`、`src/homestay_bot/config.py`、`src/homestay_bot/services/private_file_storage.py`、`src/homestay_bot/application.py`、`tests/unit/test_private_file_storage.py`、`tests/unit/test_compose_security.py`。
+- 阶段 1：`src/homestay_bot/services/model_budget.py`、`services/knowledge_service.py`、`services/stay_date_range.py`、`services/faq_draft_job.py`、`integrations/deepseek_client.py`、`integrations/deepseek_delivery_rewriter.py`、`repositories/knowledge.py`、`services/admin_debug_service.py` 及对应聚焦测试。
+- 阶段 2：`domain/models.py`、`services/approval_sensitive_data.py`、`approval_service.py`、`booking_service.py`、`approval_page_service.py`、`repositories/retention.py`、`application.py`、审批模板、`0022`/`0023` 迁移和审批/保留测试。
+- 阶段 3：`Dockerfile`、`.dockerignore`、`requirements.lock`、`.github/workflows/ci.yml`、`src/homestay_bot/middleware.py`、`tests/unit/test_compose_security.py`、`tests/integration/test_admin_hardening.py`。
+
+## 第三段：待确认的迁移、回滚与验收门禁
+
+### 阶段 0：私有上传持久化
+
+- 红测先证明当前 Compose 没有 API 上传挂载、只读目录会在启动探针失败；实现后运行存储、应用启动和 Compose 聚焦测试，以及 `docker compose config`。
+- 生产修改前备份 `.env`、Compose、源码 bundle、PostgreSQL custom dump和旧容器私有上传目录；记录文件数量、总字节数和逐文件 SHA-256，输出只包含随机文件编号与校验结果，不输出图片内容。
+- 如果旧容器目录不存在但数据库仍有附件/凭证引用，立即停止部署并报告既有缺失，禁止创建空目录冒充迁移成功。
+- 切换后连续重建 API 两次；既有文件数量、校验和必须一致，并通过已授权入口读取代表性任务附件与凭证图片。失败时恢复旧 API/Compose，保留新宿主机副本供排查，不删除任何文件；本阶段没有数据库迁移。
+
+### 阶段 1：模型预算、知识检索与工具校验
+
+- 红测覆盖：主链最坏调用次数不超过 3；所有生产调用都有 `max_tokens`；单请求/累计字符超限确定性降级；工具结果保持有效 JSON；超过 100 条知识时能找出较新的相关项并排除无关项；非法日期触发百居易调用 0 次。
+- 实现冻结后运行 DeepSeek 客户端、投递改写、知识服务、FAQ 草稿、管理员调试聚焦测试，随后 Ruff、Mypy、`pip check` 和一次全量无外联回归。确定性证据充分时不调用真实模型。
+- 只有供应商协议兼容仍有证据缺口时，最多执行一次真实 DeepSeek 验收：输入小于 4,000 字符、无工具、`max_tokens<=256`，记录调用次数和 token 数，不记录问题或回复正文。
+- 本阶段无迁移；回滚只需恢复上一版本代码/镜像。生产验收检查版本、健康、近期日志、预算数值日志和只读知识检索；企业微信客人实际收件仍是单独验收，不由健康检查替代。
+
+### 阶段 2A：审批密文列与历史回填
+
+- `0022` 只增加 nullable 密文列和 `pii_purged_at`，不删除旧列；先验证 SQLite 升级/降级/再升级和 PostgreSQL 离线 SQL。
+- 红测覆盖用途隔离、密文不含明文、错误用途不能解密、审批下单与核验仍使用原值、模板不接触 ORM 密文字段、旧记录双读和新记录临时双写。
+- 生产先做数据库备份；回填按每批 100 条短事务执行，支持幂等续跑。完成门禁为：审批总数=三种必需密文完整数，逐条解密比对成功数=总数，失败数=0；日志只记录计数和记录编号，不记录明文/密文。
+- 任一回填失败时停止并保留 `0022` 与旧列，不进入 2B；旧版代码仍可回滚运行。
+
+### 阶段 2B：删除明文与启用保留期
+
+- 进入条件：2A 已稳定运行、回填门禁全部通过、最新数据库备份可列出且完成一次隔离恢复演练。
+- `0023` 删除三列明文和临时双读/双写；保留期只清空符合条件的密文，不删除审批主记录。红测证明待处理/创建中/需复核永不清空，已预订按退房 30 天、拒绝/冲突按终态 90 天清空。
+- 由于删列回滚不能依赖普通 Alembic downgrade，2B 的唯一生产回滚是恢复升级前 PostgreSQL 备份并切回旧镜像；迁移失败必须由事务回滚，禁止带着半迁移结构启动 API。
+- 验收检查数据库不存在旧列、全部未清理记录可解密、后台审批列表/详情可读、下单状态机聚焦测试通过；生产不创建真实百居易订单。
+
+### 阶段 3：供应链、非 root 与响应头
+
+- 红测覆盖基础镜像 digest、锁文件哈希、无 `PIP_TRUSTED_HOST`、非 root `USER`、`.dockerignore` 敏感排除，以及后台防嵌套/Referrer 响应头。
+- 非 root 发布前先验证宿主机上传目录 UID/GID 和读写权限；失败则不启动新镜像。回滚恢复旧镜像，上传目录和数据不回退、不删除。
+- 最终验证为锁文件重建、Docker build、容器用户检查、`pip check`、全新 Alembic 升级、Ruff、Mypy、一次全量无外联 Pytest；依赖和构建指纹未变化时不重复运行。
+- 生产验收分别核对源码提交、服务器部署副本、运行镜像、应用版本、数据库 revision、上传目录读写、本机/公网健康、Nginx 后真实响应头、容器重启次数和近期错误日志。
+
+### 统一发布规则
+
+- 每个阶段独立版本、正式更新日志、提交、标签、备份目录和 Review 证据；前一阶段未验收不得开始后一阶段。
+- 默认不推送、不部署，除非实施阶段用户再次明确授权对应外部动作；本次“开始”只授权在完整 Spec 确认后进入本地编码与验证。
+- 全程不读取、暂存或提交未跟踪的 `YuMi民宿AI项目总结.txt`；不主动发送企业微信消息，不执行真实百居易写操作。
+
+## 阶段 0 本地 Review
+
+- 红测先得到私有写入探针缺失、Compose 持久挂载缺失共 `3 failed, 5 passed`，生命周期接入红测单独为 `1 failed`；实现后相关存储、Compose 与完整运行时启动文件为 `21 passed`。
+- `PrivateFileStorage.verify_writable()` 使用随机探针完成创建、写入、`fsync`、关闭和删除；应用在数据库、外部客户端和 worker 启动前执行一次，失败会直接阻断启动。
+- Compose 把容器内目录固定为 `/app/data/private_uploads`，宿主机通过 `${PRIVATE_UPLOAD_HOST_DIR:-./data/private_uploads}` 持久挂载；项目现有 `.gitignore` 已排除默认目录。
+- Ruff 受影响文件通过；Mypy 两个受影响源码文件通过；`git diff --check` 通过。Docker CLI 在本机不存在，`docker compose config` 留到服务器部署前执行。
+- 版本已升级为 `1.3.4` 并补充正式更新日志；版本测试 `5 passed`，标准 wheel 构建成功且元数据为 `1.3.4`。
+- 当前没有提交、推送或修改生产；生产旧容器文件尚未导出，阶段 0 不能标记为生产完成，也不能进入阶段 1。
+
+# 当前任务：v1.3.3 综合代码审查
+
+- [x] 建立应用入口、信任边界、高价值资产和外部输入清单
+- [x] 运行 Python/SAST、密钥、危险 API 与依赖配置扫描
+- [x] 审查鉴权、CSRF、IDOR、上传、SSRF、日志脱敏和外部发送边界
+- [x] 审查事务、并发、任务幂等、错误处理和后台调度一致性
+- [x] 对候选问题做可达性与测试证据人工复核，排除误报
+- [x] 按严重度输出发现、代码依据、影响和修复建议
+
+## 审查边界
+
+- 以当前 `main` 提交为对象，只读审查 `src/`、`migrations/`、`deploy/`、`compose.yaml`、`Dockerfile`、`pyproject.toml` 和相关测试。
+- 不读取、暂存或提交未跟踪的 `YuMi民宿AI项目总结.txt`；不修改业务代码、数据库、生产环境或外部服务。
+- 自动扫描结果必须回到具体调用链人工验证；没有可达性或影响证据的命中不列为正式问题。
+
+## Review
+
+- 审查基线：`main` / `767447d70213bc623303458fadb84b14658bc461`，业务代码、数据库、生产和外部服务均未修改。
+- 高风险发现：Compose 未持久化私有上传目录；主模型链路缺失完整 token/调用预算；审核知识无相关性检索且单轮最大可达 1,063,121 字符；模型工具日期在本地边界校验前已传给百居易；预订审批姓名、手机号和特殊需求明文且无保留期。
+- 中风险发现：构建依赖无锁文件/哈希且使用受信任的第三方镜像；应用中间件未自行设置防嵌套响应头，需与 Nginx 现场配置联合确认。
+- 已验证：Ruff 通过；Mypy 114 个源文件通过；`pip check` 通过；全新 SQLite 从基线升级至 `0021_task_lifecycle (head)` 通过；Pytest `1199 passed, 15 skipped`。跳过项仅为未显式开启的真实 DeepSeek、百居易和企业微信契约测试。
+
 # 当前任务：后台筛选链路全面审查与修复准备
 
 - [x] 枚举所有后台筛选、搜索、页签和分页入口

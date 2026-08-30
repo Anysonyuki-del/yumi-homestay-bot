@@ -6,9 +6,14 @@ services:
       sh -c "alembic upgrade head &&
       uvicorn homestay_bot.main:app --host 0.0.0.0 --port 8000"
     env_file: .env
+    environment:
+      # 容器内只有一个上传目录真相；宿主机位置由 Compose 变量控制。
+      PRIVATE_UPLOAD_DIR: /app/data/private_uploads
     ports:
       # 仅允许本机 Nginx 反代，禁止绕过 HTTPS 直接访问应用端口。
       - "127.0.0.1:8000:8000"
+    volumes:
+      - "${PRIVATE_UPLOAD_HOST_DIR:-./data/private_uploads}:/app/data/private_uploads"
     depends_on:
       postgres:
         condition: service_healthy

@@ -2735,6 +2735,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
         return
 
+    # 私有附件和数据库引用必须同时可靠；目录不可写时在任何业务资源启动前失败。
+    private_file_storage = PrivateFileStorage(bootstrap.private_upload_dir)
+    private_file_storage.verify_writable()
+
     try:
         runtime_environment = RuntimeEnvironmentSettings()  # type: ignore[call-arg]
     except ValidationError:
@@ -2815,7 +2819,6 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.runtime_config_service = runtime_config_service
 
     sensitive_data = SensitiveDataCipher(bootstrap.data_encryption_key)
-    private_file_storage = PrivateFileStorage(bootstrap.private_upload_dir)
     app.state.admin_dashboard_service = SessionAdminDashboardService(factory)
     app.state.admin_operations_service = SessionAdminOperationsService(factory)
     app.state.task_page_service = SessionTaskPageService(

@@ -38,6 +38,24 @@ class PrivateFileStorage:
         root.chmod(0o700)
         self._root = root.resolve()
 
+    def verify_writable(self) -> None:
+        """真实写入并删除启动探针，拒绝使用不可写的私有挂载目录。"""
+        probe_path = self._root / f".write-probe-{uuid4().hex}"
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                probe_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            os.write(descriptor, b"private-upload-ready")
+            os.fsync(descriptor)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            # 探针只验证挂载能力，任何启动路径都不得遗留临时文件。
+            probe_path.unlink(missing_ok=True)
+
     async def save_image(
         self,
         stream: BinaryIO,

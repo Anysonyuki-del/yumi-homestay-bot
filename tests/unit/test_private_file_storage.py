@@ -1,3 +1,4 @@
+import os
 from io import BytesIO
 
 import pytest
@@ -73,3 +74,32 @@ def test_private_file_id_rejects_path_traversal(tmp_path) -> None:
         storage.open_for_read("../secret.env")
     with pytest.raises(InvalidPrivateFile):
         storage.open_for_read("/etc/passwd")
+
+
+def test_private_storage_write_probe_leaves_no_file(tmp_path) -> None:
+    """启动写入探针成功后不得在私有目录留下临时文件。"""
+    storage = PrivateFileStorage(tmp_path)
+
+    storage.verify_writable()
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_private_storage_write_probe_propagates_permission_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """挂载目录不可写时必须让应用启动失败，不能静默降级。"""
+    storage = PrivateFileStorage(tmp_path)
+
+    def reject_write(*args, **kwargs):
+        """模拟生产挂载目录拒绝创建文件。"""
+        del args, kwargs
+        raise PermissionError("private upload mount is read-only")
+
+    monkeypatch.setattr(os, "open", reject_write)
+
+    with pytest.raises(PermissionError, match="read-only"):
+        storage.verify_writable()
+
+    assert list(tmp_path.iterdir()) == []
