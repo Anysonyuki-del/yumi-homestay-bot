@@ -1,10 +1,11 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Protocol, cast
+from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BeforeValidator
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,7 @@ from homestay_bot.routes.employee_auth import (
     AdminCsrfServicePort,
     require_employee_session,
 )
+from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 from homestay_bot.web import templates
 
@@ -392,7 +394,10 @@ async def knowledge_index(
     page: int = Query(1, ge=1, le=10_000),
     candidate_page: int = Query(1, ge=1, le=10_000),
     query: str | None = Query(None, max_length=100),
-    enabled: Literal["enabled", "disabled"] | None = None,
+    enabled: Annotated[
+        Literal["enabled", "disabled"] | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
     category: str | None = Query(None, max_length=64),
 ) -> Response:
     """允许全部已登录员工查看知识及启停状态。"""

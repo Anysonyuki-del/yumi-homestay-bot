@@ -11,7 +11,7 @@
     <a href="/employee/tasks?status_filter=pending_assignment" {% if filters.status and filters.status.value == "pending_assignment" %}aria-current="page"{% endif %}>待分派</a>
     <a href="/employee/tasks?status_filter=expired" {% if filters.status and filters.status.value == "expired" %}aria-current="page"{% endif %}>已失效</a>
   </nav>
-  <form class="filter-toolbar" method="get" action="/employee/tasks">
+  <form class="filter-toolbar" method="get" action="/employee/tasks" data-filter-form>
     <label>状态<select name="status_filter"><option value="">全部开放状态</option>{% for status in task_statuses %}<option value="{{ status.value }}" {% if filters.status == status %}selected{% endif %}>{{ status | status_zh }}</option>{% endfor %}</select></label>
     <label>任务类型<select name="task_type"><option value="">全部类型</option>{% for type in task_types %}<option value="{{ type.value }}" {% if filters.task_type == type %}selected{% endif %}>{{ type | status_zh }}</option>{% endfor %}</select></label>
     <label>服务日期<input type="date" name="service_date" value="{{ filters.service_date or '' }}"></label>

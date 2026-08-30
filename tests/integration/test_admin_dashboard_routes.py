@@ -246,6 +246,26 @@ def test_attention_and_operations_pages_form_actionable_workflow() -> None:
     assert 'href="/employee/properties/101"' in operations.text
 
 
+@pytest.mark.parametrize("days", ["3", "7", "14"])
+def test_operations_accepts_each_visible_range(days: str) -> None:
+    """页面展示的三个房态范围都必须能从真实查询字符串进入。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin/operations", params={"days": days})
+
+    assert response.status_code == 200
+    assert f'aria-current="page">未来 {days} 天' in response.text
+
+
+def test_operations_rejects_unknown_range() -> None:
+    """房态范围继续使用白名单，不能因兼容查询字符串而放宽。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    assert client.get("/employee/admin/operations?days=30").status_code == 422
+
+
 def test_dashboard_requires_login_and_first_password_change() -> None:
     """总览沿用统一会话门控，匿名用户不得读取页面。"""
     client = build_client()

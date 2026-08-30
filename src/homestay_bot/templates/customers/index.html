@@ -3,7 +3,7 @@
 
 {% block content %}
 <section class="panel panel--padded">
-  <form class="filter-toolbar" method="get" action="/employee/customers">
+  <form class="filter-toolbar" method="get" action="/employee/customers" data-filter-form>
     <label>搜索客户<input type="search" name="query" value="{{ query }}" maxlength="100" autocomplete="off" placeholder="姓名或员工备注"></label>
     <label>住宿状态<select name="stay_status"><option value="">全部状态</option><option value="upcoming" {% if filters.stay_status == "upcoming" %}selected{% endif %}>即将入住</option><option value="in_house" {% if filters.stay_status == "in_house" %}selected{% endif %}>在住</option><option value="departed" {% if filters.stay_status == "departed" %}selected{% endif %}>已离店</option><option value="none" {% if filters.stay_status == "none" %}selected{% endif %}>暂无有效订单</option></select></label>
     <label class="checkbox"><input type="checkbox" name="attention" value="1" {% if filters.attention %}checked{% endif %}>仅看待处理</label>

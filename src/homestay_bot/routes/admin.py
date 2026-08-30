@@ -192,13 +192,15 @@ async def admin_attention(request: Request) -> Response:
 @router.get("/operations", response_class=HTMLResponse)
 async def admin_operations(
     request: Request,
-    days: Literal[3, 7, 14] = Query(3),
+    days: Literal["3", "7", "14"] = Query("3"),
 ) -> Response:
     """展示房间近期入住事实、运营准备度与优先行动。"""
     await _require_admin(request)
+    # 查询字符串天然是文本；通过白名单后再转换为运营服务需要的整数。
+    horizon_days = int(days)
     snapshot = await _operations_service(request).snapshot(
         _clock(request),
-        horizon_days=days,
+        horizon_days=horizon_days,
         source_synced_at=getattr(
             request.app.state,
             "hostex_data_last_success",

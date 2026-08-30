@@ -149,6 +149,20 @@ document.querySelectorAll("form[data-confirm], form[data-danger-confirm]").forEa
   });
 });
 
+/** 删除 GET 筛选表单中的空字段，让地址只保留真实生效的筛选条件。 */
+function removeEmptyFilterValues(event) {
+  if (!(event.formData instanceof FormData)) return;
+  const emptyNames = [...event.formData.entries()]
+    .filter(([, value]) => typeof value === "string" && value.trim() === "")
+    .map(([name]) => name);
+  emptyNames.forEach((name) => event.formData.delete(name));
+}
+
+document.querySelectorAll("form[data-filter-form]").forEach((form) => {
+  // `formdata` 只调整浏览器即将提交的副本，不禁用控件，也不接管服务端筛选。
+  form.addEventListener("formdata", removeEmptyFilterValues);
+});
+
 const dirtyForms = new Set();
 
 document.querySelectorAll("form").forEach((form) => {

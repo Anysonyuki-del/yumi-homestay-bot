@@ -37,6 +37,12 @@ def _admin_fixture() -> str:
             <form id="form-b" data-unsaved-warning>
               <input name="b"><button type="submit">保存 B</button>
             </form>
+            <form id="filter-form" method="get" action="/employee/tasks" data-filter-form>
+              <select name="status_filter"><option value="" selected>全部状态</option></select>
+              <select name="task_type"><option value="cleaning" selected>保洁</option></select>
+              <input name="service_date" value="">
+              <button type="submit">筛选</button>
+            </form>
           </main>
         </div>
       </div>
@@ -181,6 +187,21 @@ def test_cross_form_submission(browser: Browser) -> None:
         "disabled": True,
         "unloadPrevented": False,
     }
+    page.close()
+
+
+def test_filter_form_removes_empty_query_values(browser: Browser) -> None:
+    """筛选表单只把有效值写入 URL，空控件交给服务端默认筛选。"""
+    page = browser.new_page()
+    _load_admin_page(page)
+
+    values = page.evaluate(
+        """() => Object.fromEntries(
+          new FormData(document.querySelector('#filter-form')).entries()
+        )"""
+    )
+
+    assert values == {"task_type": "cleaning"}
     page.close()
 
 

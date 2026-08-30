@@ -461,6 +461,21 @@ def test_knowledge_lists_use_independent_bounded_pagination() -> None:
     )
 
 
+def test_knowledge_filter_form_accepts_empty_enabled_value() -> None:
+    """只搜索知识时，原生表单附带的空启用状态应按未筛选处理。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+
+    response = client.get(
+        "/employee/knowledge",
+        params={"query": "入住", "enabled": "", "category": ""},
+    )
+
+    assert response.status_code == 200
+    assert "几点入住" in response.text
+    assert "data-filter-form" in response.text
+    assert client.get("/employee/knowledge?enabled=unknown").status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_disabling_knowledge_removes_it_from_bot_context() -> None:
     """停用内容必须立即退出机器人可用上下文。"""

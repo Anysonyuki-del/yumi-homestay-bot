@@ -590,6 +590,22 @@ def test_customer_list_preserves_operational_filters_in_url() -> None:
     assert "merge_review=1" in response.text
 
 
+def test_customer_filter_form_accepts_empty_stay_status() -> None:
+    """只搜索客户时，原生表单附带的空住宿状态应按未筛选处理。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get(
+        "/employee/customers",
+        params={"query": "订单", "stay_status": ""},
+    )
+
+    assert response.status_code == 200
+    assert customers.list_calls == [("订单", 1, 0, 51)]
+    assert "data-filter-form" in response.text
+    assert client.get("/employee/customers?stay_status=unknown").status_code == 422
+
+
 def test_customer_detail_tabs_load_separate_safe_views() -> None:
     """详情页签进入 URL，服务页只展示会话元数据且不展示消息正文。"""
     client, _ = build_client(EmployeeRole.ADMIN)

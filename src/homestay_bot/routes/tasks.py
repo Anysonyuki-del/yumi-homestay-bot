@@ -15,6 +15,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from pydantic import BeforeValidator, Field
 
 from homestay_bot.domain.enums import (
     BusinessTaskStatus,
@@ -23,11 +24,13 @@ from homestay_bot.domain.enums import (
 )
 from homestay_bot.domain.models import BusinessTask, Employee
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.task_page_service import TaskFilters
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/tasks")
 logger = logging.getLogger(__name__)
+PositiveQueryId = Annotated[int, Field(ge=1)]
 
 
 class TaskPageServicePort(Protocol):
@@ -166,11 +169,26 @@ def _raise_page_error(error: Exception) -> None:
 async def task_index(
     request: Request,
     page: int = Query(1, ge=1, le=10_000),
-    status_filter: BusinessTaskStatus | None = None,
-    task_type: BusinessTaskType | None = None,
-    service_date: date | None = None,
-    property_id: int | None = Query(None, ge=1),
-    assigned_employee_id: int | None = Query(None, ge=1),
+    status_filter: Annotated[
+        BusinessTaskStatus | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
+    task_type: Annotated[
+        BusinessTaskType | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
+    service_date: Annotated[
+        date | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
+    property_id: Annotated[
+        PositiveQueryId | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
+    assigned_employee_id: Annotated[
+        PositiveQueryId | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
     overdue: bool = False,
 ) -> Response:
     """展示管理员全部待办或员工自己的任务。"""

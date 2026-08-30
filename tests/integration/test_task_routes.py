@@ -289,6 +289,34 @@ def test_task_filters_are_forwarded_and_persist_in_pagination() -> None:
     assert "status_filter=expired" in response.text
 
 
+def test_task_filter_form_treats_empty_controls_as_inactive() -> None:
+    """浏览器 GET 表单提交空控件时不得在进入任务页面前返回 422。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get(
+        "/employee/tasks",
+        params={
+            "status_filter": "",
+            "task_type": "cleaning",
+            "service_date": "",
+            "property_id": "",
+            "assigned_employee_id": "",
+        },
+    )
+
+    assert response.status_code == 200
+    filters = tasks.filter_calls[-1]
+    assert filters.status is None
+    assert filters.task_type is BusinessTaskType.CLEANING
+    assert filters.service_date is None
+    assert filters.property_id is None
+    assert filters.assigned_employee_id is None
+    assert "data-filter-form" in response.text
+    assert client.get("/employee/tasks?service_date=not-a-date").status_code == 422
+    assert client.get("/employee/tasks?property_id=0").status_code == 422
+
+
 def test_staff_cannot_view_other_task_id() -> None:
     """越权任务编号统一返回 403。"""
     client, _ = build_client(EmployeeRole.STAFF)

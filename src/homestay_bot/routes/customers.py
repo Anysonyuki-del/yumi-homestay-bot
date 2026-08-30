@@ -4,10 +4,12 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from pydantic import BeforeValidator
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.customer_admin_service import (
     CustomerDetailRequest,
     CustomerListFilters,
@@ -185,7 +187,10 @@ def _raise_page_error(error: Exception) -> None:
 async def customer_index(
     request: Request,
     query: Annotated[str | None, Query(max_length=100)] = None,
-    stay_status: Literal["upcoming", "in_house", "departed", "none"] | None = None,
+    stay_status: Annotated[
+        Literal["upcoming", "in_house", "departed", "none"] | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
     attention: bool = False,
     memory_review: bool = False,
     merge_review: bool = False,
