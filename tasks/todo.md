@@ -27,8 +27,8 @@
 - [x] 阶段 2B 实现：0023 不可逆迁移、密文唯一读取和既有清理循环接入
 - [x] 阶段 2B 验证：迁移失败回滚、聚焦回归、静态检查和本地 Review
 - [x] 阶段 2B 发布：升级 v1.3.7、补充正式更新日志并验证发布包
-- [ ] 阶段 2B 提交、标记 v1.3.7 并推送 GitHub
-- [ ] 阶段 2B 完成生产备份、不可逆迁移、API 部署和运行态验收
+- [x] 阶段 2B 提交、标记 v1.3.7 并推送 GitHub
+- [x] 阶段 2B 完成生产备份、不可逆迁移、API 部署和运行态验收
 
 ### 阶段 2A 本地 Review
 
@@ -59,7 +59,13 @@
 ### 阶段 2B 发布 Review
 
 - 发布前生产仍为 v1.3.6 / `0022_approval_pii`，API 健康且重启次数为 0；审批记录和未清理密文缺口均为 0，满足不可逆迁移入口门禁。
-- 其余发布证据在提交、备份、迁移和运行态验收完成后补充。
+- 版本暴露回归为 `7 passed`，标准 wheel 元数据为 `1.3.7` 且 `git diff --check` 通过；业务源码自最终 `80 passed` 门禁后没有变化，因此版本号、更新日志和任务记录没有重复触发业务回归。
+- 正式功能提交与标签均指向 `e9ae7d8f1bdb204b6a254c25c2b9d682666d43a3` / `v1.3.7`，已推送 GitHub；服务器使用 SHA-256 一致且 `git bundle verify` 通过的 bundle 快进，三个既存未跟踪环境备份保持不变。
+- 生产备份位于 `/opt/yumi-backups/v1.3.7-20260830T193253Z`，包含 v1.3.6 源码、配置、私有上传、PostgreSQL custom dump 和旧 API 镜像；数据库转储已恢复到隔离数据库，确认 `0022_approval_pii`、35 张表和 0 条审批后删除隔离库，旧镜像标记为 `rollback-v1.3.6`。
+- 停止旧 API 后再次确认审批密文门禁为 `0|0|0|0|0`；PostgreSQL 事务升级到 `0023_approval_pii_final`，三个旧明文列数量为 0，四个密文/清理字段完整，迁移后审批计数仍为零。
+- 生产 API 运行镜像为 `sha256:4e5b77a07ecb9bab915fcc79709a2fe01eb02d1cc8ee79de2890346b5d3e59b3`，容器包与公网 OpenAPI 均为 `1.3.7`，重启次数为 0，近期 `ERROR`、`Traceback`、`Exception` 标记为 0；PostgreSQL 容器没有重建。
+- 本机和公网 `/health` 均为 `ok`，公网 `/employee/login` 返回 200，未登录访问 `/employee/approvals` 返回 401；私有上传仍挂载 `/opt/yumi-data/private_uploads -> /app/data/private_uploads`，文件数为 0。
+- 本次发布没有主动调用 DeepSeek、百居易或企业微信，没有发送真实消息；受保护的未跟踪项目总结文件保持未读、未改、未暂存。
 
 ## 第一段：推荐修复边界
 
