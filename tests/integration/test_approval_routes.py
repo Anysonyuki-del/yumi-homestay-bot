@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 from datetime import date
 
 from admin_auth_helpers import configure_admin_auth, login_admin
@@ -7,9 +8,9 @@ from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.domain.enums import ApprovalStatus, EmployeeRole
-from homestay_bot.domain.models import BookingApproval
 from homestay_bot.routes.approvals import router as approvals_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
+from homestay_bot.services.approval_page_service import ApprovalPageView
 
 
 class ApprovalPageStub:
@@ -18,16 +19,14 @@ class ApprovalPageStub:
     def __init__(self) -> None:
         self.confirm_calls = 0
         self.list_calls: list[tuple[int, int]] = []
-        self.approval = BookingApproval(
+        self.approval = ApprovalPageView(
             id=1,
             approval_code="APP-1",
-            conversation_id=1,
             status=ApprovalStatus.PENDING,
             check_in_date=date(2026, 8, 1),
             check_out_date=date(2026, 8, 2),
             number_of_guests=2,
             guest_name="张三",
-            guest_mobile="13800138000",
             room_type_preference="江景房",
             special_requests="高楼层",
         )
@@ -51,8 +50,10 @@ class ApprovalPageStub:
     async def confirm(self, approval_id: int, employee_id: int, command):
         """记录确认并返回已预订状态。"""
         self.confirm_calls += 1
-        self.approval.status = ApprovalStatus.BOOKED
-        self.approval.hostex_reservation_code = "R-1"
+        self.approval = replace(
+            self.approval,
+            status=ApprovalStatus.BOOKED,
+        )
         return self.approval
 
 
@@ -177,7 +178,10 @@ def test_approval_pages_use_shell_and_emphasize_money_confirmation() -> None:
 def test_non_pending_approval_cannot_render_real_order_form() -> None:
     """冲突或需复核审批只能展示处理说明，不能继续提交真实订单。"""
     client, approvals = build_client(EmployeeRole.ADMIN)
-    approvals.approval.status = ApprovalStatus.CONFLICT
+    approvals.approval = replace(
+        approvals.approval,
+        status=ApprovalStatus.CONFLICT,
+    )
     login(client)
 
     detail = client.get("/employee/approvals/1")

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Protocol
 
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
@@ -9,13 +8,21 @@ from homestay_bot.services.sensitive_data import SensitiveDataCipher
 class ApprovalSensitiveFields:
     """保存一次审批敏感字段解密后的短生命周期值。"""
 
-    guest_name: str
-    guest_mobile: str
+    guest_name: str | None
+    guest_mobile: str | None
     special_requests: str | None
 
 
+@dataclass(frozen=True)
+class BookingApprovalSensitiveFields:
+    """保存下单和写后核验必须存在的审批客人资料。"""
+
+    guest_name: str
+    guest_mobile: str
+
+
 class ApprovalSensitiveData:
-    """集中处理审批敏感字段的用途隔离加密、读取和过渡回填。"""
+    """集中处理审批敏感字段的用途隔离加密和短生命周期解密。"""
 
     _GUEST_NAME_PURPOSE = "approval_guest_name"
     _GUEST_MOBILE_PURPOSE = "approval_guest_mobile"
@@ -33,7 +40,7 @@ class ApprovalSensitiveData:
         guest_mobile: str,
         special_requests: str | None,
     ) -> None:
-        """把审批敏感值写入用途隔离密文；旧明文由过渡调用方负责双写。"""
+        """只把审批敏感值写入用途隔离密文，并重置清理标记。"""
         approval.guest_name_ciphertext = self._cipher.encrypt(
             guest_name,
             purpose=self._GUEST_NAME_PURPOSE,
@@ -50,24 +57,28 @@ class ApprovalSensitiveData:
             if special_requests is not None
             else None
         )
+        approval.pii_purged_at = None
 
     def read(self, approval: BookingApproval) -> ApprovalSensitiveFields:
-        """优先解密新字段，仅在密文缺失时兼容读取旧明文。"""
-        guest_name = (
-            self._cipher.decrypt(
-                approval.guest_name_ciphertext,
-                purpose=self._GUEST_NAME_PURPOSE,
+        """解密未清理审批；缺少必需密文时拒绝静默降级。"""
+        if approval.pii_purged_at is not None:
+            return ApprovalSensitiveFields(
+                guest_name=None,
+                guest_mobile=None,
+                special_requests=None,
             )
-            if approval.guest_name_ciphertext is not None
-            else approval.guest_name
+        if (
+            approval.guest_name_ciphertext is None
+            or approval.guest_mobile_ciphertext is None
+        ):
+            raise ValueError("审批敏感资料密文缺失")
+        guest_name = self._cipher.decrypt(
+            approval.guest_name_ciphertext,
+            purpose=self._GUEST_NAME_PURPOSE,
         )
-        guest_mobile = (
-            self._cipher.decrypt(
-                approval.guest_mobile_ciphertext,
-                purpose=self._GUEST_MOBILE_PURPOSE,
-            )
-            if approval.guest_mobile_ciphertext is not None
-            else approval.guest_mobile
+        guest_mobile = self._cipher.decrypt(
+            approval.guest_mobile_ciphertext,
+            purpose=self._GUEST_MOBILE_PURPOSE,
         )
         special_requests = (
             self._cipher.decrypt(
@@ -75,7 +86,7 @@ class ApprovalSensitiveData:
                 purpose=self._SPECIAL_REQUESTS_PURPOSE,
             )
             if approval.special_requests_ciphertext is not None
-            else approval.special_requests
+            else None
         )
         return ApprovalSensitiveFields(
             guest_name=guest_name,
@@ -83,90 +94,15 @@ class ApprovalSensitiveData:
             special_requests=special_requests,
         )
 
-    def ensure_encrypted(self, approval: BookingApproval) -> bool:
-        """只补齐缺失密文，重复执行不得覆盖已经存在的密文。"""
-        changed = False
-        if approval.guest_name_ciphertext is None:
-            approval.guest_name_ciphertext = self._cipher.encrypt(
-                approval.guest_name,
-                purpose=self._GUEST_NAME_PURPOSE,
-            )
-            changed = True
-        if approval.guest_mobile_ciphertext is None:
-            approval.guest_mobile_ciphertext = self._cipher.encrypt(
-                approval.guest_mobile,
-                purpose=self._GUEST_MOBILE_PURPOSE,
-            )
-            changed = True
-        if (
-            approval.special_requests is not None
-            and approval.special_requests_ciphertext is None
-        ):
-            approval.special_requests_ciphertext = self._cipher.encrypt(
-                approval.special_requests,
-                purpose=self._SPECIAL_REQUESTS_PURPOSE,
-            )
-            changed = True
-        return changed
-
-
-class ApprovalSensitiveDataBackfillRepository(Protocol):
-    """定义单批审批密文回填所需的最小仓储接口。"""
-
-    async def list_sensitive_data_backfill_batch(
+    def require_for_booking(
         self,
-        *,
-        after_id: int,
-        limit: int,
-    ) -> list[BookingApproval]:
-        """按主键稳定顺序返回仍缺少必要密文的审批。"""
-
-    async def save(self, approval: BookingApproval) -> None:
-        """保存已补齐密文的审批。"""
-
-
-@dataclass(frozen=True)
-class ApprovalSensitiveDataBackfillResult:
-    """记录一次有界回填的扫描进度，供调用方显式续跑。"""
-
-    scanned: int
-    updated: int
-    last_id: int
-
-
-class ApprovalSensitiveDataBackfillService:
-    """每次最多回填 100 条旧审批，不自行启动后台循环。"""
-
-    _MAX_BATCH_SIZE = 100
-
-    def __init__(
-        self,
-        repository: ApprovalSensitiveDataBackfillRepository,
-        sensitive_data: ApprovalSensitiveData,
-    ) -> None:
-        """注入审批仓储和统一敏感数据服务。"""
-        self._repository = repository
-        self._sensitive_data = sensitive_data
-
-    async def run_batch(
-        self,
-        *,
-        after_id: int = 0,
-        limit: int = _MAX_BATCH_SIZE,
-    ) -> ApprovalSensitiveDataBackfillResult:
-        """运行一个有上限且可从最后主键继续的幂等回填批次。"""
-        bounded_limit = max(1, min(limit, self._MAX_BATCH_SIZE))
-        approvals = await self._repository.list_sensitive_data_backfill_batch(
-            after_id=after_id,
-            limit=bounded_limit,
-        )
-        updated = 0
-        for approval in approvals:
-            if self._sensitive_data.ensure_encrypted(approval):
-                await self._repository.save(approval)
-                updated += 1
-        return ApprovalSensitiveDataBackfillResult(
-            scanned=len(approvals),
-            updated=updated,
-            last_id=approvals[-1].id if approvals else after_id,
+        approval: BookingApproval,
+    ) -> BookingApprovalSensitiveFields:
+        """为下单状态机读取必需资料，已清理或缺失时拒绝继续。"""
+        values = self.read(approval)
+        if values.guest_name is None or values.guest_mobile is None:
+            raise ValueError("审批敏感资料已清理，不能继续下单")
+        return BookingApprovalSensitiveFields(
+            guest_name=values.guest_name,
+            guest_mobile=values.guest_mobile,
         )

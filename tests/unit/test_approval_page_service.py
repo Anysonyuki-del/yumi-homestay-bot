@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from cryptography.fernet import Fernet
@@ -57,10 +57,7 @@ async def test_page_service_returns_decrypted_view_without_orm_ciphertext() -> N
             check_in_date=date(2026, 9, 1),
             check_out_date=date(2026, 9, 2),
             number_of_guests=2,
-            guest_name="张三",
-            guest_mobile="13800138000",
             room_type_preference="江景房",
-            special_requests="高楼层",
         )
         sensitive.write(
             approval,
@@ -79,6 +76,13 @@ async def test_page_service_returns_decrypted_view_without_orm_ciphertext() -> N
         )
         detail = await service.get_detail(approval.id)
         pending = await service.list_pending(offset=0, limit=10)
+        approval.status = ApprovalStatus.BOOKED
+        approval.guest_name_ciphertext = None
+        approval.guest_mobile_ciphertext = None
+        approval.special_requests_ciphertext = None
+        approval.pii_purged_at = datetime(2026, 8, 31, tzinfo=UTC)
+        await session.commit()
+        purged_detail = await service.get_detail(approval.id)
 
     view = detail["approval"]
     assert view.guest_name == "张三"
@@ -88,4 +92,7 @@ async def test_page_service_returns_decrypted_view_without_orm_ciphertext() -> N
     assert not hasattr(view, "guest_name_ciphertext")
     assert pending[0].guest_name == "张三"
     assert not isinstance(pending[0], BookingApproval)
+    assert purged_detail["approval"].guest_name == "已清理"
+    assert purged_detail["approval"].special_requests is None
+    assert purged_detail["masked_mobile"] == "已清理"
     await engine.dispose()

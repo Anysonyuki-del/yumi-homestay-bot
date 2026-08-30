@@ -70,8 +70,8 @@ async def test_snapshot_uses_wuhan_day_and_only_returns_safe_room_facts() -> Non
                 check_in_date=datetime(2026, 8, 11).date(),
                 check_out_date=datetime(2026, 8, 12).date(),
                 number_of_guests=2,
-                guest_name="敏感姓名",
-                guest_mobile="13800000000",
+                guest_name_ciphertext=b"encrypted-name",
+                guest_mobile_ciphertext=b"encrypted-mobile",
                 room_type_preference="大床房",
             )
         )

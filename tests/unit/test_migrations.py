@@ -64,6 +64,11 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     assert "guest_mobile_ciphertext" in result.stdout
     assert "special_requests_ciphertext" in result.stdout
     assert "pii_purged_at" in result.stdout
+    assert "0023_approval_pii_final" in result.stdout
+    assert "审批敏感资料密文回填未完成" in result.stdout
+    assert "DROP COLUMN guest_name" in result.stdout
+    assert "DROP COLUMN guest_mobile" in result.stdout
+    assert "DROP COLUMN special_requests" in result.stdout
     assert "customer_memory_events" in result.stdout
     assert "source_excerpt_hash" in result.stdout
     assert "uq_customer_memory_active_subject" in result.stdout
@@ -91,7 +96,7 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
             check=False,
         )
 
-    upgrade = run_alembic("upgrade", "head")
+    upgrade = run_alembic("upgrade", "0022_approval_pii")
     assert upgrade.returncode == 0, upgrade.stderr
     with sqlite3.connect(database_path) as connection:
         tables_after_upgrade = {
@@ -297,11 +302,11 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     assert "runtime_config_versions" not in tables_after_downgrade
     assert "runtime_config_state" not in tables_after_downgrade
 
-    second_upgrade = run_alembic("upgrade", "head")
+    second_upgrade = run_alembic("upgrade", "0022_approval_pii")
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     current = run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0022_approval_pii (head)" in current.stdout
+    assert current.stdout.strip() == "0022_approval_pii"
 
 
 def test_sqlite_approval_pii_migration_downgrades_and_reupgrades(
@@ -331,7 +336,7 @@ def test_sqlite_approval_pii_migration_downgrades_and_reupgrades(
         "special_requests_ciphertext",
         "pii_purged_at",
     }
-    first_upgrade = run_alembic("upgrade", "head")
+    first_upgrade = run_alembic("upgrade", "0022_approval_pii")
     assert first_upgrade.returncode == 0, first_upgrade.stderr
     with sqlite3.connect(database_path) as connection:
         first_columns = {
@@ -349,7 +354,7 @@ def test_sqlite_approval_pii_migration_downgrades_and_reupgrades(
         }
     assert expected_columns.isdisjoint(downgraded_columns)
 
-    second_upgrade = run_alembic("upgrade", "head")
+    second_upgrade = run_alembic("upgrade", "0022_approval_pii")
     assert second_upgrade.returncode == 0, second_upgrade.stderr
     with sqlite3.connect(database_path) as connection:
         second_columns = {
@@ -357,6 +362,138 @@ def test_sqlite_approval_pii_migration_downgrades_and_reupgrades(
             for row in connection.execute("PRAGMA table_info('booking_approvals')")
         }
     assert expected_columns <= second_columns
+
+
+def test_sqlite_approval_pii_finalization_drops_plaintext_and_is_irreversible(
+    tmp_path: Path,
+) -> None:
+    """0023 只在密文完整时删旧列，并明确拒绝普通 Alembic 降级。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "approval-pii-final.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+    alembic = str(project_root / ".venv/bin/alembic")
+
+    def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
+        """在隔离数据库执行审批 PII 最终迁移命令。"""
+        return subprocess.run(
+            [alembic, *arguments],
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    before = run_alembic("upgrade", "0022_approval_pii")
+    assert before.returncode == 0, before.stderr
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO booking_approvals ("
+            "approval_code, conversation_id, status, check_in_date, check_out_date, "
+            "number_of_guests, guest_name, guest_mobile, guest_name_ciphertext, "
+            "guest_mobile_ciphertext, room_type_preference, special_requests, "
+            "special_requests_ciphertext"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "APP-FINAL",
+                1,
+                "PENDING",
+                "2026-09-01",
+                "2026-09-02",
+                2,
+                "张三",
+                "13800138000",
+                b"encrypted-name",
+                b"encrypted-mobile",
+                "江景房",
+                "高楼层",
+                b"encrypted-request",
+            ),
+        )
+        connection.commit()
+
+    upgrade = run_alembic("upgrade", "head")
+    assert upgrade.returncode == 0, upgrade.stderr
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info('booking_approvals')")
+        }
+        ciphertext = connection.execute(
+            "SELECT guest_name_ciphertext, guest_mobile_ciphertext, "
+            "special_requests_ciphertext FROM booking_approvals"
+        ).fetchone()
+    assert {"guest_name", "guest_mobile", "special_requests"}.isdisjoint(columns)
+    assert {
+        "guest_name_ciphertext",
+        "guest_mobile_ciphertext",
+        "special_requests_ciphertext",
+        "pii_purged_at",
+    } <= columns
+    assert ciphertext == (b"encrypted-name", b"encrypted-mobile", b"encrypted-request")
+
+    downgrade = run_alembic("downgrade", "0022_approval_pii")
+    assert downgrade.returncode != 0
+    assert "恢复升级前数据库备份" in downgrade.stderr
+    current = run_alembic("current")
+    assert "0023_approval_pii_final (head)" in current.stdout
+
+
+def test_sqlite_approval_pii_finalization_rejects_missing_ciphertext(
+    tmp_path: Path,
+) -> None:
+    """任一未清理审批缺少必需密文时，0023 必须保持 0022 结构。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "approval-pii-incomplete.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+    alembic = str(project_root / ".venv/bin/alembic")
+
+    def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
+        """在隔离数据库执行缺失密文迁移命令。"""
+        return subprocess.run(
+            [alembic, *arguments],
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    before = run_alembic("upgrade", "0022_approval_pii")
+    assert before.returncode == 0, before.stderr
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO booking_approvals ("
+            "approval_code, conversation_id, status, check_in_date, check_out_date, "
+            "number_of_guests, guest_name, guest_mobile, room_type_preference"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "APP-INCOMPLETE",
+                1,
+                "PENDING",
+                "2026-09-01",
+                "2026-09-02",
+                2,
+                "张三",
+                "13800138000",
+                "江景房",
+            ),
+        )
+        connection.commit()
+
+    upgrade = run_alembic("upgrade", "head")
+    assert upgrade.returncode != 0
+    assert "审批敏感资料密文回填未完成" in upgrade.stderr
+    current = run_alembic("current")
+    assert current.stdout.strip() == "0022_approval_pii"
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info('booking_approvals')")
+        }
+    assert {"guest_name", "guest_mobile", "special_requests"} <= columns
 
 
 def test_customer_memory_trust_migration_quarantines_unverified_history(
@@ -414,7 +551,7 @@ def test_customer_memory_trust_migration_quarantines_unverified_history(
             )
         connection.commit()
 
-    after = run_alembic("upgrade", "head")
+    after = run_alembic("upgrade", "0022_approval_pii")
     assert after.returncode == 0, after.stderr
     with sqlite3.connect(database_path) as connection:
         statuses = dict(

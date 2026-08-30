@@ -73,7 +73,11 @@ class ApprovalPageService:
         sensitive = self._sensitive_data.read(approval)
         return {
             "approval": self._to_view(approval),
-            "masked_mobile": self.mask_mobile(sensitive.guest_mobile),
+            "masked_mobile": (
+                self.mask_mobile(sensitive.guest_mobile)
+                if sensitive.guest_mobile is not None
+                else "已清理"
+            ),
             "properties": [item.model_dump(mode="json") for item in properties],
             "reference_prices": [
                 item.model_dump(mode="json") for item in prices
@@ -134,7 +138,7 @@ class ApprovalPageService:
             check_in_date=approval.check_in_date,
             check_out_date=approval.check_out_date,
             number_of_guests=approval.number_of_guests,
-            guest_name=sensitive.guest_name,
+            guest_name=sensitive.guest_name or "已清理",
             room_type_preference=approval.room_type_preference,
             special_requests=sensitive.special_requests,
         )

@@ -22,6 +22,13 @@
 - [x] 阶段 2A 发布：升级 v1.3.6、补充正式更新日志并验证发布包
 - [x] 阶段 2A 提交、标记 v1.3.6 并推送 GitHub
 - [x] 阶段 2A 生产备份、迁移、API 单容器部署和运行态验收
+- [x] 阶段 2B 进入门禁：2A 健康、密文完整、备份可列出且隔离恢复成功
+- [x] 阶段 2B 红测：删列安全门、无明文读取和审批 PII 保留期
+- [x] 阶段 2B 实现：0023 不可逆迁移、密文唯一读取和既有清理循环接入
+- [x] 阶段 2B 验证：迁移失败回滚、聚焦回归、静态检查和本地 Review
+- [x] 阶段 2B 发布：升级 v1.3.7、补充正式更新日志并验证发布包
+- [ ] 阶段 2B 提交、标记 v1.3.7 并推送 GitHub
+- [ ] 阶段 2B 完成生产备份、不可逆迁移、API 部署和运行态验收
 
 ### 阶段 2A 本地 Review
 
@@ -39,6 +46,20 @@
 - 只重建 API，PostgreSQL 未重启；运行镜像为 `sha256:a0bd56b2c58fcbb15d29c28aa2103efcd3432f7881f6368262203352de074678`，API 容器包和公网 OpenAPI 均为 `1.3.6`，重启次数为 0，近期 `ERROR`、`Traceback`、`Exception` 标记为 0。
 - 本机和公网 `/health` 均为 `ok`，公网 `/employee/login` 返回 200，未登录访问 `/employee/approvals` 返回 401；私有上传仍挂载 `/opt/yumi-data/private_uploads -> /app/data/private_uploads`，文件数为 0。
 - 本次发布没有主动调用 DeepSeek、百居易或企业微信，没有发送真实消息；受保护的未跟踪项目总结文件保持未读、未改、未暂存。
+
+### 阶段 2B 本地 Review
+
+- 进入前复核生产 v1.3.6 健康、API 重启次数为 0、审批密文门禁为 `0|0|0|0`；将 `/opt/yumi-backups/v1.3.6-20260831T025557/postgres.dump` 恢复到隔离数据库，确认 revision 为 `0021_task_lifecycle`、35 张表可读、审批数为 0，并在验收后删除隔离数据库。
+- 新增不可逆迁移 `0023_approval_pii_final`：未清理审批缺少姓名或手机号密文时先失败，结构保持 0022；门禁通过后删除 `guest_name`、`guest_mobile`、`special_requests`。普通 downgrade 明确拒绝，回滚只能恢复升级前数据库备份并切回旧镜像。
+- `ApprovalSensitiveData` 已删除旧明文回退、回填协议与批处理服务；新审批只写用途隔离密文。未清理记录缺少必需密文立即失败，已按策略清理的记录在后台显示“已清理”，下单状态机拒绝重新使用。
+- 既有每日 `SQLAlchemyRetentionRepository.purge()` 增加审批 PII 清理：`BOOKED` 在退房满 30 天清理，`REJECTED`、`CONFLICT` 在终态更新时间满 90 天清理；`PENDING`、`CREATING`、`NEEDS_REVIEW` 永不自动清理，审批主记录和审计字段保留。
+- 红测最初为 `5 failed`，分别证明兼容回退、保留期和 0023 均尚不存在；最终综合门禁为 `80 passed`，Ruff、mypy（117 个源文件）、PostgreSQL 离线 SQL、SQLite 成功/失败迁移、Alembic 单一 head 和 `git diff --check` 通过。
+- 本阶段目前只完成本地编码与验证，没有升级版本、提交、推送或部署；生产仍保持 v1.3.6 / `0022_approval_pii`。没有调用 DeepSeek、百居易或企业微信，受保护项目总结文件保持未读、未改、未暂存。
+
+### 阶段 2B 发布 Review
+
+- 发布前生产仍为 v1.3.6 / `0022_approval_pii`，API 健康且重启次数为 0；审批记录和未清理密文缺口均为 0，满足不可逆迁移入口门禁。
+- 其余发布证据在提交、备份、迁移和运行态验收完成后补充。
 
 ## 第一段：推荐修复边界
 

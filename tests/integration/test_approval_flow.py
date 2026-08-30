@@ -20,12 +20,12 @@ from homestay_bot.services.approval_service import ApprovalService
 from homestay_bot.services.booking_service import BookingService
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 
+_TEST_ENCRYPTION_KEY = Fernet.generate_key().decode("ascii")
+
 
 def sensitive_data() -> ApprovalSensitiveData:
-    """构造使用随机测试密钥的审批敏感数据服务。"""
-    return ApprovalSensitiveData(
-        SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
-    )
+    """构造共享同一测试密钥的审批敏感数据服务。"""
+    return ApprovalSensitiveData(SensitiveDataCipher(_TEST_ENCRYPTION_KEY))
 
 
 class InMemoryApprovalRepository:
@@ -145,9 +145,13 @@ def pending_approval() -> BookingApproval:
         check_in_date=date(2026, 8, 1),
         check_out_date=date(2026, 8, 2),
         number_of_guests=2,
+        room_type_preference="江景房",
+    )
+    sensitive_data().write(
+        approval,
         guest_name="张三",
         guest_mobile="13800138000",
-        room_type_preference="江景房",
+        special_requests=None,
     )
     approval.created_at = datetime.fromisoformat("2026-07-29T00:00:00+08:00")
     return approval
@@ -209,11 +213,9 @@ async def test_confirming_same_approval_twice_creates_one_reservation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_booking_prefers_ciphertext_over_legacy_plaintext() -> None:
-    """已有密文时，下单与写后核验都不得继续读取旧明文。"""
+async def test_booking_uses_ciphertext_for_create_and_reconciliation() -> None:
+    """下单与写后核验必须共同读取用途隔离密文。"""
     approval = pending_approval()
-    approval.guest_name = "旧姓名"
-    approval.guest_mobile = "10000000000"
     sensitive = sensitive_data()
     sensitive.write(
         approval,

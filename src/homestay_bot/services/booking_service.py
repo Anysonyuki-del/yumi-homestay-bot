@@ -157,7 +157,7 @@ class BookingService:
         ):
             raise ValueError("审批单缺少创建订单所需字段")
 
-        sensitive = self._sensitive_data.read(approval)
+        sensitive = self._sensitive_data.require_for_booking(approval)
         return CreateReservationRequest(
             property_id=approval.property_id,
             custom_channel_id=1,
@@ -197,7 +197,7 @@ class BookingService:
                 approval,
                 failure_message="创建结果暂时无法自动核验",
             )
-        sensitive = self._sensitive_data.read(approval)
+        sensitive = self._sensitive_data.require_for_booking(approval)
         matches = [
             item
             for item in candidates

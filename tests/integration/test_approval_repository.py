@@ -40,6 +40,7 @@ async def test_repository_adds_and_locks_approval() -> None:
         session.add(conversation)
         await session.flush()
         repository = SQLAlchemyApprovalRepository(session)
+        sensitive = sensitive_data()
         approval = BookingApproval(
             approval_code="APP-DB",
             conversation_id=conversation.id,
@@ -47,9 +48,13 @@ async def test_repository_adds_and_locks_approval() -> None:
             check_in_date=date(2026, 8, 1),
             check_out_date=date(2026, 8, 2),
             number_of_guests=2,
+            room_type_preference="江景房",
+        )
+        sensitive.write(
+            approval,
             guest_name="张三",
             guest_mobile="13800138000",
-            room_type_preference="江景房",
+            special_requests=None,
         )
         saved = await repository.add(approval)
         await session.commit()
@@ -128,6 +133,7 @@ async def test_production_repository_and_permission_share_one_transaction() -> N
         conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
         session.add_all([employee, conversation])
         await session.flush()
+        sensitive = sensitive_data()
         approval = BookingApproval(
             approval_code="APP-TXN",
             conversation_id=conversation.id,
@@ -135,9 +141,13 @@ async def test_production_repository_and_permission_share_one_transaction() -> N
             check_in_date=date(2026, 8, 1),
             check_out_date=date(2026, 8, 2),
             number_of_guests=2,
+            room_type_preference="江景房",
+        )
+        sensitive.write(
+            approval,
             guest_name="张三",
             guest_mobile="13800138000",
-            room_type_preference="江景房",
+            special_requests=None,
         )
         session.add(approval)
         await session.commit()
@@ -147,9 +157,7 @@ async def test_production_repository_and_permission_share_one_transaction() -> N
             SQLAlchemyApprovalRepository(session),
             SQLAlchemyPermissionChecker(session),
             UnavailableHostex(),
-            ApprovalSensitiveData(
-                SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
-            ),
+            sensitive,
         )
 
         result = await service.confirm_and_create(
@@ -182,6 +190,7 @@ async def test_stale_creating_approval_moves_to_manual_review() -> None:
         conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
         session.add(conversation)
         await session.flush()
+        sensitive = sensitive_data()
         approval = BookingApproval(
             approval_code="APP-STALE",
             conversation_id=conversation.id,
@@ -189,10 +198,14 @@ async def test_stale_creating_approval_moves_to_manual_review() -> None:
             check_in_date=date(2026, 8, 1),
             check_out_date=date(2026, 8, 2),
             number_of_guests=2,
-            guest_name="张三",
-            guest_mobile="13800138000",
             room_type_preference="江景房",
             approved_at=now - timedelta(minutes=10),
+        )
+        sensitive.write(
+            approval,
+            guest_name="张三",
+            guest_mobile="13800138000",
+            special_requests=None,
         )
         session.add(approval)
         await session.commit()
@@ -206,58 +219,5 @@ async def test_stale_creating_approval_moves_to_manual_review() -> None:
         assert recovered == 1
         assert approval.status is ApprovalStatus.NEEDS_REVIEW
         assert approval.failure_message == "创建进程中断，需人工核验百居易后台"
-
-    await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_approval_backfill_query_only_returns_missing_ciphertext_in_id_order() -> None:
-    """回填仓储只返回缺失必要密文的记录，并遵守稳定主键分页。"""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with factory() as session:
-        conversation = Conversation(open_kfid="wk-backfill", external_userid="wm-backfill")
-        session.add(conversation)
-        await session.flush()
-        approvals = [
-            BookingApproval(
-                approval_code=f"APP-BACKFILL-{index}",
-                conversation_id=conversation.id,
-                status=ApprovalStatus.PENDING,
-                check_in_date=date(2026, 9, index),
-                check_out_date=date(2026, 9, index + 1),
-                number_of_guests=2,
-                guest_name=f"客人{index}",
-                guest_mobile=f"1380013800{index}",
-                room_type_preference="江景房",
-                special_requests="高楼层" if index == 2 else None,
-            )
-            for index in (1, 2, 3)
-        ]
-        complete = sensitive_data()
-        complete.write(
-            approvals[2],
-            guest_name=approvals[2].guest_name,
-            guest_mobile=approvals[2].guest_mobile,
-            special_requests=approvals[2].special_requests,
-        )
-        session.add_all(approvals)
-        await session.flush()
-        repository = SQLAlchemyApprovalRepository(session)
-
-        first = await repository.list_sensitive_data_backfill_batch(
-            after_id=0,
-            limit=1,
-        )
-        second = await repository.list_sensitive_data_backfill_batch(
-            after_id=first[0].id,
-            limit=100,
-        )
-
-        assert [item.approval_code for item in first] == ["APP-BACKFILL-1"]
-        assert [item.approval_code for item in second] == ["APP-BACKFILL-2"]
 
     await engine.dispose()

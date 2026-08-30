@@ -2320,7 +2320,9 @@ async def _run_retention_loop(
                 deleted = await SQLAlchemyRetentionRepository(session).purge()
                 await session.commit()
                 logger.info(
-                    "历史记录清理完成：jobs=%s external_requests=%s hostex_events=%s audit_logs=%s",
+                    "历史记录清理完成：approval_pii=%s jobs=%s "
+                    "external_requests=%s hostex_events=%s audit_logs=%s",
+                    deleted.get("booking_approval_pii", 0),
                     deleted.get("jobs", 0),
                     deleted.get("external_requests", 0),
                     deleted.get("hostex_webhook_events", 0),

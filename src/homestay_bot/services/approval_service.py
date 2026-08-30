@@ -65,12 +65,9 @@ class ApprovalService:
             check_in_date=request.check_in_date,
             check_out_date=request.check_out_date,
             number_of_guests=request.number_of_guests,
-            guest_name=request.guest_name,
-            guest_mobile=request.guest_mobile,
             room_type_preference=request.room_type_preference,
-            special_requests=request.special_requests,
         )
-        # 阶段 2A 保留旧明文以支持回滚，同时所有新审批立即双写独立密文。
+        # 阶段 2B 只保存用途隔离密文，审批表不再持久化旧明文字段。
         self._sensitive_data.write(
             approval,
             guest_name=request.guest_name,

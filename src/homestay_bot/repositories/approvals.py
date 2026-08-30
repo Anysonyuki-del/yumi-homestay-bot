@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,31 +57,6 @@ class SQLAlchemyApprovalRepository:
         """刷新审批单变更，提交由外层事务负责。"""
         self._session.add(approval)
         await self._session.flush()
-
-    async def list_sensitive_data_backfill_batch(
-        self,
-        *,
-        after_id: int,
-        limit: int,
-    ) -> list[BookingApproval]:
-        """按主键返回缺失审批密文的有界批次，供显式幂等回填。"""
-        statement = (
-            select(BookingApproval)
-            .where(
-                BookingApproval.id > after_id,
-                or_(
-                    BookingApproval.guest_name_ciphertext.is_(None),
-                    BookingApproval.guest_mobile_ciphertext.is_(None),
-                    and_(
-                        BookingApproval.special_requests.is_not(None),
-                        BookingApproval.special_requests_ciphertext.is_(None),
-                    ),
-                ),
-            )
-            .order_by(BookingApproval.id)
-            .limit(max(1, min(limit, 100)))
-        )
-        return list((await self._session.scalars(statement)).all())
 
     async def recover_stale_creating(self, *, before: datetime) -> int:
         """把进程中断遗留的创建中审批转为人工核验，绝不自动重放。"""

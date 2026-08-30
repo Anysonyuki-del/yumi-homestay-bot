@@ -650,8 +650,6 @@ class BookingApproval(TimestampMixin, Base):
     check_in_date: Mapped[date] = mapped_column(Date, nullable=False)
     check_out_date: Mapped[date] = mapped_column(Date, nullable=False)
     number_of_guests: Mapped[int] = mapped_column(Integer, nullable=False)
-    guest_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    guest_mobile: Mapped[str] = mapped_column(String(32), nullable=False)
     guest_name_ciphertext: Mapped[bytes | None] = mapped_column(
         LargeBinary,
         nullable=True,
@@ -661,7 +659,6 @@ class BookingApproval(TimestampMixin, Base):
         nullable=True,
     )
     room_type_preference: Mapped[str] = mapped_column(String(128), nullable=False)
-    special_requests: Mapped[str | None] = mapped_column(Text, nullable=True)
     special_requests_ciphertext: Mapped[bytes | None] = mapped_column(
         LargeBinary,
         nullable=True,
