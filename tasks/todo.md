@@ -8,7 +8,7 @@
 - [x] 阶段 0 红测：Compose 持久挂载与私有目录写入探针
 - [x] 阶段 0 实现：单一容器目录、宿主机挂载与启动失败保护
 - [x] 阶段 0 本地最小验证与差异自审
-- [ ] 阶段 0 提交、推送、生产文件迁移与双重重建验收
+- [x] 阶段 0 提交、推送、生产文件迁移与双重重建验收
 
 ## 第一段：推荐修复边界
 
@@ -125,7 +125,19 @@
 - Compose 把容器内目录固定为 `/app/data/private_uploads`，宿主机通过 `${PRIVATE_UPLOAD_HOST_DIR:-./data/private_uploads}` 持久挂载；项目现有 `.gitignore` 已排除默认目录。
 - Ruff 受影响文件通过；Mypy 两个受影响源码文件通过；`git diff --check` 通过。Docker CLI 在本机不存在，`docker compose config` 留到服务器部署前执行。
 - 版本已升级为 `1.3.4` 并补充正式更新日志；版本测试 `5 passed`，标准 wheel 构建成功且元数据为 `1.3.4`。
-- 当前没有提交、推送或修改生产；生产旧容器文件尚未导出，阶段 0 不能标记为生产完成，也不能进入阶段 1。
+- 本地冻结时尚未提交、推送或修改生产；后续生产证据单独记录在下方，避免用本地结果替代运行态验收。
+
+## 阶段 0 生产 Review
+
+- 功能提交 `255ba9c` 和正式标签 `v1.3.4` 已推送 GitHub，并通过本机与服务器双重验证的完整 Git bundle 快进到生产；服务器原有 3 个未跟踪配置备份保持不变。
+- 生产预检确认旧容器 `data/private_uploads` 存在但文件数为 0，数据库 `task_attachments` 和 `room_credentials` 引用数也均为 0，不存在需要人工恢复的既有缺失文件。
+- 备份位于 `/opt/yumi-backups/v1.3.4-20260830T130258Z`，包含旧提交、权限 600 的 `.env`、Compose、源码 bundle、部署 bundle、旧上传目录清单和 PostgreSQL custom dump；主机缺少 `pg_restore` 后改由 PostgreSQL 容器验证同一归档，未重复或覆盖备份。
+- 旧运行容器的镜像内容层已不可直接引用，`docker commit` 也因缺少 content digest 失败；在现网未切换时从旧提交 `f3b663a` 独立重建并保留 `rollback-v1.3.3` 镜像，补齐即时回滚能力后才继续部署。
+- 生产 `.env` 已设置 `PRIVATE_UPLOAD_HOST_DIR=/opt/yumi-data/private_uploads` 且权限保持 600；Compose 解析确认 bind mount 来源为该目录、目标为 `/app/data/private_uploads`，宿主机目录权限为 700。
+- 使用非业务哨兵连续强制重建 API 两次，容器编号依次变更为 `8e1ee68c...` 和 `d58159dc...`；两次健康后哨兵都可在容器挂载内读取，随后已安全删除，最终上传文件、数据库引用和遗留写入探针均为 0。
+- PostgreSQL 容器始终为 `af11bb4a...` 且重启次数为 0；API 重启次数为 0，Alembic current/head 均为 `0021_task_lifecycle`。
+- 容器包版本和公网 OpenAPI 均为 `1.3.4`，本机与公网 `/health` 均为 `ok`，部署后 15 分钟日志中 `ERROR`、`Traceback`、`Exception` 计数为 0。
+- 本次发布未调用 DeepSeek、百居易或企业微信真实接口，没有发送真实消息；由于生产原本没有附件或凭证文件，授权页面读取验收不适用，改由目录清单一致性和跨两次容器重建哨兵证明持久化。
 
 # 当前任务：v1.3.3 综合代码审查
 
