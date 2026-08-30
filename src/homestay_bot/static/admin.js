@@ -8,7 +8,18 @@ const drawerClosers = document.querySelectorAll("[data-drawer-close]");
 const drawerBackdrop = document.querySelector(".drawer-backdrop");
 const workspace = document.querySelector(".admin-workspace");
 const desktopBreakpoint = window.matchMedia("(min-width: 1024px)");
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 let focusBeforeDrawer = null;
+let drawerTransitionToken = 0;
+let cancelPendingDrawerClose = null;
+
+/** 取消旧的抽屉收尾回调，并返回本次状态变化的唯一编号。 */
+function beginDrawerTransition() {
+  drawerTransitionToken += 1;
+  if (typeof cancelPendingDrawerClose === "function") cancelPendingDrawerClose();
+  cancelPendingDrawerClose = null;
+  return drawerTransitionToken;
+}
 
 /** 根据断点和开关状态同步抽屉的可访问树状态。 */
 function syncDrawerAccessibility() {
@@ -22,23 +33,40 @@ function syncDrawerAccessibility() {
 /** 打开移动导航并把键盘焦点移到关闭按钮。 */
 function openDrawer() {
   if (!drawer || !drawerTrigger || !drawerBackdrop || !workspace) return;
-  focusBeforeDrawer = document.activeElement;
+  const transitionToken = beginDrawerTransition();
+  if (!document.body.classList.contains("drawer-is-open")) {
+    focusBeforeDrawer = document.activeElement;
+  }
+  drawerBackdrop.hidden = false;
+  drawer.classList.remove("is-closing");
   drawer.classList.add("is-open");
   syncDrawerAccessibility();
   drawerTrigger.setAttribute("aria-expanded", "true");
-  drawerBackdrop.hidden = false;
   workspace.inert = true;
   workspace.setAttribute("aria-hidden", "true");
   document.body.classList.add("drawer-is-open");
+  // 遮罩从 hidden 恢复后要等一帧再切换透明度，才能稳定触发淡入。
+  window.requestAnimationFrame(() => {
+    if (
+      transitionToken === drawerTransitionToken
+      && drawer.classList.contains("is-open")
+    ) {
+      drawerBackdrop.classList.add("is-visible");
+    }
+  });
   drawer.querySelector("[data-drawer-close]")?.focus();
 }
 
-/** 关闭移动导航并恢复触发前焦点。 */
-function closeDrawer(restoreFocus = true) {
+/** 完成抽屉关闭后的可访问状态和焦点恢复。 */
+function finishDrawerClose(restoreFocus, transitionToken) {
   if (!drawer || !drawerTrigger || !drawerBackdrop || !workspace) return;
-  drawer.classList.remove("is-open");
+  if (transitionToken !== drawerTransitionToken || drawer.classList.contains("is-open")) {
+    return;
+  }
+  drawer.classList.remove("is-closing");
   drawerTrigger.setAttribute("aria-expanded", "false");
   drawerBackdrop.hidden = true;
+  drawerBackdrop.classList.remove("is-visible");
   workspace.inert = false;
   workspace.removeAttribute("aria-hidden");
   document.body.classList.remove("drawer-is-open");
@@ -46,10 +74,47 @@ function closeDrawer(restoreFocus = true) {
   if (restoreFocus && focusBeforeDrawer instanceof HTMLElement) focusBeforeDrawer.focus();
 }
 
+/** 先播放关闭动画，再恢复页面操作；减少动态和桌面切换直接收尾。 */
+function closeDrawer(restoreFocus = true, immediate = false) {
+  if (!drawer || !drawerTrigger || !drawerBackdrop || !workspace) return;
+  if (!document.body.classList.contains("drawer-is-open")) {
+    syncDrawerAccessibility();
+    return;
+  }
+  const transitionToken = beginDrawerTransition();
+  drawer.classList.add("is-closing");
+  drawer.classList.remove("is-open");
+  drawerBackdrop.classList.remove("is-visible");
+  if (immediate || reducedMotion.matches) {
+    finishDrawerClose(restoreFocus, transitionToken);
+    return;
+  }
+
+  let fallbackTimer = null;
+  const cleanup = () => {
+    drawer.removeEventListener("transitionend", handleTransitionEnd);
+    if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
+    if (cancelPendingDrawerClose === cleanup) cancelPendingDrawerClose = null;
+  };
+  const finish = () => {
+    cleanup();
+    finishDrawerClose(restoreFocus, transitionToken);
+  };
+  const handleTransitionEnd = (event) => {
+    if (event.target === drawer && event.propertyName === "transform") finish();
+  };
+  drawer.addEventListener("transitionend", handleTransitionEnd);
+  // 浏览器丢失 transitionend 时仍须释放 inert 和页面滚动。
+  fallbackTimer = window.setTimeout(finish, 240);
+  cancelPendingDrawerClose = cleanup;
+}
+
 drawerTrigger?.addEventListener("click", openDrawer);
 drawerClosers.forEach((element) => element.addEventListener("click", closeDrawer));
 desktopBreakpoint.addEventListener("change", (event) => {
-  if (event.matches && drawer?.classList.contains("is-open")) closeDrawer(false);
+  if (event.matches && document.body.classList.contains("drawer-is-open")) {
+    closeDrawer(false, true);
+  }
   else syncDrawerAccessibility();
 });
 syncDrawerAccessibility();
@@ -138,6 +203,7 @@ function setSubmittingState(submitter) {
     : submitter.textContent || "";
   if (submitter instanceof HTMLInputElement) submitter.value = "正在处理…";
   else submitter.textContent = "正在处理…";
+  submitter.classList.add("is-submitting");
   submitter.setAttribute("aria-busy", "true");
   submitter.setAttribute("aria-disabled", "true");
   submitter.disabled = true;

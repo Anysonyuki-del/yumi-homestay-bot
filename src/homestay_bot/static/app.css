@@ -20,6 +20,10 @@
   --topbar-height: 56px;
   --radius: 8px;
   --shadow-overlay: 0 12px 32px rgb(15 23 42 / 14%);
+  --motion-fast: 160ms;
+  --motion-panel: 180ms;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-in: cubic-bezier(.4, 0, 1, 1);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--page);
@@ -61,8 +65,9 @@ dt { color: var(--muted); }
 dd { margin: 0; }
 .checkbox { grid-template-columns: auto 1fr; align-items: center; font-weight: 500; }
 .checkbox input, .check-row input, .confirmation-check input { width: 20px; min-height: 20px; }
-button, .button { border: 1px solid var(--primary); color: #fff; background: var(--primary); transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease; }
+button, .button { border: 1px solid var(--primary); color: #fff; background: var(--primary); transition: color var(--motion-fast) ease, background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, transform 100ms ease; }
 button:hover, .button:hover { border-color: var(--primary-hover); background: var(--primary-hover); }
+button:active:not(:disabled), .button:active { transform: translateY(1px); }
 .button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; padding: 9px 14px; border-radius: 6px; font-weight: 600; text-decoration: none; }
 .button--secondary { border-color: var(--line-strong); color: #334155; background: #fff; }
 .button--secondary:hover { border-color: #94a3b8; color: #0f172a; background: #f8fafc; }
@@ -155,9 +160,9 @@ tbody tr:hover { background: #fafcff; }
 .filter-toolbar label { margin: 0; }
 .filter-toolbar .checkbox { align-self: end; }
 .tab-nav { display: flex; gap: 4px; margin-bottom: 12px; padding: 4px; overflow-x: auto; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
-.tab-nav a { min-height: 38px; padding: 9px 12px; border-radius: 5px; color: var(--muted); font-weight: 600; text-decoration: none; white-space: nowrap; }
+.tab-nav a { min-height: 38px; padding: 9px 12px; border: 1px solid transparent; border-radius: 5px; color: var(--muted); font-weight: 600; text-decoration: none; white-space: nowrap; transition: color var(--motion-fast) ease, background-color var(--motion-fast) ease, border-color var(--motion-fast) ease; }
 .tab-nav a:hover { color: var(--text); background: #f8fafc; }
-.tab-nav a[aria-current="page"] { color: var(--primary-hover); background: var(--primary-soft); }
+.tab-nav a[aria-current="page"] { border-color: #bfdbfe; color: var(--primary-hover); background: var(--primary-soft); }
 .attention-grid { display: grid; gap: 10px; }
 .operations-matrix th, .operations-matrix td { text-align: center; }
 .operations-matrix th:first-child { position: sticky; left: 0; z-index: 1; text-align: left; background: #f8fafc; }
@@ -194,10 +199,12 @@ tbody tr:hover { background: #fafcff; }
 .admin-shell { min-height: 100vh; }
 .admin-workspace, .metric-item, .panel, .clean-list li, .diagnostics-list dd { min-width: 0; overflow-wrap: anywhere; }
 .drawer-is-open { overflow: hidden; overscroll-behavior: none; }
-.admin-sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; display: none; visibility: hidden; width: min(86vw, 292px); flex-direction: column; padding: 16px 12px; overflow-y: auto; overscroll-behavior: contain; transform: translateX(-105%); color: var(--text); background: #fff; border-right: 1px solid var(--line); box-shadow: var(--shadow-overlay); transition: transform 180ms ease; }
+.admin-sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; display: none; visibility: hidden; width: min(86vw, 292px); flex-direction: column; padding: 16px 12px; overflow-y: auto; overscroll-behavior: contain; transform: translateX(-105%); color: var(--text); background: #fff; border-right: 1px solid var(--line); box-shadow: var(--shadow-overlay); transition: transform var(--motion-panel) var(--ease-in); }
 .js-enabled .admin-sidebar { display: flex; }
-.admin-sidebar.is-open { visibility: visible; transform: translateX(0); }
-.drawer-backdrop { position: fixed; z-index: 30; inset: 0; background: rgb(15 23 42 / 48%); }
+.admin-sidebar.is-open, .admin-sidebar.is-closing { visibility: visible; }
+.admin-sidebar.is-open { transform: translateX(0); transition-timing-function: var(--ease-out); }
+.drawer-backdrop { position: fixed; z-index: 30; inset: 0; opacity: 0; background: rgb(15 23 42 / 48%); transition: opacity var(--motion-fast) var(--ease-in); }
+.drawer-backdrop.is-visible { opacity: 1; transition-timing-function: var(--ease-out); }
 .brand { display: flex; align-items: center; gap: 9px; padding: 2px 8px 18px; font-size: 1rem; font-weight: 750; line-height: 1.15; }
 .brand small { display: block; margin-top: 2px; color: var(--muted); font-size: .68rem; font-weight: 500; }
 .brand__mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 8px; color: #fff; background: var(--primary); font-size: 1rem; }
@@ -225,8 +232,10 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .no-script-nav a { display: block; min-height: 44px; padding: 10px 4px; }
 .js-enabled .no-script-nav { display: none; }
 .page-content { width: min(100%, 1920px); margin: 0 auto; padding: 16px 12px 36px; }
+.js-enabled .page-content { animation: page-enter var(--motion-panel) var(--ease-out) both; }
 .content-header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 14px; }
 .alert { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px; padding: 11px 13px; border: 1px solid; border-radius: 6px; }
+.js-enabled .alert { animation: status-enter var(--motion-fast) var(--ease-out) both; }
 .alert--warning { border-color: #fde68a; color: #78350f; background: var(--warning-soft); }
 .alert--danger { border-color: #fecaca; color: #991b1b; background: var(--danger-soft); }
 .alert--success { border-color: #bbf7d0; color: var(--success); background: var(--success-soft); }
@@ -263,6 +272,38 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .diagnostics-report summary { cursor: pointer; font-weight: 700; }
 .diagnostics-report[open] summary { margin-bottom: 12px; }
 .diagnostics-report textarea { margin-top: 8px; white-space: pre; overflow: auto; }
+
+/* 折叠面板只旋转方向提示，内容继续使用浏览器原生展开行为。 */
+.collapsible-section > summary,
+.operations-overview > summary,
+.diagnostics-report > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; list-style: none; }
+.collapsible-section > summary::-webkit-details-marker,
+.operations-overview > summary::-webkit-details-marker,
+.diagnostics-report > summary::-webkit-details-marker { display: none; }
+.collapsible-section > summary::after,
+.operations-overview > summary::after,
+.diagnostics-report > summary::after { width: 8px; height: 8px; flex: 0 0 auto; border-right: 2px solid currentcolor; border-bottom: 2px solid currentcolor; content: ""; transform: rotate(45deg); transform-origin: center; transition: transform var(--motion-fast) var(--ease-out); }
+.collapsible-section[open] > summary::after,
+.operations-overview[open] > summary::after,
+.diagnostics-report[open] > summary::after { transform: rotate(225deg); }
+
+/* 提交指示器只在真实提交锁定后运行，不改变表单的可访问文本。 */
+button.is-submitting { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border: 2px solid currentcolor; border-right-color: transparent; border-radius: 50%; content: ""; opacity: .82; animation: submit-spin 650ms linear infinite; }
+
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes status-enter {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes submit-spin {
+  to { transform: rotate(360deg); }
+}
 
 @media (min-width: 375px) {
   .page-content { padding-inline: 16px; }
@@ -322,5 +363,6 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition: none !important; animation: none !important; }
 }

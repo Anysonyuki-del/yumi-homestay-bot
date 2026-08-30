@@ -25,13 +25,19 @@ def _admin_fixture() -> str:
                     aria-controls="admin-drawer" aria-expanded="false">打开导航</button>
             <div class="topbar-title">后台页面标题</div><a href="#account">账号</a>
           </header>
-          <a href="#workspace-target">工作区链接</a>
-          <form id="form-a" data-unsaved-warning>
-            <input name="a"><button type="submit">保存 A</button>
-          </form>
-          <form id="form-b" data-unsaved-warning>
-            <input name="b"><button type="submit">保存 B</button>
-          </form>
+          <main class="page-content">
+            <div class="alert alert--success" role="status">保存成功</div>
+            <details class="operations-overview"><summary>查看紧凑总览</summary>
+              <div>总览内容</div>
+            </details>
+            <a href="#workspace-target">工作区链接</a>
+            <form id="form-a" data-unsaved-warning>
+              <input name="a"><button type="submit">保存 A</button>
+            </form>
+            <form id="form-b" data-unsaved-warning>
+              <input name="b"><button type="submit">保存 B</button>
+            </form>
+          </main>
         </div>
       </div>
       <details class="no-script-nav"><summary>打开页面导航</summary>
@@ -92,6 +98,7 @@ def test_cross_form_submission(browser: Browser) -> None:
             accepted,
             submitting: form.dataset.submitting,
             disabled: form.querySelector("button").disabled,
+            motionClass: form.querySelector("button").classList.contains("is-submitting"),
             unloadPrevented: unload.defaultPrevented,
             confirmCalls: window.confirmCalls.length,
           };
@@ -101,6 +108,7 @@ def test_cross_form_submission(browser: Browser) -> None:
         "accepted": True,
         "submitting": "true",
         "disabled": True,
+        "motionClass": True,
         "unloadPrevented": False,
         "confirmCalls": 0,
     }
@@ -203,9 +211,23 @@ def test_drawer_accessibility(browser: Browser) -> None:
     page.keyboard.press("Escape")
     assert page.locator("[data-drawer-open]").evaluate(
         "node => node === document.activeElement"
+    ) is False
+    assert drawer.evaluate("node => node.inert") is False
+    page.wait_for_timeout(260)
+    assert page.locator("[data-drawer-open]").evaluate(
+        "node => node === document.activeElement"
     ) is True
     assert drawer.evaluate("node => node.inert") is True
     assert drawer.evaluate("node => getComputedStyle(node).visibility") == "hidden"
+
+    page.click("[data-drawer-open]")
+    page.evaluate("() => { closeDrawer(); openDrawer(); }")
+    page.wait_for_timeout(260)
+    assert drawer.evaluate("node => node.classList.contains('is-open')") is True
+    assert drawer.evaluate("node => node.inert") is False
+    assert page.locator(".drawer-backdrop").evaluate(
+        "node => !node.hidden && node.classList.contains('is-visible')"
+    ) is True
 
     page.set_viewport_size({"width": 1100, "height": 844})
     page.wait_for_timeout(20)
@@ -215,6 +237,91 @@ def test_drawer_accessibility(browser: Browser) -> None:
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(20)
     assert drawer.evaluate("node => node.inert") is True
+    page.close()
+
+
+def test_motion_feedback_and_reduced_motion(browser: Browser) -> None:
+    """常规模式提供克制反馈，减少动态模式保留静态终态。"""
+    page = browser.new_page(viewport={"width": 390, "height": 844})
+    _load_admin_page(page)
+    assert page.locator(".page-content").evaluate(
+        "node => getComputedStyle(node).animationName"
+    ) == "page-enter"
+    assert page.locator(".alert").evaluate(
+        "node => getComputedStyle(node).animationName"
+    ) == "status-enter"
+
+    summary = page.locator(".operations-overview > summary")
+    closed_transform = summary.evaluate(
+        "node => getComputedStyle(node, '::after').transform"
+    )
+    summary.click()
+    page.wait_for_timeout(220)
+    open_transform = summary.evaluate(
+        "node => getComputedStyle(node, '::after').transform"
+    )
+    assert closed_transform != "none"
+    assert open_transform != closed_transform
+
+    page.evaluate(
+        """() => document.querySelector('#form-a').dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true })
+        )"""
+    )
+    page.wait_for_timeout(10)
+    submitter = page.locator("#form-a button")
+    assert submitter.evaluate("node => node.classList.contains('is-submitting')") is True
+    assert submitter.evaluate(
+        "node => getComputedStyle(node, '::before').animationName"
+    ) == "submit-spin"
+    page.close()
+
+    context = browser.new_context(
+        reduced_motion="reduce",
+        viewport={"width": 390, "height": 844},
+    )
+    reduced_page = context.new_page()
+    _load_admin_page(reduced_page)
+    assert reduced_page.locator(".page-content").evaluate(
+        "node => getComputedStyle(node).animationName"
+    ) == "none"
+    assert reduced_page.locator(".alert").evaluate(
+        "node => getComputedStyle(node).animationName"
+    ) == "none"
+    reduced_page.evaluate(
+        """() => document.querySelector('#form-a').dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true })
+        )"""
+    )
+    reduced_page.wait_for_timeout(10)
+    assert reduced_page.locator("#form-a button").evaluate(
+        "node => getComputedStyle(node, '::before').animationName"
+    ) == "none"
+    context.close()
+
+
+@pytest.mark.parametrize("width", [375, 1440])
+def test_motion_layout_has_no_horizontal_overflow(
+    browser: Browser,
+    width: int,
+) -> None:
+    """验证手机和桌面关键宽度下，动效层不会制造横向溢出。"""
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    _load_admin_page(page)
+    assert page.evaluate(
+        "() => document.documentElement.scrollWidth <= window.innerWidth"
+    ) is True
+
+    if width == 375:
+        page.click("[data-drawer-open]")
+        page.wait_for_timeout(220)
+        assert page.evaluate(
+            "() => document.documentElement.scrollWidth <= window.innerWidth"
+        ) is True
+        assert page.locator("[data-drawer]").evaluate(
+            "node => getComputedStyle(node).transform"
+        ) == "matrix(1, 0, 0, 1, 0, 0)"
+
     page.close()
 
 

@@ -77,6 +77,12 @@ def test_admin_javascript_contract_covers_accessible_progressive_enhancements() 
     assert "workspace.inert = false" in script
     assert 'document.body.classList.remove("drawer-is-open")' in script
     assert 'window.matchMedia("(min-width: 1024px)")' in script
+    assert 'window.matchMedia("(prefers-reduced-motion: reduce)")' in script
+    assert "drawerTransitionToken" in script
+    assert "finishDrawerClose" in script
+    assert 'addEventListener("transitionend"' in script
+    assert "requestAnimationFrame" in script
+    assert 'submitter.classList.add("is-submitting")' in script
     assert "if (!event.defaultPrevented) dirtyForms.delete(form);" in script
 
 
@@ -92,6 +98,17 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     assert "--topbar-height: 56px" in css
     assert ":focus-visible { outline: 3px solid var(--primary)" in css
     assert "@media (prefers-reduced-motion: reduce)" in css
+    assert "--motion-fast: 160ms" in css
+    assert "--motion-panel: 180ms" in css
+    assert "@keyframes page-enter" in css
+    assert "@keyframes status-enter" in css
+    assert "@keyframes submit-spin" in css
+    assert ".drawer-backdrop.is-visible" in css
+    assert "button.is-submitting::before" in css
+    assert "transition: all" not in css
+    reduced_motion = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
+    assert "animation: none !important" in reduced_motion
+    assert "transition: none !important" in reduced_motion
     assert "body {" in css and "overflow-x: clip" not in css and "overflow-x: hidden" not in css
     assert "overflow-wrap: anywhere" in css
     assert "pre, code" in css
