@@ -20,8 +20,8 @@
 - [x] 阶段 2A 验证：SQLite 往返迁移、PostgreSQL 离线 SQL 和聚焦回归
 - [x] 阶段 2A 本地 Review；不提前实施 2B 删列或保留期清理
 - [x] 阶段 2A 发布：升级 v1.3.6、补充正式更新日志并验证发布包
-- [ ] 阶段 2A 提交、标记 v1.3.6 并推送 GitHub
-- [ ] 阶段 2A 生产备份、迁移、API 单容器部署和运行态验收
+- [x] 阶段 2A 提交、标记 v1.3.6 并推送 GitHub
+- [x] 阶段 2A 生产备份、迁移、API 单容器部署和运行态验收
 
 ### 阶段 2A 本地 Review
 
@@ -29,6 +29,16 @@
 - 审批模板只接收不可变 `ApprovalPageView`，不再接触含密文字段的 SQLAlchemy 实体；显式回填服务每批最多 100 条、按主键续跑且不自动启动循环。
 - `0022_approval_pii` 只增加四个 nullable 列，SQLite 升级/降级/再升级和 PostgreSQL 离线 SQL 均已验证；未实施 2B 明文删列、PII 清理或保留期策略。
 - 红测先证明服务缺失；最终聚焦回归为 `31 passed`，运行时装配回归为 `14 passed`；Ruff、mypy（7 个受影响源文件）和 `git diff --check` 通过。未调用真实模型，未升级版本、推送或部署。
+
+### 阶段 2A 发布 Review
+
+- 正式功能提交与标签均为 `5fa0db51b3833f2d5c69467e4cf10e68e92a8731` / `v1.3.6`，已推送 GitHub；标准 wheel 元数据版本为 `1.3.6`。
+- 发布前生产审批总数、姓名、手机号和特殊需求非空数再次确认为 `0|0|0|0`；新镜像构建完成、迁移前再次确认为零，因此未执行无意义的历史回填。
+- 生产备份位于 `/opt/yumi-backups/v1.3.6-20260831T025557`，包含旧提交、权限 600 的 `.env`、Compose、完整源码 bundle、上传目录归档、PostgreSQL custom dump和旧 API 镜像编号；bundle 与数据库归档均已验证，旧镜像标记为 `rollback-v1.3.5`。
+- 服务器源码以验证过的 Git bundle 快进到功能提交；三个既存未跟踪环境备份保持不变。PostgreSQL 从 `0021_task_lifecycle` 事务升级到 `0022_approval_pii`，四个新列全部存在，迁移后审批密文计数仍为 `0|0|0|0`。
+- 只重建 API，PostgreSQL 未重启；运行镜像为 `sha256:a0bd56b2c58fcbb15d29c28aa2103efcd3432f7881f6368262203352de074678`，API 容器包和公网 OpenAPI 均为 `1.3.6`，重启次数为 0，近期 `ERROR`、`Traceback`、`Exception` 标记为 0。
+- 本机和公网 `/health` 均为 `ok`，公网 `/employee/login` 返回 200，未登录访问 `/employee/approvals` 返回 401；私有上传仍挂载 `/opt/yumi-data/private_uploads -> /app/data/private_uploads`，文件数为 0。
+- 本次发布没有主动调用 DeepSeek、百居易或企业微信，没有发送真实消息；受保护的未跟踪项目总结文件保持未读、未改、未暂存。
 
 ## 第一段：推荐修复边界
 
