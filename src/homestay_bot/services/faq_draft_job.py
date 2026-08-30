@@ -189,7 +189,9 @@ class FaqDraftJobService:
         generation: int,
     ) -> DraftCandidate | None:
         """生成并保存草稿；第三次失败改为人工兜底提醒。"""
-        approved_knowledge = await self._build_approved_knowledge()
+        approved_knowledge = await self._build_approved_knowledge(
+            candidate.canonical_question
+        )
         try:
             draft = await self._drafter.generate(
                 canonical_question=candidate.canonical_question,
@@ -216,14 +218,14 @@ class FaqDraftJobService:
             expected_generation=generation,
         )
 
-    async def _build_approved_knowledge(self) -> list[dict[str, str]]:
-        """把语言分离的审核知识合并为双语草稿上下文。"""
-        zh_items = await self._knowledge.build_context(Language.ZH)
-        en_items = await self._knowledge.build_context(Language.EN)
+    async def _build_approved_knowledge(self, query: str) -> list[dict[str, str]]:
+        """按候选标准问题召回并合并双语审核知识。"""
+        zh_items = await self._knowledge.retrieve(Language.ZH, query)
+        en_items = await self._knowledge.retrieve(Language.EN, query)
         zh_by_id = {item.source_id: item for item in zh_items}
         en_by_id = {item.source_id: item for item in en_items}
         approved: list[dict[str, str]] = []
-        for source_id in list(dict.fromkeys([*zh_by_id, *en_by_id]))[:100]:
+        for source_id in list(dict.fromkeys([*zh_by_id, *en_by_id]))[:8]:
             zh = zh_by_id.get(source_id)
             en = en_by_id.get(source_id)
             approved.append(self._knowledge_payload(zh, en))

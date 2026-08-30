@@ -161,10 +161,12 @@ class KnowledgeStub:
     def __init__(self) -> None:
         """初始化语言调用记录。"""
         self.languages: list[Language] = []
+        self.queries: list[str] = []
 
-    async def build_context(self, language: Language) -> list[KnowledgeSnippet]:
+    async def retrieve(self, language: Language, query: str, **kwargs) -> list[KnowledgeSnippet]:
         """按语言返回审核知识。"""
         self.languages.append(language)
+        self.queries.append(query)
         return [
             KnowledgeSnippet(
                 source_id=1,
@@ -262,6 +264,7 @@ async def test_successful_draft_is_saved_and_only_notifies_admins_without_identi
     assert record.draft_payload == reviewable_draft().model_dump()
     assert candidates.notified_at == now
     assert knowledge.languages == [Language.ZH, Language.EN]
+    assert knowledge.queries == [record.canonical_question, record.canonical_question]
     assert len(drafter.calls) == 1
     assert notifications.messages[0]["employee_userids"] == ["admin-1"]
     content = notifications.messages[0]["content"]

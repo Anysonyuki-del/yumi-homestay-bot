@@ -1,10 +1,12 @@
 import json
 import re
+from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
 
 import pytest
 
+import homestay_bot.integrations.deepseek_client as deepseek_client_module
 from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.deepseek_client import (
     AssistantRequestContext,
@@ -28,7 +30,7 @@ from homestay_bot.services.knowledge_service import KnowledgeSnippet
 class KnowledgeStub:
     """返回固定审核知识。"""
 
-    async def build_context(self, language: Language) -> list[KnowledgeSnippet]:
+    async def retrieve(self, language: Language, query: str, **kwargs) -> list[KnowledgeSnippet]:
         """提供入住知识用于构造系统提示。"""
         return [
             KnowledgeSnippet(
@@ -43,7 +45,7 @@ class KnowledgeStub:
 class ParkingKnowledgeStub:
     """返回已经覆盖停车主题的审核知识。"""
 
-    async def build_context(self, language: Language) -> list[KnowledgeSnippet]:
+    async def retrieve(self, language: Language, query: str, **kwargs) -> list[KnowledgeSnippet]:
         """提供停车知识用于验证已覆盖主题不会进入候选。"""
         return [
             KnowledgeSnippet(
@@ -219,6 +221,7 @@ async def test_context_envelope_uses_redacted_current_question() -> None:
     envelope = json.loads(client.chat.completions.requests[0]["messages"][-1]["content"])
     assert "张三" not in envelope["current_question"]
     assert "13800138000" not in envelope["current_question"]
+    assert client.chat.completions.requests[0]["max_tokens"] == 1800
 
 
 @pytest.mark.asyncio
@@ -312,6 +315,52 @@ class ToolClientStub:
         self.chat = SimpleNamespace(completions=ToolCompletionsStub())
 
 
+class RepeatingToolCompletionsStub(ToolCompletionsStub):
+    """每轮都重复请求房态工具，用于锁定主链硬调用上限。"""
+
+    async def create(self, **kwargs):
+        """始终返回同一个合法只读工具调用。"""
+        self.requests.append(kwargs)
+        function = SimpleNamespace(
+            name="search_availability",
+            arguments=(
+                '{"check_in_date":"2026-08-30",'
+                '"check_out_date":"2026-08-31"}'
+            ),
+        )
+        call = SimpleNamespace(
+            id=f"call-{len(self.requests)}",
+            type="function",
+            function=function,
+        )
+        message = SimpleNamespace(
+            content=None,
+            tool_calls=[call],
+            model_dump=lambda **kwargs: {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": function.name,
+                            "arguments": function.arguments,
+                        },
+                    }
+                ],
+            },
+        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class RepeatingToolClientStub:
+    """暴露持续请求工具的模型客户端。"""
+
+    def __init__(self) -> None:
+        """初始化可观察的模型请求资源。"""
+        self.chat = SimpleNamespace(completions=RepeatingToolCompletionsStub())
+
+
 class InvalidToolResultCompletionsStub(ToolCompletionsStub):
     """工具查询成功但最终结构化回复无效，复现线上失败形状。"""
 
@@ -391,6 +440,22 @@ class ToolExecutorStub:
                     }
                 ],
             }
+        ]
+
+
+class LargeToolExecutorStub(ToolExecutorStub):
+    """返回超大房态列表，验证工具结果按完整 JSON 项裁剪。"""
+
+    async def execute(self, name: str, arguments: dict[str, str]) -> list[dict[str, object]]:
+        """生成足以超过单次工具结果预算的结构化列表。"""
+        self.calls.append((name, arguments))
+        return [
+            {
+                "property_id": index,
+                "stay_available": True,
+                "remarks": "房态说明" * 200,
+            }
+            for index in range(100)
         ]
 
 
@@ -511,7 +576,10 @@ class HostexInclusiveCheckoutStub(HostexCatalogStub):
 @pytest.mark.asyncio
 async def test_availability_result_includes_hostex_property_title() -> None:
     """房态工具结果必须同时提供百居易房间名称和编号。"""
-    executor = HostexReadOnlyToolExecutor(HostexCatalogStub())
+    executor = HostexReadOnlyToolExecutor(
+        HostexCatalogStub(),
+        local_date_provider=lambda: date(2026, 8, 2),
+    )
 
     result = await executor.execute(
         "search_availability",
@@ -533,7 +601,10 @@ async def test_availability_result_includes_hostex_property_title() -> None:
 @pytest.mark.asyncio
 async def test_availability_excludes_checkout_day_from_stay_result() -> None:
     """退房日不可用不能覆盖入住日晚可用，交给模型的数据只含住宿晚。"""
-    executor = HostexReadOnlyToolExecutor(HostexInclusiveCheckoutStub())
+    executor = HostexReadOnlyToolExecutor(
+        HostexInclusiveCheckoutStub(),
+        local_date_provider=lambda: date(2026, 8, 14),
+    )
 
     result = await executor.execute(
         "search_availability",
@@ -556,6 +627,52 @@ async def test_availability_excludes_checkout_day_from_stay_result() -> None:
             ],
         }
     ]
+
+
+class HostexCallCounterStub(HostexCatalogStub):
+    """记录百居易只读方法调用次数。"""
+
+    def __init__(self) -> None:
+        """初始化所有外部调用计数。"""
+        self.property_calls = 0
+        self.availability_calls = 0
+        self.price_calls = 0
+
+    async def list_properties(self):
+        """记录房源目录调用。"""
+        self.property_calls += 1
+        return await super().list_properties()
+
+    async def list_availabilities(self, property_ids, start_date, end_date):
+        """记录房态调用。"""
+        self.availability_calls += 1
+        return await super().list_availabilities(property_ids, start_date, end_date)
+
+    async def list_reference_prices(self, start_date, end_date):
+        """记录参考价调用。"""
+        self.price_calls += 1
+        return []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["search_availability", "search_reference_price"])
+async def test_invalid_stay_dates_do_not_call_hostex(tool_name: str) -> None:
+    """非法日期必须在任何百居易请求之前被本地拒绝。"""
+    hostex = HostexCallCounterStub()
+    executor = HostexReadOnlyToolExecutor(
+        hostex,
+        local_date_provider=lambda: date(2026, 8, 30),
+    )
+
+    with pytest.raises(ValueError):
+        await executor.execute(
+            tool_name,
+            {"check_in_date": "2026-08-29", "check_out_date": "2026-08-30"},
+        )
+
+    assert hostex.property_calls == 0
+    assert hostex.availability_calls == 0
+    assert hostex.price_calls == 0
 
 
 @pytest.mark.asyncio
@@ -855,9 +972,9 @@ async def test_faq_candidate_is_returned_in_same_structured_guest_response() -> 
     system_prompt = request["messages"][0]["content"]
     envelope = request["messages"][-1]["content"]
     assert '"canonical_question"' not in system_prompt
-    assert envelope.count('"canonical_question"') == 50
-    assert '"id": 50' in envelope
-    assert '"id": 51' not in envelope
+    assert envelope.count('"canonical_question"') == 20
+    assert '"id": 20' in envelope
+    assert '"id": 21' not in envelope
     assert "客人原始问法" not in envelope
     assert "wm-sensitive" not in envelope
     assert "wm-private-guest" not in envelope
@@ -1357,6 +1474,131 @@ async def test_two_invalid_json_responses_raise_unavailable(caplog) -> None:
 
 
 @pytest.mark.asyncio
+async def test_repeating_tool_requests_stop_after_three_model_calls() -> None:
+    """持续工具请求必须在三次主模型调用后确定性停止。"""
+    client = RepeatingToolClientStub()
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=ToolExecutorStub(),
+        local_date_provider=lambda: date(2026, 8, 30),
+    )
+
+    with pytest.raises(AssistantUnavailableError):
+        await assistant.respond(
+            guest_identifier="wm-guest",
+            language=Language.ZH,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "查询2026年8月30日入住、8月31日退房的房态",
+                }
+            ],
+        )
+
+    assert len(client.chat.completions.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_request_over_character_budget_stops_before_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """单请求超过硬字符预算时必须在供应商调用前停止。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    monkeypatch.setattr(
+        deepseek_client_module,
+        "MODEL_BUDGET",
+        replace(deepseek_client_module.MODEL_BUDGET, main_request_chars=100),
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    with pytest.raises(AssistantUnavailableError):
+        await assistant.respond(
+            guest_identifier="wm-guest",
+            language=Language.ZH,
+            messages=[{"role": "user", "content": "几点入住？"}],
+        )
+
+    assert client.chat.completions.requests == []
+
+
+@pytest.mark.asyncio
+async def test_cumulative_character_budget_stops_before_second_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """主链累计预算不足第二轮时不得继续请求供应商。"""
+    client = RepeatingToolClientStub()
+    monkeypatch.setattr(
+        deepseek_client_module,
+        "MODEL_BUDGET",
+        replace(deepseek_client_module.MODEL_BUDGET, main_chain_chars=50_000),
+    )
+    monkeypatch.setattr(
+        deepseek_client_module,
+        "serialized_chars",
+        lambda value: 30_000,
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=ToolExecutorStub(),
+        local_date_provider=lambda: date(2026, 8, 30),
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {
+                "role": "user",
+                "content": "查询2026年8月30日入住、8月31日退房的房态",
+            }
+        ],
+    )
+
+    assert len(client.chat.completions.requests) == 1
+    assert decision.staff_confirmation_required is True
+    assert decision.staff_confirmation_reason == "availability_result_confirmation"
+
+
+@pytest.mark.asyncio
+async def test_large_tool_result_is_bounded_as_valid_json() -> None:
+    """超大工具结果只能按结构裁剪，不能生成无法解析的 JSON。"""
+    client = ToolClientStub()
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=LargeToolExecutorStub(),
+        local_date_provider=lambda: date(2026, 7, 30),
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "今天入住明天退房有房吗？"}],
+    )
+
+    tool_content = client.chat.completions.requests[1]["messages"][-1]["content"]
+    assert isinstance(json.loads(tool_content), list)
+    assert len(tool_content) <= 24_000
+
+
+@pytest.mark.asyncio
 async def test_deepseek_executes_read_only_tool_and_replays_result() -> None:
     """Chat Completions 工具调用必须执行并回传结果。"""
     client = ToolClientStub()
@@ -1794,8 +2036,8 @@ def test_unrelated_property_question_drops_previous_complaint_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deepseek_context_keeps_only_three_latest_valid_messages() -> None:
-    """DeepSeek 结构化对话只携带上一轮问答和当前问题。"""
+async def test_deepseek_context_keeps_only_six_latest_valid_messages() -> None:
+    """DeepSeek 结构化对话最多携带最近六条有效消息。"""
     client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
@@ -1820,8 +2062,14 @@ async def test_deepseek_context_keeps_only_three_latest_valid_messages() -> None
     )
 
     context = client.chat.completions.requests[0]["messages"][1:]
-    assert len(context) == 3
-    assert [message["content"] for message in context[:-1]] == ["第五条", "第六条"]
+    assert len(context) == 6
+    assert [message["content"] for message in context[:-1]] == [
+        "第二条",
+        "第三条",
+        "第四条",
+        "第五条",
+        "第六条",
+    ]
     assert json.loads(context[-1]["content"])["current_question"] == (
         "怎样和朋友协调旅行安排？"
     )

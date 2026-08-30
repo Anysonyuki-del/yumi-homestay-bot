@@ -127,7 +127,7 @@ async def test_preview_changes_only_safe_audit_log() -> None:
         properties=SessionDebugPropertyRepository(factory),
         audits=SessionDebugAuditRepository(factory),
         limiter=AdminDebugRateLimiter(limit=10),
-        local_date_provider=lambda: date(2026, 8, 11),
+        local_date_provider=lambda: date(2026, 8, 30),
     )
     result = await service.preview(
         DebugPreviewCommand(
@@ -136,8 +136,8 @@ async def test_preview_changes_only_safe_audit_log() -> None:
             question="几点入住？",
             language=Language.ZH,
             property_id=11,
-            check_in_date=date(2026, 8, 12),
-            check_out_date=date(2026, 8, 13),
+            check_in_date=date(2026, 8, 31),
+            check_out_date=date(2026, 9, 1),
         )
     )
 
@@ -164,8 +164,8 @@ class ProductionToolCompletions:
             function = SimpleNamespace(
                 name="search_availability",
                 arguments=(
-                    '{"check_in_date":"2026-08-12",'
-                    '"check_out_date":"2026-08-13"}'
+                    '{"check_in_date":"2026-08-31",'
+                    '"check_out_date":"2026-09-01"}'
                 ),
             )
             call = SimpleNamespace(id="debug-call-1", function=function)
@@ -194,8 +194,8 @@ class ProductionToolCompletions:
                 "confidence": 0.95,
                 "handoff_reason": None,
                 "booking_fields": {
-                    "check_in_date": "2026-08-12",
-                    "check_out_date": "2026-08-13",
+                    "check_in_date": "2026-08-31",
+                    "check_out_date": "2026-09-01",
                 },
                 "knowledge_gap": False,
                 "knowledge_gap_topic": None,
@@ -330,7 +330,7 @@ class ContactFailFastSpy:
 class EmptyKnowledge:
     """为生产 assistant 提供空审核知识。"""
 
-    async def build_context(self, language: Language):
+    async def retrieve(self, language: Language, query: str, **kwargs):
         """返回空知识列表。"""
         return []
 
@@ -419,18 +419,18 @@ async def test_production_bundle_assistant_is_read_only_end_to_end(
         properties=SessionDebugPropertyRepository(factory),
         audits=SessionDebugAuditRepository(factory),
         limiter=AdminDebugRateLimiter(limit=10),
-        local_date_provider=lambda: date(2026, 8, 11),
+        local_date_provider=lambda: date(2026, 8, 30),
     )
     try:
         result = await service.preview(
             DebugPreviewCommand(
                 actor_employee_id=1,
                 admin_id=1,
-                question="2026-08-12 入住、2026-08-13 退房有房吗？",
+                question="2026-08-31 入住、2026-09-01 退房有房吗？",
                 language=Language.ZH,
                 property_id=11,
-                check_in_date=date(2026, 8, 12),
-                check_out_date=date(2026, 8, 13),
+                check_in_date=date(2026, 8, 31),
+                check_out_date=date(2026, 9, 1),
             )
         )
         async with factory() as session:

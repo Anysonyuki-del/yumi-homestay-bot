@@ -14,6 +14,7 @@ from homestay_bot.services.guest_reply_policy import (
     remove_ungrounded_property_claims,
     sanitize_guest_reply,
 )
+from homestay_bot.services.model_budget import MODEL_BUDGET, serialized_chars
 
 _URL_OR_MARKDOWN_PATTERN = re.compile(
     r"https?://|www\.|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b|"
@@ -516,9 +517,9 @@ class DeepSeekDeliveryRewriter:
         if not original_body.strip():
             raise DeliveryRewriteUnavailableError("原回复缺少可改写正文")
         try:
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                messages=[
+            rewrite_request = {
+                "model": self._model,
+                "messages": [
                     {
                         "role": "system",
                         "content": (
@@ -539,8 +540,14 @@ class DeepSeekDeliveryRewriter:
                         ),
                     },
                 ],
-                response_format={"type": "json_object"},
-                extra_body={"thinking": {"type": "disabled"}},
+                "response_format": {"type": "json_object"},
+                "max_tokens": MODEL_BUDGET.delivery_rewrite_max_tokens,
+                "extra_body": {"thinking": {"type": "disabled"}},
+            }
+            if serialized_chars(rewrite_request) > MODEL_BUDGET.main_request_chars:
+                raise DeliveryRewriteUnavailableError("改写请求超过字符预算")
+            response = await self._client.chat.completions.create(
+                **rewrite_request
             )
             content = response.choices[0].message.content or ""
             rewritten = _DeliveryRewritePayload.model_validate_json(

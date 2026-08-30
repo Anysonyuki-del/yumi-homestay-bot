@@ -71,6 +71,7 @@ async def test_rewriter_preserves_weather_facts_without_tools_or_sources() -> No
     request = client.completions.requests[0]
     assert request["response_format"] == {"type": "json_object"}
     assert request["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert request["max_tokens"] == 900
     assert "tools" not in request
     assert "主要参考了" not in request["messages"][1]["content"]
     model_input = request["messages"][1]["content"]

@@ -3,10 +3,9 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from time import monotonic
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -36,6 +35,15 @@ from homestay_bot.services.guest_reply_policy import (
     sanitize_guest_reply,
 )
 from homestay_bot.services.knowledge_service import KnowledgeService
+from homestay_bot.services.model_budget import (
+    MODEL_BUDGET,
+    bound_json_value,
+    serialized_chars,
+)
+from homestay_bot.services.stay_date_range import (
+    validate_stay_date_range,
+    wuhan_today,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,9 +212,15 @@ class HostexReadOnlyClient(Protocol):
 class HostexReadOnlyToolExecutor:
     """把 DeepSeek 工具映射到百居易只读查询。"""
 
-    def __init__(self, hostex: HostexReadOnlyClient) -> None:
-        """注入不包含写入能力的百居易客户端。"""
+    def __init__(
+        self,
+        hostex: HostexReadOnlyClient,
+        *,
+        local_date_provider: Callable[[], date] | None = None,
+    ) -> None:
+        """注入百居易只读客户端和可测试的武汉自然日。"""
         self._hostex = hostex
+        self._local_date_provider = local_date_provider or wuhan_today
 
     async def execute(
         self, name: str, arguments: dict[str, Any]
@@ -216,23 +230,31 @@ class HostexReadOnlyToolExecutor:
             result = await self._hostex.list_properties()
             return [item.model_dump(mode="json") for item in result]
         if name == "search_availability":
+            check_in_date, check_out_date = validate_stay_date_range(
+                arguments["check_in_date"],
+                arguments["check_out_date"],
+                today_provider=self._local_date_provider,
+            )
             properties = await self._hostex.list_properties()
             property_titles = {item.id: item.title for item in properties}
             result = await self._hostex.list_availabilities(
                 [item.id for item in properties],
-                arguments["check_in_date"],
-                arguments["check_out_date"],
+                check_in_date.isoformat(),
+                check_out_date.isoformat(),
             )
         elif name == "search_reference_price":
-            result = await self._hostex.list_reference_prices(
+            check_in_date, check_out_date = validate_stay_date_range(
                 arguments["check_in_date"],
                 arguments["check_out_date"],
+                today_provider=self._local_date_provider,
+            )
+            result = await self._hostex.list_reference_prices(
+                check_in_date.isoformat(),
+                check_out_date.isoformat(),
             )
             return [item.model_dump(mode="json") for item in result]
         else:
             raise ValueError(f"不允许执行工具: {name}")
-        check_in_date = date.fromisoformat(arguments["check_in_date"])
-        check_out_date = date.fromisoformat(arguments["check_out_date"])
         stay_dates: list[date] = []
         current_date = check_in_date
         while current_date < check_out_date:
@@ -340,7 +362,7 @@ def assistant_decision_schema() -> dict[str, Any]:
 
 def _wuhan_today() -> date:
     """返回武汉时区当前自然日。"""
-    return datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    return wuhan_today()
 
 
 class DeepSeekGuestAssistant:
@@ -441,8 +463,16 @@ class DeepSeekGuestAssistant:
         date_parameters = {
             "type": "object",
             "properties": {
-                "check_in_date": {"type": "string", "format": "date"},
-                "check_out_date": {"type": "string", "format": "date"},
+                "check_in_date": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "武汉当天起365天内的 YYYY-MM-DD 入住日。",
+                },
+                "check_out_date": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "晚于入住日且住宿不超过30晚的 YYYY-MM-DD 退房日。",
+                },
             },
             "required": ["check_in_date", "check_out_date"],
             "additionalProperties": False,
@@ -515,8 +545,9 @@ class DeepSeekGuestAssistant:
                 and _HIGH_RISK_CONTEXT_PATTERN.search(previous_content)
             ):
                 cleaned = [latest_user]
-        cleaned = cleaned[-3:]
+        cleaned = cleaned[-MODEL_BUDGET.history_messages :]
         minimized: list[dict[str, str]] = []
+        used_history_chars = 0
         for item in cleaned:
             content = re.sub(
                 r"(?<!\d)1[3-9]\d{9}(?!\d)",
@@ -528,6 +559,14 @@ class DeepSeekGuestAssistant:
                 "[姓名已隐藏]",
                 content,
             )
+            if item is latest_user:
+                content = content[: MODEL_BUDGET.question_chars]
+            else:
+                remaining = MODEL_BUDGET.history_total_chars - used_history_chars
+                content = content[
+                    : max(0, min(MODEL_BUDGET.history_message_chars, remaining))
+                ]
+                used_history_chars += len(content)
             minimized.append({**item, "content": content})
         return minimized
 
@@ -685,11 +724,28 @@ class DeepSeekGuestAssistant:
         request_context: AssistantRequestContext | None,
     ) -> str:
         """把动态上下文编码成最后一条用户数据，避免污染系统指令。"""
-        customer_payload = asdict(customer_context) if customer_context else {}
-        operational_context: dict[str, Any] = {
-            "active_orders": customer_payload.pop("active_orders", []),
-            "open_tasks": customer_payload.pop("open_tasks", []),
+        raw_customer_payload = asdict(customer_context) if customer_context else {}
+        raw_operational_context: dict[str, Any] = {
+            "active_orders": raw_customer_payload.pop("active_orders", []),
+            "open_tasks": raw_customer_payload.pop("open_tasks", []),
         }
+        operational_context = bound_json_value(
+            raw_operational_context,
+            char_budget=4_000,
+        )
+        if not isinstance(operational_context, dict):
+            operational_context = {}
+        remaining_customer_chars = max(
+            0,
+            MODEL_BUDGET.customer_context_chars
+            - serialized_chars(operational_context),
+        )
+        customer_payload = bound_json_value(
+            raw_customer_payload,
+            char_budget=remaining_customer_chars,
+        )
+        if not isinstance(customer_payload, dict):
+            customer_payload = {}
         if request_context is not None:
             operational_context["debug"] = asdict(request_context)
         envelope = {
@@ -907,9 +963,9 @@ class DeepSeekGuestAssistant:
         refinement_input, evidence_footer = split_tourism_reply(reply_text)
 
         try:
-            response = await self._chat_client.chat.completions.create(
-                model=self._model,
-                messages=[
+            refinement_request = {
+                "model": self._model,
+                "messages": [
                     {
                         "role": "system",
                         "content": (
@@ -928,8 +984,14 @@ class DeepSeekGuestAssistant:
                     },
                     {"role": "user", "content": refinement_input},
                 ],
-                response_format={"type": "json_object"},
-                extra_body={"thinking": {"type": "disabled"}},
+                "response_format": {"type": "json_object"},
+                "max_tokens": MODEL_BUDGET.refinement_max_tokens,
+                "extra_body": {"thinking": {"type": "disabled"}},
+            }
+            if serialized_chars(refinement_request) > MODEL_BUDGET.main_request_chars:
+                return reply_text
+            response = await self._chat_client.chat.completions.create(
+                **refinement_request
             )
             content = response.choices[0].message.content or ""
             refined = RefinedReply.model_validate_json(content).reply_text.strip()
@@ -1049,7 +1111,7 @@ class DeepSeekGuestAssistant:
                 confidence=0.95,
             )
 
-        knowledge = await self._knowledge.build_context(language)
+        knowledge = await self._knowledge.retrieve(language, question_text)
         faq_candidates = await self._build_faq_candidate_context()
         faq_candidate_ids = {
             int(item["id"])
@@ -1144,6 +1206,7 @@ class DeepSeekGuestAssistant:
                 *prompt_messages,
             ],
             "response_format": {"type": "json_object"},
+            "max_tokens": MODEL_BUDGET.main_max_tokens,
             "extra_body": {"thinking": {"type": "disabled"}},
         }
         if tool_definitions:
@@ -1169,6 +1232,9 @@ class DeepSeekGuestAssistant:
         )
         property_tool_grounded = False
         availability_fallback: AssistantDecision | None = None
+        model_calls = 0
+        tool_result_rounds = 0
+        cumulative_request_chars = 0
         for attempt in range(1, 3):
             try:
                 active_request = {**request}
@@ -1188,7 +1254,26 @@ class DeepSeekGuestAssistant:
                             request["messages"][0],
                             latest_user_message,
                         ]
-                for _tool_round in range(4):
+                for _tool_round in range(MODEL_BUDGET.main_calls):
+                    if model_calls >= MODEL_BUDGET.main_calls:
+                        raise AssistantUnavailableError()
+                    request_chars = serialized_chars(active_request)
+                    if (
+                        request_chars > MODEL_BUDGET.main_request_chars
+                        or cumulative_request_chars + request_chars
+                        > MODEL_BUDGET.main_chain_chars
+                    ):
+                        if availability_fallback is not None:
+                            return availability_fallback
+                        raise AssistantUnavailableError()
+                    model_calls += 1
+                    cumulative_request_chars += request_chars
+                    logger.info(
+                        "DeepSeek 主链预算：call=%s request_chars=%s cumulative_chars=%s",
+                        model_calls,
+                        request_chars,
+                        cumulative_request_chars,
+                    )
                     response = await self._chat_client.chat.completions.create(
                         **active_request
                     )
@@ -1217,6 +1302,9 @@ class DeepSeekGuestAssistant:
                         )
                     if self._tool_executor is None:
                         raise AssistantUnavailableError()
+                    if tool_result_rounds >= MODEL_BUDGET.tool_result_rounds:
+                        raise AssistantUnavailableError()
+                    tool_result_rounds += 1
                     active_messages = list(active_request["messages"])
                     active_messages.append(
                         message.model_dump(exclude_none=True)
@@ -1281,7 +1369,10 @@ class DeepSeekGuestAssistant:
                                 "role": "tool",
                                 "tool_call_id": call.id,
                                 "content": json.dumps(
-                                    result,
+                                    bound_json_value(
+                                        result,
+                                        char_budget=MODEL_BUDGET.tool_result_chars,
+                                    ),
                                     ensure_ascii=False,
                                 ),
                             }

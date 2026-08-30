@@ -17,6 +17,7 @@ from homestay_bot.integrations.deepseek_client import (
     AssistantToolTrace,
     TaskSuggestion,
 )
+from homestay_bot.services.stay_date_range import validate_stay_date_range
 
 logger = logging.getLogger(__name__)
 
@@ -266,10 +267,16 @@ class AdminDebugService:
         if (start is None) != (end is None):
             raise DebugPreviewInputError("入住和退房日期必须同时提供")
         if start is not None and end is not None:
-            if start < today or start > today + timedelta(days=self.MAX_ADVANCE_DAYS):
-                raise DebugPreviewInputError("入住日期超出范围")
-            if end <= start or end - start > timedelta(days=self.MAX_STAY_DAYS):
-                raise DebugPreviewInputError("退房日期超出范围")
+            try:
+                validate_stay_date_range(
+                    start,
+                    end,
+                    today_provider=lambda: today,
+                    max_advance_days=self.MAX_ADVANCE_DAYS,
+                    max_stay_days=self.MAX_STAY_DAYS,
+                )
+            except ValueError as error:
+                raise DebugPreviewInputError(str(error)) from error
         if command.property_id is None:
             return None
         selected = await self._properties.get_debug_property(command.property_id)

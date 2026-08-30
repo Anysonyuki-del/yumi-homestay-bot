@@ -2,6 +2,8 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 
+from homestay_bot.services.model_budget import MODEL_BUDGET, serialized_chars
+
 
 class FaqCandidateRecord(Protocol):
     """定义模型候选上下文所需的最小记录字段。"""
@@ -37,10 +39,13 @@ class FaqCandidateContextService:
         candidates = await self._repository.list_context(
             now=self._now_provider()
         )
-        return [
-            {
+        context: list[dict[str, int | str]] = []
+        for candidate in candidates[: MODEL_BUDGET.faq_candidates]:
+            item: dict[str, int | str] = {
                 "id": candidate.id,
-                "canonical_question": candidate.canonical_question,
+                "canonical_question": candidate.canonical_question[:300],
             }
-            for candidate in candidates[:50]
-        ]
+            if serialized_chars([*context, item]) > MODEL_BUDGET.faq_candidates_chars:
+                break
+            context.append(item)
+        return context

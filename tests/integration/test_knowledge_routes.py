@@ -490,7 +490,7 @@ async def test_disabling_knowledge_removes_it_from_bot_context() -> None:
         "/employee/knowledge/1/disable",
         data={"csrf_token": csrf_token},
     )
-    context = await knowledge_service.build_context(Language.ZH)
+    context = await knowledge_service.retrieve(Language.ZH, "入住时间")
 
     assert response.status_code == 200
     assert 1 not in {item.source_id for item in context}

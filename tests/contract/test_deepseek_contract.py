@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(
 class EmptyKnowledge:
     """真实契约不依赖本地知识库。"""
 
-    async def build_context(self, language: Language) -> list[KnowledgeSnippet]:
+    async def retrieve(self, language: Language, query: str, **kwargs) -> list[KnowledgeSnippet]:
         """返回空审核知识。"""
         return []
 

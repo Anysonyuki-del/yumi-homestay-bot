@@ -31,8 +31,8 @@ class CandidateRepositoryStub:
 
 
 @pytest.mark.asyncio
-async def test_context_keeps_only_fifty_ids_and_canonical_questions() -> None:
-    """候选上下文不得包含示例、客人身份或超过五十条记录。"""
+async def test_context_keeps_only_twenty_ids_and_canonical_questions() -> None:
+    """候选上下文不得包含示例、客人身份或超过二十条记录。"""
     repository = CandidateRepositoryStub()
     fixed_now = datetime(2026, 7, 30, 8, tzinfo=UTC)
     service = FaqCandidateContextService(
@@ -43,7 +43,7 @@ async def test_context_keeps_only_fifty_ids_and_canonical_questions() -> None:
     context = await service.build_context()
 
     assert repository.queries == [fixed_now]
-    assert len(context) == 50
+    assert len(context) == 20
     assert context[0] == {"id": 1, "canonical_question": "标准问题1"}
-    assert context[-1] == {"id": 50, "canonical_question": "标准问题50"}
+    assert context[-1] == {"id": 20, "canonical_question": "标准问题20"}
     assert all(set(item) == {"id", "canonical_question"} for item in context)
