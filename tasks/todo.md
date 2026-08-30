@@ -7,7 +7,7 @@
 - [x] 增加页面、提示、提交、折叠面板、按钮和页签微动效
 - [x] 运行聚焦测试、静态检查和 375px/1440px 浏览器验收
 - [x] 在 Review 小节记录范围与最终证据
-- [ ] 发布 `v1.3.2` 并完成生产备份、API 单容器部署和真实页面验收
+- [x] 发布 `v1.3.2` 并完成生产备份、API 单容器部署和真实页面验收
 
 ## 实施边界
 
@@ -23,7 +23,13 @@
 - `prefers-reduced-motion: reduce` 下关闭所有非必要动画并保留静态终态；原生 `details`、无脚本导航、表单提交语义及抽屉 `inert` / ARIA / 焦点管理保持有效。
 - 红测阶段 5 项动效契约全部失败，实现后转绿；最终聚焦门禁为 `22 passed`，覆盖静态资源、真实 Chromium 交互和后台路由兼容，375px / 1440px 均无横向溢出。
 - Ruff、`node --check` 和 `git diff --check` 均通过；未运行无关全量后端测试，未调用 DeepSeek、Hostex 或企业微信，外部模型 token 消耗为 0。
-- 本次已完成本地编码、验证和经用户另行授权的 GitHub 推送；`v1.3.2` 版本发布与生产验收进行中。受保护的未跟踪文件 `YuMi民宿AI项目总结.txt` 未读取、未修改、未暂存。
+- `8634f25` 与正式标签 `v1.3.2` 已推送 GitHub；版本测试 `5 passed`，标准 wheel 构建成功且包内元数据为 `1.3.2`，此前冻结的动效门禁仍为 `22 passed`。
+- 生产备份位于 `/opt/yumi-backups/v1.3.2-20260830T025758Z`，包含旧提交、权限 `600` 的 `.env`、Compose、源码 bundle 和经 `pg_restore -l` 验证的 PostgreSQL custom dump。
+- 服务器源码以 fast-forward 更新到 `8634f25`；GitHub 标签拉取遇到 TLS 中断后，使用本地和服务器双重验证的 Git bundle 同步同一 `v1.3.2` 标签，没有覆盖 3 个既有未跟踪文件。
+- 只重建 API 容器；PostgreSQL 容器 ID 保持 `af11bb4a411fae8cf94df0ec6b1963eeb0dc08e8ad417475189a39fa5a39db7f`，已连续运行两周且重启次数为 0。API 重启次数为 0，Alembic current/head 均为 `0021_task_lifecycle`。
+- 本机与公网 `/health` 均为 `ok`，公网 OpenAPI 版本为 `1.3.2`，受保护健康与诊断入口均返回预期 `401`，部署后近期日志中 `ERROR`、`Traceback` 和 `Exception` 均为 0。
+- 已刷新真实登录后台 `/employee/tasks`：侧栏显示 `v1.3.2`，浏览器实际请求 `app.css?v=1.3.2` 与 `admin.js?v=1.3.2`；页面进入动画和按钮过渡已生效，1920px 无横向溢出，控制台无错误。
+- 部署验收没有主动调用 DeepSeek、Hostex 或企业微信，也没有发送真实消息；生产启动后仅由既有运行循环按正式配置继续工作。受保护的未跟踪文件 `YuMi民宿AI项目总结.txt` 未读取、未修改、未暂存。
 
 # 当前任务：任务生命周期治理与房间近期运营看板 v1.3.1
 
