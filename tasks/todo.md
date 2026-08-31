@@ -32,11 +32,11 @@
 - [x] 阶段 3 入口复核：构建、依赖、响应头、CI 与生产上传目录权限基线
 - [x] 阶段 3 红测：镜像 digest、哈希锁、可信主机、非 root、构建上下文和后台响应头
 - [x] 阶段 3 实现：锁文件、Dockerfile、`.dockerignore`、后台响应头和最小 CI
-- [ ] 阶段 3 最终验证：锁文件重建、镜像/容器、迁移、静态检查和无外联测试
-- [ ] 阶段 3 本地 Review；版本、GitHub 推送和生产部署等待单独授权
+- [x] 阶段 3 最终验证：锁文件重建、镜像/容器、迁移、静态检查和无外联测试
+- [x] 阶段 3 本地 Review：本地门禁、GitHub 云端门禁和生产镜像门禁均有独立证据
 - [x] 阶段 3 发布：升级 v1.3.8、维护正式更新日志并验证发布包
-- [ ] 阶段 3 提交、标记 v1.3.8 并推送 GitHub
-- [ ] 阶段 3 生产备份、上传目录权限迁移、API 部署和运行态验收
+- [x] 阶段 3 提交、标记 v1.3.8 并推送 GitHub
+- [x] 阶段 3 生产备份、上传目录权限迁移、API 部署和运行态验收
 - [x] 阶段 3 CI 可移植性修复：安装 Chromium、移除测试中的本机虚拟环境与用户目录假设
 
 ### 阶段 2A 本地 Review
@@ -76,7 +76,7 @@
 - 本机和公网 `/health` 均为 `ok`，公网 `/employee/login` 返回 200，未登录访问 `/employee/approvals` 返回 401；私有上传仍挂载 `/opt/yumi-data/private_uploads -> /app/data/private_uploads`，文件数为 0。
 - 本次发布没有主动调用 DeepSeek、百居易或企业微信，没有发送真实消息；受保护的未跟踪项目总结文件保持未读、未改、未暂存。
 
-### 阶段 3 本地 Review（待镜像门禁）
+### 阶段 3 发布 Review
 
 - 红测首次为 `13 failed, 12 deselected`，分别证明基础镜像未固定 digest、缺少哈希锁和构建上下文排除、存在 `PIP_TRUSTED_HOST`、容器以 root 运行、缺少 CI，且后台未返回防嵌套与来源保护头。
 - `requirements.lock` 由 Python 3.12 和 pip-tools 生成，精确固定生产及构建依赖与制品哈希；连续两次生成的 SHA-256 均为 `9abddc58bb9c9f1e7209aaa7c3d369649faee26f07f2f75aed259a60396e3ede`。全新虚拟环境按哈希安装、项目无依赖重解析安装、`pip check` 和导入均通过。
@@ -84,9 +84,15 @@
 - Dockerfile 固定 Python 3.12 slim digest，通过 TLS 索引和哈希锁安装，并声明固定非 root UID/GID `10001:10001`；`.dockerignore` 排除密钥、版本库、虚拟环境、运行数据、备份、测试与受保护总结。最小 CI 采用只读仓库权限、完整 Action SHA、关闭真实外联测试，并覆盖静态检查、迁移、全量测试和镜像构建。
 - `/employee` 应用响应新增 `frame-ancestors 'none'`、`DENY` 和 `no-referrer`，公开健康检查与静态资源保持不变；供应链与响应头聚焦回归为 `26 passed`。
 - 冻结差异后的本地门禁：Ruff 全仓通过，mypy `130` 个源码文件通过，CI YAML 有效；全新 SQLite 数据库迁移到 `0023_approval_pii_final (head)`；使用锁定依赖环境的无外联全量回归为 `1229 passed, 15 skipped`。两项 warning 均为既存 Starlette/httpx 与 Alembic 配置弃用提示。
-- 本机没有 Docker、Podman 或 Colima，因此尚未执行 Docker build、容器内用户与镜像内 `pip check`；阶段 3 最终验证和本地 Review 暂不勾选。生产上传目录当前为 `root:root`、权限 `0700`，部署前必须先备份并调整为 UID/GID `10001:10001`，否则非 root 启动写入探针会按设计拒绝启动。
-- 已升级为 v1.3.8 并维护正式更新日志；标准 wheel 元数据为 `1.3.8`，SHA-256 为 `db9320f53dbaf06cb0b9fda2bd91e0f409eda572e338f90bdd0dbb9bf5ed5855`。当前尚未提交、推送或部署，也未调用 DeepSeek、百居易或企业微信；受保护的未跟踪项目总结保持未读、未改、未暂存。
-- GitHub CI 首次真实运行在测试步骤失败并阻止镜像构建，证据为缺少 Playwright Chromium、八处迁移测试硬编码 `.venv/bin/alembic`、LaunchAgent 测试误用 Runner HOME；修复后使用项目外 Python 3.12 环境的迁移、LaunchAgent 和 CI 聚焦回归为 `19 passed`，Ruff、YAML 解析和 diff 检查通过，Actions 同步升级为已核验的 v7 完整提交 SHA。
+- 正式功能提交为 `3f06a0e8becafca30ba88235e95ccd0ba7e9b12e`，CI 可移植性修复提交为 `74fd53e74b4106ab8e2d91ac9f5905a63f4a3918`；标注标签 `v1.3.8` 指向后一提交并已推送 GitHub。标准 wheel 元数据为 `1.3.8`，SHA-256 为 `db9320f53dbaf06cb0b9fda2bd91e0f409eda572e338f90bdd0dbb9bf5ed5855`。
+- GitHub CI 首次真实运行在测试步骤失败并阻止镜像构建，证据为缺少 Playwright Chromium、迁移测试硬编码 `.venv/bin/alembic`、LaunchAgent 测试误用 Runner HOME；修复后使用项目外 Python 3.12 环境的聚焦回归为 `19 passed`，Ruff、YAML 解析和 diff 检查通过。第二次云端运行 `33343906158` 全部通过，覆盖依赖哈希安装、Chromium、Ruff、mypy、全新迁移、全量测试和 Docker build。
+- 生产部署包 SHA-256 为 `897474d0f7f861326228ac3a51ced99de26947c66fc7fcd37d55195ebb606351`，本机与服务器均通过 `git bundle verify`；服务器以 fast-forward 更新到 `74fd53e74b4106ab8e2d91ac9f5905a63f4a3918`，三个既存未跟踪环境备份保持不变。
+- 生产备份位于 `/opt/yumi-backups/v1.3.8-20260831T001642Z`，包含旧源码 bundle、权限 `600` 的 `.env`、Compose、私有上传目录、PostgreSQL custom dump、旧容器/镜像编号、部署包和校验清单；数据库归档经 `pg_restore -l` 验证为 `360` 行，旧镜像标记为 `rollback-v1.3.7`。
+- 新镜像为 `sha256:4726e82b5de44678b7e1a7c3daf55572dcf4fb294df82c31868b4a27da8b8f87`，容器用户和实际 UID/GID 均为 `10001:10001`；镜像内 `pip check` 通过，项目版本为 `1.3.8`，`cryptography` 为 `50.0.1`，Alembic head 为 `0023_approval_pii_final`。服务器没有 Trivy、Syft 或 Docker Scout，因此本次只声明 Python 依赖 SCA/SBOM 和镜像构建门禁，不声称完成操作系统层漏洞扫描。
+- 私有上传目录在备份后从 `0:0 0700` 迁移为 `10001:10001 0700`；非 root 临时容器挂载写入探针通过并完成清理，部署前后文件数均为 `0`。
+- 生产 API 容器为 `f34ba3af6d12c98f6c06f918947c71843df676cdd8ed966be5c5df6ea9fbb08a`，重启次数为 `0`，近 30 分钟 `ERROR`、`Traceback`、`Exception` 标记为 `0`；PostgreSQL 容器 `af11bb4a411fae8cf94df0ec6b1963eeb0dc08e8ad417475189a39fa5a39db7f` 未重建，启动时间保持 `2026-08-10T16:43:53.783849747Z`，健康且重启次数为 `0`。
+- 本机和公网 `/health` 均返回 `ok`，公网 OpenAPI 版本为 `1.3.8`；公网 `/employee/login` 返回 200，并具有 `no-store`、`frame-ancestors 'none'`、`DENY`、`no-referrer` 和 `nosniff` 响应头；未登录访问诊断和审批端点均返回 401。应用内浏览器尝试读取已登录侧栏版本时被客户端策略以 `ERR_BLOCKED_BY_CLIENT` 阻止，因此不把侧栏视觉结果冒充为已验收。
+- 本次发布没有主动调用 DeepSeek、百居易或企业微信，没有发送真实消息；受保护的未跟踪项目总结保持未读、未改、未暂存。
 
 ## 第一段：推荐修复边界
 
