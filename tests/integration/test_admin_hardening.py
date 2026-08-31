@@ -106,7 +106,7 @@ async def test_credential_submissions_keep_their_own_global_cap() -> None:
     ],
 )
 def test_admin_surface_sets_no_store(path: str) -> None:
-    """真实应用的全部后台路径都不得被浏览器或中间缓存留存。"""
+    """真实后台必须禁止缓存、嵌套展示和跨页面泄漏来源地址。"""
     from homestay_bot.main import app as real_app
 
     with TestClient(real_app) as client:
@@ -114,17 +114,23 @@ def test_admin_surface_sets_no_store(path: str) -> None:
 
     assert response.headers.get("cache-control") == "no-store"
     assert response.headers.get("x-content-type-options") == "nosniff"
+    assert response.headers.get("content-security-policy") == "frame-ancestors 'none'"
+    assert response.headers.get("x-frame-options") == "DENY"
+    assert response.headers.get("referrer-policy") == "no-referrer"
 
 
 @pytest.mark.parametrize("path", ["/static/app.css", "/health"])
 def test_non_admin_paths_stay_uncapped(path: str) -> None:
-    """静态资源和公开健康检查不属于敏感面，不能被统一 no-store 影响。"""
+    """静态资源和健康检查不属于敏感面，不得被后台专用响应头影响。"""
     from homestay_bot.main import app as real_app
 
     with TestClient(real_app) as client:
         response = client.get(path)
 
     assert response.headers.get("cache-control") != "no-store"
+    assert response.headers.get("content-security-policy") is None
+    assert response.headers.get("x-frame-options") is None
+    assert response.headers.get("referrer-policy") is None
 
 
 def test_staff_cannot_reach_complaint_review() -> None:

@@ -22,16 +22,19 @@ class AdminNoStoreMiddleware:
         self._app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """只为后台路径补齐缓存与嗅探防护头，其余请求原样透传。"""
+        """只为后台路径补齐缓存、防嵌套和来源保护头，其余请求原样透传。"""
         if scope["type"] != "http" or not _requires_no_store(scope.get("path", "")):
             await self._app(scope, receive, send)
             return
 
         async def send_with_no_store(message: Message) -> None:
-            """在响应头发出前统一设置 no-store 并保留已有嗅探防护声明。"""
+            """在响应头发出前统一收紧后台缓存、嵌套展示和来源泄漏策略。"""
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 headers["cache-control"] = "no-store"
+                headers["content-security-policy"] = "frame-ancestors 'none'"
+                headers["x-frame-options"] = "DENY"
+                headers["referrer-policy"] = "no-referrer"
                 if "x-content-type-options" not in headers:
                     headers["x-content-type-options"] = "nosniff"
             await send(message)

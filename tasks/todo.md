@@ -29,6 +29,14 @@
 - [x] 阶段 2B 发布：升级 v1.3.7、补充正式更新日志并验证发布包
 - [x] 阶段 2B 提交、标记 v1.3.7 并推送 GitHub
 - [x] 阶段 2B 完成生产备份、不可逆迁移、API 部署和运行态验收
+- [x] 阶段 3 入口复核：构建、依赖、响应头、CI 与生产上传目录权限基线
+- [x] 阶段 3 红测：镜像 digest、哈希锁、可信主机、非 root、构建上下文和后台响应头
+- [x] 阶段 3 实现：锁文件、Dockerfile、`.dockerignore`、后台响应头和最小 CI
+- [ ] 阶段 3 最终验证：锁文件重建、镜像/容器、迁移、静态检查和无外联测试
+- [ ] 阶段 3 本地 Review；版本、GitHub 推送和生产部署等待单独授权
+- [x] 阶段 3 发布：升级 v1.3.8、维护正式更新日志并验证发布包
+- [ ] 阶段 3 提交、标记 v1.3.8 并推送 GitHub
+- [ ] 阶段 3 生产备份、上传目录权限迁移、API 部署和运行态验收
 
 ### 阶段 2A 本地 Review
 
@@ -66,6 +74,17 @@
 - 生产 API 运行镜像为 `sha256:4e5b77a07ecb9bab915fcc79709a2fe01eb02d1cc8ee79de2890346b5d3e59b3`，容器包与公网 OpenAPI 均为 `1.3.7`，重启次数为 0，近期 `ERROR`、`Traceback`、`Exception` 标记为 0；PostgreSQL 容器没有重建。
 - 本机和公网 `/health` 均为 `ok`，公网 `/employee/login` 返回 200，未登录访问 `/employee/approvals` 返回 401；私有上传仍挂载 `/opt/yumi-data/private_uploads -> /app/data/private_uploads`，文件数为 0。
 - 本次发布没有主动调用 DeepSeek、百居易或企业微信，没有发送真实消息；受保护的未跟踪项目总结文件保持未读、未改、未暂存。
+
+### 阶段 3 本地 Review（待镜像门禁）
+
+- 红测首次为 `13 failed, 12 deselected`，分别证明基础镜像未固定 digest、缺少哈希锁和构建上下文排除、存在 `PIP_TRUSTED_HOST`、容器以 root 运行、缺少 CI，且后台未返回防嵌套与来源保护头。
+- `requirements.lock` 由 Python 3.12 和 pip-tools 生成，精确固定生产及构建依赖与制品哈希；连续两次生成的 SHA-256 均为 `9abddc58bb9c9f1e7209aaa7c3d369649faee26f07f2f75aed259a60396e3ede`。全新虚拟环境按哈希安装、项目无依赖重解析安装、`pip check` 和导入均通过。
+- SCA 首次发现原约束会锁入存在已知公告的 `cryptography==45.0.7`；用户确认后将源约束升级为 `>=50.0.1,<51`，锁定 `50.0.1`，重新扫描结果为 `No known vulnerabilities found`，加密相关聚焦回归为 `41 passed`。
+- Dockerfile 固定 Python 3.12 slim digest，通过 TLS 索引和哈希锁安装，并声明固定非 root UID/GID `10001:10001`；`.dockerignore` 排除密钥、版本库、虚拟环境、运行数据、备份、测试与受保护总结。最小 CI 采用只读仓库权限、完整 Action SHA、关闭真实外联测试，并覆盖静态检查、迁移、全量测试和镜像构建。
+- `/employee` 应用响应新增 `frame-ancestors 'none'`、`DENY` 和 `no-referrer`，公开健康检查与静态资源保持不变；供应链与响应头聚焦回归为 `26 passed`。
+- 冻结差异后的本地门禁：Ruff 全仓通过，mypy `130` 个源码文件通过，CI YAML 有效；全新 SQLite 数据库迁移到 `0023_approval_pii_final (head)`；使用锁定依赖环境的无外联全量回归为 `1229 passed, 15 skipped`。两项 warning 均为既存 Starlette/httpx 与 Alembic 配置弃用提示。
+- 本机没有 Docker、Podman 或 Colima，因此尚未执行 Docker build、容器内用户与镜像内 `pip check`；阶段 3 最终验证和本地 Review 暂不勾选。生产上传目录当前为 `root:root`、权限 `0700`，部署前必须先备份并调整为 UID/GID `10001:10001`，否则非 root 启动写入探针会按设计拒绝启动。
+- 已升级为 v1.3.8 并维护正式更新日志；标准 wheel 元数据为 `1.3.8`，SHA-256 为 `db9320f53dbaf06cb0b9fda2bd91e0f409eda572e338f90bdd0dbb9bf5ed5855`。当前尚未提交、推送或部署，也未调用 DeepSeek、百居易或企业微信；受保护的未跟踪项目总结保持未读、未改、未暂存。
 
 ## 第一段：推荐修复边界
 
@@ -130,7 +149,8 @@
 - 阶段 0：`compose.yaml`、`src/homestay_bot/config.py`、`src/homestay_bot/services/private_file_storage.py`、`src/homestay_bot/application.py`、`tests/unit/test_private_file_storage.py`、`tests/unit/test_compose_security.py`。
 - 阶段 1：`src/homestay_bot/services/model_budget.py`、`services/knowledge_service.py`、`services/stay_date_range.py`、`services/faq_draft_job.py`、`integrations/deepseek_client.py`、`integrations/deepseek_delivery_rewriter.py`、`repositories/knowledge.py`、`services/admin_debug_service.py` 及对应聚焦测试。
 - 阶段 2：`domain/models.py`、`services/approval_sensitive_data.py`、`approval_service.py`、`booking_service.py`、`approval_page_service.py`、`repositories/retention.py`、`application.py`、审批模板、`0022`/`0023` 迁移和审批/保留测试。
-- 阶段 3：`Dockerfile`、`.dockerignore`、`requirements.lock`、`.github/workflows/ci.yml`、`src/homestay_bot/middleware.py`、`tests/unit/test_compose_security.py`、`tests/integration/test_admin_hardening.py`。
+- 阶段 3：`pyproject.toml`、`Dockerfile`、`.dockerignore`、`requirements.lock`、`.github/workflows/ci.yml`、`src/homestay_bot/middleware.py`、`tests/unit/test_compose_security.py`、`tests/integration/test_admin_hardening.py`。
+- 阶段 3 实施中经 SCA 发现 `cryptography>=44,<46` 只能锁入存在当前安全公告的 `45.0.7`；用户确认将 `pyproject.toml` 纳入范围，升级到已通过无漏洞扫描和加密聚焦回归的 `>=50.0.1,<51`，再重建哈希锁。
 
 ## 第三段：待确认的迁移、回滚与验收门禁
 

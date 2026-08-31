@@ -1,0 +1,31 @@
+# 密钥与本机配置不得进入构建上下文。
+.env
+.env.*
+
+# 版本库、工作树、虚拟环境和工具缓存不属于运行制品。
+.git
+.github
+.worktrees
+.venv
+venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.py[cod]
+
+# 运行数据、数据库、备份和测试产物必须留在宿主机。
+data
+.backups
+backups
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.log
+build
+dist
+tests
+
+# 用户明确保护的未跟踪项目总结禁止进入镜像。
+YuMi民宿AI项目总结.txt
