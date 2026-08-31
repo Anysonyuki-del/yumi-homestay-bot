@@ -118,6 +118,7 @@ def test_ci_has_minimal_permissions_and_pinned_actions() -> None:
     assert action_refs
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
     assert "RUN_LIVE_CONTRACT_TESTS: \"0\"" in workflow
+    assert "python -m playwright install --with-deps chromium" in workflow
     assert "python -m ruff check ." in workflow
     assert "python -m mypy" in workflow
     assert "python -m pytest" in workflow

@@ -37,6 +37,7 @@
 - [x] 阶段 3 发布：升级 v1.3.8、维护正式更新日志并验证发布包
 - [ ] 阶段 3 提交、标记 v1.3.8 并推送 GitHub
 - [ ] 阶段 3 生产备份、上传目录权限迁移、API 部署和运行态验收
+- [x] 阶段 3 CI 可移植性修复：安装 Chromium、移除测试中的本机虚拟环境与用户目录假设
 
 ### 阶段 2A 本地 Review
 
@@ -85,6 +86,7 @@
 - 冻结差异后的本地门禁：Ruff 全仓通过，mypy `130` 个源码文件通过，CI YAML 有效；全新 SQLite 数据库迁移到 `0023_approval_pii_final (head)`；使用锁定依赖环境的无外联全量回归为 `1229 passed, 15 skipped`。两项 warning 均为既存 Starlette/httpx 与 Alembic 配置弃用提示。
 - 本机没有 Docker、Podman 或 Colima，因此尚未执行 Docker build、容器内用户与镜像内 `pip check`；阶段 3 最终验证和本地 Review 暂不勾选。生产上传目录当前为 `root:root`、权限 `0700`，部署前必须先备份并调整为 UID/GID `10001:10001`，否则非 root 启动写入探针会按设计拒绝启动。
 - 已升级为 v1.3.8 并维护正式更新日志；标准 wheel 元数据为 `1.3.8`，SHA-256 为 `db9320f53dbaf06cb0b9fda2bd91e0f409eda572e338f90bdd0dbb9bf5ed5855`。当前尚未提交、推送或部署，也未调用 DeepSeek、百居易或企业微信；受保护的未跟踪项目总结保持未读、未改、未暂存。
+- GitHub CI 首次真实运行在测试步骤失败并阻止镜像构建，证据为缺少 Playwright Chromium、八处迁移测试硬编码 `.venv/bin/alembic`、LaunchAgent 测试误用 Runner HOME；修复后使用项目外 Python 3.12 环境的迁移、LaunchAgent 和 CI 聚焦回归为 `19 passed`，Ruff、YAML 解析和 diff 检查通过，Actions 同步升级为已核验的 v7 完整提交 SHA。
 
 ## 第一段：推荐修复边界
 
@@ -149,8 +151,9 @@
 - 阶段 0：`compose.yaml`、`src/homestay_bot/config.py`、`src/homestay_bot/services/private_file_storage.py`、`src/homestay_bot/application.py`、`tests/unit/test_private_file_storage.py`、`tests/unit/test_compose_security.py`。
 - 阶段 1：`src/homestay_bot/services/model_budget.py`、`services/knowledge_service.py`、`services/stay_date_range.py`、`services/faq_draft_job.py`、`integrations/deepseek_client.py`、`integrations/deepseek_delivery_rewriter.py`、`repositories/knowledge.py`、`services/admin_debug_service.py` 及对应聚焦测试。
 - 阶段 2：`domain/models.py`、`services/approval_sensitive_data.py`、`approval_service.py`、`booking_service.py`、`approval_page_service.py`、`repositories/retention.py`、`application.py`、审批模板、`0022`/`0023` 迁移和审批/保留测试。
-- 阶段 3：`pyproject.toml`、`Dockerfile`、`.dockerignore`、`requirements.lock`、`.github/workflows/ci.yml`、`src/homestay_bot/middleware.py`、`tests/unit/test_compose_security.py`、`tests/integration/test_admin_hardening.py`。
+- 阶段 3：`pyproject.toml`、`Dockerfile`、`.dockerignore`、`requirements.lock`、`.github/workflows/ci.yml`、`src/homestay_bot/middleware.py`、`tests/unit/test_compose_security.py`、`tests/unit/test_migrations.py`、`tests/unit/test_launch_agent.py`、`tests/integration/test_admin_hardening.py`。
 - 阶段 3 实施中经 SCA 发现 `cryptography>=44,<46` 只能锁入存在当前安全公告的 `45.0.7`；用户确认将 `pyproject.toml` 纳入范围，升级到已通过无漏洞扫描和加密聚焦回归的 `>=50.0.1,<51`，再重建哈希锁。
+- GitHub Actions 首次真实运行在测试步骤失败：Runner 缺少 Playwright Chromium，迁移测试硬编码项目 `.venv/bin/alembic`，LaunchAgent 测试错误使用 Runner 的 HOME 推导本机固定部署路径；这些属于 Stage 3 最小 CI 的可移植性缺口，需在同一阶段修复后重新通过云端门禁。
 
 ## 第三段：待确认的迁移、回滚与验收门禁
 

@@ -1,10 +1,16 @@
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+
+
+def _alembic_command(*arguments: str) -> list[str]:
+    """始终使用当前测试解释器调用 Alembic，避免依赖本机虚拟环境路径。"""
+    return [sys.executable, "-m", "alembic", *arguments]
 
 
 def test_migration_revision_ids_fit_alembic_version_column() -> None:
@@ -29,7 +35,7 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     environment["DATABASE_URL"] = "postgresql+asyncpg://offline:offline@localhost/offline"
 
     result = subprocess.run(
-        [str(project_root / ".venv/bin/alembic"), "upgrade", "head", "--sql"],
+        _alembic_command("upgrade", "head", "--sql"),
         cwd=project_root,
         env=environment,
         capture_output=True,
@@ -83,12 +89,10 @@ def test_sqlite_admin_migrations_replay_through_runtime_config_lifecycle(
     database_path = tmp_path / "migration-replay.db"
     environment = dict(os.environ)
     environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
-    alembic = str(project_root / ".venv/bin/alembic")
-
     def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
         """在隔离 SQLite 数据库运行一次真实 Alembic 命令。"""
         return subprocess.run(
-            [alembic, *arguments],
+            _alembic_command(*arguments),
             cwd=project_root,
             env=environment,
             capture_output=True,
@@ -317,12 +321,10 @@ def test_sqlite_approval_pii_migration_downgrades_and_reupgrades(
     database_path = tmp_path / "approval-pii.db"
     environment = dict(os.environ)
     environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
-    alembic = str(project_root / ".venv/bin/alembic")
-
     def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
         """在隔离审批数据库执行一次 Alembic 命令。"""
         return subprocess.run(
-            [alembic, *arguments],
+            _alembic_command(*arguments),
             cwd=project_root,
             env=environment,
             capture_output=True,
@@ -372,12 +374,10 @@ def test_sqlite_approval_pii_finalization_drops_plaintext_and_is_irreversible(
     database_path = tmp_path / "approval-pii-final.db"
     environment = dict(os.environ)
     environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
-    alembic = str(project_root / ".venv/bin/alembic")
-
     def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
         """在隔离数据库执行审批 PII 最终迁移命令。"""
         return subprocess.run(
-            [alembic, *arguments],
+            _alembic_command(*arguments),
             cwd=project_root,
             env=environment,
             capture_output=True,
@@ -448,12 +448,10 @@ def test_sqlite_approval_pii_finalization_rejects_missing_ciphertext(
     database_path = tmp_path / "approval-pii-incomplete.db"
     environment = dict(os.environ)
     environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
-    alembic = str(project_root / ".venv/bin/alembic")
-
     def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
         """在隔离数据库执行缺失密文迁移命令。"""
         return subprocess.run(
-            [alembic, *arguments],
+            _alembic_command(*arguments),
             cwd=project_root,
             env=environment,
             capture_output=True,
@@ -504,12 +502,10 @@ def test_customer_memory_trust_migration_quarantines_unverified_history(
     database_path = tmp_path / "customer-memory-trust-existing.db"
     environment = dict(os.environ)
     environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
-    alembic = str(project_root / ".venv/bin/alembic")
-
     def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
         """在隔离 SQLite 数据库运行记忆迁移生命周期。"""
         return subprocess.run(
-            [alembic, *arguments],
+            _alembic_command(*arguments),
             cwd=project_root,
             env=environment,
             capture_output=True,
@@ -627,10 +623,8 @@ def test_runtime_config_lifecycle_backfills_existing_versions_with_orm_enum_name
     database_path = tmp_path / "runtime-config-existing-row.db"
     environment = dict(os.environ)
     environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
-    alembic = str(project_root / ".venv/bin/alembic")
-
     before = subprocess.run(
-        [alembic, "upgrade", "0016_admin_dashboard_indexes"],
+        _alembic_command("upgrade", "0016_admin_dashboard_indexes"),
         cwd=project_root,
         env=environment,
         capture_output=True,
@@ -647,7 +641,7 @@ def test_runtime_config_lifecycle_backfills_existing_versions_with_orm_enum_name
         connection.commit()
 
     after = subprocess.run(
-        [alembic, "upgrade", "head"],
+        _alembic_command("upgrade", "head"),
         cwd=project_root,
         env=environment,
         capture_output=True,
@@ -671,10 +665,8 @@ def test_checkout_observation_migration_backfills_existing_finished_orders(
     database_path = tmp_path / "checkout-observation-existing-orders.db"
     environment = dict(os.environ)
     environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
-    alembic = str(project_root / ".venv/bin/alembic")
-
     before = subprocess.run(
-        [alembic, "upgrade", "0017_runtime_config_lifecycle"],
+        _alembic_command("upgrade", "0017_runtime_config_lifecycle"),
         cwd=project_root,
         env=environment,
         capture_output=True,
@@ -703,7 +695,7 @@ def test_checkout_observation_migration_backfills_existing_finished_orders(
         connection.commit()
 
     after = subprocess.run(
-        [alembic, "upgrade", "head"],
+        _alembic_command("upgrade", "head"),
         cwd=project_root,
         env=environment,
         capture_output=True,

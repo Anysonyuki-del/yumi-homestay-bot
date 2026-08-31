@@ -6,7 +6,8 @@ def test_launch_agent_keeps_local_bot_running() -> None:
     """本地守护配置应在登录后启动服务，并在意外退出后自动重启。"""
     project_root = Path(__file__).resolve().parents[2]
     plist_path = project_root / "deploy" / "com.rin.homestay-bot.plist"
-    runtime_root = Path.home() / "Library" / "Application Support" / "HomestayBot"
+    # LaunchAgent 属于指定 macOS 账户，测试固定部署契约而不是当前 Runner 的 HOME。
+    runtime_root = Path("/Users/rin/Library/Application Support/HomestayBot")
 
     with plist_path.open("rb") as plist_file:
         config = plistlib.load(plist_file)
