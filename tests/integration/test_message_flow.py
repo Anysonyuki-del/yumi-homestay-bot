@@ -26,7 +26,11 @@ from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
     SQLAlchemyMessageRepository,
 )
+from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
+from homestay_bot.services.business_task_service import BusinessTaskService
+from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.delivery_rewrite_job import GuestDeliveryRewriteJobService
+from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
 
 
@@ -491,6 +495,69 @@ async def test_guest_outbox_carries_exact_source_message_id() -> None:
 
         assert job is not None
         assert job.payload["source_guest_message_id"] == "guest-weather"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
+    """设施故障应在一个真实事务中依次登记任务、员工通知和客人建议。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        customer = Customer(display_name="测试客人")
+        conversation = Conversation(
+            customer=customer,
+            open_kfid="wk-facility",
+            external_userid="wm-facility",
+        )
+        session.add(conversation)
+        await session.flush()
+        message = IncomingMessage(
+            msgid="guest-facility",
+            open_kfid=conversation.open_kfid,
+            external_userid=conversation.external_userid,
+            origin=MessageOrigin.GUEST,
+            msgtype="text",
+            content="灯不亮了",
+            sent_at=datetime(2026, 9, 1, tzinfo=UTC),
+        )
+        service = ConversationService(
+            conversations=SQLAlchemyConversationRepository(session),
+            messages=MessageService(SQLAlchemyMessageRepository(session)),
+            assistant=object(),
+            emergency_service=EmergencyService(),
+            wecom=TransactionalOutboxWeCom(
+                session,
+                source_message_id=message.msgid,
+                source_guest_message_id=message.msgid,
+                delivery_phase="final",
+            ),
+            agent_id=100001,
+            duty_employee_userids=["staff-1"],
+            business_tasks=BusinessTaskService(
+                SQLAlchemyOperationsRepository(session)
+            ),
+        )
+
+        await service._handle_facility_issue(conversation, message, "power")
+        await session.commit()
+
+        task = await session.scalar(select(BusinessTask))
+        jobs = list(await session.scalars(select(Job).order_by(Job.id)))
+        assert task is not None
+        assert task.status is BusinessTaskStatus.PENDING_CONFIRMATION
+        assert task.task_type is BusinessTaskType.MAINTENANCE
+        assert task.source_message_id == message.msgid
+        assert [job.job_type for job in jobs] == [
+            "wecom_send_internal_text",
+            "wecom_send_text",
+        ]
+        assert "开关、取电卡或遥控器" in jobs[1].payload["content"]
+        assert "已提交管家人工处理" in jobs[1].payload["content"]
 
     await engine.dispose()
 

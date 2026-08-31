@@ -19,7 +19,11 @@ class EmergencyService:
     _patterns: tuple[tuple[str, re.Pattern[str]], ...] = (
         (
             "fire",
-            re.compile(r"着火|起火|火灾|浓烟|\bfire\b|smoke", re.IGNORECASE),
+            re.compile(
+                r"着火|起火|火灾|浓烟|冒烟|火花|焦味|"
+                r"\bfire\b|smoke|sparks?|burning\s+smell",
+                re.IGNORECASE,
+            ),
         ),
         (
             "gas",

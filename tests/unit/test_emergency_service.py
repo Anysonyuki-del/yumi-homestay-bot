@@ -9,7 +9,13 @@ from homestay_bot.services.emergency_service import EmergencyService
     [
         ("门锁坏了，我进不了房间", "access"),
         ("房间着火了", "fire"),
+        ("洗衣机突然冒烟了", "fire"),
+        ("空调冒出火花还有焦味", "fire"),
+        ("台灯突然冒烟了", "fire"),
+        ("冰箱有焦味", "fire"),
+        ("吹风机冒火花了", "fire"),
         ("闻到燃气味", "gas"),
+        ("热水器好像漏电", "electric"),
         ("有人触电了", "electric"),
         ("有人威胁要打我", "violence"),
         ("客人突然昏迷，需要急救", "medical"),

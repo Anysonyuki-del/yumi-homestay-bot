@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from homestay_bot.integrations.deepseek_client import (
     AssistantDecision,
     AssistantUnavailableError,
     BookingFields,
+    FacilityIssue,
     TaskSuggestion,
 )
 from homestay_bot.integrations.tourism import (
@@ -768,6 +770,64 @@ async def test_merged_fragments_are_rechecked_for_complaint_before_ack() -> None
 
 
 @pytest.mark.asyncio
+async def test_merged_equipment_fault_gets_advice_and_manual_task() -> None:
+    """拆开的委婉故障合并后只排一个最终任务，再建一次维修任务。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="洗衣机好像", msgid="msg-1"),
+        incoming(content="也出了点问题", msgid="msg-2"),
+    ]
+    messages.recorded.extend(fragments)
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="收到，我先给您一个安全排查建议。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.96,
+            facility_issue=FacilityIssue(
+                scope="homestay_facility",
+                safe_profile="power",
+            ),
+        )
+    )
+    service, conversations, assistant, wecom = build_service(
+        assistant=assistant,
+        jobs=jobs,
+        messages=messages,
+        business_tasks=tasks,
+    )
+    # 真实流程在入站阶段已建立客户关联，静默任务只处理合并消息。
+    conversations.conversation.customer_id = 42
+
+    await service.process_debounced_message(fragments[-1])
+
+    assert assistant.calls == 0
+    assert assistant.ack_calls == 0
+    assert tasks.calls == []
+    assert wecom.guest_messages == []
+    assert len(jobs.jobs) == 1
+    job_type, payload, dedupe_key, _ = jobs.jobs[0]
+    assert job_type == "wecom_process_message"
+    assert payload["phase"] == "final"
+    assert dedupe_key == "final:msg-2"
+
+    await service.process_recorded_message(
+        replace(
+            fragments[-1],
+            content=str(payload["content"]),
+            metadata={"merged_guest_count": "2"},
+        )
+    )
+
+    assert assistant.calls == 1
+    assert tasks.calls[0]["source_message_id"] == "msg-2"
+    assert "开关、取电卡或遥控器" in wecom.guest_messages[0]
+    assert "已提交管家人工处理" in wecom.guest_messages[0]
+
+
+@pytest.mark.asyncio
 async def test_split_english_human_request_is_rechecked_after_merge() -> None:
     """英文转人工短语被拆成两条时，合并后仍须立即进入人工流程。"""
     jobs = DeferredJobStub()
@@ -1007,7 +1067,7 @@ async def test_deferred_final_skips_exact_duplicate_of_fast_ack() -> None:
             confidence=0.96,
         )
     )
-    message = incoming(content="灯坏了修一下")
+    message = incoming(content="请补两瓶矿泉水")
     service, _, _, wecom = build_service(
         assistant=assistant,
         jobs=jobs,
@@ -1047,7 +1107,7 @@ async def test_deferred_final_keeps_new_advice_after_fast_ack() -> None:
             confidence=0.96,
         )
     )
-    message = incoming(content="灯坏了修一下")
+    message = incoming(content="请补两瓶矿泉水")
     service, _, _, wecom = build_service(
         assistant=assistant,
         jobs=jobs,
@@ -1081,7 +1141,7 @@ async def test_deferred_final_waits_until_fast_ack_delivery_finishes() -> None:
     jobs.delivery_status = JobStatus.PENDING
     wecom = OutboxWeComStub()
     assistant = AssistantStub()
-    message = incoming(content="灯坏了修一下")
+    message = incoming(content="请补两瓶矿泉水")
     service, _, _, _ = build_service(
         assistant=assistant,
         jobs=jobs,
@@ -1126,7 +1186,7 @@ async def test_deferred_final_is_not_suppressed_when_fast_ack_delivery_failed() 
             confidence=0.96,
         )
     )
-    message = incoming(content="灯坏了修一下")
+    message = incoming(content="请补两瓶矿泉水")
     service, _, _, _ = build_service(
         assistant=assistant,
         jobs=jobs,
@@ -1171,11 +1231,16 @@ def test_information_questions_do_not_trigger_fast_service_ack(question: str) ->
 
 @pytest.mark.parametrize(
     "question",
-    ["请补两瓶矿泉水", "洗衣机一直显示锁，打不开", "想申请提前入住"],
+    ["请补两瓶矿泉水", "需要维修灯具", "想申请提前入住"],
 )
 def test_operational_requests_still_trigger_fast_service_ack(question: str) -> None:
-    """收窄识别后，补给、维修和提前入住仍须快速安抚。"""
+    """非故障型的补给、维修申请和提前入住仍须快速安抚。"""
     assert ConversationService._should_send_fast_ack(question) is True
+
+
+def test_explicit_facility_fault_does_not_trigger_neutral_fast_ack() -> None:
+    """设施故障需等待固定建议，不得先发送没有解决方案的中立安抚。"""
+    assert ConversationService._should_send_fast_ack("洗衣机一直显示锁，打不开") is False
 
 
 @pytest.mark.asyncio
@@ -1771,8 +1836,8 @@ async def test_guest_task_reply_hides_staff_delivery_wording() -> None:
 
 
 @pytest.mark.asyncio
-async def test_washer_task_keeps_safe_advice_without_promising_a_technician() -> None:
-    """复现生产洗衣机对话：保留童锁建议，但不得承诺师傅上门或解决。"""
+async def test_washer_task_uses_model_profile_without_promising_a_technician() -> None:
+    """洗衣机故障应使用同轮模型档位，但客人建议仍来自固定模板。"""
     tasks = BusinessTaskStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
@@ -1784,9 +1849,228 @@ async def test_washer_task_keeps_safe_advice_without_promising_a_technician() ->
             language=Language.ZH,
             intent="maintenance",
             confidence=0.96,
+            facility_issue=FacilityIssue(
+                scope="homestay_facility",
+                safe_profile="power",
+            ),
             task_suggestion=TaskSuggestion(
                 task_type=BusinessTaskType.MAINTENANCE,
                 description="检查洗衣机童锁状态",
+            ),
+        )
+    )
+    service, _, selected_assistant, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="房间洗衣机一直显示锁，打不开怎么办"))
+
+    reply = wecom.guest_messages[0]
+    assert selected_assistant.calls == 1
+    assert "开关、取电卡或遥控器" in reply
+    assert reply.endswith("我已提交管家人工处理，请您稍等。")
+    assert "师傅" not in reply
+    assert "上门" not in reply
+    assert "彻底解决" not in reply
+    assert tasks.calls
+    assert "新任务待确认" in wecom.internal_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_dangerous_equipment_fault_uses_emergency_flow_first() -> None:
+    """设备冒烟必须优先撤离并转人工，不得进入普通维修建议。"""
+    tasks = BusinessTaskStub()
+    service, conversations, assistant, wecom = build_service(
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="洗衣机突然冒烟了"))
+
+    assert assistant.calls == 0
+    assert tasks.calls == []
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert "119" in wecom.guest_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_soft_washer_fault_gives_advice_after_submitting_manual_task() -> None:
+    """委婉洗衣机故障应先建维修任务，再发送无追问的简单建议和提交说明。"""
+    events: list[str] = []
+
+    class OrderedBusinessTaskStub(BusinessTaskStub):
+        """记录维修任务与两类出站的先后顺序。"""
+
+        async def record_ai_suggestion(self, **kwargs):
+            """任务成功返回后记录事件，区分开始调用与创建完成。"""
+            task = await super().record_ai_suggestion(**kwargs)
+            events.append("task")
+            return task
+
+    class OrderedWeComStub(WeComStub):
+        """记录客人和员工出站事件。"""
+
+        async def send_text(self, *args, **kwargs):
+            """记录客人消息必须晚于任务创建。"""
+            events.append("guest")
+            return await super().send_text(*args, **kwargs)
+
+        async def send_internal_text(self, **kwargs) -> None:
+            """记录员工通知并复用固定通知结果。"""
+            events.append("internal")
+            await super().send_internal_text(**kwargs)
+
+    tasks = OrderedBusinessTaskStub()
+    wecom = OrderedWeComStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="收到，我先给您一个安全排查建议。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.96,
+            facility_issue=FacilityIssue(
+                scope="homestay_facility",
+                safe_profile="power",
+            ),
+        )
+    )
+    service, _, assistant, _ = build_service(
+        assistant=assistant,
+        wecom=wecom,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(
+        incoming(
+            content="洗衣机好像也出了点问题",
+            msgid="washer-soft-fault",
+        )
+    )
+
+    assert assistant.calls == 1
+    assert events.index("task") < events.index("guest")
+    assert events.count("internal") == 1
+    assert events.count("guest") == 1
+    assert tasks.calls[0]["source_message_id"] == "washer-soft-fault"
+    assert tasks.calls[0]["task_type"] is BusinessTaskType.MAINTENANCE
+    reply = wecom.guest_messages[0]
+    assert "开关、取电卡或遥控器" in reply
+    assert "不要拆卸或接触电线" in reply
+    assert "已提交管家人工处理" in reply
+    assert "？" not in reply
+
+
+@pytest.mark.asyncio
+async def test_equipment_task_failure_never_claims_manual_submission() -> None:
+    """维修任务失败时应让事务重试，客人侧不得先收到虚假提交说明。"""
+    tasks = BusinessTaskStub(fail=True)
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="收到，我先给您一个安全排查建议。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.96,
+            facility_issue=FacilityIssue(
+                scope="homestay_facility",
+                safe_profile="power",
+            ),
+        )
+    )
+    service, _, assistant, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    with pytest.raises(RuntimeError, match="task unavailable"):
+        await service.handle_message(
+            incoming(content="洗衣机好像也出了点问题")
+        )
+
+    assert assistant.calls == 1
+    assert wecom.guest_messages == []
+    assert wecom.internal_messages == []
+    assert len(tasks.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "profile", "advice"),
+    [
+        ("灯不亮了", "power", "开关、取电卡或遥控器"),
+        ("马桶堵了", "generic", "停止使用"),
+        ("窗帘拉不动了", "generic", "不要拆卸或强行操作"),
+        ("烘干机不工作", "power", "不要拆卸或接触电线"),
+    ],
+)
+async def test_new_facility_is_handled_on_first_occurrence(
+    content: str,
+    profile: str,
+    advice: str,
+) -> None:
+    """开放分类应让新设施首次出现就获得固定建议和人工维修任务。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="模型不得直接编写排查步骤。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.95,
+            facility_issue=FacilityIssue(
+                scope="homestay_facility",
+                safe_profile=profile,
+            ),
+        )
+    )
+    service, _, selected_assistant, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content=content))
+
+    assert selected_assistant.calls == 1
+    assert tasks.calls[0]["task_type"] is BusinessTaskType.MAINTENANCE
+    assert advice in wecom.guest_messages[0]
+    assert "模型不得直接编写排查步骤" not in wecom.guest_messages[0]
+    assert "已提交管家人工处理" in wecom.guest_messages[0]
+    assert "？" not in wecom.guest_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_missing_facility_classification_falls_back_to_generic_safe_profile() -> None:
+    """模型漏填设施字段时，明确故障仍应使用通用安全建议并建任务。"""
+    tasks = BusinessTaskStub()
+    service, _, assistant, wecom = build_service(
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="麻将机卡住了"))
+
+    assert assistant.calls == 1
+    assert tasks.calls
+    assert "停止使用" in wecom.guest_messages[0]
+    assert "已提交管家人工处理" in wecom.guest_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_facility_profile_falls_back_to_generic_advice() -> None:
+    """低置信度档位不得驱动具体操作，只允许通用停用建议。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="可以重置路由器。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.4,
+            facility_issue=FacilityIssue(
+                scope="homestay_facility",
+                safe_profile="network",
             ),
         )
     )
@@ -1796,16 +2080,91 @@ async def test_washer_task_keeps_safe_advice_without_promising_a_technician() ->
         business_tasks=tasks,
     )
 
-    await service.handle_message(incoming(content="房间洗衣机一直显示锁，打不开怎么办"))
+    await service.handle_message(incoming(content="房间网络断了"))
 
-    reply = wecom.guest_messages[0]
-    assert "长按童锁键三秒试试看" in reply
-    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
-    assert "师傅" not in reply
-    assert "上门" not in reply
-    assert "彻底解决" not in reply
     assert tasks.calls
-    assert "新任务待确认" in wecom.internal_messages[0]
+    assert "停止使用" in wecom.guest_messages[0]
+    assert "重置路由器" not in wecom.guest_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_model_unavailable_explicit_fault_uses_generic_advice_and_task() -> None:
+    """模型不可用时，民宿渠道的明确设施故障仍须完成确定性兜底。"""
+    tasks = BusinessTaskStub()
+    assistant = FailingAssistantStub()
+    service, conversations, _, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="灯不亮了"))
+
+    assert assistant.calls == 1
+    assert tasks.calls
+    assert "停止使用" in wecom.guest_messages[0]
+    assert "已提交管家人工处理" in wecom.guest_messages[0]
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["我的手机坏了", "景区的灯坏了"])
+async def test_private_or_external_fault_never_creates_homestay_task(content: str) -> None:
+    """本地明确的私人或外部归属必须覆盖模型误判，禁止创建民宿维修。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="建议联系物品或场所负责人处理。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.98,
+            facility_issue=FacilityIssue(
+                scope="homestay_facility",
+                safe_profile="power",
+            ),
+        )
+    )
+    service, _, selected_assistant, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content=content))
+
+    assert selected_assistant.calls == 1
+    assert tasks.calls == []
+    assert wecom.internal_messages == []
+    assert "已提交管家人工处理" not in wecom.guest_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_high_confidence_model_external_scope_blocks_homestay_task() -> None:
+    """本地未枚举的外部场所仍可由同轮模型归属排除，不依赖场所名单补丁。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="建议联系书店工作人员处理。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.96,
+            facility_issue=FacilityIssue(
+                scope="external",
+                safe_profile="generic",
+            ),
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="对面书店的灯坏了"))
+
+    assert tasks.calls == []
+    assert wecom.internal_messages == []
+    assert wecom.guest_messages == ["建议联系书店工作人员处理。"]
 
 
 @pytest.mark.asyncio

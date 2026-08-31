@@ -29,19 +29,24 @@ from homestay_bot.integrations.deepseek_client import (
 )
 from homestay_bot.integrations.tourism import TourismSearchError
 from homestay_bot.services.answer_policy import (
-    handoff_reason as determine_handoff_reason,
-)
-from homestay_bot.services.answer_policy import (
+    facility_fault_exclusion,
+    has_facility_fault_signal,
     is_booking_action_request,
     is_homestay_related,
     is_service_request,
+)
+from homestay_bot.services.answer_policy import (
+    handoff_reason as determine_handoff_reason,
 )
 from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.emergency_service import (
     EmergencyClassification,
     EmergencyService,
 )
-from homestay_bot.services.guest_reply_policy import prepare_guest_reply
+from homestay_bot.services.guest_reply_policy import (
+    prepare_facility_issue_reply,
+    prepare_guest_reply,
+)
 from homestay_bot.services.message_service import GuestMessageBatch, IncomingMessage
 from homestay_bot.worker import DeferredRetryJobError
 
@@ -619,6 +624,30 @@ class ConversationService:
                 dedupe_key=f"complaint:{message.msgid}",
             )
 
+    async def _handle_facility_issue(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        safe_profile: str,
+    ) -> None:
+        """先登记维修任务和员工通知，再发送固定档位的安全建议。"""
+        if self._business_tasks is None or conversation.customer_id is None:
+            # 生产装配必须同时提供正式客户和任务仓储；缺失时回滚入站并由 worker 重试。
+            raise RuntimeError("设施故障人工任务依赖未配置")
+        task = await self._business_tasks.record_ai_suggestion(
+            customer_id=conversation.customer_id,
+            source_message_id=message.msgid,
+            task_type=BusinessTaskType.MAINTENANCE,
+            description="客人反馈民宿设施故障，待人工处理",
+        )
+        await self._notify_employee(
+            conversation,
+            message,
+            f"新任务待确认：ID {task.id}，类型 {task.task_type.value}",
+        )
+        reply = prepare_facility_issue_reply(safe_profile, conversation.language)
+        await self._send_prepared_guest_reply(conversation, reply)
+
     async def _stage_fast_ack(
         self,
         conversation: Conversation,
@@ -629,7 +658,10 @@ class ConversationService:
         if jobs is None:
             return
         fast_ack_sha256: str | None = None
-        if self._should_send_fast_ack(message.content):
+        if (
+            not has_facility_fault_signal(message.content)
+            and self._should_send_fast_ack(message.content)
+        ):
             ack = await self._assistant.respond_ack(
                 guest_identifier=message.external_userid,
                 language=conversation.language,
@@ -711,7 +743,6 @@ class ConversationService:
             rf"(?:补|送|拿|更换|换|加).{{0,8}}(?:{supply})",
             rf"(?:{supply}).{{0,8}}(?:补|送|拿|更换|换|加)",
             r"维修|报修|修理|保洁|打扫|收房|收垃圾|调麻将机|生日布置|求婚布置",
-            r"坏了|故障|打不开|无法使用|不能用|漏水|没热水|不制冷|显示锁|锁住",
             r"提前入住|延迟退房|特殊服务",
             r"help.{0,20}(?:water|towel|blanket|repair)|maintenance|housekeeping",
         )
@@ -792,6 +823,16 @@ class ConversationService:
                 message,
             ):
                 return
+            if (
+                self._determine_handoff_reason(message.content) is None
+                and self._facility_safe_profile(message.content, None) is not None
+            ):
+                await self._handle_facility_issue(
+                    conversation,
+                    message,
+                    "generic",
+                )
+                return
             await self._escalate_assistant_failure(conversation, message)
             return
         if discard_if_stale and await self._discard_stale_final(
@@ -800,6 +841,18 @@ class ConversationService:
         ):
             return
         local_handoff_reason = self._determine_handoff_reason(message.content)
+        facility_safe_profile = self._facility_safe_profile(message.content, decision)
+        if (
+            local_handoff_reason is None
+            and decision.handoff_reason is None
+            and facility_safe_profile is not None
+        ):
+            await self._handle_facility_issue(
+                conversation,
+                message,
+                facility_safe_profile,
+            )
+            return
         service_requested = is_service_request(message.content)
         booking_action_requested = is_booking_action_request(message.content)
         requires_human = bool(
@@ -840,6 +893,7 @@ class ConversationService:
                 audit_reason=reason,
             )
             return
+
         if decision.intent == "booking_confirmed" and booking_action_requested:
             await self._create_pending_approval(conversation, message, decision)
             return
@@ -855,6 +909,26 @@ class ConversationService:
                 ),
             )
             return
+
+    @staticmethod
+    def _facility_safe_profile(
+        question: str,
+        decision: AssistantDecision | None,
+    ) -> str | None:
+        """把开放模型分类收敛到五个固定安全档位或明确排除。"""
+        if (
+            not has_facility_fault_signal(question)
+            or facility_fault_exclusion(question) is not None
+        ):
+            return None
+        issue = decision.facility_issue if decision is not None else None
+        if issue is None or decision is None or decision.confidence < 0.7:
+            return "generic"
+        if issue.scope in {"private", "external"}:
+            return None
+        if issue.scope == "uncertain":
+            return "generic"
+        return issue.safe_profile
 
     async def _discard_stale_final(
         self,

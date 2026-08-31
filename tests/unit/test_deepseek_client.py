@@ -806,6 +806,73 @@ async def test_task_suggestion_is_returned_in_same_structured_response() -> None
     assert decision.task_suggestion.property_id == 101
 
 
+@pytest.mark.asyncio
+async def test_facility_scope_and_safe_profile_share_the_existing_model_response() -> None:
+    """开放设施分类必须复用主回复 JSON，不增加第二次分类调用。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "reply_text": "收到，我先给您一个安全排查建议。",
+            "intent": "facility_fault",
+            "facility_issue": {
+                "scope": "homestay_facility",
+                "safe_profile": "power",
+            },
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "灯不亮了"}],
+    )
+
+    assert decision.facility_issue is not None
+    assert decision.facility_issue.scope == "homestay_facility"
+    assert decision.facility_issue.safe_profile == "power"
+    assert len(client.chat.completions.requests) == 1
+    system_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
+    assert "官方客服渠道" in system_prompt
+    assert "私人物品" in system_prompt
+    assert "外部场所" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_invalid_facility_profile_is_ignored_without_losing_main_reply() -> None:
+    """设施字段无效时只降级该字段，不能让整轮客服决定失败。"""
+    payload = decision_payload()
+    payload["facility_issue"] = {
+        "scope": "homestay_facility",
+        "safe_profile": "reset_router",
+    }
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "灯不亮了"}],
+    )
+
+    assert decision.reply_text == "下午三点后可以入住。"
+    assert decision.facility_issue is None
+    assert len(client.chat.completions.requests) == 1
+
+
 def test_side_effect_intent_requires_explicit_current_request() -> None:
     """副作用授权只能来自本轮明确服务或预订确认语义。"""
     assert is_service_request("请给101房补两瓶水") is True

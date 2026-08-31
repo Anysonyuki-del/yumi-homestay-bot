@@ -1,4 +1,5 @@
 import re
+from typing import Literal
 
 _TRANSACTION_PATTERN = re.compile(
     r"房态|有房|可订|价格|房价|多少钱|参考价|退款|退多少|"
@@ -75,14 +76,57 @@ _SERVICE_REQUEST_PATTERN = re.compile(
     r"(?:保洁|打扫|清洁|换洗|更换|维修|修理|补充|补|送|拿|加床|布置|接送)|"
     r"(?:保洁|打扫|清洁|换洗|更换|维修|修理|补充|补|送|拿|加床|布置|接送)"
     r".{0,10}(?:一下|一份|一个|一床|一点|一些|吗|么|吧|谢谢)|"
-    r"(?:空调|热水|门锁|洗衣机|投影|WiFi|无线网).{0,10}"
-    r"(?:坏了|打不开|不工作|不能用|没反应|故障|锁住)|"
     r"(?:床单|被子|枕头|矿泉水|纸巾|毛巾|洗漱用品).{0,10}"
     r"(?:脏了|没有了|没了|不够|需要|补|换)|"
     r"(?:补|换|送|拿).{0,6}(?:床单|被子|枕头|矿泉水|纸巾|毛巾|洗漱用品)|"
     r"房间.{0,6}(?:没水|缺水|没有热水)|"
     r"(?:提前入住|延迟退房|晚点退房)|"
     r"(?:clean|repair|replace|bring|deliver|extra bed|early check[ -]?in|late check[ -]?out)",
+    re.IGNORECASE,
+)
+
+_FACILITY_FAULT_SIGNAL = (
+    r"坏了|故障|打不开|关不上|拉不动|按不动|不工作|不能用|用不了|没反应|"
+    r"锁住|卡住|堵(?:住|了)|漏水|不亮(?:了)?|不制冷|不加热|异响|"
+    r"出(?:了)?(?:点|一点)?问题|有(?:点|一点)?问题|不太正常|不正常|异常|"
+    r"不对劲|连不上|断网|停电|没电|"
+    r"(?:网络|Wi[ -]?Fi|无线网|连接|电源|供水).{0,6}断了|"
+    r"(?:没(?:有)?|不出)热水|"
+    r"broken|not\s+working|doesn'?t\s+work|can(?:not|'t)\s+use|"
+    r"won'?t\s+start|can(?:not|'t)\s+connect|issue|problem|abnormal"
+)
+_FACILITY_FAULT_PATTERN = re.compile(
+    _FACILITY_FAULT_SIGNAL,
+    re.IGNORECASE | re.DOTALL,
+)
+_ABSTRACT_FAULT_TOPIC_PATTERN = re.compile(
+    r"设计|方案|订单|价格|房价|回复|消息|态度|行程|计划|代码|程序|页面|"
+    r"政策|规则|合同|账单|付款|退款|预订|服务|卫生|清洁|"
+    r"身体|健康|(?<!不)工作|感情|情绪|这个事情|那个事情|"
+    r"design|plan|order|price|reply|message|attitude|code|program|policy",
+    re.IGNORECASE,
+)
+_HOMESTAY_FACILITY_CONTEXT_PATTERN = re.compile(
+    r"房间|客房|民宿|店里|公区|公共区域|楼道|房门|卫生间|浴室|厨房|"
+    r"room|homestay|property|guesthouse|public area",
+    re.IGNORECASE,
+)
+_PRIVATE_FACILITY_PATTERN = re.compile(
+    r"(?:我的|我自己的|个人的|私人的|我自己带来的|我带来的|自己带的|自带的)"
+    r".{0,16}(?:手机|电脑|平板|相机|耳机|充电器|充电宝|行李箱|咖啡机|"
+    r"吹风机|手表|汽车|电动车|自行车|车辆)|"
+    r"(?:我自己带来|我带来|自己带来|自带)(?:的)?.{1,20}"
+    rf"(?:{_FACILITY_FAULT_SIGNAL})",
+    re.IGNORECASE | re.DOTALL,
+)
+_INHERENT_PRIVATE_FACILITY_PATTERN = re.compile(
+    r"手机|笔记本电脑|平板|相机|耳机|充电宝|手表|汽车|电动车|自行车|车辆|"
+    r"phone|laptop|tablet|camera|headphones|power bank|watch|car|bicycle",
+    re.IGNORECASE,
+)
+_EXTERNAL_PLACE_PATTERN = re.compile(
+    r"景区|商场|餐厅|饭店|咖啡店|便利店|地铁站?|火车站|机场|医院|学校|"
+    r"公司|办公室|停车场|路边|街上|scenic area|mall|restaurant|station|airport",
     re.IGNORECASE,
 )
 
@@ -128,7 +172,44 @@ def is_homestay_related(text: str) -> bool:
 
 def is_service_request(text: str) -> bool:
     """判断本轮客人是否明确提出需要执行的民宿服务。"""
+    if has_facility_fault_signal(text):
+        return facility_fault_exclusion(text) is None
     return _SERVICE_REQUEST_PATTERN.search(text) is not None
+
+
+def has_facility_fault_signal(text: str) -> bool:
+    """识别开放式设施故障表达，不依赖固定设备名称清单。"""
+    normalized = " ".join(text.split())
+    # 分句判断让“订单有问题，灯也坏了”只保留真实设施故障部分。
+    return any(
+        _FACILITY_FAULT_PATTERN.search(segment) is not None
+        and _ABSTRACT_FAULT_TOPIC_PATTERN.search(segment) is None
+        for segment in re.split(r"[，。！？!?；;]+", normalized)
+        if segment.strip()
+    )
+
+
+def facility_fault_exclusion(text: str) -> Literal["private", "external"] | None:
+    """返回明确的私人或外部故障归属；含糊短句仍按民宿设施理解。"""
+    if not has_facility_fault_signal(text):
+        return None
+    if _PRIVATE_FACILITY_PATTERN.search(text) is not None:
+        return "private"
+    if (
+        _INHERENT_PRIVATE_FACILITY_PATTERN.search(text) is not None
+        and _HOMESTAY_FACILITY_CONTEXT_PATTERN.search(text) is None
+    ):
+        return "private"
+    for place_match in _EXTERNAL_PLACE_PATTERN.finditer(text):
+        start = max(0, place_match.start() - 12)
+        end = min(len(text), place_match.end() + 24)
+        nearby = text[start:end]
+        if (
+            _FACILITY_FAULT_PATTERN.search(nearby) is not None
+            and _HOMESTAY_FACILITY_CONTEXT_PATTERN.search(nearby) is None
+        ):
+            return "external"
+    return None
 
 
 def is_booking_action_request(text: str) -> bool:

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from time import monotonic
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -17,13 +17,15 @@ from homestay_bot.integrations.tourism import (
     split_tourism_reply,
 )
 from homestay_bot.services.answer_policy import (
-    handoff_reason as determine_handoff_reason,
-)
-from homestay_bot.services.answer_policy import (
+    facility_fault_exclusion,
+    has_facility_fault_signal,
     is_booking_action_request,
     is_property_specific,
     is_service_request,
     is_transaction_sensitive,
+)
+from homestay_bot.services.answer_policy import (
+    handoff_reason as determine_handoff_reason,
 )
 from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.faq_candidate_context import (
@@ -112,6 +114,13 @@ class TaskSuggestion(BaseModel):
         return " ".join(redacted.split()).strip()
 
 
+class FacilityIssue(BaseModel):
+    """保存模型对开放式设施故障的领域归属和固定安全档位。"""
+
+    scope: Literal["homestay_facility", "private", "external", "uncertain"]
+    safe_profile: Literal["power", "network", "water", "lock", "generic"]
+
+
 class AssistantDecision(BaseModel):
     """约束模型每轮回复、风险标记和员工提醒决定。"""
 
@@ -130,6 +139,18 @@ class AssistantDecision(BaseModel):
     faq_canonical_question: str | None = None
     faq_category: str | None = None
     task_suggestion: TaskSuggestion | None = None
+    facility_issue: FacilityIssue | None = None
+
+    @field_validator("facility_issue", mode="before")
+    @classmethod
+    def ignore_invalid_facility_issue(cls, value: Any) -> FacilityIssue | None:
+        """设施字段异常时只丢弃该字段，让会话层使用通用安全降级。"""
+        if value is None:
+            return None
+        try:
+            return FacilityIssue.model_validate(value)
+        except ValidationError:
+            return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +373,36 @@ def assistant_decision_schema() -> dict[str, Any]:
                             "property_id",
                             "service_date",
                         ],
+                    },
+                    {"type": "null"},
+                ]
+            },
+            "facility_issue": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "scope": {
+                                "type": "string",
+                                "enum": [
+                                    "homestay_facility",
+                                    "private",
+                                    "external",
+                                    "uncertain",
+                                ],
+                            },
+                            "safe_profile": {
+                                "type": "string",
+                                "enum": [
+                                    "power",
+                                    "network",
+                                    "water",
+                                    "lock",
+                                    "generic",
+                                ],
+                            },
+                        },
+                        "required": ["scope", "safe_profile"],
                     },
                     {"type": "null"},
                 ]
@@ -594,6 +645,15 @@ class DeepSeekGuestAssistant:
         if not is_service_request(question_text):
             # 历史、摘要和模型推断都不能替代本轮客人的服务授权。
             updates["task_suggestion"] = None
+        if not has_facility_fault_signal(question_text):
+            # 模型不能把普通咨询或历史设施问题升级为当前维修故障。
+            updates["facility_issue"] = None
+        elif (excluded_scope := facility_fault_exclusion(question_text)) is not None:
+            # 私人物品和外部场所归属由本地证据覆盖模型误判。
+            updates["facility_issue"] = FacilityIssue(
+                scope=excluded_scope,
+                safe_profile="generic",
+            )
         if not is_booking_action_request(question_text):
             # 普通咨询即使被模型误判，也不能携带资料进入预订审批链路。
             updates["booking_fields"] = None
@@ -1156,6 +1216,12 @@ class DeepSeekGuestAssistant:
             "客人提出保洁、维修、补耗材、特殊服务、提前入住或延迟退房时，"
             "在同一 JSON 的 task_suggestion 中提取任务；不能确定房间或日期时填 null，"
             "不得编造。task_suggestion 只是待员工确认，绝不代表已经答应客人。"
+            "当前问题表达设施故障时，在同一 JSON 的 facility_issue 中判断归属和安全档位；"
+            "这是民宿官方客服渠道，未说明归属的‘灯不亮了’等短句默认 scope=homestay_facility；"
+            "明确属于客人私人物品时 scope=private，明确属于景区、商场等外部场所时"
+            " scope=external，确实无法判断时 scope=uncertain。"
+            "safe_profile 只能选择 power、network、water、lock、generic；"
+            "不得在 reply_text 中自行生成拆机、带电、重置路由器或反复点火等排查步骤。"
             "如语义匹配已有候选，填写其编号；否则编号为 null，并给出简洁标准问题"
             "和分类。候选目录只用于语义匹配，不可把目录内容当作已审核答案。"
             f"武汉当前日期：{local_today.isoformat()}；"

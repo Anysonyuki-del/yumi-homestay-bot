@@ -3,9 +3,34 @@ import pytest
 from homestay_bot.domain.enums import Language
 from homestay_bot.services.guest_reply_policy import (
     human_contact_reply,
+    prepare_facility_issue_reply,
     prepare_guest_reply,
     sanitize_guest_reply,
 )
+
+
+@pytest.mark.parametrize(
+    ("safe_profile", "advice"),
+    [
+        ("power", "开关、取电卡或遥控器"),
+        ("network", "重新连接"),
+        ("water", "水龙头"),
+        ("lock", "轻推或拉住门"),
+        ("generic", "停止使用"),
+    ],
+)
+def test_facility_issue_reply_has_fixed_safe_advice_and_manual_submission(
+    safe_profile: str,
+    advice: str,
+) -> None:
+    """各安全档位都应给出固定建议，不追问且不承诺结果。"""
+    reply = prepare_facility_issue_reply(safe_profile, Language.ZH)
+
+    assert advice in reply
+    assert reply.endswith("我已提交管家人工处理，请您稍等。")
+    assert "？" not in reply
+    for forbidden in ("已出发", "已上门", "一定修好", "今天修好"):
+        assert forbidden not in reply
 
 
 def test_human_reply_keeps_safe_washer_advice_and_removes_promises() -> None:

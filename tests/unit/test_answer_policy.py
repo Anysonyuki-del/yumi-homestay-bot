@@ -1,7 +1,12 @@
+import pytest
+
 from homestay_bot.services.answer_policy import (
+    facility_fault_exclusion,
     handoff_reason,
+    has_facility_fault_signal,
     is_homestay_related,
     is_property_specific,
+    is_service_request,
     is_transaction_sensitive,
 )
 
@@ -48,3 +53,68 @@ def test_unrelated_questions_are_rejected_locally() -> None:
     assert is_homestay_related("武汉有哪些地方好玩？")
     assert is_homestay_related("好的，两个人")
     assert not is_homestay_related("帮我写一段股票量化交易程序")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "洗衣机好像也出了点问题",
+        "灯不亮了",
+        "马桶堵了",
+        "窗帘拉不动了",
+        "烘干机不工作",
+        "冰箱坏了",
+        "The dryer is not working",
+    ],
+)
+def test_open_facility_fault_is_a_service_request(text: str) -> None:
+    """新设施首次出现时也应由开放故障信号进入维修服务。"""
+    assert has_facility_fault_signal(text)
+    assert facility_fault_exclusion(text) is None
+    assert is_service_request(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "这个设计有点问题",
+        "洗衣机怎么用？",
+        "订单好像有问题",
+        "房间卫生有点问题",
+        "我身体有点问题",
+    ],
+)
+def test_facility_fault_does_not_match_abstract_problem_or_usage_question(
+    text: str,
+) -> None:
+    """抽象问题或设施用法咨询不得误建维修任务。"""
+    assert not has_facility_fault_signal(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "scope"),
+    [
+        ("我的手机坏了", "private"),
+        ("手机坏了", "private"),
+        ("我自己带来的咖啡机不工作", "private"),
+        ("景区的灯坏了", "external"),
+        ("商场电梯打不开", "external"),
+    ],
+)
+def test_private_or_external_fault_is_excluded_from_homestay_maintenance(
+    text: str,
+    scope: str,
+) -> None:
+    """明确属于私人物品或外部场所的故障不得授权民宿维修任务。"""
+    assert has_facility_fault_signal(text)
+    assert facility_fault_exclusion(text) == scope
+    assert not is_service_request(text)
+
+
+def test_room_facility_wins_over_ambiguous_official_channel_context() -> None:
+    """客人明确说房间设施时必须留在民宿维修边界。"""
+    text = "房间里的灯不亮了"
+
+    assert has_facility_fault_signal(text)
+    assert facility_fault_exclusion(text) is None
+    assert is_service_request(text)

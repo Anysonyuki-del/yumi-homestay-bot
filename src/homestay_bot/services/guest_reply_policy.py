@@ -111,6 +111,39 @@ _EN_HIGH_RISK_SAFETY_SENTENCE = re.compile(
     re.IGNORECASE,
 )
 
+_ZH_FACILITY_ADVICE = {
+    "power": (
+        "请先确认对应的开关、取电卡或遥控器是否已开启；如仍不能使用，请停止操作，"
+        "不要拆卸或接触电线。"
+    ),
+    "network": "请先关闭再开启手机网络，并尝试重新连接；不要重置房间路由器。",
+    "water": (
+        "请先确认水龙头是否已完全打开；如仍异常请停止使用，"
+        "不要拆卸热水器或反复点火。"
+    ),
+    "lock": "请先轻推或拉住门，让锁舌对齐后重试一次；不要强行开门或拆锁。",
+    "generic": "请先停止使用该设施，不要拆卸或强行操作。",
+}
+_EN_FACILITY_ADVICE = {
+    "power": (
+        "Please check whether the relevant switch, power card, or remote is on. "
+        "If it still does not work, stop using it and do not disassemble it or touch wiring."
+    ),
+    "network": (
+        "Please turn your phone network off and on, then try reconnecting. "
+        "Do not reset the room router."
+    ),
+    "water": (
+        "Please check whether the tap is fully open. If the problem continues, stop using it. "
+        "Do not disassemble or repeatedly ignite the water heater."
+    ),
+    "lock": (
+        "Please gently push or pull the door to align the latch, then try once more. "
+        "Do not force or disassemble the lock."
+    ),
+    "generic": "Please stop using the facility. Do not disassemble or force it.",
+}
+
 
 def human_contact_reply(language: Language) -> str:
     """返回无需人工确认执行结果的统一管家联系话术。"""
@@ -201,6 +234,24 @@ def _safe_human_sentences(content: str, language: Language) -> list[str]:
         for sentence in _safe_sentences(content)
         if safe_pattern.search(sentence)
     ]
+
+
+def prepare_facility_issue_reply(
+    safe_profile: str,
+    language: Language,
+) -> str:
+    """按固定安全档位生成建议，并声明已成功提交人工任务。"""
+    advice_by_profile = (
+        _EN_FACILITY_ADVICE if language is Language.EN else _ZH_FACILITY_ADVICE
+    )
+    # 未知档位只能降级为停止使用，模型不能扩展或直接编写排查步骤。
+    advice = advice_by_profile.get(safe_profile, advice_by_profile["generic"])
+    if language is Language.EN:
+        return (
+            f"Thanks for letting us know. {advice} "
+            "I've submitted this to the host for manual handling. Please wait a moment."
+        )
+    return f"收到，{advice}我已提交管家人工处理，请您稍等。"
 
 
 def _high_risk_reply(content: str, language: Language) -> str:
