@@ -2,7 +2,7 @@
 
 import json
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -35,6 +35,11 @@ from homestay_bot.services.admin_debug_service import (
     DebugPreviewCommand,
 )
 from homestay_bot.services.runtime_clients import RuntimeClientRegistry
+
+# 只读生产链测试始终使用未来两天，避免固定日期随时间失效。
+_READ_ONLY_LOCAL_TODAY = date.today()
+_READ_ONLY_CHECK_IN_DATE = _READ_ONLY_LOCAL_TODAY + timedelta(days=1)
+_READ_ONLY_CHECK_OUT_DATE = _READ_ONLY_LOCAL_TODAY + timedelta(days=2)
 
 
 class FailFastWrites:
@@ -163,9 +168,11 @@ class ProductionToolCompletions:
         if len(self.requests) == 1:
             function = SimpleNamespace(
                 name="search_availability",
-                arguments=(
-                    '{"check_in_date":"2026-08-31",'
-                    '"check_out_date":"2026-09-01"}'
+                arguments=json.dumps(
+                    {
+                        "check_in_date": _READ_ONLY_CHECK_IN_DATE.isoformat(),
+                        "check_out_date": _READ_ONLY_CHECK_OUT_DATE.isoformat(),
+                    }
                 ),
             )
             call = SimpleNamespace(id="debug-call-1", function=function)
@@ -194,8 +201,8 @@ class ProductionToolCompletions:
                 "confidence": 0.95,
                 "handoff_reason": None,
                 "booking_fields": {
-                    "check_in_date": "2026-08-31",
-                    "check_out_date": "2026-09-01",
+                    "check_in_date": _READ_ONLY_CHECK_IN_DATE.isoformat(),
+                    "check_out_date": _READ_ONLY_CHECK_OUT_DATE.isoformat(),
                 },
                 "knowledge_gap": False,
                 "knowledge_gap_topic": None,
@@ -419,18 +426,21 @@ async def test_production_bundle_assistant_is_read_only_end_to_end(
         properties=SessionDebugPropertyRepository(factory),
         audits=SessionDebugAuditRepository(factory),
         limiter=AdminDebugRateLimiter(limit=10),
-        local_date_provider=lambda: date(2026, 8, 30),
+        local_date_provider=lambda: _READ_ONLY_LOCAL_TODAY,
     )
     try:
         result = await service.preview(
             DebugPreviewCommand(
                 actor_employee_id=1,
                 admin_id=1,
-                question="2026-08-31 入住、2026-09-01 退房有房吗？",
+                question=(
+                    f"{_READ_ONLY_CHECK_IN_DATE.isoformat()} 入住、"
+                    f"{_READ_ONLY_CHECK_OUT_DATE.isoformat()} 退房有房吗？"
+                ),
                 language=Language.ZH,
                 property_id=11,
-                check_in_date=date(2026, 8, 31),
-                check_out_date=date(2026, 9, 1),
+                check_in_date=_READ_ONLY_CHECK_IN_DATE,
+                check_out_date=_READ_ONLY_CHECK_OUT_DATE,
             )
         )
         async with factory() as session:
