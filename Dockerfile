@@ -11,15 +11,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.lock ./
+
+# 依赖层只受哈希锁影响，普通源码和版本变更可直接复用缓存。
+RUN python -m pip install --no-cache-dir --retries 5 \
+        --require-hashes -r requirements.lock
+
 COPY pyproject.toml ./
 COPY src ./src
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-# 先按哈希锁安装运行与构建依赖，再禁止项目安装重新解析依赖。
-RUN python -m pip install --no-cache-dir --retries 5 \
-        --require-hashes -r requirements.lock && \
-    python -m pip install --no-cache-dir --no-deps --no-build-isolation .
+# 项目层禁止重新解析依赖，只在项目文件变化时重新安装。
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 # 固定 UID/GID 便于部署前精确核对宿主机上传目录权限。
 RUN groupadd --system --gid 10001 app && \
