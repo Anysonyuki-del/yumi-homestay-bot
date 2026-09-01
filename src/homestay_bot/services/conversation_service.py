@@ -749,9 +749,9 @@ class ConversationService:
         patterns = (
             rf"(?:补|送|拿|更换|换|加).{{0,8}}(?:{supply})",
             rf"(?:{supply}).{{0,8}}(?:补|送|拿|更换|换|加)",
-            r"维修|报修|修理|保洁|打扫|收房|收垃圾|调麻将机|生日布置|求婚布置",
+            r"保洁|打扫|收房|收垃圾|调麻将机|生日布置|求婚布置",
             r"提前入住|延迟退房|特殊服务",
-            r"help.{0,20}(?:water|towel|blanket|repair)|maintenance|housekeeping",
+            r"help.{0,20}(?:water|towel|blanket)|housekeeping",
         )
         return any(
             re.search(pattern, policy_question, re.IGNORECASE)
@@ -923,19 +923,20 @@ class ConversationService:
         decision: AssistantDecision | None,
     ) -> str | None:
         """返回可用于民宿设施故障的模型正文，异常时用空串触发降级。"""
-        if (
-            not has_facility_fault_signal(question)
-            or facility_fault_exclusion(question) is not None
-        ):
+        if facility_fault_exclusion(question) is not None:
             return None
         issue = decision.facility_issue if decision is not None else None
-        if issue is None or decision is None or decision.confidence < 0.7:
+        if issue is not None:
+            if issue.scope in {"private", "external"}:
+                return None
+            # 结构化归属负责开放语义；低置信和不确定归属只使用本地通用建议。
+            if issue.scope == "uncertain" or decision is None or decision.confidence < 0.7:
+                return ""
+            return decision.reply_text
+        if has_facility_fault_signal(question):
+            # 模型字段缺失或模型不可用时，明确本地信号仍进入确定性兜底。
             return ""
-        if issue.scope in {"private", "external"}:
-            return None
-        if issue.scope == "uncertain":
-            return ""
-        return decision.reply_text
+        return None
 
     async def _discard_stale_final(
         self,

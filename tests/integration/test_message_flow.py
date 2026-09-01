@@ -11,7 +11,12 @@ from homestay_bot.application import (
     _handle_guest_delivery_failure,
     _notify_guest_delivery_failure,
 )
-from homestay_bot.domain.enums import BusinessTaskStatus, BusinessTaskType, MessageOrigin
+from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
+    BusinessTaskType,
+    Language,
+    MessageOrigin,
+)
 from homestay_bot.domain.models import (
     AuditLog,
     Base,
@@ -21,6 +26,7 @@ from homestay_bot.domain.models import (
     Job,
     Message,
 )
+from homestay_bot.integrations.deepseek_client import AssistantDecision, FacilityIssue
 from homestay_bot.repositories.context import SQLAlchemyContextRepository
 from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
@@ -522,7 +528,7 @@ async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
             external_userid=conversation.external_userid,
             origin=MessageOrigin.GUEST,
             msgtype="text",
-            content="灯不亮了",
+            content="洗衣机不出水",
             sent_at=datetime(2026, 9, 1, tzinfo=UTC),
         )
         service = ConversationService(
@@ -543,10 +549,21 @@ async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
             ),
         )
 
+        reply_text = service._facility_reply_text(
+            message.content,
+            AssistantDecision(
+                reply_text="请先检查水龙头是否开启、进水管有没有折住。",
+                language=Language.ZH,
+                intent="facility_fault",
+                confidence=0.95,
+                facility_issue=FacilityIssue(scope="homestay_facility"),
+            ),
+        )
+        assert reply_text is not None
         await service._handle_facility_issue(
             conversation,
             message,
-            "请先确认房间开关是否已开启；如仍不亮，请停止操作。",
+            reply_text,
         )
         await session.commit()
 
@@ -560,7 +577,7 @@ async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
             "wecom_send_internal_text",
             "wecom_send_text",
         ]
-        assert "确认房间开关是否已开启" in jobs[1].payload["content"]
+        assert "检查水龙头是否开启" in jobs[1].payload["content"]
         assert "已提交管家人工处理" in jobs[1].payload["content"]
 
     await engine.dispose()

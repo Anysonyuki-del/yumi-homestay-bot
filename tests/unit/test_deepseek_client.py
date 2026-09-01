@@ -841,6 +841,8 @@ async def test_facility_scope_and_reply_share_the_existing_model_response() -> N
     assert "外部场所" in system_prompt
     assert "不追问" in system_prompt
     assert "一至两条" in system_prompt
+    assert "无法正常使用" in system_prompt
+    assert "查看或维修" in system_prompt
     assert "不得拆卸" in system_prompt
     assert "不得猜测故障原因" in system_prompt
     facility_schema = deepseek_client_module.assistant_decision_schema()["properties"][
@@ -848,6 +850,37 @@ async def test_facility_scope_and_reply_share_the_existing_model_response() -> N
     ]
     issue_properties = facility_schema["anyOf"][0]["properties"]
     assert "safe_profile" not in issue_properties
+
+
+@pytest.mark.asyncio
+async def test_model_facility_scope_survives_unlisted_symptom_wording() -> None:
+    """模型已理解当前设施异常时，本地词表未命中不得删除结构化归属。"""
+    payload = decision_payload()
+    payload.update(
+        {
+            "reply_text": "请先检查水龙头是否开启、进水管有没有折住。",
+            "intent": "facility_fault",
+            "facility_issue": {"scope": "homestay_facility"},
+        }
+    )
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "洗衣机不出水"}],
+    )
+
+    assert decision.facility_issue is not None
+    assert decision.facility_issue.scope == "homestay_facility"
+    assert len(client.chat.completions.requests) == 1
 
 
 @pytest.mark.asyncio

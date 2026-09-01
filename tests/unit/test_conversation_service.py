@@ -610,7 +610,7 @@ async def test_deferred_normal_message_waits_three_seconds_before_ack() -> None:
 
 @pytest.mark.asyncio
 async def test_debounce_merges_fragments_before_single_ack_and_final_job() -> None:
-    """三秒静默后才按完整问题判断安抚，并只登记一次最终任务。"""
+    """三秒静默后合并设施维修请求，只登记最终任务且不发送中立安抚。"""
     jobs = DeferredJobStub()
     messages = MessageServiceStub()
     fragments = [
@@ -628,9 +628,8 @@ async def test_debounce_merges_fragments_before_single_ack_and_final_job() -> No
     await service.process_debounced_message(fragments[-1])
 
     merged = "你好，房间里的灯\n一直闪\n麻烦帮我安排维修"
-    assert assistant.ack_calls == 1
-    assert assistant.last_ack_kwargs["question"] == merged
-    assert len(wecom.guest_messages) == 1
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == []
     assert len(jobs.jobs) == 1
     _, payload, dedupe_key, available_at = jobs.jobs[0]
     assert payload["phase"] == "final"
@@ -1229,16 +1228,22 @@ def test_information_questions_do_not_trigger_fast_service_ack(question: str) ->
 
 @pytest.mark.parametrize(
     "question",
-    ["请补两瓶矿泉水", "需要维修灯具", "想申请提前入住"],
+    ["请补两瓶矿泉水", "想申请提前入住"],
 )
 def test_operational_requests_still_trigger_fast_service_ack(question: str) -> None:
-    """非故障型的补给、维修申请和提前入住仍须快速安抚。"""
+    """非设施类的补给和提前入住仍须快速安抚。"""
     assert ConversationService._should_send_fast_ack(question) is True
 
 
 def test_explicit_facility_fault_does_not_trigger_neutral_fast_ack() -> None:
     """设施故障需等待固定建议，不得先发送没有解决方案的中立安抚。"""
     assert ConversationService._should_send_fast_ack("洗衣机一直显示锁，打不开") is False
+
+
+@pytest.mark.parametrize("question", ["需要维修灯具", "请报修空调", "麻烦找人修理门锁"])
+def test_facility_repair_request_does_not_trigger_neutral_fast_ack(question: str) -> None:
+    """设施查看或维修请求应等待最终建议，不得先发送中立安抚。"""
+    assert ConversationService._should_send_fast_ack(question) is False
 
 
 @pytest.mark.asyncio
@@ -1993,6 +1998,15 @@ async def test_equipment_task_failure_never_claims_manual_submission() -> None:
         ("厕所马桶堵了", "请先停止冲水，以免马桶继续溢水。", "停止冲水"),
         ("门锁打不开", "请先轻推或拉住门，再尝试开锁一次。", "轻推或拉住门"),
         ("窗帘拉不动了", "请不要强拉窗帘，可以轻轻反向松动一次。", "不要强拉窗帘"),
+        ("洗衣机不出水", "请先检查水龙头是否开启、进水管有没有折住。", "检查水龙头"),
+        ("空调吹半天还是热的", "请先确认空调是否处于制冷模式。", "制冷模式"),
+        ("花洒水特别小", "请先确认花洒开关是否已完全打开。", "花洒开关"),
+        ("马桶下水很慢", "请先暂停冲水，避免积水溢出。", "暂停冲水"),
+        ("投影只有声音没有画面", "请先确认投影镜头盖是否已经打开。", "镜头盖"),
+        ("窗帘停在一半", "请不要强拉窗帘，可以轻轻反向松动一次。", "不要强拉窗帘"),
+        ("热水忽冷忽热", "请先停止使用热水，避免烫伤。", "停止使用热水"),
+        ("门锁识别不了密码", "请先轻推房门，让锁舌对齐后重试一次。", "锁舌对齐"),
+        ("冰箱不冻", "请先确认冰箱门是否已经关严。", "冰箱门"),
     ],
 )
 async def test_new_facility_is_handled_on_first_occurrence(
@@ -2062,11 +2076,38 @@ async def test_low_confidence_facility_reply_falls_back_to_generic_advice() -> N
         business_tasks=tasks,
     )
 
-    await service.handle_message(incoming(content="房间网络断了"))
+    await service.handle_message(incoming(content="空调吹半天还是热的"))
 
     assert tasks.calls
     assert "停止使用" in wecom.guest_messages[0]
     assert "重置路由器" not in wecom.guest_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_uncertain_unlisted_facility_scope_still_submits_manual_task() -> None:
+    """模型确认是设施异常但归属不确定时，应提交候选任务并使用通用建议。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="请拆开设备检查线路。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.9,
+            facility_issue=FacilityIssue(scope="uncertain"),
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content="投影只有声音没有画面"))
+
+    assert tasks.calls
+    assert "停止使用" in wecom.guest_messages[0]
+    assert "检查线路" not in wecom.guest_messages[0]
+    assert "已提交管家人工处理" in wecom.guest_messages[0]
 
 
 @pytest.mark.asyncio

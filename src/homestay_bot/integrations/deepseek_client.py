@@ -18,7 +18,6 @@ from homestay_bot.integrations.tourism import (
 )
 from homestay_bot.services.answer_policy import (
     facility_fault_exclusion,
-    has_facility_fault_signal,
     is_booking_action_request,
     is_property_specific,
     is_service_request,
@@ -634,10 +633,7 @@ class DeepSeekGuestAssistant:
         if not is_service_request(question_text):
             # 历史、摘要和模型推断都不能替代本轮客人的服务授权。
             updates["task_suggestion"] = None
-        if not has_facility_fault_signal(question_text):
-            # 模型不能把普通咨询或历史设施问题升级为当前维修故障。
-            updates["facility_issue"] = None
-        elif (excluded_scope := facility_fault_exclusion(question_text)) is not None:
+        if (excluded_scope := facility_fault_exclusion(question_text)) is not None:
             # 私人物品和外部场所归属由本地证据覆盖模型误判。
             updates["facility_issue"] = FacilityIssue(scope=excluded_scope)
         if not is_booking_action_request(question_text):
@@ -1202,7 +1198,8 @@ class DeepSeekGuestAssistant:
             "客人提出保洁、维修、补耗材、特殊服务、提前入住或延迟退房时，"
             "在同一 JSON 的 task_suggestion 中提取任务；不能确定房间或日期时填 null，"
             "不得编造。task_suggestion 只是待员工确认，绝不代表已经答应客人。"
-            "当前问题表达设施故障时，在同一 JSON 的 facility_issue 中判断归属；"
+            "当前问题表达设施无法正常使用、异常现象，或请求查看或维修设施时，"
+            "在同一 JSON 的 facility_issue 中判断归属；"
             "这是民宿官方客服渠道，未说明归属的‘灯不亮了’等短句默认 scope=homestay_facility；"
             "明确属于客人私人物品时 scope=private，明确属于景区、商场等外部场所时"
             " scope=external，确实无法判断时 scope=uncertain。"
