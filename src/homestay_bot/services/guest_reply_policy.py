@@ -142,7 +142,10 @@ _EN_NEGATED_FACILITY_ACTION = re.compile(
     + r")",
     re.IGNORECASE,
 )
-_ZH_FACILITY_FOLLOW_UP = re.compile(r"请问|能否|是否|可否|麻烦.{0,8}(?:告知|说明|提供)")
+_ZH_FACILITY_FOLLOW_UP = re.compile(
+    r"请问|(?:能否|是否|可否).{0,8}(?:告知|说明|提供|描述)|"
+    r"麻烦.{0,8}(?:告知|说明|提供|描述)"
+)
 _EN_FACILITY_FOLLOW_UP = re.compile(
     r"(?:could|can|would) you|please (?:tell|describe|provide)|do you know",
     re.IGNORECASE,

@@ -543,7 +543,11 @@ async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
             ),
         )
 
-        await service._handle_facility_issue(conversation, message, "power")
+        await service._handle_facility_issue(
+            conversation,
+            message,
+            "请先确认房间开关是否已开启；如仍不亮，请停止操作。",
+        )
         await session.commit()
 
         task = await session.scalar(select(BusinessTask))
@@ -556,7 +560,7 @@ async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
             "wecom_send_internal_text",
             "wecom_send_text",
         ]
-        assert "开关、取电卡或遥控器" in jobs[1].payload["content"]
+        assert "确认房间开关是否已开启" in jobs[1].payload["content"]
         assert "已提交管家人工处理" in jobs[1].payload["content"]
 
     await engine.dispose()
