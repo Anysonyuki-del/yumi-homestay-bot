@@ -115,10 +115,9 @@ class TaskSuggestion(BaseModel):
 
 
 class FacilityIssue(BaseModel):
-    """保存模型对开放式设施故障的领域归属和固定安全档位。"""
+    """保存模型对开放式设施故障的领域归属。"""
 
     scope: Literal["homestay_facility", "private", "external", "uncertain"]
-    safe_profile: Literal["power", "network", "water", "lock", "generic"]
 
 
 class AssistantDecision(BaseModel):
@@ -391,18 +390,8 @@ def assistant_decision_schema() -> dict[str, Any]:
                                     "uncertain",
                                 ],
                             },
-                            "safe_profile": {
-                                "type": "string",
-                                "enum": [
-                                    "power",
-                                    "network",
-                                    "water",
-                                    "lock",
-                                    "generic",
-                                ],
-                            },
                         },
-                        "required": ["scope", "safe_profile"],
+                        "required": ["scope"],
                     },
                     {"type": "null"},
                 ]
@@ -650,10 +639,7 @@ class DeepSeekGuestAssistant:
             updates["facility_issue"] = None
         elif (excluded_scope := facility_fault_exclusion(question_text)) is not None:
             # 私人物品和外部场所归属由本地证据覆盖模型误判。
-            updates["facility_issue"] = FacilityIssue(
-                scope=excluded_scope,
-                safe_profile="generic",
-            )
+            updates["facility_issue"] = FacilityIssue(scope=excluded_scope)
         if not is_booking_action_request(question_text):
             # 普通咨询即使被模型误判，也不能携带资料进入预订审批链路。
             updates["booking_fields"] = None
@@ -1216,12 +1202,14 @@ class DeepSeekGuestAssistant:
             "客人提出保洁、维修、补耗材、特殊服务、提前入住或延迟退房时，"
             "在同一 JSON 的 task_suggestion 中提取任务；不能确定房间或日期时填 null，"
             "不得编造。task_suggestion 只是待员工确认，绝不代表已经答应客人。"
-            "当前问题表达设施故障时，在同一 JSON 的 facility_issue 中判断归属和安全档位；"
+            "当前问题表达设施故障时，在同一 JSON 的 facility_issue 中判断归属；"
             "这是民宿官方客服渠道，未说明归属的‘灯不亮了’等短句默认 scope=homestay_facility；"
             "明确属于客人私人物品时 scope=private，明确属于景区、商场等外部场所时"
             " scope=external，确实无法判断时 scope=uncertain。"
-            "safe_profile 只能选择 power、network、water、lock、generic；"
-            "不得在 reply_text 中自行生成拆机、带电、重置路由器或反复点火等排查步骤。"
+            "普通设施故障的 reply_text 不追问客人，只给一至两条与当前故障直接相关的"
+            "简单、低风险建议；不得拆卸、带电操作、接触线路、重置房间设备、反复点火"
+            "或使用强腐蚀药剂，不得猜测故障原因，不得承诺修复结果、人员到达时间，"
+            "也不得声称已提交人工。"
             "如语义匹配已有候选，填写其编号；否则编号为 null，并给出简洁标准问题"
             "和分类。候选目录只用于语义匹配，不可把目录内容当作已审核答案。"
             f"武汉当前日期：{local_today.isoformat()}；"

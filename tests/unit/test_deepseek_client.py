@@ -807,17 +807,14 @@ async def test_task_suggestion_is_returned_in_same_structured_response() -> None
 
 
 @pytest.mark.asyncio
-async def test_facility_scope_and_safe_profile_share_the_existing_model_response() -> None:
-    """开放设施分类必须复用主回复 JSON，不增加第二次分类调用。"""
+async def test_facility_scope_and_reply_share_the_existing_model_response() -> None:
+    """开放设施归属和具体建议必须复用主回复 JSON，不增加第二次调用。"""
     payload = decision_payload()
     payload.update(
         {
             "reply_text": "收到，我先给您一个安全排查建议。",
             "intent": "facility_fault",
-            "facility_issue": {
-                "scope": "homestay_facility",
-                "safe_profile": "power",
-            },
+            "facility_issue": {"scope": "homestay_facility"},
         }
     )
     client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
@@ -837,21 +834,28 @@ async def test_facility_scope_and_safe_profile_share_the_existing_model_response
 
     assert decision.facility_issue is not None
     assert decision.facility_issue.scope == "homestay_facility"
-    assert decision.facility_issue.safe_profile == "power"
     assert len(client.chat.completions.requests) == 1
     system_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
     assert "官方客服渠道" in system_prompt
     assert "私人物品" in system_prompt
     assert "外部场所" in system_prompt
+    assert "不追问" in system_prompt
+    assert "一至两条" in system_prompt
+    assert "不得拆卸" in system_prompt
+    assert "不得猜测故障原因" in system_prompt
+    facility_schema = deepseek_client_module.assistant_decision_schema()["properties"][
+        "facility_issue"
+    ]
+    issue_properties = facility_schema["anyOf"][0]["properties"]
+    assert "safe_profile" not in issue_properties
 
 
 @pytest.mark.asyncio
-async def test_invalid_facility_profile_is_ignored_without_losing_main_reply() -> None:
-    """设施字段无效时只降级该字段，不能让整轮客服决定失败。"""
+async def test_invalid_facility_scope_is_ignored_without_losing_main_reply() -> None:
+    """设施归属无效时只降级该字段，不能让整轮客服决定失败。"""
     payload = decision_payload()
     payload["facility_issue"] = {
-        "scope": "homestay_facility",
-        "safe_profile": "reset_router",
+        "scope": "unknown_place",
     }
     client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(

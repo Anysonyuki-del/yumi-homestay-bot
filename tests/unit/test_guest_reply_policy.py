@@ -10,27 +10,79 @@ from homestay_bot.services.guest_reply_policy import (
 
 
 @pytest.mark.parametrize(
-    ("safe_profile", "advice"),
+    ("model_reply", "advice"),
     [
-        ("power", "开关、取电卡或遥控器"),
-        ("network", "重新连接"),
-        ("water", "水龙头"),
-        ("lock", "轻推或拉住门"),
-        ("generic", "停止使用"),
+        ("收到，**请先停止使用洗衣机，不要自行拆卸。**", "停止使用洗衣机"),
+        ("请先停止冲水，以免马桶继续溢水。", "停止冲水"),
+        ("请先轻推或拉住门，再尝试开锁一次。", "轻推或拉住门"),
     ],
 )
-def test_facility_issue_reply_has_fixed_safe_advice_and_manual_submission(
-    safe_profile: str,
+def test_facility_issue_reply_keeps_model_advice_and_manual_submission(
+    model_reply: str,
     advice: str,
 ) -> None:
-    """各安全档位都应给出固定建议，不追问且不承诺结果。"""
-    reply = prepare_facility_issue_reply(safe_profile, Language.ZH)
+    """普通设施故障应保留模型的针对性安全建议并声明人工已提交。"""
+    reply = prepare_facility_issue_reply(model_reply, Language.ZH)
 
     assert advice in reply
+    assert "**" not in reply
+    assert reply.count("收到") == 1
     assert reply.endswith("我已提交管家人工处理，请您稍等。")
     assert "？" not in reply
     for forbidden in ("已出发", "已上门", "一定修好", "今天修好"):
         assert forbidden not in reply
+
+
+@pytest.mark.parametrize(
+    "unsafe_reply",
+    [
+        "请拆开洗衣机后盖检查线路。",
+        "请接触电线确认是否通电。",
+        "请重置房间路由器。",
+        "请重启房间路由器。",
+        "请反复点火测试热水器。",
+        "请倒入强腐蚀疏通剂。",
+        "请问故障时有什么声音",
+        "已经提交管家人工处理。",
+    ],
+)
+def test_unsafe_or_follow_up_facility_reply_falls_back(unsafe_reply: str) -> None:
+    """危险操作和追问不得发给客人，只能使用通用安全降级。"""
+    reply = prepare_facility_issue_reply(unsafe_reply, Language.ZH)
+
+    assert reply == (
+        "收到，请先停止使用该设施，不要拆卸或强行操作。"
+        "我已提交管家人工处理，请您稍等。"
+    )
+
+
+def test_facility_reply_removes_promise_but_keeps_safe_advice() -> None:
+    """模型夹带人员与结果承诺时，应只保留低风险排查建议。"""
+    reply = prepare_facility_issue_reply(
+        "请先长按童锁键三秒试试看；师傅稍后会上门并彻底修好。",
+        Language.ZH,
+    )
+
+    assert "长按童锁键三秒" in reply
+    assert "师傅" not in reply
+    assert "修好" not in reply
+    assert reply.endswith("我已提交管家人工处理，请您稍等。")
+
+
+def test_english_facility_reply_uses_same_safety_boundary() -> None:
+    """英文设施回复也必须保留安全建议并拦截危险操作。"""
+    safe_reply = prepare_facility_issue_reply(
+        "Please stop flushing to avoid overflow.",
+        Language.EN,
+    )
+    unsafe_reply = prepare_facility_issue_reply(
+        "Please restart the room router.",
+        Language.EN,
+    )
+
+    assert "stop flushing" in safe_reply
+    assert "restart" not in unsafe_reply
+    assert "stop using the facility" in unsafe_reply
 
 
 def test_human_reply_keeps_safe_washer_advice_and_removes_promises() -> None:

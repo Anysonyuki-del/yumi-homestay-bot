@@ -782,14 +782,11 @@ async def test_merged_equipment_fault_gets_advice_and_manual_task() -> None:
     tasks = BusinessTaskStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="收到，我先给您一个安全排查建议。",
+            reply_text="收到，请先停止使用洗衣机，不要自行拆卸。",
             language=Language.ZH,
             intent="facility_fault",
             confidence=0.96,
-            facility_issue=FacilityIssue(
-                scope="homestay_facility",
-                safe_profile="power",
-            ),
+            facility_issue=FacilityIssue(scope="homestay_facility"),
         )
     )
     service, conversations, assistant, wecom = build_service(
@@ -823,7 +820,8 @@ async def test_merged_equipment_fault_gets_advice_and_manual_task() -> None:
 
     assert assistant.calls == 1
     assert tasks.calls[0]["source_message_id"] == "msg-2"
-    assert "开关、取电卡或遥控器" in wecom.guest_messages[0]
+    assert "停止使用洗衣机" in wecom.guest_messages[0]
+    assert wecom.guest_messages[0].count("收到") == 1
     assert "已提交管家人工处理" in wecom.guest_messages[0]
 
 
@@ -1836,8 +1834,8 @@ async def test_guest_task_reply_hides_staff_delivery_wording() -> None:
 
 
 @pytest.mark.asyncio
-async def test_washer_task_uses_model_profile_without_promising_a_technician() -> None:
-    """洗衣机故障应使用同轮模型档位，但客人建议仍来自固定模板。"""
+async def test_washer_task_uses_model_advice_without_promising_a_technician() -> None:
+    """洗衣机故障应保留同轮模型的安全建议并删除人员与结果承诺。"""
     tasks = BusinessTaskStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
@@ -1849,10 +1847,7 @@ async def test_washer_task_uses_model_profile_without_promising_a_technician() -
             language=Language.ZH,
             intent="maintenance",
             confidence=0.96,
-            facility_issue=FacilityIssue(
-                scope="homestay_facility",
-                safe_profile="power",
-            ),
+            facility_issue=FacilityIssue(scope="homestay_facility"),
             task_suggestion=TaskSuggestion(
                 task_type=BusinessTaskType.MAINTENANCE,
                 description="检查洗衣机童锁状态",
@@ -1869,7 +1864,7 @@ async def test_washer_task_uses_model_profile_without_promising_a_technician() -
 
     reply = wecom.guest_messages[0]
     assert selected_assistant.calls == 1
-    assert "开关、取电卡或遥控器" in reply
+    assert "长按童锁键三秒" in reply
     assert reply.endswith("我已提交管家人工处理，请您稍等。")
     assert "师傅" not in reply
     assert "上门" not in reply
@@ -1926,14 +1921,11 @@ async def test_soft_washer_fault_gives_advice_after_submitting_manual_task() -> 
     wecom = OrderedWeComStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="收到，我先给您一个安全排查建议。",
+            reply_text="请先停止使用洗衣机，不要自行拆卸。",
             language=Language.ZH,
             intent="facility_fault",
             confidence=0.96,
-            facility_issue=FacilityIssue(
-                scope="homestay_facility",
-                safe_profile="power",
-            ),
+            facility_issue=FacilityIssue(scope="homestay_facility"),
         )
     )
     service, _, assistant, _ = build_service(
@@ -1957,8 +1949,8 @@ async def test_soft_washer_fault_gives_advice_after_submitting_manual_task() -> 
     assert tasks.calls[0]["source_message_id"] == "washer-soft-fault"
     assert tasks.calls[0]["task_type"] is BusinessTaskType.MAINTENANCE
     reply = wecom.guest_messages[0]
-    assert "开关、取电卡或遥控器" in reply
-    assert "不要拆卸或接触电线" in reply
+    assert "停止使用洗衣机" in reply
+    assert "不要自行拆卸" in reply
     assert "已提交管家人工处理" in reply
     assert "？" not in reply
 
@@ -1973,10 +1965,7 @@ async def test_equipment_task_failure_never_claims_manual_submission() -> None:
             language=Language.ZH,
             intent="facility_fault",
             confidence=0.96,
-            facility_issue=FacilityIssue(
-                scope="homestay_facility",
-                safe_profile="power",
-            ),
+            facility_issue=FacilityIssue(scope="homestay_facility"),
         )
     )
     service, _, assistant, wecom = build_service(
@@ -1998,31 +1987,28 @@ async def test_equipment_task_failure_never_claims_manual_submission() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("content", "profile", "advice"),
+    ("content", "model_reply", "advice"),
     [
-        ("灯不亮了", "power", "开关、取电卡或遥控器"),
-        ("马桶堵了", "generic", "停止使用"),
-        ("窗帘拉不动了", "generic", "不要拆卸或强行操作"),
-        ("烘干机不工作", "power", "不要拆卸或接触电线"),
+        ("洗衣机坏了", "请先停止使用洗衣机，不要自行拆卸。", "停止使用洗衣机"),
+        ("厕所马桶堵了", "请先停止冲水，以免马桶继续溢水。", "停止冲水"),
+        ("门锁打不开", "请先轻推或拉住门，再尝试开锁一次。", "轻推或拉住门"),
+        ("窗帘拉不动了", "请不要强拉窗帘，可以轻轻反向松动一次。", "不要强拉窗帘"),
     ],
 )
 async def test_new_facility_is_handled_on_first_occurrence(
     content: str,
-    profile: str,
+    model_reply: str,
     advice: str,
 ) -> None:
-    """开放分类应让新设施首次出现就获得固定建议和人工维修任务。"""
+    """新设施首次出现时应直接使用模型的针对性建议并创建维修任务。"""
     tasks = BusinessTaskStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="模型不得直接编写排查步骤。",
+            reply_text=model_reply,
             language=Language.ZH,
             intent="facility_fault",
             confidence=0.95,
-            facility_issue=FacilityIssue(
-                scope="homestay_facility",
-                safe_profile=profile,
-            ),
+            facility_issue=FacilityIssue(scope="homestay_facility"),
         )
     )
     service, _, selected_assistant, wecom = build_service(
@@ -2036,13 +2022,12 @@ async def test_new_facility_is_handled_on_first_occurrence(
     assert selected_assistant.calls == 1
     assert tasks.calls[0]["task_type"] is BusinessTaskType.MAINTENANCE
     assert advice in wecom.guest_messages[0]
-    assert "模型不得直接编写排查步骤" not in wecom.guest_messages[0]
     assert "已提交管家人工处理" in wecom.guest_messages[0]
     assert "？" not in wecom.guest_messages[0]
 
 
 @pytest.mark.asyncio
-async def test_missing_facility_classification_falls_back_to_generic_safe_profile() -> None:
+async def test_missing_facility_classification_falls_back_to_generic_reply() -> None:
     """模型漏填设施字段时，明确故障仍应使用通用安全建议并建任务。"""
     tasks = BusinessTaskStub()
     service, _, assistant, wecom = build_service(
@@ -2059,8 +2044,8 @@ async def test_missing_facility_classification_falls_back_to_generic_safe_profil
 
 
 @pytest.mark.asyncio
-async def test_low_confidence_facility_profile_falls_back_to_generic_advice() -> None:
-    """低置信度档位不得驱动具体操作，只允许通用停用建议。"""
+async def test_low_confidence_facility_reply_falls_back_to_generic_advice() -> None:
+    """低置信度模型正文不得驱动具体操作，只允许通用停用建议。"""
     tasks = BusinessTaskStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
@@ -2068,10 +2053,7 @@ async def test_low_confidence_facility_profile_falls_back_to_generic_advice() ->
             language=Language.ZH,
             intent="facility_fault",
             confidence=0.4,
-            facility_issue=FacilityIssue(
-                scope="homestay_facility",
-                safe_profile="network",
-            ),
+            facility_issue=FacilityIssue(scope="homestay_facility"),
         )
     )
     service, _, _, wecom = build_service(
@@ -2118,10 +2100,7 @@ async def test_private_or_external_fault_never_creates_homestay_task(content: st
             language=Language.ZH,
             intent="facility_fault",
             confidence=0.98,
-            facility_issue=FacilityIssue(
-                scope="homestay_facility",
-                safe_profile="power",
-            ),
+            facility_issue=FacilityIssue(scope="homestay_facility"),
         )
     )
     service, _, selected_assistant, wecom = build_service(
@@ -2148,10 +2127,7 @@ async def test_high_confidence_model_external_scope_blocks_homestay_task() -> No
             language=Language.ZH,
             intent="facility_fault",
             confidence=0.96,
-            facility_issue=FacilityIssue(
-                scope="external",
-                safe_profile="generic",
-            ),
+            facility_issue=FacilityIssue(scope="external"),
         )
     )
     service, _, _, wecom = build_service(

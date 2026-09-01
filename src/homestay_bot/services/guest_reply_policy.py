@@ -111,38 +111,47 @@ _EN_HIGH_RISK_SAFETY_SENTENCE = re.compile(
     re.IGNORECASE,
 )
 
-_ZH_FACILITY_ADVICE = {
-    "power": (
-        "请先确认对应的开关、取电卡或遥控器是否已开启；如仍不能使用，请停止操作，"
-        "不要拆卸或接触电线。"
-    ),
-    "network": "请先关闭再开启手机网络，并尝试重新连接；不要重置房间路由器。",
-    "water": (
-        "请先确认水龙头是否已完全打开；如仍异常请停止使用，"
-        "不要拆卸热水器或反复点火。"
-    ),
-    "lock": "请先轻推或拉住门，让锁舌对齐后重试一次；不要强行开门或拆锁。",
-    "generic": "请先停止使用该设施，不要拆卸或强行操作。",
-}
-_EN_FACILITY_ADVICE = {
-    "power": (
-        "Please check whether the relevant switch, power card, or remote is on. "
-        "If it still does not work, stop using it and do not disassemble it or touch wiring."
-    ),
-    "network": (
-        "Please turn your phone network off and on, then try reconnecting. "
-        "Do not reset the room router."
-    ),
-    "water": (
-        "Please check whether the tap is fully open. If the problem continues, stop using it. "
-        "Do not disassemble or repeatedly ignite the water heater."
-    ),
-    "lock": (
-        "Please gently push or pull the door to align the latch, then try once more. "
-        "Do not force or disassemble the lock."
-    ),
-    "generic": "Please stop using the facility. Do not disassemble or force it.",
-}
+_ZH_FACILITY_FALLBACK = "请先停止使用该设施，不要拆卸或强行操作。"
+_EN_FACILITY_FALLBACK = (
+    "Please stop using the facility. Do not disassemble or force it."
+)
+_ZH_FACILITY_SUBMITTED = "我已提交管家人工处理，请您稍等。"
+_EN_FACILITY_SUBMITTED = (
+    "I've submitted this to the host for manual handling. Please wait a moment."
+)
+_ZH_UNSAFE_FACILITY_ACTION = re.compile(
+    r"拆(?:开|卸)|打开.{0,6}(?:后盖|机盖|外壳)|"
+    r"(?:接触|触碰).{0,6}(?:电线|线路|电路)|带电操作|"
+    r"重(?:置|启).{0,8}(?:路由器|网关|房间设备)|"
+    r"反复.{0,6}(?:点火|启动|通电|开关)|强腐蚀|疏通剂"
+)
+_EN_UNSAFE_FACILITY_ACTION = re.compile(
+    r"disassembl|open.{0,16}(?:cover|casing)|touch.{0,12}(?:wire|circuit)|"
+    r"work.{0,8}live|(?:reset|restart).{0,16}(?:router|gateway|room device)|"
+    r"repeatedly.{0,12}(?:ignite|start|power)|corrosive|drain cleaner",
+    re.IGNORECASE,
+)
+_ZH_NEGATED_FACILITY_ACTION = re.compile(
+    r"(?:不要|切勿|请勿|避免|不得).{0,12}(?:"
+    + _ZH_UNSAFE_FACILITY_ACTION.pattern
+    + r")"
+)
+_EN_NEGATED_FACILITY_ACTION = re.compile(
+    r"(?:do not|don't|never|avoid).{0,24}(?:"
+    + _EN_UNSAFE_FACILITY_ACTION.pattern
+    + r")",
+    re.IGNORECASE,
+)
+_ZH_FACILITY_FOLLOW_UP = re.compile(r"请问|能否|是否|可否|麻烦.{0,8}(?:告知|说明|提供)")
+_EN_FACILITY_FOLLOW_UP = re.compile(
+    r"(?:could|can|would) you|please (?:tell|describe|provide)|do you know",
+    re.IGNORECASE,
+)
+_ZH_FACILITY_SUBMISSION_CLAIM = re.compile(r"(?:已|已经).{0,8}提交.{0,8}(?:人工|管家)")
+_EN_FACILITY_SUBMISSION_CLAIM = re.compile(
+    r"(?:have|has|'ve|'s) submitted.{0,24}(?:host|manual)",
+    re.IGNORECASE,
+)
 
 
 def human_contact_reply(language: Language) -> str:
@@ -236,22 +245,66 @@ def _safe_human_sentences(content: str, language: Language) -> list[str]:
     ]
 
 
+def _contains_unsafe_facility_action(sentence: str, language: Language) -> bool:
+    """忽略明确禁止语后，判断模型是否仍建议客人执行危险操作。"""
+    if language is Language.EN:
+        remaining = _EN_NEGATED_FACILITY_ACTION.sub("", sentence)
+        return bool(_EN_UNSAFE_FACILITY_ACTION.search(remaining))
+    remaining = _ZH_NEGATED_FACILITY_ACTION.sub("", sentence)
+    return bool(_ZH_UNSAFE_FACILITY_ACTION.search(remaining))
+
+
+def _contains_facility_follow_up_or_submission(
+    sentence: str,
+    language: Language,
+) -> bool:
+    """拦截模型追问和自行声明提交状态，由本地流程统一决定。"""
+    if language is Language.EN:
+        return bool(
+            _EN_FACILITY_FOLLOW_UP.search(sentence)
+            or _EN_FACILITY_SUBMISSION_CLAIM.search(sentence)
+        )
+    return bool(
+        _ZH_FACILITY_FOLLOW_UP.search(sentence)
+        or _ZH_FACILITY_SUBMISSION_CLAIM.search(sentence)
+    )
+
+
 def prepare_facility_issue_reply(
-    safe_profile: str,
+    content: str,
     language: Language,
 ) -> str:
-    """按固定安全档位生成建议，并声明已成功提交人工任务。"""
-    advice_by_profile = (
-        _EN_FACILITY_ADVICE if language is Language.EN else _ZH_FACILITY_ADVICE
+    """清洗模型的设施建议，并在任务成功后声明已提交人工。"""
+    content = _plain_text_guest_reply(content)
+    fallback = (
+        _EN_FACILITY_FALLBACK if language is Language.EN else _ZH_FACILITY_FALLBACK
     )
-    # 未知档位只能降级为停止使用，模型不能扩展或直接编写排查步骤。
-    advice = advice_by_profile.get(safe_profile, advice_by_profile["generic"])
+    submitted = (
+        _EN_FACILITY_SUBMITTED
+        if language is Language.EN
+        else _ZH_FACILITY_SUBMITTED
+    )
+    safe_sentences = [
+        sentence
+        for sentence in _safe_sentences(content.replace(submitted, ""))
+        if "?" not in sentence
+        and "？" not in sentence
+        and not _contains_unsafe_facility_action(sentence, language)
+        and not _contains_facility_follow_up_or_submission(sentence, language)
+    ]
+    advice = " ".join(safe_sentences) if language is Language.EN else "".join(safe_sentences)
+    if not advice:
+        advice = fallback
     if language is Language.EN:
-        return (
-            f"Thanks for letting us know. {advice} "
-            "I've submitted this to the host for manual handling. Please wait a moment."
+        acknowledgement = "Thanks for letting us know."
+        prefix = (
+            ""
+            if advice.lower().startswith(acknowledgement.lower())
+            else f"{acknowledgement} "
         )
-    return f"收到，{advice}我已提交管家人工处理，请您稍等。"
+        return f"{prefix}{advice} {submitted}"
+    prefix = "" if advice.startswith("收到") else "收到，"
+    return f"{prefix}{advice}{submitted}"
 
 
 def _high_risk_reply(content: str, language: Language) -> str:
