@@ -2059,7 +2059,7 @@ async def test_missing_facility_classification_falls_back_to_generic_reply() -> 
 
 @pytest.mark.asyncio
 async def test_low_confidence_facility_reply_falls_back_to_generic_advice() -> None:
-    """低置信度模型正文不得驱动具体操作，只允许通用停用建议。"""
+    """低置信度危险建议仍须由逐句安全门清除并使用通用降级。"""
     tasks = BusinessTaskStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
@@ -2081,6 +2081,58 @@ async def test_low_confidence_facility_reply_falls_back_to_generic_advice() -> N
     assert tasks.calls
     assert "停止使用" in wecom.guest_messages[0]
     assert "重置路由器" not in wecom.guest_messages[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "model_reply", "advice"),
+    [
+        (
+            "外面很吵怎么办，觉都睡不好",
+            "建议您先关好门窗、拉上窗帘，尽量减少外部噪音。",
+            "关好门窗",
+        ),
+        (
+            "晚上有噪音啊怎么办",
+            "建议您先关好门窗，并暂时远离噪音较明显的位置。",
+            "远离噪音",
+        ),
+        (
+            "觉都睡不好",
+            "建议您先拉上窗帘并关闭窗户，看看能否缓解。",
+            "拉上窗帘",
+        ),
+    ],
+)
+async def test_low_confidence_stay_issue_keeps_safe_contextual_advice(
+    content: str,
+    model_reply: str,
+    advice: str,
+) -> None:
+    """住宿环境问题的安全建议不得仅因整体置信度较低而被丢弃。"""
+    tasks = BusinessTaskStub()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text=model_reply,
+            language=Language.ZH,
+            intent="stay_environment_issue",
+            confidence=0.4,
+            facility_issue=FacilityIssue(scope="homestay_facility"),
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+    )
+
+    await service.handle_message(incoming(content=content))
+
+    assert tasks.calls
+    assert advice in wecom.guest_messages[0]
+    assert "停止使用该设施" not in wecom.guest_messages[0]
+    assert "已提交管家人工处理" in wecom.guest_messages[0]
+    assert "？" not in wecom.guest_messages[0]
 
 
 @pytest.mark.asyncio

@@ -630,7 +630,7 @@ class ConversationService:
         message: IncomingMessage,
         reply_text: str,
     ) -> None:
-        """先登记维修任务和员工通知，再发送经过安全清洗的模型建议。"""
+        """先登记住宿问题任务和员工通知，再发送经过安全清洗的模型建议。"""
         if self._business_tasks is None or conversation.customer_id is None:
             # 生产装配必须同时提供正式客户和任务仓储；缺失时回滚入站并由 worker 重试。
             raise RuntimeError("设施故障人工任务依赖未配置")
@@ -638,7 +638,7 @@ class ConversationService:
             customer_id=conversation.customer_id,
             source_message_id=message.msgid,
             task_type=BusinessTaskType.MAINTENANCE,
-            description="客人反馈民宿设施故障，待人工处理",
+            description="客人反馈民宿设施或环境问题，待人工处理",
         )
         await self._notify_employee(
             conversation,
@@ -922,16 +922,16 @@ class ConversationService:
         question: str,
         decision: AssistantDecision | None,
     ) -> str | None:
-        """返回可用于民宿设施故障的模型正文，异常时用空串触发降级。"""
+        """返回住宿设施或环境问题的模型正文，缺失时用空串触发降级。"""
         if facility_fault_exclusion(question) is not None:
             return None
-        issue = decision.facility_issue if decision is not None else None
+        if decision is None:
+            return "" if has_facility_fault_signal(question) else None
+        issue = decision.facility_issue
         if issue is not None:
             if issue.scope in {"private", "external"}:
                 return None
-            # 结构化归属负责开放语义；低置信和不确定归属只使用本地通用建议。
-            if issue.scope == "uncertain" or decision is None or decision.confidence < 0.7:
-                return ""
+            # 结构化归属负责开放语义；具体危险动作继续由逐句安全策略删除。
             return decision.reply_text
         if has_facility_fault_signal(question):
             # 模型字段缺失或模型不可用时，明确本地信号仍进入确定性兜底。

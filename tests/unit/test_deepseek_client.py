@@ -842,6 +842,8 @@ async def test_facility_scope_and_reply_share_the_existing_model_response() -> N
     assert "不追问" in system_prompt
     assert "一至两条" in system_prompt
     assert "无法正常使用" in system_prompt
+    assert "住宿环境异常" in system_prompt
+    assert "影响当前入住" in system_prompt
     assert "查看或维修" in system_prompt
     assert "不得拆卸" in system_prompt
     assert "不得猜测故障原因" in system_prompt

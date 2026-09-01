@@ -114,7 +114,7 @@ class TaskSuggestion(BaseModel):
 
 
 class FacilityIssue(BaseModel):
-    """保存模型对开放式设施故障的领域归属。"""
+    """保存模型对开放式住宿设施或环境问题的领域归属。"""
 
     scope: Literal["homestay_facility", "private", "external", "uncertain"]
 
@@ -142,7 +142,7 @@ class AssistantDecision(BaseModel):
     @field_validator("facility_issue", mode="before")
     @classmethod
     def ignore_invalid_facility_issue(cls, value: Any) -> FacilityIssue | None:
-        """设施字段异常时只丢弃该字段，让会话层使用通用安全降级。"""
+        """住宿问题字段异常时只丢弃该字段，让会话层使用通用安全降级。"""
         if value is None:
             return None
         try:
@@ -1198,12 +1198,14 @@ class DeepSeekGuestAssistant:
             "客人提出保洁、维修、补耗材、特殊服务、提前入住或延迟退房时，"
             "在同一 JSON 的 task_suggestion 中提取任务；不能确定房间或日期时填 null，"
             "不得编造。task_suggestion 只是待员工确认，绝不代表已经答应客人。"
-            "当前问题表达设施无法正常使用、异常现象，或请求查看或维修设施时，"
+            "当前问题表达设施无法正常使用、住宿环境异常影响当前入住，"
+            "或请求查看或维修设施、处理住宿环境问题时，"
             "在同一 JSON 的 facility_issue 中判断归属；"
             "这是民宿官方客服渠道，未说明归属的‘灯不亮了’等短句默认 scope=homestay_facility；"
+            "房间内受到外部噪音、异味等干扰并影响休息时也按 homestay_facility 处理；"
             "明确属于客人私人物品时 scope=private，明确属于景区、商场等外部场所时"
             " scope=external，确实无法判断时 scope=uncertain。"
-            "普通设施故障的 reply_text 不追问客人，只给一至两条与当前故障直接相关的"
+            "普通设施或住宿环境问题的 reply_text 不追问客人，只给一至两条与当前问题直接相关的"
             "简单、低风险建议；不得拆卸、带电操作、接触线路、重置房间设备、反复点火"
             "或使用强腐蚀药剂，不得猜测故障原因，不得承诺修复结果、人员到达时间，"
             "也不得声称已提交人工。"
