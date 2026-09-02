@@ -1,4 +1,3 @@
-import secrets
 from typing import Any, Protocol, cast
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
@@ -7,6 +6,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
+from homestay_bot.routes.admin_form_csrf import (
+    APPROVAL_CSRF_FAMILY,
+    consume_form_csrf,
+    drop_legacy_session_key,
+    issue_form_csrf,
+)
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.services.approval_page_service import ApprovalPageView
 from homestay_bot.web import templates
@@ -80,10 +85,15 @@ async def approval_detail(request: Request, approval_id: int) -> Response:
         raise HTTPException(status_code=403, detail="只有管理员可以查看预订审批")
 
     detail = await _get_page_service(request).get_detail(approval_id)
-    nonce = secrets.token_urlsafe(24)
-    nonces = dict(request.session.get("approval_nonces", {}))
-    nonces[str(approval_id)] = nonce
-    request.session["approval_nonces"] = nonces
+    drop_legacy_session_key(request, "approval_nonces")
+    # 下单确认牵涉真实订单，沿用服务端默认的十五分钟有效期：超时必须刷新页面、
+    # 重新读取当前房态与金额后再确认，而不是提交一个久放的旧表单。
+    nonce = await issue_form_csrf(
+        request,
+        family=APPROVAL_CSRF_FAMILY,
+        entity_id=approval_id,
+        ttl=None,
+    )
     return templates.TemplateResponse(
         request=request,
         name="approvals/detail.html",
@@ -113,13 +123,13 @@ async def confirm_approval(
     if role is not EmployeeRole.ADMIN:
         raise HTTPException(status_code=403, detail="当前员工没有确认下单权限")
 
-    nonces = dict(request.session.get("approval_nonces", {}))
-    expected_nonce = nonces.pop(str(approval_id), None)
-    request.session["approval_nonces"] = nonces
-    if expected_nonce is None or not secrets.compare_digest(
-        expected_nonce, confirmation_nonce
-    ):
-        raise HTTPException(status_code=409, detail="确认令牌无效或已使用")
+    await consume_form_csrf(
+        request,
+        family=APPROVAL_CSRF_FAMILY,
+        entity_id=approval_id,
+        token=confirmation_nonce,
+        detail="确认令牌无效或已使用",
+    )
 
     command = ConfirmBookingCommand(
         property_id=property_id,

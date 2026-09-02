@@ -26,6 +26,10 @@ from homestay_bot.repositories.complaints import (
     ComplaintVersionConflict,
     SQLAlchemyComplaintRepository,
 )
+from homestay_bot.routes.admin_form_csrf import (
+    COMPLAINT_CSRF_FAMILY,
+    OPERATIONS_FORM_TTL,
+)
 from homestay_bot.routes.complaints import router as complaint_router
 from homestay_bot.services.complaint_admin_service import ComplaintAdminService
 
@@ -44,8 +48,14 @@ def _install_versioned_admin_session(
         request.session["admin_id"] = 1
         request.session["admin_session_version"] = 1
         request.session["last_activity_at"] = datetime.now(UTC).isoformat()
-        request.session["complaint_csrf"] = {"7": "valid-token"}
-        return {"status": "seeded"}
+        # 令牌迁移到服务端后不能再预置会话字典，必须真实签发一次。
+        token = await request.app.state.admin_csrf_service.issue(
+            f"{COMPLAINT_CSRF_FAMILY}:7",
+            admin_id=1,
+            evict_oldest_in_scope=True,
+            ttl=OPERATIONS_FORM_TTL,
+        )
+        return {"status": "seeded", "csrf_token": token}
 
     return verifier
 
@@ -423,13 +433,13 @@ def test_complaint_route_rejects_oversized_draft_before_service() -> None:
     verifier = _install_versioned_admin_session(app)
 
     with TestClient(app) as client:
-        client.get("/test/session")
+        csrf_token = client.get("/test/session").json()["csrf_token"]
         response = client.post(
             "/employee/complaints/7/save",
             data={
                 "version": "1",
                 "draft": "过长草稿" * 1001,
-                "csrf_token": "valid-token",
+                "csrf_token": csrf_token,
             },
             follow_redirects=False,
         )
@@ -464,13 +474,13 @@ def test_complaint_route_valid_form_reaches_service_after_admin_reverification()
     verifier = _install_versioned_admin_session(app)
 
     with TestClient(app) as client:
-        client.get("/test/session")
+        csrf_token = client.get("/test/session").json()["csrf_token"]
         response = client.post(
             "/employee/complaints/7/save",
             data={
                 "version": "1",
                 "draft": "请继续核实",
-                "csrf_token": "valid-token",
+                "csrf_token": csrf_token,
             },
             follow_redirects=False,
         )
@@ -569,3 +579,39 @@ async def test_complaint_review_does_not_persist_raw_guest_content(repository) -
     assert stored is not None
     assert "13800138000" not in str(stored.analysis)
     assert not hasattr(stored, "raw_content")
+
+
+def test_complaint_csrf_rejects_cross_entity_replay() -> None:
+    """为 7 号客诉签发的令牌不得用于保存另一条客诉的草稿。"""
+
+    class ServiceStub:
+        """记录是否被跨单令牌意外触达。"""
+
+        def __init__(self) -> None:
+            """初始化调用状态。"""
+            self.called = False
+
+        async def update_draft(self, *args, **kwargs) -> None:
+            """任何跨单调用都视为回归。"""
+            self.called = True
+
+    app = FastAPI()
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key="complaint-cross-entity-test-secret-at-least-32",
+    )
+    app.include_router(complaint_router)
+    service = ServiceStub()
+    app.state.complaint_admin_service = service
+    _install_versioned_admin_session(app)
+
+    with TestClient(app) as client:
+        csrf_token = client.get("/test/session").json()["csrf_token"]
+        response = client.post(
+            "/employee/complaints/8/save",
+            data={"version": "1", "draft": "改到别单", "csrf_token": csrf_token},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 409
+    assert service.called is False

@@ -793,3 +793,35 @@ def test_merge_review_explains_direction_and_safe_association_counts() -> None:
     assert "ROUTE_TARGET_SECRET_NOTE" not in response.text
     assert "138****8000" not in response.text
     assert "139****9000" not in response.text
+
+
+def test_customer_csrf_rejects_cross_entity_replay() -> None:
+    """客户详情签发的令牌不得用于修改另一个客户。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    csrf_token = detail_csrf(client, customer_id=7)
+
+    response = client.post(
+        "/employee/customers/8/note",
+        data={"note": "改到别人头上", "csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert customers.note_calls == []
+
+
+def test_customer_merge_csrf_is_not_interchangeable_with_detail_token() -> None:
+    """客户详情令牌不得用于确认合并建议，两类作用域必须隔离。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    detail_token = detail_csrf(client, customer_id=7)
+
+    response = client.post(
+        "/employee/customers/merge/9/confirm",
+        data={"csrf_token": detail_token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert customers.merge_calls == []

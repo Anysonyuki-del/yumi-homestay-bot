@@ -1,4 +1,3 @@
-import secrets
 from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlencode
 
@@ -8,6 +7,13 @@ from pydantic import BeforeValidator
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
+from homestay_bot.routes.admin_form_csrf import (
+    CUSTOMER_CSRF_FAMILY,
+    CUSTOMER_MERGE_CSRF_FAMILY,
+    consume_form_csrf,
+    drop_legacy_session_key,
+    issue_form_csrf,
+)
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.customer_admin_service import (
@@ -136,36 +142,42 @@ async def _current_admin(request: Request) -> Employee:
     )
 
 
-def _issue_csrf(
+# 迁移前两类令牌分别存放在这两个会话字典里，签发时一并清除。
+_LEGACY_SESSION_KEYS = {
+    CUSTOMER_CSRF_FAMILY: "customer_csrf",
+    CUSTOMER_MERGE_CSRF_FAMILY: "customer_merge_csrf",
+}
+
+
+async def _issue_csrf(
     request: Request,
     *,
-    namespace: str,
+    family: str,
     object_id: int,
 ) -> str:
-    """为客户或合并建议签发一次性表单令牌。"""
-    token = secrets.token_urlsafe(24)
-    tokens = dict(request.session.get(namespace, {}))
-    tokens[str(object_id)] = token
-    request.session[namespace] = tokens
-    return token
+    """为客户或合并建议签发服务端一次性表单令牌。"""
+    drop_legacy_session_key(request, _LEGACY_SESSION_KEYS[family])
+    return await issue_form_csrf(
+        request,
+        family=family,
+        entity_id=object_id,
+    )
 
 
-def _consume_csrf(
+async def _consume_csrf(
     request: Request,
     *,
-    namespace: str,
+    family: str,
     object_id: int,
     token: str,
 ) -> None:
-    """校验并立即消耗客户管理一次性令牌。"""
-    tokens = dict(request.session.get(namespace, {}))
-    expected = tokens.pop(str(object_id), None)
-    request.session[namespace] = tokens
-    if not isinstance(expected, str) or not secrets.compare_digest(
-        expected,
-        token,
-    ):
-        raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
+    """校验并原子消费客户管理令牌；令牌绑定该对象，跨对象重放必然失败。"""
+    await consume_form_csrf(
+        request,
+        family=family,
+        entity_id=object_id,
+        token=token,
+    )
 
 
 def _raise_page_error(error: Exception) -> None:
@@ -276,9 +288,9 @@ async def customer_merge_detail(
         name="customers/merge.html",
         context={
             **detail,
-            "csrf_token": _issue_csrf(
+            "csrf_token": await _issue_csrf(
                 request,
-                namespace="customer_merge_csrf",
+                family=CUSTOMER_MERGE_CSRF_FAMILY,
                 object_id=suggestion_id,
             ),
             "page_title": "复核客户合并",
@@ -298,9 +310,9 @@ async def review_customer_merge(
     administrator = await _current_admin(request)
     if decision not in {"confirm", "reject"}:
         raise HTTPException(status_code=404, detail="不支持的合并操作")
-    _consume_csrf(
+    await _consume_csrf(
         request,
-        namespace="customer_merge_csrf",
+        family=CUSTOMER_MERGE_CSRF_FAMILY,
         object_id=suggestion_id,
         token=csrf_token,
     )
@@ -357,9 +369,9 @@ async def customer_detail(
             "merge_query": merge_query or "",
             "merge_targets": merge_targets,
             "legacy_full": tab is None,
-            "csrf_token": _issue_csrf(
+            "csrf_token": await _issue_csrf(
                 request,
-                namespace="customer_csrf",
+                family=CUSTOMER_CSRF_FAMILY,
                 object_id=customer_id,
             ),
             "page_title": detail["customer"].display_name,
@@ -375,9 +387,9 @@ async def _customer_form_context(
 ) -> tuple[Employee, CustomerAdminServicePort]:
     """统一复核管理员并消耗客户详情页令牌。"""
     administrator = await _current_admin(request)
-    _consume_csrf(
+    await _consume_csrf(
         request,
-        namespace="customer_csrf",
+        family=CUSTOMER_CSRF_FAMILY,
         object_id=customer_id,
         token=csrf_token,
     )

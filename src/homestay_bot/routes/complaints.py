@@ -1,4 +1,3 @@
-import secrets
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
@@ -6,6 +5,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.repositories.complaints import ComplaintVersionConflict
+from homestay_bot.routes.admin_form_csrf import (
+    COMPLAINT_CSRF_FAMILY,
+    consume_form_csrf,
+    drop_legacy_session_key,
+    issue_form_csrf,
+)
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.web import templates
 
@@ -36,22 +41,24 @@ def _service(request: Request) -> ComplaintAdminServicePort:
     return cast(ComplaintAdminServicePort, service)
 
 
-def _csrf(request: Request, review_id: int) -> str:
-    """为单条客诉生成一次性表单令牌。"""
-    token = secrets.token_urlsafe(24)
-    values = dict(request.session.get("complaint_csrf", {}))
-    values[str(review_id)] = token
-    request.session["complaint_csrf"] = values
-    return token
+async def _csrf(request: Request, review_id: int) -> str:
+    """为单条客诉签发服务端一次性表单令牌。"""
+    drop_legacy_session_key(request, "complaint_csrf")
+    return await issue_form_csrf(
+        request,
+        family=COMPLAINT_CSRF_FAMILY,
+        entity_id=review_id,
+    )
 
 
-def _consume_csrf(request: Request, review_id: int, token: str) -> None:
-    """校验并消耗客诉表单令牌。"""
-    values = dict(request.session.get("complaint_csrf", {}))
-    expected = values.pop(str(review_id), None)
-    request.session["complaint_csrf"] = values
-    if not isinstance(expected, str) or not secrets.compare_digest(expected, token):
-        raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
+async def _consume_csrf(request: Request, review_id: int, token: str) -> None:
+    """校验并原子消费客诉令牌；令牌绑定该复核单，跨单重放必然失败。"""
+    await consume_form_csrf(
+        request,
+        family=COMPLAINT_CSRF_FAMILY,
+        entity_id=review_id,
+        token=token,
+    )
 
 
 async def _require_admin(request: Request) -> int:
@@ -108,7 +115,7 @@ async def complaint_detail(
         context={
             **detail,
             "employee_id": employee_id,
-            "csrf_token": _csrf(request, review_id),
+            "csrf_token": await _csrf(request, review_id),
             "page_title": f"客诉复核 #{review_id}",
             "active_nav": "complaints",
         },
@@ -125,7 +132,7 @@ async def _action(
 ) -> RedirectResponse:
     """统一处理客诉编辑页的保存、发送、退回和关闭动作。"""
     employee_id = await _require_admin(request)
-    _consume_csrf(request, review_id, csrf_token)
+    await _consume_csrf(request, review_id, csrf_token)
     try:
         service = _service(request)
         if action == "save":

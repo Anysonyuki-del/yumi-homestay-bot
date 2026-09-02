@@ -446,3 +446,19 @@ async def test_credentials_are_versioned_encrypted_and_safely_audited() -> None:
         assert "入住后" not in str([item.details for item in audits])
 
     await engine.dispose()
+
+
+def test_property_csrf_rejects_cross_entity_replay(tmp_path) -> None:
+    """房源详情签发的令牌不得用于修改另一个房源。"""
+    client, properties = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+    csrf_token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/properties/202/profile",
+        data={"title": "另一处房源", "csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert properties.profile_calls == []

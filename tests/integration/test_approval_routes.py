@@ -189,3 +189,26 @@ def test_non_pending_approval_cannot_render_real_order_form() -> None:
     assert detail.status_code == 200
     assert 'action="/employee/approvals/1/confirm"' not in detail.text
     assert "当前审批需要人工处理" in detail.text
+
+
+def test_approval_nonce_rejects_cross_entity_replay() -> None:
+    """审批详情签发的确认令牌不得用于确认另一张审批单。
+
+    下单会创建真实订单，令牌与审批单的绑定关系必须由测试锁定。
+    """
+    client, approvals = build_client(EmployeeRole.ADMIN)
+    login(client)
+    detail = client.get("/employee/approvals/1")
+    nonce = re.search(
+        r'name="confirmation_nonce" value="([^"]+)"',
+        detail.text,
+    ).group(1)
+
+    response = client.post(
+        "/employee/approvals/2/confirm",
+        data=valid_form(nonce),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert approvals.confirm_calls == 0

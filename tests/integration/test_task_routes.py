@@ -1,11 +1,14 @@
+import json
 import logging
 import re
+from base64 import b64decode, b64encode
 from datetime import date
 from types import SimpleNamespace
 
 from admin_auth_helpers import configure_admin_auth, login_admin
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from itsdangerous import TimestampSigner
 from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.domain.enums import (
@@ -559,3 +562,99 @@ def test_task_center_opens_advanced_filters_when_a_filter_is_applied() -> None:
     disclosure = re.search(r"<details class=\"filter-disclosure\"([^>]*)>", response.text)
     assert disclosure is not None
     assert "open" in disclosure.group(1)
+
+
+SESSION_SECRET = "task-test-secret"
+
+
+def _read_session(client: TestClient) -> dict:
+    """解出当前签名会话内容，用于断言 Cookie 不再承载令牌。"""
+    raw = client.cookies.get("session")
+    assert raw is not None
+    return json.loads(b64decode(TimestampSigner(SESSION_SECRET).unsign(raw)))
+
+
+def _session_from_response(response) -> dict:
+    """从响应的 Set-Cookie 解出服务端写回的会话。
+
+    手工写入的会话 Cookie 与服务端回写的会话 Cookie 域不同，会在 jar 中并存；
+    直接读响应可以绕开重名冲突。
+    """
+    raw = response.cookies.get("session")
+    assert raw is not None
+    return json.loads(b64decode(TimestampSigner(SESSION_SECRET).unsign(raw)))
+
+
+def _write_session(client: TestClient, data: dict) -> None:
+    """回写签名会话，用于构造迁移前遗留的臃肿会话。"""
+    signed = TimestampSigner(SESSION_SECRET).sign(
+        b64encode(json.dumps(data).encode())
+    )
+    # 直接 set 会与服务端下发的同名 Cookie 并存，而带 domain 重设又过不了
+    # http.cookiejar 对无点域名的匹配；清空后重设是唯一稳定的写法。
+    client.cookies.clear()
+    client.cookies.set("session", signed.decode())
+
+
+def test_task_csrf_rejects_cross_entity_replay() -> None:
+    """任务详情签发的令牌不得用于提交另一个任务。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    csrf_token = detail_csrf(client, task_id=1)
+
+    response = client.post(
+        "/employee/tasks/2/transition",
+        data={"target": "in_progress", "csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert tasks.transition_calls == []
+
+
+def test_task_detail_survives_repeated_reload() -> None:
+    """同一任务反复打开不得因作用域容量在 GET 阶段 429。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    statuses = [
+        client.get("/employee/tasks/1").status_code for _ in range(12)
+    ]
+
+    assert statuses == [200] * 12
+    # 最后一次签发的令牌必须仍然可用，淘汰只应作用于更旧的令牌。
+    latest = detail_csrf(client, task_id=1)
+    accepted = client.post(
+        "/employee/tasks/1/transition",
+        data={"target": "in_progress", "csrf_token": latest},
+        follow_redirects=False,
+    )
+    assert accepted.status_code == 303
+
+
+def test_browsing_many_tasks_does_not_grow_session_cookie() -> None:
+    """连续浏览大量任务详情后，签名会话不得随之膨胀。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    for task_id in range(1, 61):
+        assert client.get(f"/employee/tasks/{task_id}").status_code == 200
+
+    session = _read_session(client)
+    assert "task_csrf" not in session
+    # 浏览器丢弃整条 Cookie 的阈值是 4096 字节；令牌不再入会话后应远低于该值。
+    assert len(client.cookies.get("session")) < 600
+
+
+def test_task_detail_clears_legacy_session_csrf_key() -> None:
+    """迁移前遗留的会话令牌字典必须在首次访问详情页后消失。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+    session = _read_session(client)
+    session["task_csrf"] = {str(index): f"legacy-{index}" for index in range(40)}
+    _write_session(client, session)
+
+    response = client.get("/employee/tasks/1")
+
+    assert response.status_code == 200
+    assert "task_csrf" not in _session_from_response(response)

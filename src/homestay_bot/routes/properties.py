@@ -7,6 +7,12 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import Employee
+from homestay_bot.routes.admin_form_csrf import (
+    PROPERTY_CSRF_FAMILY,
+    consume_form_csrf,
+    drop_legacy_session_key,
+    issue_form_csrf,
+)
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.property_admin_service import PropertyFields
@@ -78,25 +84,24 @@ async def _current_admin(request: Request) -> Employee:
     )
 
 
-def _issue_csrf(request: Request, property_id: int) -> str:
-    """为单个房源写操作签发一次性 CSRF 令牌。"""
-    token = secrets.token_urlsafe(24)
-    tokens = dict(request.session.get("property_csrf", {}))
-    tokens[str(property_id)] = token
-    request.session["property_csrf"] = tokens
-    return token
+async def _issue_csrf(request: Request, property_id: int) -> str:
+    """为单个房源写操作签发服务端一次性令牌。"""
+    drop_legacy_session_key(request, "property_csrf")
+    return await issue_form_csrf(
+        request,
+        family=PROPERTY_CSRF_FAMILY,
+        entity_id=property_id,
+    )
 
 
-def _consume_csrf(request: Request, property_id: int, token: str) -> None:
-    """校验并立即消耗房源管理一次性令牌。"""
-    tokens = dict(request.session.get("property_csrf", {}))
-    expected = tokens.pop(str(property_id), None)
-    request.session["property_csrf"] = tokens
-    if not isinstance(expected, str) or not secrets.compare_digest(
-        expected,
-        token,
-    ):
-        raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
+async def _consume_csrf(request: Request, property_id: int, token: str) -> None:
+    """校验并原子消费房源令牌；令牌绑定该房源，跨房源重放必然失败。"""
+    await consume_form_csrf(
+        request,
+        family=PROPERTY_CSRF_FAMILY,
+        entity_id=property_id,
+        token=token,
+    )
 
 
 def _raise_page_error(error: Exception) -> None:
@@ -164,7 +169,7 @@ async def property_detail(
         context={
             **detail,
             "tab": tab,
-            "csrf_token": _issue_csrf(request, property_id),
+            "csrf_token": await _issue_csrf(request, property_id),
             "page_title": getattr(
                 detail["property"],
                 "title",
@@ -190,7 +195,7 @@ async def update_property_profile(
 ) -> RedirectResponse:
     """校验一次性令牌后更新房源公开运营资料。"""
     administrator = await _current_admin(request)
-    _consume_csrf(request, property_id, csrf_token)
+    await _consume_csrf(request, property_id, csrf_token)
     try:
         await _get_service(request).update_profile(
             property_id,
@@ -224,7 +229,7 @@ async def replace_property_credentials(
 ) -> RedirectResponse:
     """保存用途隔离加密的密码、指南和私有二维码。"""
     administrator = await _current_admin(request)
-    _consume_csrf(request, property_id, csrf_token)
+    await _consume_csrf(request, property_id, csrf_token)
     try:
         await _get_service(request).replace_credentials(
             property_id,

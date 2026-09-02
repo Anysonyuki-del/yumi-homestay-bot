@@ -23,6 +23,12 @@ from homestay_bot.domain.enums import (
     EmployeeRole,
 )
 from homestay_bot.domain.models import BusinessTask, Employee
+from homestay_bot.routes.admin_form_csrf import (
+    TASK_CSRF_FAMILY,
+    consume_form_csrf,
+    drop_legacy_session_key,
+    issue_form_csrf,
+)
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.task_page_service import TaskFilters
@@ -119,25 +125,24 @@ async def _current_employee(request: Request) -> Employee:
     )
 
 
-def _issue_csrf(request: Request, task_id: int) -> str:
-    """为单个任务写操作签发一次性令牌。"""
-    token = secrets.token_urlsafe(24)
-    tokens = dict(request.session.get("task_csrf", {}))
-    tokens[str(task_id)] = token
-    request.session["task_csrf"] = tokens
-    return token
+async def _issue_csrf(request: Request, task_id: int) -> str:
+    """为单个任务写操作签发服务端一次性令牌。"""
+    drop_legacy_session_key(request, "task_csrf")
+    return await issue_form_csrf(
+        request,
+        family=TASK_CSRF_FAMILY,
+        entity_id=task_id,
+    )
 
 
-def _consume_csrf(request: Request, task_id: int, token: str) -> None:
-    """校验并立即消耗任务一次性 CSRF 令牌。"""
-    tokens = dict(request.session.get("task_csrf", {}))
-    expected = tokens.pop(str(task_id), None)
-    request.session["task_csrf"] = tokens
-    if not isinstance(expected, str) or not secrets.compare_digest(
-        expected,
-        token,
-    ):
-        raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
+async def _consume_csrf(request: Request, task_id: int, token: str) -> None:
+    """校验并原子消费任务一次性令牌；令牌绑定该任务，跨任务重放必然失败。"""
+    await consume_form_csrf(
+        request,
+        family=TASK_CSRF_FAMILY,
+        entity_id=task_id,
+        token=token,
+    )
 
 
 def _raise_page_error(error: Exception) -> None:
@@ -282,7 +287,7 @@ async def task_detail(request: Request, task_id: int) -> Response:
             **detail,
             **options,
             "is_admin": employee.role is EmployeeRole.ADMIN,
-            "csrf_token": _issue_csrf(request, task_id),
+            "csrf_token": await _issue_csrf(request, task_id),
             "page_title": f"任务 #{task_id}",
             "active_nav": "tasks",
         },
@@ -298,7 +303,7 @@ async def transition_task(
 ) -> RedirectResponse:
     """校验一次性令牌并推进当前员工可操作的任务。"""
     employee = await _current_employee(request)
-    _consume_csrf(request, task_id, csrf_token)
+    await _consume_csrf(request, task_id, csrf_token)
     try:
         await _get_service(request).transition(task_id, employee, target)
     except Exception as error:
@@ -324,7 +329,7 @@ async def assign_task(
 ) -> RedirectResponse:
     """只允许管理员补齐执行信息并分派任务。"""
     employee = await _current_employee(request)
-    _consume_csrf(request, task_id, csrf_token)
+    await _consume_csrf(request, task_id, csrf_token)
     try:
         await _get_service(request).assign(
             task_id,
@@ -352,7 +357,7 @@ async def update_task_checklist(
 ) -> RedirectResponse:
     """校验执行权限后保存三项房间检查结果。"""
     employee = await _current_employee(request)
-    _consume_csrf(request, task_id, csrf_token)
+    await _consume_csrf(request, task_id, csrf_token)
     try:
         await _get_service(request).update_checklist(
             task_id,
@@ -380,7 +385,7 @@ async def upload_task_photo(
 ) -> RedirectResponse:
     """校验执行权限后把现场照片存入私有目录。"""
     employee = await _current_employee(request)
-    _consume_csrf(request, task_id, csrf_token)
+    await _consume_csrf(request, task_id, csrf_token)
     try:
         await _get_service(request).upload_photo(
             task_id,
@@ -406,7 +411,7 @@ async def mark_room_ready(
 ) -> RedirectResponse:
     """允许任务执行员工在证据完整后标记房间可入住。"""
     employee = await _current_employee(request)
-    _consume_csrf(request, task_id, csrf_token)
+    await _consume_csrf(request, task_id, csrf_token)
     try:
         await _get_service(request).mark_ready(task_id, employee)
     except Exception as error:
@@ -425,7 +430,7 @@ async def revoke_room_ready(
 ) -> RedirectResponse:
     """允许管理员把任务关联房间撤回待检查。"""
     employee = await _current_employee(request)
-    _consume_csrf(request, task_id, csrf_token)
+    await _consume_csrf(request, task_id, csrf_token)
     try:
         await _get_service(request).revoke_ready(task_id, employee)
     except Exception as error:
