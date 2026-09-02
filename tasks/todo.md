@@ -49,24 +49,24 @@
 
 ## 任务清单
 
-- [ ] 红测：跨实体重放被拒（五家族各一条）
-- [ ] 红测：同一详情页连开 9 次不 429 且第 9 次正常渲染
-- [ ] 红测：连开 60 个任务详情页后会话 Cookie 长度不增长
-- [ ] 红测：遗留会话键在首次签发后被清除
-- [ ] 红测：仓储级淘汰双态（`evict_oldest_in_scope` 开关）
-- [ ] 红测：管理员作用域占满后登录令牌仍可签发（R1）
-- [ ] 实现：`services/admin_csrf.py` 与 `repositories/admin_csrf.py` 增淘汰模式、TTL 覆盖与登录预留额度
-- [ ] 实现：`application.py::SessionAdminCsrfService.issue` 透传新参数
-- [ ] 实现：新增 `routes/admin_form_csrf.py` 共享助手
-- [ ] 实现：`tests/admin_auth_helpers.py::MemoryAdminCsrfService` 对齐新签名与淘汰语义
-- [ ] 迁移 `tasks.py`（1 签发 6 消费）
-- [ ] 迁移 `properties.py`（1 签发 2 消费）
-- [ ] 迁移 `complaints.py`（1 签发 1 消费助手，覆盖 4 个 POST）
-- [ ] 迁移 `customers.py`（2 签发 2 消费助手，覆盖 7 个 POST）
-- [ ] 迁移 `approvals.py`（保留 per-entity 绑定与 `confirmation_nonce` 键名）
-- [ ] 复跑既有 8 条容量测试，确认登录预留额度未破坏 `max_active=100` 小容量用例
-- [ ] 差异自审：逐文件复核签发/消费配对，确认无 POST 遗漏令牌校验
-- [ ] 本地全量门禁
+- [x] 红测：跨实体重放被拒（五家族各一条）
+- [x] 红测：同一详情页连开 9 次不 429 且第 9 次正常渲染
+- [x] 红测：连开 60 个任务详情页后会话 Cookie 长度不增长
+- [x] 红测：遗留会话键在首次签发后被清除
+- [x] 红测：仓储级淘汰双态（`evict_oldest_in_scope` 开关）
+- [x] 红测：管理员作用域占满后登录令牌仍可签发（R1）
+- [x] 实现：`services/admin_csrf.py` 与 `repositories/admin_csrf.py` 增淘汰模式、TTL 覆盖与登录预留额度
+- [x] 实现：`application.py::SessionAdminCsrfService.issue` 透传新参数
+- [x] 实现：新增 `routes/admin_form_csrf.py` 共享助手
+- [x] 实现：`tests/admin_auth_helpers.py::MemoryAdminCsrfService` 对齐新签名与淘汰语义
+- [x] 迁移 `tasks.py`（1 签发 6 消费）
+- [x] 迁移 `properties.py`（1 签发 2 消费）
+- [x] 迁移 `complaints.py`（1 签发 1 消费助手，覆盖 4 个 POST）
+- [x] 迁移 `customers.py`（2 签发 2 消费助手，覆盖 7 个 POST）
+- [x] 迁移 `approvals.py`（保留 per-entity 绑定与 `confirmation_nonce` 键名）
+- [x] 复跑既有 8 条容量测试，确认登录预留额度未破坏 `max_active=100` 小容量用例
+- [x] 差异自审：逐文件复核签发/消费配对，确认无 POST 遗漏令牌校验
+- [x] 本地全量门禁
 
 ## 验收门禁
 
@@ -75,3 +75,24 @@
 - 生产：登录后逐家族实测一次写操作（任务流转、房源资料、客诉保存、客户标签）；连开 60 个任务详情页后读取实际 Cookie 长度；桌面与 375px 各一遍
 - 审批确认涉及真实订单，生产验收需用户单独授权，否则只验收到令牌签发与表单渲染为止
 - 回滚：无 schema 变更，回退镜像即可；已签发 nonce 随 TTL 自然过期
+
+## 实施 Review
+
+- 五个家族共 20 个 POST 端点（tasks 6、properties 2、complaints 4、customers 7、approvals 1）经 AST 逐个核对，全部仍消费一次性令牌，无遗漏；与 Spec 的计数一致。
+- 会话不再承载任何业务表单令牌：六个旧键的写入点在 `src/` 中已归零，仅 `knowledge.py` 保留其自有的有界列表（八项，本次未改其存储方式）。
+- 实测迁移效果：登录后会话 Cookie 227 字节，连续浏览 60 个任务详情页后仍为 227 字节，完全不随浏览增长；迁移前同一操作约 4000 字节并越过浏览器 4096 上限。
+- 跨实体绑定首次获得测试锁定，五个家族各一条：任务、房源、客诉、客户详情，以及客户详情令牌不可用于合并确认。审批的跨单重放单独锁定，因为它会创建真实订单。
+- 门禁：全量 `1323 passed, 15 skipped` 与 browser `7 passed`（基线 1309 + 7，本次净增 14 条）；Ruff 通过，mypy 118 个源文件通过，`pip check` 无破损，`compileall` 与 `git diff --check` 通过。
+
+## 超出原定边界的一处改动
+
+第二段曾写明不动 `knowledge.py` 的现有行为。实施中把测试桩 `MemoryAdminCsrfService` 补齐为带作用域容量后，`test_knowledge_csrf_token_collection_is_bounded` 失败，随后以真实 `AdminCsrfService` 复现确认这是线上缺陷而非测试假象：
+
+`_MAX_CSRF_TOKENS = 8` 与 `max_active_per_scope = 8` 构成 off-by-one 死锁——`knowledge.py::_issue_csrf` 先签发再裁剪，因此必须签发第九个才会触发裁剪，而第九个在作用域检查处即被拒绝。裁剪分支在生产中从未执行，知识页第九次打开返回 429。旧测试桩没有任何容量约束，长期掩盖了它。
+
+修复为在该处传入 `evict_oldest_in_scope=True`（一个关键字参数），既有测试断言未改动即通过。同时把 `AdminCsrfServicePort` 的导入从 `employee_auth` 改为新的 `admin_form_csrf`，否则 mypy 因旧 Protocol 缺少新参数而报错。
+
+## 待用户决定
+
+- 是否保留上述 `knowledge.py` 修复。它超出第二段边界，但修的正是本次迁移要消除的失败模式，且证据已复现。
+- `purge_expired` 仍是零调用死接口、retention 日清理仍不含 nonce 表，按原计划本次未接入。
