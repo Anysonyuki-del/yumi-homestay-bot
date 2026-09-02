@@ -20,6 +20,7 @@ class AdminCsrfRepository(Protocol):
         max_active: int,
         max_active_per_scope: int,
         max_active_anonymous: int,
+        evict_oldest_in_scope: bool,
     ) -> bool:
         """原子预占数据库配额并保存 nonce 摘要。"""
 
@@ -68,20 +69,33 @@ class AdminCsrfService:
         self._max_active_anonymous = min(max_active_anonymous, max_active)
         self._purge_limit = purge_limit
 
-    async def issue(self, purpose: str, *, admin_id: int | None) -> str:
-        """返回浏览器所需随机明文，同时只保存摘要。"""
+    async def issue(
+        self,
+        purpose: str,
+        *,
+        admin_id: int | None,
+        evict_oldest_in_scope: bool = False,
+        ttl: timedelta | None = None,
+    ) -> str:
+        """返回浏览器所需随机明文，同时只保存摘要。
+
+        `evict_oldest_in_scope` 只供后台表单使用：作用域满时淘汰最旧 nonce 而不是
+        拒绝，避免顺序浏览详情页在 GET 阶段就 429。登录等未认证用途必须保持默认的
+        拒绝语义，那是它抵抗滥用的手段。`ttl` 逐次覆盖默认有效期，不改构造默认值。
+        """
         token = secrets.token_urlsafe(32)
         now = self._clock()
         created = await self._repository.reserve_and_create(
             token_hash=_hash_token(token),
             purpose=purpose,
             admin_id=admin_id,
-            expires_at=now + self._ttl,
+            expires_at=now + (ttl if ttl is not None else self._ttl),
             now=now,
             purge_limit=self._purge_limit,
             max_active=self._max_active,
             max_active_per_scope=self._max_active_per_scope,
             max_active_anonymous=self._max_active_anonymous,
+            evict_oldest_in_scope=evict_oldest_in_scope,
         )
         if not created:
             raise AdminCsrfCapacityError("认证表单容量已满")

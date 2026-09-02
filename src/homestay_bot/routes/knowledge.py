@@ -12,10 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from homestay_bot.domain.enums import EmployeeRole, KnowledgeCandidateStatus
 from homestay_bot.domain.models import AuditLog, KnowledgeCandidate, KnowledgeEntry
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
-from homestay_bot.routes.employee_auth import (
-    AdminCsrfServicePort,
-    require_employee_session,
-)
+from homestay_bot.routes.admin_form_csrf import AdminCsrfServicePort
+from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 from homestay_bot.web import templates
@@ -332,6 +330,10 @@ async def _issue_csrf(request: Request) -> str:
         token = await service.issue(
             _KNOWLEDGE_CSRF_PURPOSE,
             admin_id=admin_id,
+            # 会话集合上限与服务端作用域上限同为 8，而裁剪发生在签发之后：不开淘汰
+            # 时第九次打开知识页会先被作用域拒绝，页面直接 429，下面的裁剪永远执行
+            # 不到。由服务端淘汰最旧 nonce 才能让这段有界窗口真正生效。
+            evict_oldest_in_scope=True,
         )
     except AdminCsrfCapacityError as error:
         raise HTTPException(status_code=429, detail="表单请求过于频繁") from error

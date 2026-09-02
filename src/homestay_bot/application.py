@@ -1120,13 +1120,25 @@ class SessionAdminCsrfService:
         self._factory = factory
         self._issue_lock = asyncio.Lock()
 
-    async def issue(self, purpose: str, *, admin_id: int | None) -> str:
+    async def issue(
+        self,
+        purpose: str,
+        *,
+        admin_id: int | None,
+        evict_oldest_in_scope: bool = False,
+        ttl: timedelta | None = None,
+    ) -> str:
         """持久化 nonce 摘要并提交后返回随机明文。"""
-        # 同一应用实例串行执行清理、计数和插入，保证活动容量硬上限。
+        # 同一应用实例串行执行清理、淘汰、计数和插入，保证活动容量硬上限。
         async with self._issue_lock, self._factory() as session:
             token = await AdminCsrfService(
                 SQLAlchemyAdminCsrfRepository(session)
-            ).issue(purpose, admin_id=admin_id)
+            ).issue(
+                purpose,
+                admin_id=admin_id,
+                evict_oldest_in_scope=evict_oldest_in_scope,
+                ttl=ttl,
+            )
             await session.commit()
             return token
 

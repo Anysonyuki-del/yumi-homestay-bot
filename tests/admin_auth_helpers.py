@@ -1,5 +1,5 @@
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -8,21 +8,47 @@ from fastapi.testclient import TestClient
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.routes.employee_auth import AdminLoginRateLimiter
 from homestay_bot.services.admin_auth_service import AdminSession
+from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 
 
 class MemoryAdminCsrfService:
     """以内存原子映射模拟服务端一次性认证 nonce。"""
 
-    def __init__(self) -> None:
-        """初始化 nonce 序号和未消费集合。"""
+    def __init__(self, *, max_active_per_scope: int = 8) -> None:
+        """初始化 nonce 序号、未消费集合和作用域容量。"""
         self.sequence = 0
         self.pending: dict[str, tuple[str, int | None]] = {}
+        self.issued_ttl: dict[str, timedelta | None] = {}
+        self.max_active_per_scope = max_active_per_scope
 
-    async def issue(self, purpose: str, *, admin_id: int | None) -> str:
-        """签发测试可识别且用途绑定的唯一 nonce。"""
+    async def issue(
+        self,
+        purpose: str,
+        *,
+        admin_id: int | None,
+        evict_oldest_in_scope: bool = False,
+        ttl: timedelta | None = None,
+    ) -> str:
+        """签发测试可识别且用途绑定的唯一 nonce。
+
+        复刻生产语义：作用域满时，开启淘汰则删最旧、否则拒绝。字典保持插入顺序，
+        因此作用域列表天然是从旧到新。
+        """
+        scope = [
+            token
+            for token, stored in self.pending.items()
+            if stored == (purpose, admin_id)
+        ]
+        if len(scope) >= self.max_active_per_scope:
+            if not evict_oldest_in_scope:
+                raise AdminCsrfCapacityError("测试作用域容量已满")
+            for stale in scope[: len(scope) - self.max_active_per_scope + 1]:
+                del self.pending[stale]
+                self.issued_ttl.pop(stale, None)
         self.sequence += 1
         token = f"csrf-{self.sequence}-{purpose}"
         self.pending[token] = (purpose, admin_id)
+        self.issued_ttl[token] = ttl
         return token
 
     async def consume(

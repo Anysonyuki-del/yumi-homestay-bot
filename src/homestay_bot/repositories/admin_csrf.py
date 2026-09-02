@@ -28,6 +28,7 @@ class SQLAlchemyAdminCsrfRepository:
         max_active: int,
         max_active_per_scope: int,
         max_active_anonymous: int,
+        evict_oldest_in_scope: bool = False,
     ) -> bool:
         """同一事务清理、预占数据库配额并写入 nonce。"""
         await self._ensure_quota()
@@ -37,7 +38,12 @@ class SQLAlchemyAdminCsrfRepository:
             update(AdminCsrfQuota)
             .where(
                 AdminCsrfQuota.id == 1,
-                AdminCsrfQuota.active_count < max_active,
+                AdminCsrfQuota.active_count
+                < _effective_max_active(
+                    admin_id=admin_id,
+                    max_active=max_active,
+                    max_active_anonymous=max_active_anonymous,
+                ),
             )
             .values(active_count=AdminCsrfQuota.active_count + 1)
             .returning(AdminCsrfQuota.active_count)
@@ -60,16 +66,30 @@ class SQLAlchemyAdminCsrfRepository:
             if int(anonymous_count or 0) >= max_active_anonymous:
                 await self._decrement_quota(1)
                 return False
-        scope_count = await self._session.scalar(
-            select(func.count(AdminCsrfNonce.id)).where(
-                AdminCsrfNonce.purpose == purpose,
-                admin_condition,
-                AdminCsrfNonce.expires_at > now,
+        scope_count = int(
+            await self._session.scalar(
+                select(func.count(AdminCsrfNonce.id)).where(
+                    AdminCsrfNonce.purpose == purpose,
+                    admin_condition,
+                    AdminCsrfNonce.expires_at > now,
+                )
             )
+            or 0
         )
-        if int(scope_count or 0) >= max_active_per_scope:
-            await self._decrement_quota(1)
-            return False
+        if scope_count >= max_active_per_scope:
+            if not evict_oldest_in_scope:
+                await self._decrement_quota(1)
+                return False
+            # 后台表单作用域已满时淘汰最旧 nonce：旧实现按实体覆盖令牌，本就只保留
+            # 最后一次签发，因此淘汰不比旧行为更宽松，却能让顺序浏览不在 GET 阶段
+            # 429。被淘汰的旧表单再提交仍是 409。
+            evicted = await self._evict_oldest_in_scope(
+                purpose=purpose,
+                admin_condition=admin_condition,
+                now=now,
+                amount=scope_count - max_active_per_scope + 1,
+            )
+            await self._decrement_quota(evicted)
         self._session.add(
             AdminCsrfNonce(
                 token_hash=token_hash,
@@ -119,6 +139,36 @@ class SQLAlchemyAdminCsrfRepository:
         await self._decrement_quota(deleted)
         return deleted
 
+    async def _evict_oldest_in_scope(
+        self,
+        *,
+        purpose: str,
+        admin_condition: Any,
+        now: datetime,
+        amount: int,
+    ) -> int:
+        """删除作用域内最旧的若干有效 nonce 并返回精确删除数量。"""
+        if amount <= 0:
+            return 0
+        oldest_ids = (
+            select(AdminCsrfNonce.id)
+            .where(
+                AdminCsrfNonce.purpose == purpose,
+                admin_condition,
+                AdminCsrfNonce.expires_at > now,
+            )
+            # 同批签发的有效期相同，主键兜底保证淘汰顺序确定。
+            .order_by(AdminCsrfNonce.expires_at, AdminCsrfNonce.id)
+            .limit(amount)
+        )
+        result = await self._session.execute(
+            delete(AdminCsrfNonce)
+            .where(AdminCsrfNonce.id.in_(oldest_ids))
+            .returning(AdminCsrfNonce.id)
+            .execution_options(synchronize_session=False)
+        )
+        return len(result.scalars().all())
+
     async def _delete_expired(self, *, now: datetime, limit: int) -> int:
         """删除过期 nonce 并返回精确数量，不单独修改配额。"""
         expired_ids = (
@@ -166,3 +216,21 @@ class SQLAlchemyAdminCsrfRepository:
                 )
             )
         )
+
+
+def _effective_max_active(
+    *,
+    admin_id: int | None,
+    max_active: int,
+    max_active_anonymous: int,
+) -> int:
+    """为未认证登录预留额度后的全局活动上限。
+
+    全局配额检查先于匿名子池检查，因此 `max_active_anonymous` 只给匿名设上限、
+    并不为它预留额度。管理员表单占满全局配额后，登录令牌会签发失败、登录页返回
+    429，把所有人锁在门外。这里给管理员作用域单独压低天花板；预留量不超过总量的
+    五分之一，避免小容量配置被压成零。
+    """
+    if admin_id is None:
+        return max_active
+    return max_active - min(max_active_anonymous, max_active // 5)
