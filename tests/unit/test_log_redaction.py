@@ -1,4 +1,5 @@
 import logging
+import sys
 from io import StringIO
 
 from uvicorn.logging import AccessFormatter
@@ -133,3 +134,85 @@ def test_log_filter_redacts_mapping_message_and_extra_fields() -> None:
     assert record.msg["nested"]["phone"] == "138****8000"
     assert record.secret == "[REDACTED]"
     assert record.guest_phone == "139****9000"
+
+
+def _record_with_exception(message: str) -> logging.LogRecord:
+    """构造一条携带真实异常信息的日志记录。"""
+    try:
+        raise RuntimeError(message)
+    except RuntimeError:
+        exc_info = sys.exc_info()
+    return logging.LogRecord(
+        "homestay_bot.test",
+        logging.ERROR,
+        __file__,
+        1,
+        "后台任务失败",
+        (),
+        exc_info,
+    )
+
+
+def test_log_filter_redacts_secrets_inside_exception_traceback() -> None:
+    """异常栈中的密钥、令牌和回调签名不得随 traceback 输出。"""
+    record = _record_with_exception(
+        "Hostex-Access-Token: secret-token 调用 "
+        "https://example.com/cb?code=secret-code&state=secret-state 失败 "
+        "deepseek_api_key=sk-secret-value"
+    )
+
+    assert SensitiveDataFilter().filter(record) is True
+    rendered = logging.Formatter("%(message)s").format(record)
+
+    assert "secret-token" not in rendered
+    assert "secret-code" not in rendered
+    assert "secret-state" not in rendered
+    assert "sk-secret-value" not in rendered
+
+
+def test_log_filter_keeps_traceback_structure_after_redaction() -> None:
+    """脱敏不得破坏 traceback 的多行结构和异常类型，否则失去定位价值。"""
+    record = _record_with_exception("token=secret-token 之后仍需保留定位信息")
+
+    assert SensitiveDataFilter().filter(record) is True
+    rendered = logging.Formatter("%(message)s").format(record)
+
+    assert "Traceback (most recent call last):" in rendered
+    assert "RuntimeError" in rendered
+    assert "_record_with_exception" in rendered
+    assert "之后仍需保留定位信息" in rendered
+    assert rendered.count("\n") >= 3
+
+
+def test_log_filter_redacts_already_rendered_exception_text() -> None:
+    """其它 formatter 预渲染过的 exc_text 也必须经过脱敏。"""
+    record = logging.LogRecord(
+        "homestay_bot.test",
+        logging.ERROR,
+        __file__,
+        1,
+        "后台任务失败",
+        (),
+        None,
+    )
+    record.exc_text = 'RuntimeError: Authorization: Bearer secret-token'
+
+    assert SensitiveDataFilter().filter(record) is True
+    assert "secret-token" not in (record.exc_text or "")
+
+
+def test_log_filter_redacts_stack_info_text() -> None:
+    """stack_info=True 采集的调用栈同样不得泄露密钥。"""
+    record = logging.LogRecord(
+        "homestay_bot.test",
+        logging.ERROR,
+        __file__,
+        1,
+        "后台任务失败",
+        (),
+        None,
+        sinfo='Stack (most recent call last):\n  wecom_kf_secret=secret-value',
+    )
+
+    assert SensitiveDataFilter().filter(record) is True
+    assert "secret-value" not in (record.stack_info or "")

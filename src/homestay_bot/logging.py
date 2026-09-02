@@ -22,6 +22,23 @@ _SENSITIVE_QUERY_KEYS = {
     "token",
 }
 
+# 异常栈和调用栈是多行文本，按 URL 解析会压掉换行并丢失定位信息，因此改为
+# 只替换键值对。负向先行断言让过滤器可以重复作用于同一条记录而不叠加括号。
+_QUERY_PARAM_IN_TEXT_PATTERN = re.compile(
+    r"(?i)([?&])(" + "|".join(sorted(_SENSITIVE_QUERY_KEYS)) + r")="
+    r"(?!\[REDACTED\])[^&\s\"'>]*"
+)
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)([\w.-]*(?:token|secret|password|api[_-]?key|aes[_-]?key|authorization))"
+    r"(\s*[=:]\s*)"
+    r"(?!\[REDACTED\])"
+    # Bearer、Basic 等方案词与凭证之间有空格，必须一并消费才不会残留正文。
+    r"(?:(?:Bearer|Basic|Token)\s+)?"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;)\]}&]+)"
+)
+
+_EXCEPTION_FORMATTER = logging.Formatter()
+
 # LogRecord 的标准字段不属于业务 extra，避免把日志元数据误当成业务内容。
 _STANDARD_RECORD_FIELDS = frozenset(
     {
@@ -72,6 +89,12 @@ def _redact_value(key: str, value: Any) -> Any:
     if isinstance(value, str):
         return _TOKEN_IN_TEXT_PATTERN.sub(r"\1: [REDACTED]", value)
     return value
+
+
+def redact_exception_text(value: str) -> str:
+    """脱敏异常栈或调用栈文本，同时保留多行结构、帧信息和异常类型。"""
+    redacted = _QUERY_PARAM_IN_TEXT_PATTERN.sub(r"\1\2=[REDACTED]", value)
+    return _SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2[REDACTED]", redacted)
 
 
 def redact_log_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
@@ -142,6 +165,18 @@ class SensitiveDataFilter(logging.Filter):
             redacted = _redact_value(key, value)
             if redacted != value:
                 setattr(record, key, redacted)
+
+        # exc_text 与 stack_info 属于标准字段，上面的 extra 循环会跳过；没有这段
+        # 处理时 traceback 会绕过全部脱敏规则，也正因如此项目此前无法使用
+        # logger.exception。渲染后清空 exc_info，确保下游 formatter 只能读到
+        # 已脱敏文本，不会从原始异常重新渲染一份未脱敏的栈。
+        if record.exc_info is not None and not record.exc_text:
+            record.exc_text = _EXCEPTION_FORMATTER.formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = redact_exception_text(record.exc_text)
+            record.exc_info = None
+        if record.stack_info:
+            record.stack_info = redact_exception_text(record.stack_info)
         return True
 
 

@@ -1,4 +1,3 @@
-import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -356,16 +355,3 @@ class Worker[JobType: WorkerJob]:
         )
         if release_claim_lock is not None:
             await release_claim_lock()
-
-
-async def run_forever(
-    worker_factory: Callable[[], Awaitable[Worker[Any]]],
-    *,
-    poll_interval_seconds: float = 1.0,
-) -> None:
-    """持续创建短生命周期 worker 执行任务，空闲时有限等待。"""
-    while True:
-        worker = await worker_factory()
-        handled = await worker.run_once()
-        if not handled:
-            await asyncio.sleep(poll_interval_seconds)

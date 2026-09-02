@@ -197,11 +197,31 @@ logger = logging.getLogger(__name__)
 _MODEL_JOB_TYPES = {"wecom_process_message", "guest_delivery_rewrite"}
 
 
+def _log_runtime_task_result(task: asyncio.Task[None]) -> None:
+    """记录常驻后台task的意外结束；正常结束与关停取消保持静默。"""
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is None:
+        return
+    logger.error(
+        "常驻后台task意外结束：name=%s error_type=%s",
+        task.get_name(),
+        type(error).__name__,
+        exc_info=error,
+    )
+
+
 def _create_runtime_task(
     coroutine: Coroutine[Any, Any, None],
 ) -> asyncio.Task[None]:
     """集中创建运行后台task，便于协调器验证中途失败的清理语义。"""
-    return asyncio.create_task(coroutine)
+    task = asyncio.create_task(coroutine)
+    # background_tasks 全程持强引用，异常不会被 retrieve，asyncio 的
+    # "Task exception was never retrieved" 也不会触发；不主动记录时，运维只能
+    # 看到 /health 因心跳陈旧转 degraded，却拿不到任何原因。
+    task.add_done_callback(_log_runtime_task_result)
+    return task
 
 
 class DurableJobQueue:
@@ -2270,13 +2290,14 @@ async def _run_worker_loop(
                 )
                 handled = await worker.run_once()
         except SQLAlchemyError as error:
-            # 数据库提交或连接故障不得永久终止 worker；只记录异常类型并有限退避。
+            # 数据库提交或连接故障不得永久终止 worker；记录栈后有限退避。
             if isinstance(error, OperationalError) and "database is locked" in str(error).lower():
                 logger.warning("后台任务遇到 SQLite 写锁，1 秒后重试")
             else:
                 logger.warning(
                     "后台任务遇到数据库运行故障，1 秒后重试：error_type=%s",
                     type(error).__name__,
+                    exc_info=error,
                 )
             await asyncio.sleep(1)
             continue
@@ -2302,10 +2323,11 @@ async def _run_faq_maintenance_loop(
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            # 周期维护失败不影响消息 worker，只记录异常类型等待下轮重试。
+            # 周期维护失败不影响消息 worker，记录栈后等待下轮重试。
             logger.warning(
                 "FAQ 周期维护失败：error_type=%s",
                 type(error).__name__,
+                exc_info=error,
             )
         await asyncio.sleep(3600)
 
@@ -2334,6 +2356,7 @@ async def _run_retention_loop(
             logger.warning(
                 "历史记录清理失败，下一轮继续：error_type=%s",
                 type(error).__name__,
+                exc_info=error,
             )
         await asyncio.sleep(86_400)
 
@@ -2395,6 +2418,7 @@ async def _run_context_maintenance_loop(
             logger.warning(
                 "客户上下文维护失败：error_type=%s",
                 type(error).__name__,
+                exc_info=error,
             )
         await asyncio.sleep(3600)
 
@@ -2471,6 +2495,7 @@ async def _run_hostex_reconcile_loop(
             logger.warning(
                 "百居易订单对账失败：error_type=%s",
                 type(error).__name__,
+                exc_info=error,
             )
         if registry is not None:
             async with registry.acquire() as interval_bundle:
@@ -2510,6 +2535,7 @@ async def _run_task_lifecycle_loop(
             logger.warning(
                 "任务生命周期巡检失败：error_type=%s",
                 type(error).__name__,
+                exc_info=error,
             )
         await asyncio.sleep(interval_seconds)
 
@@ -2571,11 +2597,12 @@ async def _run_wecom_poll_loop(
                 error=error,
             )
             backing_off = True
-            # 只记录异常类型，避免企业微信错误正文携带请求细节。
+            # 异常正文可能携带请求细节，由日志脱敏过滤器统一处理后再输出。
             logger.warning(
                 "企业微信定时补拉失败，%s 秒后重试：%s",
                 delay,
                 type(error).__name__,
+                exc_info=error,
             )
         else:
             app.state.wecom_poll_last_success = datetime.now(UTC)
@@ -2772,9 +2799,13 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             password_hash=bootstrap.admin_bootstrap_password_hash,
         )
     except Exception as error:
-        # 后台引导失败不能阻断企业微信、客服和 worker 主链路，且日志不含秘密正文。
+        # 后台引导失败不能阻断企业微信、客服和 worker 主链路；栈由脱敏过滤器处理。
         admin_auth_available = False
-        logger.warning("管理员后台引导不可用：%s", type(error).__name__)
+        logger.warning(
+            "管理员后台引导不可用：%s",
+            type(error).__name__,
+            exc_info=error,
+        )
 
     runtime_snapshot, runtime_source, runtime_degraded = await _resolve_runtime_snapshot(
         factory,

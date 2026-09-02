@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+import logging
 import sqlite3
 from datetime import UTC, date, datetime
 from io import BytesIO
@@ -1037,3 +1040,63 @@ async def test_failed_credential_transaction_removes_private_qr(
         )
 
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_failure_is_logged_with_traceback(caplog) -> None:
+    """常驻后台task意外结束必须留下可定位的错误日志。
+
+    task 由 background_tasks 强引用，异常永远不会被 retrieve，asyncio 的
+    "Task exception was never retrieved" 也不会触发；没有主动记录时，运维只能
+    看到 /health 转 degraded 而拿不到任何原因。
+    """
+
+    async def failing_loop() -> None:
+        """模拟常驻循环遇到未预料异常后退出。"""
+        raise RuntimeError("运行客户端注册表已关闭")
+
+    with caplog.at_level(logging.ERROR, logger="homestay_bot.application"):
+        task = application._create_runtime_task(failing_loop())
+        with contextlib.suppress(RuntimeError):
+            await task
+
+    records = [item for item in caplog.records if item.levelno >= logging.ERROR]
+    assert records, "后台task异常结束必须记录 ERROR 日志"
+    # 脱敏过滤器会把 exc_info 渲染进 exc_text 再清空，两种形态都必须能定位。
+    rendered = "\n".join(
+        logging.Formatter("%(message)s").format(item) for item in records
+    )
+    assert "RuntimeError" in rendered
+    assert "failing_loop" in rendered
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_cancellation_is_not_reported_as_failure(caplog) -> None:
+    """正常关停取消不得污染错误日志，否则告警会失去意义。"""
+
+    async def cancellable_loop() -> None:
+        """模拟关停期间被取消的常驻循环。"""
+        await asyncio.sleep(3600)
+
+    with caplog.at_level(logging.WARNING, logger="homestay_bot.application"):
+        task = application._create_runtime_task(cancellable_loop())
+        await asyncio.sleep(0)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert not [item for item in caplog.records if item.levelno >= logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_normal_completion_is_not_reported(caplog) -> None:
+    """正常结束的后台task不得记录异常。"""
+
+    async def finishing_loop() -> None:
+        """模拟一次性后台任务正常结束。"""
+        return None
+
+    with caplog.at_level(logging.WARNING, logger="homestay_bot.application"):
+        await application._create_runtime_task(finishing_loop())
+
+    assert not [item for item in caplog.records if item.levelno >= logging.WARNING]
