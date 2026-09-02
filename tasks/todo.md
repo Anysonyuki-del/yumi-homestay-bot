@@ -96,3 +96,39 @@
 
 - 是否保留上述 `knowledge.py` 修复。它超出第二段边界，但修的正是本次迁移要消除的失败模式，且证据已复现。
 - `purge_expired` 仍是零调用死接口、retention 日清理仍不含 nonce 表，按原计划本次未接入。
+
+## 发布 v1.4.0
+
+- [x] 用户明确授权发布并指定版本号 `1.4.0`
+- [x] 升级版本号并补充正式更新日志
+- [x] 重装本地包，确认元数据暴露为 `1.4.0`
+- [x] 发布前全量门禁
+- [x] 提交、标记 `v1.4.0` 并推送 GitHub
+- [x] 等待 main 与标签 CI 成功
+- [x] 创建并校验生产备份
+- [x] 仅重建并替换 API，保持 PostgreSQL 运行
+- [x] 验证服务器源码、容器版本、健康、日志与公网入口
+- [ ] 登录后逐家族页面验收（需用户执行，本会话不持有后台口令）
+
+### v1.4.0 生产发布 Review
+
+- 提交与注释标签均指向 `2e908c55847891797e51a4db16eb8f00e4f3d408`；`git ls-remote` 独立确认 GitHub 上 `refs/heads/main` 与 `refs/tags/v1.4.0`（标签对象 `74b4e0a`）都解析到该提交。main CI `33692292480` 与标签 CI `33692298912` 均成功。
+- 生产备份位于 `/opt/yumi-backups/v1.4.0-20260902T230014Z`：源码 bundle 通过 `git bundle verify` 且记录完整历史；`.env` 与 PostgreSQL dump 权限均为 `600`；dump 魔数为 `PGDMP`，在容器内 `pg_restore -l` 退出码 0、读出 360 行目录清单与 35 项 TABLE DATA；私有上传目录已归档；`MANIFEST.txt` 与 `SHA256SUMS` 齐全；旧镜像 `cc7adbac` 标记为 `yumi-homestay-bot-api:rollback-v1.3.14`。
+- 首次 dump 校验命令误用 `docker exec` 下的 `/dev/stdin`，读出 0 行；改为直接由标准输入喂给 `pg_restore -l` 后复验通过。未经校验的备份不计入验收。
+- 发布包 SHA-256 `936f1de5…` 在服务器端比对一致后才 `git bundle verify` 并快进；服务器由 `ca4dc1e` 快进到 `2e908c5` 并断言 HEAD 相符，两个既存未跟踪环境备份保持不变。
+- 只重建 API：新容器 `ad1d7bb4`、新镜像 `f8a7b4d2`，运行用户 `uid=10001(app) gid=10001(app)`，重启次数 0。PostgreSQL 未重建也未重启，仍为 `af11bb4a`，启动时间保持 `2026-08-10T16:43:53.783849747Z`，重启次数 0。
+- 容器包版本为 `1.4.0`，`alembic current` 仍为 `0023_approval_pii_final (head)`，确认启动时的 `alembic upgrade head` 是空操作、未变更结构。
+- 本机与公网 `/health` 均为 `ok`，公网 OpenAPI 为 `1.4.0`；公网 `/employee/login` 返回 200 且带 `no-store`、`frame-ancestors 'none'`、`DENY`、`no-referrer`、`nosniff`；未登录访问 `/employee/approvals` 返回 401。私有上传仍挂载 `/opt/yumi-data/private_uploads -> /app/data/private_uploads`，文件数为 0。
+- 部署后 10 分钟内 `ERROR`、`Traceback`、`Exception` 计数为 0。与既往版本不同，本版本起该计数具有真实意义：此前脱敏过滤器不覆盖异常栈，项目无法输出任何带栈日志，该计数恒为 0 是同义反复。
+- 只读确认服务端 nonce 机制已在线：`admin_csrf_nonces` 有 1 条 `login` 用途记录，`admin_csrf_quota.active_count` 为 1，与表行数一致。
+- 本次发布没有主动调用 DeepSeek、百居易或企业微信，没有发送真实消息，没有创建或修改真实订单；受保护的未跟踪项目总结保持未读、未改、未暂存。
+
+### 待用户完成的登录后验收
+
+本会话不持有后台口令，也不代为输入口令，以下需用户在 `https://akros.icu/employee/login` 登录后执行：
+
+1. 连续打开 60 个以上任务详情页，确认全程不掉登录、不出现「表单令牌无效或已使用」。这是本版本的核心修复。
+2. 逐家族各做一次写操作：任务流转、房源资料保存、客诉草稿保存、客户标签更新，确认均成功。
+3. 连续打开知识页九次以上，确认第九次不再返回 429。
+4. 打开某个详情页后停留超过 15 分钟再提交，确认运营表单仍可提交（有效期为 8 小时）。
+5. 审批确认会创建真实订单，仅在确有待处理审批且愿意实际下单时验证；否则只确认详情页能正常渲染确认表单。
