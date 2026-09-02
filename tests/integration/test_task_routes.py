@@ -286,7 +286,7 @@ def test_task_filters_are_forwarded_and_persist_in_pagination() -> None:
     assert "status_filter=pending_assignment" in response.text
     assert "task_type=cleaning" in response.text
     assert "overdue=true" in response.text
-    assert "status_filter=expired" in response.text
+    assert '<option value="expired"' in response.text
 
 
 def test_task_filter_form_treats_empty_controls_as_inactive() -> None:
@@ -517,3 +517,45 @@ def test_private_file_download_requires_task_visibility(tmp_path) -> None:
     assert visible.content == PNG_BYTES
     assert visible.headers["cache-control"] == "no-store"
     assert forbidden.status_code == 403
+
+
+def _quick_queue_links(html: str) -> list[str]:
+    """提取任务中心快速队列里的全部链接文本。"""
+    block = re.search(
+        r'<nav class="tab-nav" aria-label="任务队列">(.*?)</nav>',
+        html,
+        re.S,
+    )
+    assert block is not None
+    return re.findall(r"<a [^>]*>([^<]+)</a>", block.group(1))
+
+
+def test_task_center_keeps_quick_queue_small_and_defers_advanced_filters() -> None:
+    """快速队列最多四项，完整筛选改为原生渐进披露且默认收起。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/tasks")
+
+    assert response.status_code == 200
+    links = _quick_queue_links(response.text)
+    assert len(links) <= 4
+    assert "已失效" not in links
+    disclosure = re.search(r"<details class=\"filter-disclosure\"([^>]*)>", response.text)
+    assert disclosure is not None
+    assert "open" not in disclosure.group(1)
+    assert '<option value="expired"' in response.text
+    assert response.text.index("filter-disclosure") < response.text.index("data-filter-form")
+
+
+def test_task_center_opens_advanced_filters_when_a_filter_is_applied() -> None:
+    """已经生效的筛选必须保持展开，避免员工看不到当前生效条件。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/tasks", params={"task_type": "cleaning"})
+
+    assert response.status_code == 200
+    disclosure = re.search(r"<details class=\"filter-disclosure\"([^>]*)>", response.text)
+    assert disclosure is not None
+    assert "open" in disclosure.group(1)

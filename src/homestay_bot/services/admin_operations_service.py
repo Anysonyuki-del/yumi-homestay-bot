@@ -28,6 +28,33 @@ from homestay_bot.repositories.admin_operations import (
 )
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
+TIMELINE_PAST_DAYS = 2
+# 今日周转优先级：同日进出最紧急，空置和房态未知最不紧急。
+_OCCUPANCY_TURNOVER_RANK: dict[RoomOccupancyStatus, int] = {
+    RoomOccupancyStatus.TURNOVER_TODAY: 0,
+    RoomOccupancyStatus.ARRIVING_TODAY: 1,
+    RoomOccupancyStatus.DEPARTING_TODAY: 2,
+    RoomOccupancyStatus.OCCUPIED: 3,
+    RoomOccupancyStatus.VACANT: 4,
+    RoomOccupancyStatus.UNKNOWN: 4,
+}
+# 运营准备优先级：维修最需要人工介入，就绪和在住无需今日准备。
+_READINESS_RANK: dict[RoomOperationalStatus, int] = {
+    RoomOperationalStatus.MAINTENANCE: 0,
+    RoomOperationalStatus.CLEANING: 1,
+    RoomOperationalStatus.PENDING_INSPECTION: 1,
+    RoomOperationalStatus.NOT_STARTED: 2,
+    RoomOperationalStatus.OCCUPIED: 3,
+    RoomOperationalStatus.READY: 3,
+}
+# 需要今天人工介入的运营准备状态；与排序权重表分开维护，避免调整权重时静默改变分组。
+_ATTENTION_READINESS: frozenset[RoomOperationalStatus] = frozenset(
+    {
+        RoomOperationalStatus.MAINTENANCE,
+        RoomOperationalStatus.CLEANING,
+        RoomOperationalStatus.PENDING_INSPECTION,
+    }
+)
 ATTENTION_STATUS_TEXT: dict[AttentionStatus, str] = {
     ComplaintReviewStatus.READY_FOR_REVIEW: "等待人工复核",
     ComplaintReviewStatus.EDITING: "正在人工编辑",
@@ -96,6 +123,17 @@ class RoomOperationItem:
         """返回今日是否至少有一笔退房。"""
         return self.today_departure_count > 0
 
+    @property
+    def needs_attention(self) -> bool:
+        """判断房间今天是否需要人工介入；其余房间在页面上降为次级信息。"""
+        return (
+            self.source_stale
+            or self.overdue_task_count > 0
+            or self.today_arrival
+            or self.today_departure
+            or self.status in _ATTENTION_READINESS
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SevenDayRoomItem:
@@ -105,6 +143,19 @@ class SevenDayRoomItem:
     room_number: str | None
     room_title: str
     days: tuple[RoomDayOperation, ...]
+
+
+def _room_risk_sort_key(item: RoomOperationItem) -> tuple[int, int, int, int, int, str, int]:
+    """按同步可信度、今日周转、逾期任务和运营准备给出确定性的风险优先顺序。"""
+    return (
+        0 if item.source_stale else 1,
+        _OCCUPANCY_TURNOVER_RANK[item.occupancy_status],
+        -item.overdue_task_count,
+        _READINESS_RANK[item.status],
+        -item.open_task_count,
+        item.room_title,
+        item.property_id,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +174,43 @@ class OperationsSnapshot:
     def attention_count(self) -> int:
         """返回汇总卡片背后的真实待处理事项数量。"""
         return sum(item.related_count for item in self.attention_items)
+
+    @property
+    def attention_rooms(self) -> tuple[RoomOperationItem, ...]:
+        """返回今天需要人工介入的房间，保持已经排好的风险优先顺序。"""
+        return tuple(room for room in self.rooms if room.needs_attention)
+
+    @property
+    def stable_rooms(self) -> tuple[RoomOperationItem, ...]:
+        """返回今天无需介入的稳定房间，页面按次级信息折叠展示。"""
+        return tuple(room for room in self.rooms if not room.needs_attention)
+
+    @property
+    def attention_room_count(self) -> int:
+        """返回需要人工介入的房间数量。"""
+        return len(self.attention_rooms)
+
+    @property
+    def timeline_past_days(self) -> int:
+        """返回时间轴中已过去的天数，供页面如实描述覆盖范围。"""
+        return TIMELINE_PAST_DAYS
+
+    @property
+    def timeline_start_date(self) -> date:
+        """返回时间轴第一天；时间轴并非只覆盖未来若干天。"""
+        return self.local_date - timedelta(days=TIMELINE_PAST_DAYS)
+
+    @property
+    def timeline_end_date(self) -> date:
+        """返回时间轴最后一天。"""
+        return self.local_date + timedelta(days=self.horizon_days)
+
+    def timeline_for(self, property_id: int) -> SevenDayRoomItem | None:
+        """按房间主键取时间轴，避免模板依赖两个序列的下标对齐。"""
+        for item in self.seven_day_rooms:
+            if item.property_id == property_id:
+                return item
+        return None
 
 
 class AdminOperationsRepositoryPort(Protocol):
@@ -279,7 +367,7 @@ class AdminOperationsService:
         matrix_items: list[SevenDayRoomItem] = []
         days = tuple(
             local_date + timedelta(days=offset)
-            for offset in range(-2, horizon_days + 1)
+            for offset in range(-TIMELINE_PAST_DAYS, horizon_days + 1)
         )
 
         for room in rooms:
@@ -352,7 +440,14 @@ class AdminOperationsService:
                     ),
                 )
             )
-        return tuple(room_items), tuple(matrix_items)
+        ordered = sorted(
+            zip(room_items, matrix_items, strict=True),
+            key=lambda pair: _room_risk_sort_key(pair[0]),
+        )
+        return (
+            tuple(room for room, _ in ordered),
+            tuple(matrix for _, matrix in ordered),
+        )
 
     @staticmethod
     def _occupancy_status(
@@ -446,7 +541,7 @@ class AdminOperationsService:
         attention = await self._repository.list_attention()
         rooms = await self._repository.list_active_rooms()
         stays = await self._repository.list_room_stays(
-            local_date - timedelta(days=2),
+            local_date - timedelta(days=TIMELINE_PAST_DAYS),
             local_date + timedelta(days=horizon_days + 1),
         )
         task_counts = await self._repository.list_open_task_counts(local_date)

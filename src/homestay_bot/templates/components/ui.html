@@ -28,3 +28,18 @@
   <button class="button button--danger" type="submit">{{ label }}</button>
 </form>
 {%- endmacro %}
+
+{# 房态事实徽标：同步不可信时先声明可信度，其余按今日周转和在住语义取色。 #}
+{% macro occupancy_badge(room) -%}
+{% if room.source_stale %}{{ badge("房态待确认", "warning") }}
+{%- elif room.occupancy_status.value in ("turnover_today", "arriving_today", "departing_today") %}{{ badge(room.occupancy_status | status_zh, "gold") }}
+{%- elif room.occupancy_status.value == "occupied" %}{{ badge(room.occupancy_status | status_zh, "info") }}
+{%- else %}{{ badge(room.occupancy_status | status_zh, "neutral") }}{% endif %}
+{%- endmacro %}
+
+{# 运营准备徽标：只有维修是风险，其余是状态事实；琥珀色留给今日周转，避免两类信息撞色。 #}
+{% macro readiness_badge(room) -%}
+{% if room.status.value == "maintenance" %}{{ badge("运营：" ~ (room.status | status_zh), "danger") }}
+{%- elif room.status.value == "ready" %}{{ badge("运营：" ~ (room.status | status_zh), "success") }}
+{%- else %}{{ badge("运营：" ~ (room.status | status_zh), "neutral") }}{% endif %}
+{%- endmacro %}

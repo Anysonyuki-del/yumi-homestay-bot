@@ -52,6 +52,7 @@ class Snapshot:
     pending_task_count: int
     pending_approval_count: int
     manual_attention_count: int
+    overdue_task_count: int = 0
 
     @property
     def check_in_count(self) -> int:
@@ -79,6 +80,7 @@ class Snapshot:
             pending_task_count=0,
             pending_approval_count=0,
             manual_attention_count=0,
+            overdue_task_count=0,
         )
 
 
@@ -145,6 +147,26 @@ class AdminDashboardService:
                         BusinessTaskStatus.EXPIRED,
                     )
                 )
+            )
+        )
+        return int(result or 0)
+
+    async def _count_overdue_tasks(self, local_date: date) -> int:
+        """统计服务日期已过去但仍未关闭的任务。
+
+        与同组「待办任务」同源，不按房源是否启用过滤，因此逾期数始终是待办数的子集；
+        房态页只统计启用房源，存在停用房源遗留任务时两处数字可以不同。
+        """
+        result = await self._session.scalar(
+            select(func.count(BusinessTask.id)).where(
+                BusinessTask.service_date < local_date,
+                BusinessTask.status.not_in(
+                    (
+                        BusinessTaskStatus.COMPLETED,
+                        BusinessTaskStatus.CANCELLED,
+                        BusinessTaskStatus.EXPIRED,
+                    )
+                ),
             )
         )
         return int(result or 0)
@@ -219,4 +241,5 @@ class AdminDashboardService:
             pending_task_count=await self._count_pending_tasks(),
             pending_approval_count=await self._count_pending_approvals(),
             manual_attention_count=await self._count_manual_attention(),
+            overdue_task_count=await self._count_overdue_tasks(local_date),
         )

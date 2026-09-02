@@ -461,3 +461,122 @@ async def test_snapshot_returns_complete_empty_collections() -> None:
     assert snapshot.rooms == ()
     assert snapshot.seven_day_rooms == ()
     await engine.dispose()  # type: ignore[attr-defined]
+
+
+async def test_snapshot_orders_rooms_by_operational_risk_before_stable_rooms() -> None:
+    """房间顺序必须按今日周转、逾期任务和运营准备排列，稳定房间排在最后。"""
+    engine, factory = await _factory()
+    today = date(2026, 8, 29)
+    async with factory() as session:
+        session.add_all(
+            [
+                PropertyProfile(id=1, room_number="0101", title="A 稳定房", is_active=True),
+                PropertyProfile(id=2, room_number="0201", title="B 周转房", is_active=True),
+                PropertyProfile(id=3, room_number="0301", title="C 逾期房", is_active=True),
+                PropertyProfile(id=4, room_number="0401", title="D 维修房", is_active=True),
+                RoomOperationalState(property_id=1, status=RoomOperationalStatus.READY),
+                RoomOperationalState(property_id=4, status=RoomOperationalStatus.MAINTENANCE),
+                StayOrder(
+                    hostex_reservation_code="turnover-out",
+                    stay_code="turnover-out",
+                    property_id=2,
+                    check_in_date=today - timedelta(days=2),
+                    check_out_date=today,
+                    status="confirmed",
+                ),
+                StayOrder(
+                    hostex_reservation_code="turnover-in",
+                    stay_code="turnover-in",
+                    property_id=2,
+                    check_in_date=today,
+                    check_out_date=today + timedelta(days=2),
+                    status="confirmed",
+                ),
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.ASSIGNED,
+                    property_id=3,
+                    service_date=today - timedelta(days=2),
+                    description="逾期保洁",
+                ),
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+                    property_id=3,
+                    service_date=today - timedelta(days=1),
+                    description="逾期检查",
+                ),
+            ]
+        )
+        await session.commit()
+
+        snapshot = await AdminOperationsService(session).snapshot(
+            datetime(2026, 8, 28, 16, 30, tzinfo=UTC),
+            horizon_days=3,
+            source_synced_at=datetime(2026, 8, 28, 16, tzinfo=UTC),
+        )
+
+    assert [room.room_title for room in snapshot.rooms] == [
+        "B 周转房",
+        "C 逾期房",
+        "D 维修房",
+        "A 稳定房",
+    ]
+    assert [room.room_title for room in snapshot.attention_rooms] == [
+        "B 周转房",
+        "C 逾期房",
+        "D 维修房",
+    ]
+    assert [room.room_title for room in snapshot.stable_rooms] == ["A 稳定房"]
+    assert snapshot.attention_room_count == 3
+    for room in snapshot.rooms:
+        timeline = snapshot.timeline_for(room.property_id)
+        assert timeline is not None
+        assert timeline.room_title == room.room_title
+    await engine.dispose()  # type: ignore[attr-defined]
+
+
+async def test_snapshot_exposes_timeline_span_including_past_days() -> None:
+    """时间轴同时包含已过去的两天，快照必须给出可直接展示的真实起止日期。"""
+    engine, factory = await _factory()
+    today = date(2026, 8, 29)
+    async with factory() as session:
+        session.add(PropertyProfile(id=1, title="一号房", is_active=True))
+        await session.commit()
+
+        snapshot = await AdminOperationsService(session).snapshot(
+            datetime(2026, 8, 28, 16, 30, tzinfo=UTC),
+            horizon_days=7,
+            source_synced_at=datetime(2026, 8, 28, 16, tzinfo=UTC),
+        )
+
+    assert snapshot.timeline_start_date == today - timedelta(days=2)
+    assert snapshot.timeline_end_date == today + timedelta(days=7)
+    assert len(snapshot.seven_day_rooms[0].days) == 10
+    assert snapshot.seven_day_rooms[0].days[0].local_date == snapshot.timeline_start_date
+    assert snapshot.seven_day_rooms[0].days[-1].local_date == snapshot.timeline_end_date
+    await engine.dispose()  # type: ignore[attr-defined]
+
+
+async def test_stale_source_keeps_every_room_in_the_attention_group() -> None:
+    """房态不可信时不得把任何房间降级为稳定房间。"""
+    engine, factory = await _factory()
+    observed_at = datetime(2026, 8, 29, 3, tzinfo=UTC)
+    async with factory() as session:
+        session.add_all(
+            [
+                PropertyProfile(id=1, title="一号房", is_active=True),
+                RoomOperationalState(property_id=1, status=RoomOperationalStatus.READY),
+            ]
+        )
+        await session.commit()
+
+        snapshot = await AdminOperationsService(session).snapshot(
+            observed_at,
+            source_synced_at=observed_at - timedelta(hours=7),
+        )
+
+    assert snapshot.source_stale is True
+    assert snapshot.stable_rooms == ()
+    assert [room.room_title for room in snapshot.attention_rooms] == ["一号房"]
+    await engine.dispose()  # type: ignore[attr-defined]

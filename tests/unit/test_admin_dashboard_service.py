@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,7 +22,7 @@ from homestay_bot.domain.models import (
     StayOrder,
 )
 from homestay_bot.repositories.admin_dashboard import SQLAlchemyAdminDashboardRepository
-from homestay_bot.services.admin_dashboard_service import AdminDashboardService
+from homestay_bot.services.admin_dashboard_service import AdminDashboardService, Snapshot
 
 
 async def _factory() -> tuple[object, async_sessionmaker[AsyncSession]]:
@@ -198,6 +198,11 @@ class OrderedDashboardService(AdminDashboardService):
         self.events.append("manual")
         return 0
 
+    async def _count_overdue_tasks(self, local_date: date) -> int:
+        """记录逾期任务查询。"""
+        self.events.append("overdue")
+        return 0
+
 
 async def test_snapshot_prepares_consistent_read_before_any_query() -> None:
     """一致读事务设置必须是总览服务的第一项数据库动作。"""
@@ -213,6 +218,7 @@ async def test_snapshot_prepares_consistent_read_before_any_query() -> None:
         "tasks",
         "approvals",
         "manual",
+        "overdue",
     ]
 
 
@@ -301,3 +307,47 @@ async def test_postgresql_consistent_read_sets_read_only_repeatable_read_first()
     assert session.statements == [
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
     ]
+
+
+async def test_snapshot_counts_overdue_open_tasks_as_a_separate_risk() -> None:
+    """总览必须单独暴露逾期开放任务数，终态任务不得计入。"""
+    engine, factory = await _factory()
+    local_date = date(2026, 8, 11)
+    async with factory() as session:
+        session.add_all(
+            [
+                PropertyProfile(id=7, room_number="0701", title="江景大床房", is_active=True),
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.ASSIGNED,
+                    property_id=7,
+                    service_date=local_date - timedelta(days=1),
+                    description="逾期保洁",
+                ),
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.EXPIRED,
+                    property_id=7,
+                    service_date=local_date - timedelta(days=3),
+                    description="已失效任务",
+                ),
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+                    property_id=7,
+                    service_date=local_date,
+                    description="今日任务",
+                ),
+            ]
+        )
+        await session.commit()
+
+        snapshot = await AdminDashboardService(session).snapshot(
+            datetime(2026, 8, 11, 2, tzinfo=UTC)
+        )
+
+    assert snapshot.local_date == local_date
+    assert snapshot.pending_task_count == 2
+    assert snapshot.overdue_task_count == 1
+    assert Snapshot.empty(local_date).overdue_task_count == 0
+    await engine.dispose()  # type: ignore[attr-defined]

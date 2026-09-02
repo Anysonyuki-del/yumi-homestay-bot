@@ -11,27 +11,38 @@
   <nav class="tab-nav operations-range" aria-label="近期房态范围">
     {% for day_count in (3, 7, 14) %}<a href="/employee/admin/operations?days={{ day_count }}" {% if snapshot.horizon_days == day_count %}aria-current="page"{% endif %}>未来 {{ day_count }} 天</a>{% endfor %}
   </nav>
+  <p class="operations-source">时间轴覆盖 {{ snapshot.timeline_start_date.month }}月{{ snapshot.timeline_start_date.day }}日 至 {{ snapshot.timeline_end_date.month }}月{{ snapshot.timeline_end_date.day }}日，含已过去的 {{ snapshot.timeline_past_days }} 天与今天。</p>
 </section>
-{% if snapshot.rooms %}<div class="room-operations-list">
-  {% for room in snapshot.rooms %}{% set timeline = snapshot.seven_day_rooms[loop.index0] %}
-  <article class="room-operation-card">
+{% if snapshot.rooms %}
+<section class="operations-rooms" aria-labelledby="rooms-attention">
+  <h2 class="operations-rooms__title" id="rooms-attention">今天需要处理 · {{ snapshot.attention_room_count }} 间</h2>
+  {% if snapshot.attention_rooms %}<div class="room-operations-list">
+  {% for room in snapshot.attention_rooms %}{% set timeline = snapshot.timeline_for(room.property_id) %}
+  <article class="room-operation-card" aria-labelledby="room-{{ room.property_id }}">
     <header class="room-operation-card__header">
-      <div><a href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_title }}</strong></a><small>{{ room.room_number or "房号待补充" }}</small></div>
-      <div class="room-status-pair">{{ ui.badge(room.occupancy_status | status_zh, "warning" if room.source_stale or room.occupancy_status.value in ("arriving_today", "departing_today", "turnover_today") else "success") }}{{ ui.badge("运营：" ~ (room.status | status_zh), "success" if room.status.value == "ready" else "neutral") }}</div>
+      <div><h3 class="room-operation-card__title" id="room-{{ room.property_id }}"><a href="/employee/properties/{{ room.property_id }}">{{ room.room_title }}</a></h3><small>{{ room.room_number or "房号待补充" }}</small></div>
+      <div class="room-status-pair">{{ ui.occupancy_badge(room) }}{{ ui.readiness_badge(room) }}</div>
     </header>
-    <div class="room-next-action"><span>下一步</span><strong>{{ room.next_action }}</strong></div>
+    <div class="room-next-action{% if room.overdue_task_count %} room-next-action--urgent{% endif %}"><span>下一步</span><strong>{{ room.next_action }}</strong></div>
     <dl class="room-operation-facts">
       <div><dt>开放任务</dt><dd><a href="/employee/tasks?property_id={{ room.property_id }}">{{ room.open_task_count }} 项{% if room.overdue_task_count %}，其中 {{ room.overdue_task_count }} 项逾期{% endif %}</a></dd></div>
       <div><dt>下次入住</dt><dd>{{ room.next_arrival | date_zh if room.next_arrival else "暂无" }}</dd></div>
       <div><dt>下次退房</dt><dd>{{ room.next_departure | date_zh if room.next_departure else "暂无" }}</dd></div>
     </dl>
-    <div class="room-timeline" aria-label="{{ room.room_title }}近期房态">
-      {% for day in timeline.days %}<div class="room-day{% if day.local_date == snapshot.local_date %} room-day--today{% endif %}{% if day.occupied %} room-day--occupied{% endif %}">
+    {% if timeline %}<ol class="clean-list room-timeline" aria-label="{{ room.room_title }}近期房态">
+      {% for day in timeline.days %}<li class="room-day{% if day.local_date == snapshot.local_date %} room-day--today{% endif %}{% if day.occupied %} room-day--occupied{% endif %}">
         <strong>{{ day.local_date.month }}/{{ day.local_date.day }}{% if day.local_date == snapshot.local_date %}<span>今天</span>{% endif %}</strong>
         {% if day.arrival_count %}<small>入住 {{ day.arrival_count }}</small>{% endif %}{% if day.departure_count %}<small>退房 {{ day.departure_count }}</small>{% endif %}{% if day.occupied %}<small>在住</small>{% elif not day.arrival_count and not day.departure_count %}<small>空闲</small>{% endif %}
-      </div>{% endfor %}
-    </div>
+      </li>{% endfor %}
+    </ol>{% endif %}
   </article>{% endfor %}
-</div>{% else %}{{ ui.empty("暂无启用房源", "房源同步完成后，这里会展示近期运营状态。") }}{% endif %}
+</div>{% else %}{{ ui.empty("今天没有需要处理的房间", "没有房间需要今天介入，可在下方展开稳定房间查看。") }}{% endif %}
+</section>
+{% if snapshot.stable_rooms %}<details class="operations-stable"><summary>稳定房间 · {{ snapshot.stable_rooms | length }} 间</summary>
+  <ul class="clean-list stable-room-list">
+    {% for room in snapshot.stable_rooms %}<li><a href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_number or room.room_title }}</strong><span>{{ room.room_title }}</span></a>{{ ui.readiness_badge(room) }}<span class="muted">{{ room.next_action }}</span></li>{% endfor %}
+  </ul>
+</details>{% endif %}
+{% else %}{{ ui.empty("暂无启用房源", "房源同步完成后，这里会展示近期运营状态。") }}{% endif %}
 <details class="panel panel--padded operations-overview"><summary>查看紧凑总览</summary><div class="responsive-table"><table class="data-table"><caption class="visually-hidden">房间运营紧凑总览</caption><thead><tr><th scope="col">房源</th><th scope="col">入住状态</th><th scope="col">运营准备</th><th scope="col">开放任务</th><th scope="col">下一步</th></tr></thead><tbody>{% for room in snapshot.rooms %}<tr><th scope="row"><a href="/employee/properties/{{ room.property_id }}">{{ room.room_number or room.room_title }}</a></th><td>{{ room.occupancy_status | status_zh }}</td><td>{{ room.status | status_zh }}</td><td>{{ room.open_task_count }}</td><td>{{ room.next_action }}</td></tr>{% else %}<tr><td colspan="5">暂无房态数据。</td></tr>{% endfor %}</tbody></table></div></details>
 {% endblock %}

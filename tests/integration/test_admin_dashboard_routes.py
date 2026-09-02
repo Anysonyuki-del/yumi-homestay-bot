@@ -440,3 +440,95 @@ def test_diagnostics_detail_and_audit_page_use_safe_server_view_models() -> None
     assert invalid_query.headers["cache-control"] == "no-store"
     assert "UID-SECRET" not in invalid_query.text
     assert "token=" not in invalid_query.text
+
+
+class StableRoomOperationsStub:
+    """返回一间需要关注的房间和一间稳定房间。"""
+
+    async def snapshot(
+        self,
+        now: datetime | None = None,
+        *,
+        horizon_days: int = 3,
+        source_synced_at: datetime | None = None,
+    ) -> OperationsSnapshot:
+        """构造已同步、可区分风险层级的房态投影。"""
+        local_date = date(2026, 8, 11)
+        days = tuple(
+            RoomDayOperation(local_date, 0, 0, False)
+            for _ in range(horizon_days + 3)
+        )
+        rooms = (
+            RoomOperationItem(
+                property_id=101,
+                room_number="101",
+                room_title="长江中心",
+                status=RoomOperationalStatus.CLEANING,
+                today_arrival_count=1,
+                today_departure_count=1,
+                open_task_count=2,
+                next_arrival=local_date,
+                occupancy_status=RoomOccupancyStatus.TURNOVER_TODAY,
+                overdue_task_count=1,
+                next_action="优先处理 1 项逾期任务",
+                source_stale=False,
+            ),
+            RoomOperationItem(
+                property_id=202,
+                room_number="202",
+                room_title="东湖小院",
+                status=RoomOperationalStatus.READY,
+                today_arrival_count=0,
+                today_departure_count=0,
+                open_task_count=0,
+                next_arrival=None,
+                occupancy_status=RoomOccupancyStatus.VACANT,
+                next_action="暂无近期运营动作",
+                source_stale=False,
+            ),
+        )
+        return OperationsSnapshot(
+            local_date=local_date,
+            attention_items=(),
+            rooms=rooms,
+            seven_day_rooms=(
+                SevenDayRoomItem(101, "101", "长江中心", days),
+                SevenDayRoomItem(202, "202", "东湖小院", days),
+            ),
+            horizon_days=horizon_days,
+            source_synced_at=datetime(2026, 8, 11, tzinfo=UTC),
+            source_stale=False,
+        )
+
+
+def test_dashboard_shows_manual_risk_before_daily_turnover() -> None:
+    """总览必须先展示需要人工处理的风险，再展示今日周转与工作量。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin")
+
+    assert response.status_code == 200
+    assert 'aria-labelledby="metrics-risk"' in response.text
+    assert 'aria-labelledby="metrics-turnover"' in response.text
+    assert response.text.index("需要人工处理的风险") < response.text.index("今日周转与工作量")
+    assert response.text.index("需人工关注") < response.text.index("今日入住")
+    assert "逾期任务" in response.text
+
+
+def test_operations_demotes_stable_rooms_and_states_timeline_span() -> None:
+    """稳定房间必须降为可折叠次级信息，时间轴范围文案必须与真实天数一致。"""
+    client = build_client()
+    client.app.state.admin_operations_service = StableRoomOperationsStub()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin/operations")
+
+    assert response.status_code == 200
+    assert "8月9日" in response.text
+    assert "8月14日" in response.text
+    assert "含已过去的 2 天与今天" in response.text
+    assert "稳定房间" in response.text
+    assert response.text.index("长江中心") < response.text.index("稳定房间")
+    assert response.text.index("稳定房间") < response.text.index("东湖小院")
+    assert 'class="operations-stable"' in response.text
