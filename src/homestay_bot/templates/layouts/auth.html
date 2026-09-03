@@ -5,16 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow">
     <title>{% block title %}YuMi 管理后台{% endblock %}</title>
-    <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
   </head>
   <body>
     <main class="card">
       <header class="page-header">
+        <span class="brand__mark" aria-hidden="true">Y</span>
         <p class="eyebrow">YuMi 管理后台</p>
         <h1>{% block heading %}管理员验证{% endblock %}</h1>
       </header>
-      {% if error %}<p role="alert">{{ error }}</p>{% endif %}
-      {% if notice %}<p role="status">{{ notice }}</p>{% endif %}
+      {% if error %}<div class="alert alert--danger" role="alert">{{ error }}</div>{% endif %}
+      {% if notice %}<div class="alert alert--success" role="status">{{ notice }}</div>{% endif %}
       {% block content %}{% endblock %}
     </main>
   </body>

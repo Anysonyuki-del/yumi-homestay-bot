@@ -31,8 +31,8 @@
     </dl>
     {% if timeline %}<ol class="clean-list room-timeline" aria-label="{{ room.room_title }}近期房态">
       {% for day in timeline.days %}<li class="room-day{% if day.local_date == snapshot.local_date %} room-day--today{% endif %}{% if day.occupied %} room-day--occupied{% endif %}">
-        <strong>{{ day.local_date.month }}/{{ day.local_date.day }}{% if day.local_date == snapshot.local_date %}<span>今天</span>{% endif %}</strong>
-        {% if day.arrival_count %}<small>入住 {{ day.arrival_count }}</small>{% endif %}{% if day.departure_count %}<small>退房 {{ day.departure_count }}</small>{% endif %}{% if day.occupied %}<small>在住</small>{% elif not day.arrival_count and not day.departure_count %}<small>空闲</small>{% endif %}
+        <strong>{{ day.local_date.month }}/{{ day.local_date.day }}</strong>
+        <span class="day-marks">{% if day.local_date == snapshot.local_date %}<span class="day-mark day-mark--today">今天</span>{% endif %}{% if day.arrival_count %}<span class="day-mark day-mark--arrival">入住 {{ day.arrival_count }}</span>{% endif %}{% if day.departure_count %}<span class="day-mark day-mark--departure">退房 {{ day.departure_count }}</span>{% endif %}{% if day.occupied %}<span class="day-mark day-mark--occupied">在住</span>{% elif not day.arrival_count and not day.departure_count %}<span class="day-mark day-mark--vacant">空闲</span>{% endif %}</span>
       </li>{% endfor %}
     </ol>{% endif %}
   </article>{% endfor %}

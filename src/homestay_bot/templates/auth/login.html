@@ -5,10 +5,8 @@
 <form method="post" action="/employee/login">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="next" value="{{ next_path }}">
-  <label for="username">账号</label>
-  <input id="username" name="username" type="text" maxlength="128" autocomplete="username" required autofocus>
-  <label for="password">密码</label>
-  <input id="password" name="password" type="password" maxlength="128" autocomplete="current-password" required>
+  <label for="username">账号<input id="username" name="username" type="text" maxlength="128" autocomplete="username" required autofocus></label>
+  <label for="password">密码<input id="password" name="password" type="password" maxlength="128" autocomplete="current-password" required></label>
   <button type="submit">登录</button>
 </form>
 {% endblock %}

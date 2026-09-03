@@ -143,6 +143,19 @@ def test_admin_shell_uses_grouped_lightweight_navigation() -> None:
     assert 'src="/static/admin.js?v={{ app_version }}"' in layout
 
 
+def test_every_layout_busts_static_asset_cache_with_release_version() -> None:
+    """后台与认证两套外壳都要按发布版本引用样式表。
+
+    /static 以裸 StaticFiles 挂载，不发送 Cache-Control，浏览器会走启发式缓存，
+    版本查询串是这里唯一的缓存失效手段；任一外壳漏掉都会让该页发版后吃到旧样式。
+    """
+    template_root = ASSET_ROOT / "templates"
+    for relative_path in ("layouts/admin.html", "layouts/auth.html"):
+        source = (template_root / relative_path).read_text()
+        assert 'href="/static/app.css?v={{ app_version }}"' in source
+        assert 'href="/static/app.css"' not in source
+
+
 def test_admin_template_context_exposes_one_release_version(monkeypatch) -> None:
     """全部后台页面必须复用同一应用版本上下文。"""
     monkeypatch.setattr(web, "get_app_version", lambda: "1.2.3")

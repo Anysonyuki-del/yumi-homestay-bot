@@ -208,6 +208,23 @@ def test_get_login_renders_html_and_only_keeps_internal_next() -> None:
     assert "//evil.test" not in protocol_relative.text
 
 
+def test_login_page_stylesheet_carries_resolved_release_version() -> None:
+    """登录页必须渲染出已解析的版本戳，而不是模板占位符或裸路径。
+
+    认证页与后台共用 web.templates，版本来自其 context processor；一旦认证路由
+    换成不带该处理器的实例，这里会立刻失败。
+    """
+    client, _ = build_client()
+
+    page = client.get("/employee/login")
+
+    match = re.search(r'href="/static/app\.css\?v=([^"]+)"', page.text)
+    assert match, page.text[:400]
+    assert match.group(1).strip()
+    assert "{{" not in match.group(1)
+    assert 'href="/static/app.css"' not in page.text
+
+
 def test_login_page_refresh_reuses_unconsumed_nonce() -> None:
     """同一浏览器刷新登录页应复用未消费 nonce，避免数据库持续插入。"""
     client, _ = build_client()

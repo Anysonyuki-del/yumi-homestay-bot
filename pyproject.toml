@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "homestay-bot"
-version = "1.4.0"
+version = "1.4.1"
 description = "武汉小型民宿企业微信客服机器人"
 requires-python = ">=3.12"
 dependencies = [
