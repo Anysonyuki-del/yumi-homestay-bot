@@ -1,4 +1,5 @@
 .env
+.env.*
 *.db
 *.sqlite
 *.sqlite3
@@ -20,3 +21,10 @@ data/private_uploads/
 *.egg-info/
 build/
 dist/
+
+# 以下内容永不进入仓库：本仓库在 GitHub 上是公开的。
+# 含真实客人入住资料。
+YuMi民宿AI项目总结.txt
+# 含生产服务器 root 登录目标、部署拓扑，以及仓库自身历史的二进制副本。
+run-deploy.command
+.stage/
