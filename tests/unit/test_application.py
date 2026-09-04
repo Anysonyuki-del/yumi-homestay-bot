@@ -1145,3 +1145,37 @@ def test_session_facades_implement_every_route_port_method() -> None:
             missing[facade.__name__] = absent
 
     assert missing == {}, f"会话门面缺少 Port 声明的方法：{missing}"
+
+
+def test_every_app_state_service_read_by_routes_is_actually_assigned() -> None:
+    """路由从 app.state 读取的每个服务都必须在装配处真正赋值。
+
+    路由用 getattr(request.app.state, "x", None) 或 request.app.state.x 取服务，
+    静态类型在该处是松的，装配缺失不会被 mypy 或桩化的集成测试发现，只会在真实
+    请求时返回 503 或抛 AttributeError。房态直改就是这样上线的：路由、服务和
+    模板都齐了，唯独没人给 app.state.room_readiness_service 赋值，功能从未可用。
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(application.__file__).resolve().parent
+    assigned = set(
+        re.findall(
+            r"app\.state\.([a-z_][a-z0-9_]*)\s*=",
+            (root / "application.py").read_text(encoding="utf-8"),
+        )
+    )
+
+    missing: dict[str, list[str]] = {}
+    for route_file in sorted((root / "routes").glob("*.py")):
+        source = route_file.read_text(encoding="utf-8")
+        read = set(
+            re.findall(r'getattr\(\s*request\.app\.state,\s*"([a-z_][a-z0-9_]*)"', source)
+        ) | set(re.findall(r"request\.app\.state\.([a-z_][a-z0-9_]*)", source))
+        # 这些不在装配处静态赋值：started_at 由启动钩子写入；两个 clock 是测试
+        # 注入缝，读取处均有 callable 判断并回落到真实 UTC 时钟，缺失是预期状态。
+        read -= {"started_at", "admin_dashboard_clock", "admin_auth_clock"}
+        if absent := sorted(name for name in read if name not in assigned):
+            missing[route_file.name] = absent
+
+    assert missing == {}, f"路由读取了未装配的 app.state 服务：{missing}"

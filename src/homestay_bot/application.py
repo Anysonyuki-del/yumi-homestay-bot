@@ -28,6 +28,7 @@ from homestay_bot.domain.enums import (
     EmployeeRole,
     JobStatus,
     MessageOrigin,
+    RoomOperationalStatus,
 )
 from homestay_bot.domain.models import (
     AdminCredential,
@@ -1248,6 +1249,30 @@ class SessionApprovalPageService:
             )
             await session.commit()
             return result
+
+
+class SessionRoomReadinessService:
+    """为房源房态写操作提供会话级门面。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def set_status_by_admin(
+        self,
+        property_id: int,
+        administrator: Employee,
+        status: RoomOperationalStatus,
+    ) -> Any:
+        """在同一事务内由管理员直接设定房态。"""
+        async with self._factory() as session:
+            repository = SQLAlchemyOperationsRepository(session)
+            state = await RoomReadinessService(
+                repository,
+                repository,
+            ).set_status_by_admin(property_id, administrator, status)
+            await session.commit()
+            return state
 
 
 class SessionAdminDashboardService:
@@ -2936,6 +2961,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         bootstrap.private_upload_max_bytes,
     )
     app.state.private_file_service = app.state.task_page_service
+    app.state.room_readiness_service = SessionRoomReadinessService(factory)
     app.state.property_admin_service = SessionPropertyAdminService(
         factory,
         sensitive_data,
