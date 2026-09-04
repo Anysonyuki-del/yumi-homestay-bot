@@ -1100,3 +1100,48 @@ async def test_runtime_task_normal_completion_is_not_reported(caplog) -> None:
         await application._create_runtime_task(finishing_loop())
 
     assert not [item for item in caplog.records if item.levelno >= logging.WARNING]
+
+
+def test_session_facades_implement_every_route_port_method() -> None:
+    """路由从 app.state 取到的会话门面必须实现 Port 声明的全部方法。
+
+    路由通过 app.state 获取服务，静态类型在该处是松的，因此「Port 与内层
+    服务都加了方法、生产门面漏加」不会被 mypy 发现，只会在真实请求时抛
+    AttributeError 并被错误处理压成状态码。v1.5.0 的批量归档就是这样上线的：
+    TaskPageService 和 TaskPageServicePort 都有 archive_filtered，
+    SessionTaskPageService 没有。这里逐个方法名比对，堵住整类问题而非三个方法。
+    """
+    from homestay_bot import application
+    from homestay_bot.routes import approvals as approvals_routes
+    from homestay_bot.routes import customers as customers_routes
+    from homestay_bot.routes import properties as properties_routes
+    from homestay_bot.routes import tasks as tasks_routes
+
+    pairs = [
+        (tasks_routes.TaskPageServicePort, application.SessionTaskPageService),
+        (
+            approvals_routes.ApprovalPageServicePort,
+            application.SessionApprovalPageService,
+        ),
+        (
+            properties_routes.PropertyAdminServicePort,
+            application.SessionPropertyAdminService,
+        ),
+        (
+            customers_routes.CustomerAdminServicePort,
+            application.SessionCustomerAdminService,
+        ),
+    ]
+
+    missing: dict[str, list[str]] = {}
+    for port, facade in pairs:
+        required = {
+            name
+            for name in vars(port)
+            if not name.startswith("_") and callable(vars(port)[name])
+        }
+        absent = sorted(name for name in required if not hasattr(facade, name))
+        if absent:
+            missing[facade.__name__] = absent
+
+    assert missing == {}, f"会话门面缺少 Port 声明的方法：{missing}"

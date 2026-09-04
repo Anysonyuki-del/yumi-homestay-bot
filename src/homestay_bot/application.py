@@ -182,7 +182,7 @@ from homestay_bot.services.task_lifecycle_service import (
     TaskLifecycleService,
     TaskLifecycleSweepResult,
 )
-from homestay_bot.services.task_page_service import TaskPageService
+from homestay_bot.services.task_page_service import TaskFilters, TaskPageService
 from homestay_bot.version import get_app_version
 from homestay_bot.worker import (
     JobHandler,
@@ -1233,6 +1233,22 @@ class SessionApprovalPageService:
             await session.commit()
             return result
 
+    async def reject(
+        self,
+        approval_id: int,
+        employee_id: int,
+        reason: str,
+    ) -> BookingApproval:
+        """在独立会话中拒绝审批并把原因写入审计。"""
+        async with self._registry.acquire() as bundle, self._factory() as session:
+            result = await self._service(session, bundle.hostex).reject(
+                approval_id,
+                employee_id,
+                reason,
+            )
+            await session.commit()
+            return result
+
 
 class SessionAdminDashboardService:
     """为每次总览读取创建独立只读数据库会话。"""
@@ -1517,6 +1533,32 @@ class SessionTaskPageService:
             ).revoke_ready(task.property_id, employee)
             await session.commit()
             return state
+
+    async def archive(self, task_id: int, employee: Employee) -> None:
+        """在会话内把单条终态任务移入归档。"""
+        async with self._factory() as session:
+            await self._service(session).archive(task_id, employee)
+            await session.commit()
+
+    async def restore(self, task_id: int, employee: Employee) -> None:
+        """在会话内把任务移出归档。"""
+        async with self._factory() as session:
+            await self._service(session).restore(task_id, employee)
+            await session.commit()
+
+    async def archive_filtered(
+        self,
+        employee: Employee,
+        filters: TaskFilters,
+    ) -> int:
+        """在会话内按筛选条件批量归档，返回归档数量。"""
+        async with self._factory() as session:
+            archived = await self._service(session).archive_filtered(
+                employee,
+                filters,
+            )
+            await session.commit()
+            return archived
 
     async def file_for(
         self,
