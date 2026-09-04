@@ -35,7 +35,7 @@
   {% if task.status.value == "assigned" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="in_progress"><button type="submit">开始处理</button></form>
   {% elif task.status.value == "in_progress" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="pending_inspection"><button type="submit">提交检查</button></form>{% endif %}
 
-  {% if not is_admin and task.status.value in ["assigned", "in_progress", "pending_inspection"] %}
+  {% if is_assignee and task.status.value in ["assigned", "in_progress", "pending_inspection"] %}
   <form method="post" action="/employee/tasks/{{ task.id }}/checklist" data-unsaved-warning>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <fieldset><legend>房间检查</legend><label class="checkbox"><input type="checkbox" name="clean" value="true" {% if task.checklist.get("clean") %}checked{% endif %}>清洁已完成</label><label class="checkbox"><input type="checkbox" name="supplies" value="true" {% if task.checklist.get("supplies") %}checked{% endif %}>耗材已补齐</label><label class="checkbox"><input type="checkbox" name="damage" value="true" {% if task.checklist.get("damage") %}checked{% endif %}>设施检查完成</label></fieldset>
@@ -44,7 +44,7 @@
   <form method="post" enctype="multipart/form-data" action="/employee/tasks/{{ task.id }}/photos" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>现场照片<input type="file" name="photo" accept="image/png,image/jpeg,image/webp" required></label><button type="submit">上传现场照片</button></form>
   {% endif %}
 
-  {% if not is_admin and task.status.value == "pending_inspection" %}<form method="post" action="/employee/tasks/{{ task.id }}/ready" data-confirm="确认检查证据完整，并把房间标记为可入住吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">确认房间可入住</button></form>{% endif %}
+  {% if is_assignee and task.status.value == "pending_inspection" %}<form method="post" action="/employee/tasks/{{ task.id }}/ready" data-confirm="确认检查证据完整，并把房间标记为可入住吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">确认房间可入住</button></form>{% endif %}
   {% if is_admin and room_state and room_state.status.value == "ready" %}<form method="post" action="/employee/tasks/{{ task.id }}/revoke-ready" data-confirm="确定撤回可入住状态并要求重新检查吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">撤回可入住状态</button></form>{% endif %}
   {% if is_admin and task.status.value not in ["completed", "cancelled", "expired"] %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？此操作会中止当前处理流程。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
 </div></section>

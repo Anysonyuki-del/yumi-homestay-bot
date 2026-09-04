@@ -658,3 +658,51 @@ def test_task_detail_clears_legacy_session_csrf_key() -> None:
 
     assert response.status_code == 200
     assert "task_csrf" not in _session_from_response(response)
+
+
+def test_admin_assignee_sees_field_evidence_controls() -> None:
+    """管理员作为任务执行人时必须能提交现场证据。
+
+    服务端 require_evidence_editor 只要求「是该任务的执行员工」，不看角色；
+    模板此前按「不是管理员」判断，导致唯一员工是管理员的部署里，任务被分派
+    后再也找不到清单与照片入口，只能停在已分派直至失效。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.assigned_employee_id = 1  # 管理员会话的员工编号
+    tasks.item.status = BusinessTaskStatus.ASSIGNED
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    assert page.status_code == 200
+    assert "房间检查" in page.text
+    assert 'action="/employee/tasks/1/checklist"' in page.text
+    assert 'action="/employee/tasks/1/photos"' in page.text
+
+
+def test_admin_not_assignee_keeps_field_evidence_hidden() -> None:
+    """管理员不是执行人时不得出现现场证据入口，与服务端拒绝保持一致。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.assigned_employee_id = 2  # 分派给了别人
+    tasks.item.status = BusinessTaskStatus.ASSIGNED
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    assert page.status_code == 200
+    assert 'action="/employee/tasks/1/checklist"' not in page.text
+    assert 'action="/employee/tasks/1/photos"' not in page.text
+
+
+def test_admin_assignee_can_confirm_room_ready() -> None:
+    """待检查任务的执行人是管理员时，必须给出确认可入住入口。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.assigned_employee_id = 1
+    tasks.item.status = BusinessTaskStatus.PENDING_INSPECTION
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    assert page.status_code == 200
+    assert 'action="/employee/tasks/1/ready"' in page.text
+    assert "确认房间可入住" in page.text

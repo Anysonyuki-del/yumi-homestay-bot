@@ -287,6 +287,12 @@ async def task_detail(request: Request, task_id: int) -> Response:
             **detail,
             **options,
             "is_admin": employee.role is EmployeeRole.ADMIN,
+            # 现场证据与确认可入住由服务端按「是否本任务执行员工」判断，与角色无关，
+            # 详见 require_evidence_editor 与 room_readiness_service.mark_ready。
+            "is_assignee": (
+                cast(BusinessTask, detail["task"]).assigned_employee_id
+                == employee.id
+            ),
             "csrf_token": await _issue_csrf(request, task_id),
             "page_title": f"任务 #{task_id}",
             "active_nav": "tasks",
