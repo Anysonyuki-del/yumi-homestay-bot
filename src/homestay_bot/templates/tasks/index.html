@@ -9,6 +9,7 @@
     <a href="/employee/tasks?overdue=true" {% if filters.overdue %}aria-current="page"{% endif %}>逾期</a>
     <a href="/employee/tasks?status_filter=pending_confirmation" {% if filters.status and filters.status.value == "pending_confirmation" %}aria-current="page"{% endif %}>待确认</a>
     <a href="/employee/tasks?status_filter=pending_assignment" {% if filters.status and filters.status.value == "pending_assignment" %}aria-current="page"{% endif %}>待分派</a>
+    {% if is_admin %}<a href="/employee/tasks?archived=true" {% if filters.archived %}aria-current="page"{% endif %}>已归档</a>{% endif %}
   </nav>
   <details class="filter-disclosure"{% if filters.active %} open{% endif %}><summary>高级筛选{% if filters.active %} · 已生效{% endif %}</summary>
   <form class="filter-toolbar" method="get" action="/employee/tasks" data-filter-form>

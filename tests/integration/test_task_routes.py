@@ -557,7 +557,12 @@ def _quick_queue_links(html: str) -> list[str]:
 
 
 def test_task_center_keeps_quick_queue_small_and_defers_advanced_filters() -> None:
-    """快速队列最多四项，完整筛选改为原生渐进披露且默认收起。"""
+    """开放队列最多四项，归档是另一维度可单列；完整筛选默认收起。
+
+    v1.3.14 把快速队列收敛为四项开放队列，约束的是开放任务队列不要蔓延。
+    「已归档」不是开放队列而是归档维度的入口，此前只藏在默认折叠的高级筛选
+    里，归档完就找不到任务去了哪。这里把约束写成它真正的意思，而不是放宽数字。
+    """
     client, _ = build_client(EmployeeRole.ADMIN)
     login(client)
 
@@ -565,8 +570,10 @@ def test_task_center_keeps_quick_queue_small_and_defers_advanced_filters() -> No
 
     assert response.status_code == 200
     links = _quick_queue_links(response.text)
-    assert len(links) <= 4
+    open_queue_links = [link for link in links if link != "已归档"]
+    assert len(open_queue_links) <= 4
     assert "已失效" not in links
+    assert links.count("已归档") <= 1
     disclosure = re.search(r"<details class=\"filter-disclosure\"([^>]*)>", response.text)
     assert disclosure is not None
     assert "open" not in disclosure.group(1)

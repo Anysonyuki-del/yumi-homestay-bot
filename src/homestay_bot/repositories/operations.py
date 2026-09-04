@@ -193,7 +193,8 @@ class SQLAlchemyOperationsRepository:
             if archived
             else BusinessTask.archived_at.is_(None)
         ]
-        if status is None:
+        if status is None and not archived:
+            # 归档只收终态任务，归档视图再叠加「仅开放态」会恒为空。
             conditions.append(
                 BusinessTask.status.not_in(
                     [

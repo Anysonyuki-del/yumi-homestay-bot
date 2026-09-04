@@ -944,3 +944,53 @@ async def test_bulk_archive_covers_filter_and_skips_open_tasks() -> None:
         )
         assert len(summaries) == 1
         assert summaries[0].details["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_archived_view_lists_tasks_without_extra_status_filter() -> None:
+    """只勾选「查看已归档」就必须列出全部已归档任务。
+
+    归档只接受终态任务，而默认列表在未选状态时会附加「仅开放态」条件；
+    两者相与恒为空，导致归档视图看起来永远是空的。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=101, title="测试房间"))
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        session.add_all(
+            [
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=status,
+                    property_id=101,
+                    service_date=date(2026, 8, index + 1),
+                    description=f"终态 {index}",
+                )
+                for index, status in enumerate(
+                    (
+                        BusinessTaskStatus.EXPIRED,
+                        BusinessTaskStatus.CANCELLED,
+                        BusinessTaskStatus.COMPLETED,
+                    )
+                )
+            ]
+        )
+        await session.flush()
+        assert await repository.archive_matching(1) == 3
+
+        # 不带任何状态筛选，只看归档
+        archived = await repository.list_all_open(
+            offset=0, limit=50, archived=True
+        )
+
+        assert {task.status for task in archived} == {
+            BusinessTaskStatus.EXPIRED,
+            BusinessTaskStatus.CANCELLED,
+            BusinessTaskStatus.COMPLETED,
+        }
