@@ -437,7 +437,8 @@ def test_sqlite_approval_pii_finalization_drops_plaintext_and_is_irreversible(
     assert downgrade.returncode != 0
     assert "恢复升级前数据库备份" in downgrade.stderr
     current = run_alembic("current")
-    assert "0023_approval_pii_final (head)" in current.stdout
+    assert "0023_approval_pii_final" in current.stdout
+    assert "0022_approval_pii\n" not in current.stdout
 
 
 def test_sqlite_approval_pii_finalization_rejects_missing_ciphertext(
@@ -716,3 +717,52 @@ def test_checkout_observation_migration_backfills_existing_finished_orders(
         "R-FINISHED-1": "2026-08-12",
         "R-FINISHED-2": "2026-08-13",
     }
+
+
+def test_sqlite_business_task_archive_migration_is_reversible(
+    tmp_path: Path,
+) -> None:
+    """0024 必须支持 SQLite 升级、降级到 0023 后再次升级。
+
+    归档字段只影响列表可见性，降级不应破坏任务本身，因此与不可逆的 0023
+    不同，本迁移必须双向可用。
+    """
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "task-archive.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+
+    def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
+        """在隔离数据库执行一次 Alembic 命令。"""
+        return subprocess.run(
+            _alembic_command(*arguments),
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def task_columns() -> set[str]:
+        """读取 business_tasks 的列名集合。"""
+        with sqlite3.connect(database_path) as connection:
+            return {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(business_tasks)"
+                ).fetchall()
+            }
+
+    archive_columns = {"archived_at", "archived_by_employee_id"}
+
+    upgrade = run_alembic("upgrade", "head")
+    assert upgrade.returncode == 0, upgrade.stderr
+    assert archive_columns <= task_columns()
+
+    downgrade = run_alembic("downgrade", "0023_approval_pii_final")
+    assert downgrade.returncode == 0, downgrade.stderr
+    assert archive_columns.isdisjoint(task_columns())
+
+    reupgrade = run_alembic("upgrade", "head")
+    assert reupgrade.returncode == 0, reupgrade.stderr
+    assert archive_columns <= task_columns()

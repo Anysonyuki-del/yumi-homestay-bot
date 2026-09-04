@@ -45,7 +45,12 @@
   {% endif %}
 
   {% if is_assignee and task.status.value == "pending_inspection" %}<form method="post" action="/employee/tasks/{{ task.id }}/ready" data-confirm="确认检查证据完整，并把房间标记为可入住吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">确认房间可入住</button></form>{% endif %}
+  {% if (is_assignee or is_admin) and task.status.value == "pending_inspection" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确认这项任务已经完成吗？完成后不再计入待办。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="completed"><button class="button button--secondary" type="submit">标记任务完成</button></form>{% endif %}
   {% if is_admin and room_state and room_state.status.value == "ready" %}<form method="post" action="/employee/tasks/{{ task.id }}/revoke-ready" data-confirm="确定撤回可入住状态并要求重新检查吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">撤回可入住状态</button></form>{% endif %}
+  {% if is_admin and task.status.value in ["completed", "cancelled", "expired"] %}
+    {% if task.archived_at %}<form method="post" action="/employee/tasks/{{ task.id }}/restore"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">从归档恢复</button></form>
+    {% else %}<form method="post" action="/employee/tasks/{{ task.id }}/archive" data-confirm="确定把这项任务移入归档吗？归档后不再出现在默认列表，可随时恢复。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">移入归档</button></form>{% endif %}
+  {% endif %}
   {% if is_admin and task.status.value not in ["completed", "cancelled", "expired"] %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？此操作会中止当前处理流程。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
 </div></section>
 {% endblock %}

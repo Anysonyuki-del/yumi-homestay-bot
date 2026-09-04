@@ -43,6 +43,15 @@ class RoomStateRepository(Protocol):
     ) -> RoomOperationalState:
         """锁定并更新房态，同时记录安全审计。"""
 
+    async def record_manual_override(
+        self,
+        *,
+        property_id: int,
+        actor_employee_id: int,
+        status: RoomOperationalStatus,
+    ) -> None:
+        """记录一次未经证据的人工房态覆盖。"""
+
 
 class CredentialDeliveryEvaluator(Protocol):
     """定义房间可入住后触发凭证安全评估的接口。"""
@@ -106,6 +115,40 @@ class RoomReadinessService:
                 expected_property_id=task.property_id,
                 source_task_id=task.id,
             )
+        return state
+
+    async def set_status_by_admin(
+        self,
+        property_id: int,
+        administrator: Employee,
+        status: RoomOperationalStatus,
+    ) -> RoomOperationalState:
+        """允许管理员直接设定房态，不要求清单与现场照片证据。
+
+        仓储层本就支持全部六个状态并自带审计，但此前只有 mark_ready 和
+        revoke_ready 两个受限入口，清洁中、在住、维修中永远无法到达，
+        房间坏了也标不出来。
+
+        这里额外写一条人工覆盖审计：房态 READY 是向客人发放门锁密码的前置
+        条件之一，人工直改绕过了证据要求，事后必须能区分「走了证据流程」
+        和「管理员直接设定」，否则无从追查房间当时凭什么算可入住。
+        仓储层「已入住/维修中不得直接标记为可入住」的领域守卫继续生效。
+        """
+        if (
+            not administrator.is_active
+            or administrator.role is not EmployeeRole.ADMIN
+        ):
+            raise PermissionError("只有管理员可以直接设定房态")
+        state = await self._rooms.set_room_status(
+            property_id,
+            status,
+            administrator.id,
+        )
+        await self._rooms.record_manual_override(
+            property_id=property_id,
+            actor_employee_id=administrator.id,
+            status=status,
+        )
         return state
 
     async def revoke_ready(

@@ -65,6 +65,7 @@ class RoomStateStub:
     def __init__(self) -> None:
         """初始化房态调用。"""
         self.calls: list[tuple[int, RoomOperationalStatus, int]] = []
+        self.overrides: list[tuple[int, int, RoomOperationalStatus]] = []
         self.current = SimpleNamespace(
             property_id=101,
             status=RoomOperationalStatus.READY,
@@ -83,6 +84,12 @@ class RoomStateStub:
             status=status,
             changed_by=actor_employee_id,
         )
+
+    async def record_manual_override(
+        self, *, property_id, actor_employee_id, status
+    ) -> None:
+        """记录人工房态覆盖审计。"""
+        self.overrides.append((property_id, actor_employee_id, status))
 
 
 @pytest.mark.asyncio
@@ -199,3 +206,62 @@ async def test_mark_ready_only_triggers_credential_safety_evaluation() -> None:
             "source_task_id": 7,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_admin_can_set_any_room_status_without_evidence() -> None:
+    """管理员可以直接设定房态，包括证据流程之外的清洁中与维修中。
+
+    仓储层本就支持全部六个状态，但此前只有 mark_ready 与 revoke_ready
+    两个受限入口，房间坏了无法标记为维修中。
+    """
+    rooms = RoomStateStub()
+    service = RoomReadinessService(TaskEvidenceStub(), rooms)
+
+    for target in (
+        RoomOperationalStatus.MAINTENANCE,
+        RoomOperationalStatus.CLEANING,
+        RoomOperationalStatus.OCCUPIED,
+    ):
+        state = await service.set_status_by_admin(
+            101, employee(9, EmployeeRole.ADMIN), target
+        )
+        assert state.status is target
+
+    assert [call[1] for call in rooms.calls] == [
+        RoomOperationalStatus.MAINTENANCE,
+        RoomOperationalStatus.CLEANING,
+        RoomOperationalStatus.OCCUPIED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admin_direct_ready_is_recorded_as_manual_override() -> None:
+    """直改到可入住必须留下人工覆盖审计。
+
+    房态 READY 是向客人发放门锁密码的前置条件之一，人工直改绕过了清单与
+    照片证据；事后必须能分辨这个 READY 的来源。
+    """
+    rooms = RoomStateStub()
+    service = RoomReadinessService(TaskEvidenceStub(), rooms)
+
+    await service.set_status_by_admin(
+        101, employee(9, EmployeeRole.ADMIN), RoomOperationalStatus.READY
+    )
+
+    assert rooms.overrides == [(101, 9, RoomOperationalStatus.READY)]
+
+
+@pytest.mark.asyncio
+async def test_staff_cannot_set_room_status_directly() -> None:
+    """普通员工不得绕过证据流程直接设定房态。"""
+    rooms = RoomStateStub()
+    service = RoomReadinessService(TaskEvidenceStub(), rooms)
+
+    with pytest.raises(PermissionError):
+        await service.set_status_by_admin(
+            101, employee(9, EmployeeRole.STAFF), RoomOperationalStatus.READY
+        )
+
+    assert rooms.calls == []
+    assert rooms.overrides == []

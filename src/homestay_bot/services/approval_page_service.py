@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import ApprovalStatus
-from homestay_bot.domain.models import BookingApproval
+from homestay_bot.domain.models import AuditLog, BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.booking_service import BookingService
@@ -41,6 +41,15 @@ class ApprovalPageView:
     guest_name: str
     room_type_preference: str
     special_requests: str | None
+
+
+_REJECTABLE_STATUSES = frozenset(
+    {
+        ApprovalStatus.PENDING,
+        ApprovalStatus.NEEDS_REVIEW,
+        ApprovalStatus.CONFLICT,
+    }
+)
 
 
 class ApprovalPageService:
@@ -120,6 +129,46 @@ class ApprovalPageService:
         return await self._booking.confirm_and_create(
             approval_id, employee_id, command
         )
+
+    async def reject(
+        self,
+        approval_id: int,
+        employee_id: int,
+        reason: str,
+    ) -> BookingApproval:
+        """把待处理审批标记为已拒绝，并把拒绝原因写入审计。
+
+        ApprovalStatus.REJECTED 此前没有任何写入点，审批只能确认不能拒绝。
+        原因必须在拒绝当下记入审计：数据保留逻辑会清理已拒绝审批，之后无从追溯。
+        """
+        cleaned = reason.strip()
+        if not cleaned:
+            raise ValueError("拒绝原因不能为空")
+        approval = await self._session.scalar(
+            select(BookingApproval)
+            .where(BookingApproval.id == approval_id)
+            .with_for_update()
+        )
+        if approval is None:
+            raise LookupError("审批单不存在")
+        if approval.status not in _REJECTABLE_STATUSES:
+            raise ValueError("当前审批状态不能拒绝")
+        previous = approval.status
+        approval.status = ApprovalStatus.REJECTED
+        self._session.add(
+            AuditLog(
+                actor_employee_id=employee_id,
+                action="booking_approval_rejected",
+                target_type="booking_approval",
+                target_id=str(approval_id),
+                details={
+                    "from_status": previous.value,
+                    "reason": cleaned[:500],
+                },
+            )
+        )
+        await self._session.flush()
+        return approval
 
     @staticmethod
     def mask_mobile(mobile: str) -> str:

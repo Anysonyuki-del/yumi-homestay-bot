@@ -940,6 +940,13 @@ class BusinessTask(TimestampMixin, Base):
     closed_by_employee_id: Mapped[int | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
+    # 软归档只影响列表可见性，不参与状态机；终态任务才允许归档。
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    archived_by_employee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class TaskAttachment(TimestampMixin, Base):

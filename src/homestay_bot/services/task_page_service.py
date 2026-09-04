@@ -34,8 +34,35 @@ class TaskPageRepository(Protocol):
         property_id: int | None = None,
         assigned_employee_id: int | None = None,
         overdue_before: date | None = None,
+        archived: bool = False,
     ) -> list[BusinessTask]:
-        """分页返回未关闭任务。"""
+        """分页返回未关闭任务；默认排除已归档。"""
+
+    async def archive_task(
+        self,
+        task_id: int,
+        actor_employee_id: int,
+    ) -> BusinessTask:
+        """把单条终态任务移入归档。"""
+
+    async def restore_task(
+        self,
+        task_id: int,
+        actor_employee_id: int,
+    ) -> BusinessTask:
+        """把任务移出归档。"""
+
+    async def archive_matching(
+        self,
+        actor_employee_id: int,
+        *,
+        status: BusinessTaskStatus | None = None,
+        task_type: BusinessTaskType | None = None,
+        service_date: date | None = None,
+        property_id: int | None = None,
+        assigned_employee_id: int | None = None,
+    ) -> int:
+        """按筛选条件批量归档终态任务，返回归档数量。"""
 
     async def list_assigned_open(
         self,
@@ -103,11 +130,12 @@ class TaskFilters:
     property_id: int | None = None
     assigned_employee_id: int | None = None
     overdue: bool = False
+    archived: bool = False
 
     @property
     def active(self) -> bool:
         """判断是否至少启用一项筛选。"""
-        return self.overdue or any(
+        return self.overdue or self.archived or any(
             value is not None
             for value in (
                 self.status,
@@ -175,6 +203,7 @@ class TaskPageService:
                     property_id=selected.property_id,
                     assigned_employee_id=selected.assigned_employee_id,
                     overdue_before=today if selected.overdue else None,
+                    archived=selected.archived,
                 )
                 if selected.active
                 else await self._tasks.list_all_open(
@@ -361,6 +390,32 @@ class TaskPageService:
             task_id=task.id,
             employee_id=employee.id,
             checklist=checklist,
+        )
+
+    async def archive(self, task_id: int, employee: Employee) -> None:
+        """管理员把单条终态任务移入归档。"""
+        self._require_admin(employee)
+        await self._tasks.archive_task(task_id, employee.id)
+
+    async def restore(self, task_id: int, employee: Employee) -> None:
+        """管理员把任务移出归档。"""
+        self._require_admin(employee)
+        await self._tasks.restore_task(task_id, employee.id)
+
+    async def archive_filtered(
+        self,
+        employee: Employee,
+        filters: TaskFilters,
+    ) -> int:
+        """按当前筛选条件批量归档终态任务，返回归档数量。"""
+        self._require_admin(employee)
+        return await self._tasks.archive_matching(
+            employee.id,
+            status=filters.status,
+            task_type=filters.task_type,
+            service_date=filters.service_date,
+            property_id=filters.property_id,
+            assigned_employee_id=filters.assigned_employee_id,
         )
 
     async def require_evidence_editor(

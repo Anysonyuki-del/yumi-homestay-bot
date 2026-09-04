@@ -38,6 +38,14 @@ class ApprovalPageServicePort(Protocol):
     ) -> BookingApproval:
         """由授权员工确认并执行安全下单流程。"""
 
+    async def reject(
+        self,
+        approval_id: int,
+        employee_id: int,
+        reason: str,
+    ) -> BookingApproval:
+        """由授权员工拒绝审批并记录原因。"""
+
 
 def _get_page_service(request: Request) -> ApprovalPageServicePort:
     """从应用状态读取审批页面业务服务。"""
@@ -139,6 +147,38 @@ async def confirm_approval(
         payment_confirmed=payment_confirmed,
     )
     await _get_page_service(request).confirm(approval_id, employee_id, command)
+    return RedirectResponse(
+        f"/employee/approvals/{approval_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{approval_id}/reject")
+async def reject_approval(
+    request: Request,
+    approval_id: int,
+    reason: str = Form(min_length=1, max_length=500),
+    confirmation_nonce: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """校验角色和一次性令牌后拒绝审批，并把原因写入审计。"""
+    employee_id, role = await require_employee_session(request)
+    if role is not EmployeeRole.ADMIN:
+        raise HTTPException(status_code=403, detail="当前员工没有拒绝审批权限")
+
+    await consume_form_csrf(
+        request,
+        family=APPROVAL_CSRF_FAMILY,
+        entity_id=approval_id,
+        token=confirmation_nonce,
+        detail="确认令牌无效或已使用",
+    )
+
+    try:
+        await _get_page_service(request).reject(approval_id, employee_id, reason)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="审批单不存在") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return RedirectResponse(
         f"/employee/approvals/{approval_id}",
         status_code=status.HTTP_303_SEE_OTHER,

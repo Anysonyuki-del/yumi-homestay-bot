@@ -18,6 +18,7 @@ class ApprovalPageStub:
 
     def __init__(self) -> None:
         self.confirm_calls = 0
+        self.reject_calls: list[tuple[int, int, str]] = []
         self.list_calls: list[tuple[int, int]] = []
         self.approval = ApprovalPageView(
             id=1,
@@ -53,6 +54,15 @@ class ApprovalPageStub:
         self.approval = replace(
             self.approval,
             status=ApprovalStatus.BOOKED,
+        )
+        return self.approval
+
+    async def reject(self, approval_id: int, employee_id: int, reason: str):
+        """记录拒绝原因并返回已拒绝状态。"""
+        self.reject_calls.append((approval_id, employee_id, reason))
+        self.approval = replace(
+            self.approval,
+            status=ApprovalStatus.REJECTED,
         )
         return self.approval
 
@@ -212,3 +222,73 @@ def test_approval_nonce_rejects_cross_entity_replay() -> None:
 
     assert response.status_code == 409
     assert approvals.confirm_calls == 0
+
+
+def nonce_from(client: TestClient) -> str:
+    """读取审批详情页的一次性确认令牌。"""
+    page = client.get("/employee/approvals/1")
+    return re.search(
+        r'name="confirmation_nonce" value="([^"]+)"',
+        page.text,
+    ).group(1)
+
+
+def test_pending_approval_offers_rejection_entry() -> None:
+    """待处理审批必须提供拒绝入口。
+
+    ApprovalStatus.REJECTED 此前没有任何写入点，页面只能确认不能拒绝，
+    一笔不该接的预订在后台无法结束。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    page = client.get("/employee/approvals/1")
+
+    assert page.status_code == 200
+    assert 'action="/employee/approvals/1/reject"' in page.text
+    assert 'name="reason"' in page.text
+
+
+def test_admin_rejects_approval_with_reason() -> None:
+    """管理员提交拒绝原因后审批转为已拒绝。"""
+    client, approvals = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.post(
+        "/employee/approvals/1/reject",
+        data={"reason": "所选日期已被其他渠道占用", "confirmation_nonce": nonce_from(client)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert approvals.reject_calls == [(1, 1, "所选日期已被其他渠道占用")]
+
+
+def test_staff_cannot_reject_approval() -> None:
+    """普通员工不得拒绝审批，与确认权限保持一致。"""
+    client, approvals = build_client(EmployeeRole.STAFF)
+    login_admin(client, next_path="/employee/approvals/1")
+
+    response = client.post(
+        "/employee/approvals/1/reject",
+        data={"reason": "测试", "confirmation_nonce": "any"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert approvals.reject_calls == []
+
+
+def test_rejection_requires_non_empty_reason() -> None:
+    """空原因必须被拒绝：原因是拒绝决定的唯一留痕。"""
+    client, approvals = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.post(
+        "/employee/approvals/1/reject",
+        data={"reason": "", "confirmation_nonce": nonce_from(client)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 422
+    assert approvals.reject_calls == []

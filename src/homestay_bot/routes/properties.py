@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal, Protocol, cast
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import EmployeeRole, RoomOperationalStatus
 from homestay_bot.domain.models import Employee
 from homestay_bot.routes.admin_form_csrf import (
     PROPERTY_CSRF_FAMILY,
@@ -169,6 +169,7 @@ async def property_detail(
         context={
             **detail,
             "tab": tab,
+            "room_statuses": list(RoomOperationalStatus),
             "csrf_token": await _issue_csrf(request, property_id),
             "page_title": getattr(
                 detail["property"],
@@ -245,6 +246,33 @@ async def replace_property_credentials(
         await qr_image.close()
     return RedirectResponse(
         f"/employee/properties/{property_id}?tab=credentials",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{property_id}/room-status")
+async def set_room_operational_status(
+    request: Request,
+    property_id: int,
+    room_status: Annotated[RoomOperationalStatus, Form()],
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """允许管理员直接设定房态，不要求清单与现场照片证据。"""
+    administrator = await _current_admin(request)
+    await _consume_csrf(request, property_id, csrf_token)
+    service = getattr(request.app.state, "room_readiness_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="房态服务未就绪")
+    try:
+        await service.set_status_by_admin(property_id, administrator, room_status)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail="没有权限设定房态") from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="房间不存在") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return RedirectResponse(
+        f"/employee/properties/{property_id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

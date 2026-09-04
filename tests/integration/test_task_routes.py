@@ -40,6 +40,7 @@ class TaskPageStub:
             id=1,
             task_type=BusinessTaskType.CLEANING,
             status=BusinessTaskStatus.ASSIGNED,
+            archived_at=None,
             property_id=101,
             service_date=date(2026, 8, 2),
             assigned_employee_id=2,
@@ -52,6 +53,9 @@ class TaskPageStub:
         self.photo_calls: list[dict[str, object]] = []
         self.ready_calls: list[tuple[int, int]] = []
         self.revoke_calls: list[tuple[int, int]] = []
+        self.archive_calls: list[int] = []
+        self.restore_calls: list[int] = []
+        self.bulk_archive_calls: list[object] = []
         self.private_file = None
         self.detail_error: Exception | None = None
         self.list_error: Exception | None = None
@@ -104,6 +108,25 @@ class TaskPageStub:
             "employees": [SimpleNamespace(id=2, name="阿姨")],
             "properties": [SimpleNamespace(id=101, title="长江中心")],
         }
+
+    async def archive(self, task_id, employee):
+        """记录单条归档。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以归档")
+        self.archive_calls.append(task_id)
+
+    async def restore(self, task_id, employee):
+        """记录恢复。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以恢复")
+        self.restore_calls.append(task_id)
+
+    async def archive_filtered(self, employee, filters):
+        """记录批量归档使用的筛选条件。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以归档")
+        self.bulk_archive_calls.append(filters)
+        return 394
 
     async def update_checklist(self, task_id, employee, checklist):
         """记录员工提交的清单。"""
@@ -706,3 +729,129 @@ def test_admin_assignee_can_confirm_room_ready() -> None:
     assert page.status_code == 200
     assert 'action="/employee/tasks/1/ready"' in page.text
     assert "确认房间可入住" in page.text
+
+
+def test_pending_inspection_task_offers_completion_to_assignee() -> None:
+    """待检查任务必须给执行人一个完成入口。
+
+    状态机允许 PENDING_INSPECTION → COMPLETED，但模板此前只提供 in_progress、
+    pending_inspection 和 cancelled 三个目标，做完的任务只能等待窗口关闭而失效。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.assigned_employee_id = 1
+    tasks.item.status = BusinessTaskStatus.PENDING_INSPECTION
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    assert page.status_code == 200
+    assert 'value="completed"' in page.text
+    assert "标记任务完成" in page.text
+
+
+def test_completion_entry_hidden_outside_pending_inspection() -> None:
+    """非待检查状态不得出现完成入口，与状态机允许的迁移保持一致。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.assigned_employee_id = 1
+    tasks.item.status = BusinessTaskStatus.ASSIGNED
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    assert page.status_code == 200
+    assert 'value="completed"' not in page.text
+
+
+def test_terminal_task_offers_archive_to_admin() -> None:
+    """终态任务必须给管理员归档入口。
+
+    失效任务此前只能无限堆积，全仓没有任何删除或归档能力。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.status = BusinessTaskStatus.EXPIRED
+    tasks.item.archived_at = None
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    assert 'action="/employee/tasks/1/archive"' in page.text
+    assert "移入归档" in page.text
+
+
+def test_open_task_has_no_archive_entry() -> None:
+    """开放中的任务不得出现归档入口，避免把没做的活藏起来。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.status = BusinessTaskStatus.ASSIGNED
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    assert 'action="/employee/tasks/1/archive"' not in page.text
+
+
+def test_archived_task_offers_restore() -> None:
+    """已归档任务必须可恢复：选软归档的全部意义就在可逆。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.status = BusinessTaskStatus.EXPIRED
+    tasks.item.archived_at = "2026-09-05T00:00:00Z"
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    assert 'action="/employee/tasks/1/restore"' in page.text
+    assert "从归档恢复" in page.text
+
+
+def test_admin_archives_single_task() -> None:
+    """管理员提交归档后服务收到该任务编号。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.status = BusinessTaskStatus.EXPIRED
+    login(client)
+
+    response = client.post(
+        "/employee/tasks/1/archive",
+        data={"csrf_token": detail_csrf(client)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.archive_calls == [1]
+
+
+def test_staff_cannot_archive_task() -> None:
+    """普通员工不得归档任务。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    login(client)
+
+    response = client.post(
+        "/employee/tasks/1/archive",
+        data={"csrf_token": detail_csrf(client)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert tasks.archive_calls == []
+
+
+def test_bulk_archive_uses_current_filters_as_selection() -> None:
+    """批量归档以当前筛选条件为选择范围，不引入多选提交。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks?status_filter=expired")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/archive-filtered",
+        data={
+            "csrf_token": token,
+            "status_filter": "expired",
+            "task_type": "",
+            "property_id": "",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/tasks?archived=true"
+    assert len(tasks.bulk_archive_calls) == 1
+    assert tasks.bulk_archive_calls[0].status is BusinessTaskStatus.EXPIRED

@@ -825,3 +825,122 @@ async def test_task_queue_excludes_expired_by_default_and_allows_history_filter(
     assert [item.id for item in expired_items] == [expired.id]
     assert [item.id for item in overdue_items] == [active.id]
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_archive_only_accepts_terminal_tasks_and_hides_them() -> None:
+    """归档只接受终态任务，且归档后不再出现在默认列表。
+
+    失效任务此前只能无限堆积；归档必须可逆，且不能被用来把没做的活藏起来。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=101, title="测试房间"))
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        expired = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.EXPIRED,
+            property_id=101,
+            service_date=date(2026, 8, 1),
+            description="已失效",
+        )
+        assigned = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.ASSIGNED,
+            property_id=101,
+            service_date=date(2026, 8, 2),
+            description="进行中",
+        )
+        session.add_all([expired, assigned])
+        await session.flush()
+
+        # 开放中的任务不得归档
+        with pytest.raises(ValueError):
+            await repository.archive_task(assigned.id, 1)
+
+        archived = await repository.archive_task(expired.id, 1)
+        assert archived.archived_at is not None
+        assert archived.archived_by_employee_id == 1
+
+        default_ids = {
+            task.id
+            for task in await repository.list_all_open(offset=0, limit=50)
+        }
+        assert expired.id not in default_ids
+        assert assigned.id in default_ids
+
+        archived_ids = {
+            task.id
+            for task in await repository.list_all_open(
+                offset=0,
+                limit=50,
+                status=BusinessTaskStatus.EXPIRED,
+                archived=True,
+            )
+        }
+        assert archived_ids == {expired.id}
+
+        restored = await repository.restore_task(expired.id, 1)
+        assert restored.archived_at is None
+
+
+@pytest.mark.asyncio
+async def test_bulk_archive_covers_filter_and_skips_open_tasks() -> None:
+    """批量归档以筛选条件为选择范围，且绝不触碰开放中的任务。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=101, title="测试房间"))
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        session.add_all(
+            [
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.EXPIRED,
+                    property_id=101,
+                    service_date=date(2026, 8, index),
+                    description=f"失效 {index}",
+                )
+                for index in range(1, 4)
+            ]
+            + [
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+                    property_id=101,
+                    service_date=date(2026, 8, 9),
+                    description="仍待分派",
+                )
+            ]
+        )
+        await session.flush()
+
+        archived = await repository.archive_matching(
+            1, status=BusinessTaskStatus.EXPIRED
+        )
+        assert archived == 3
+
+        remaining = await repository.list_all_open(offset=0, limit=50)
+        assert [task.status for task in remaining] == [
+            BusinessTaskStatus.PENDING_ASSIGNMENT
+        ]
+
+        # 批量只写一条含数量的汇总审计，不为每条任务各写一条
+        summaries = list(
+            await session.scalars(
+                select(AuditLog).where(AuditLog.action == "business_task_archived")
+            )
+        )
+        assert len(summaries) == 1
+        assert summaries[0].details["count"] == 3

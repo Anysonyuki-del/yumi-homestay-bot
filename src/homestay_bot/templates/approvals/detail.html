@@ -31,4 +31,16 @@
   {% else %}<p>该审批已结束，无需再次创建订单。</p>{% endif %}
 </section>
 {% endif %}
+
+{% if approval.status.value in ["pending", "conflict", "needs_review"] %}
+<section class="detail-section panel panel--padded">
+  <h2>拒绝预订</h2>
+  <p>拒绝后不再创建百居易订单。原因会记入审计，请写清楚判断依据。</p>
+  <form method="post" action="/employee/approvals/{{ approval.id }}/reject" data-confirm="确定拒绝这笔预订吗？拒绝后不会再创建订单。" data-unsaved-warning>
+    <input type="hidden" name="confirmation_nonce" value="{{ confirmation_nonce }}">
+    <label>拒绝原因<input name="reason" maxlength="500" required placeholder="例如：所选日期已被其他渠道占用"></label>
+    <button class="button button--danger" type="submit">拒绝这笔预订</button>
+  </form>
+</section>
+{% endif %}
 {% endblock %}

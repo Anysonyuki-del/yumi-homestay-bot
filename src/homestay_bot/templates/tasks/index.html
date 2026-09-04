@@ -17,10 +17,19 @@
     <label>服务日期<input type="date" name="service_date" value="{{ filters.service_date or '' }}"></label>
     <label>房源<select name="property_id"><option value="">全部房源</option>{% for property in properties %}<option value="{{ property.id }}" {% if filters.property_id == property.id %}selected{% endif %}>{{ property.title }}</option>{% endfor %}</select></label>
     {% if is_admin %}<label>执行员工<select name="assigned_employee_id"><option value="">全部员工</option>{% for employee in employees %}<option value="{{ employee.id }}" {% if filters.assigned_employee_id == employee.id %}selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select></label>{% endif %}
-    <label class="checkbox"><input type="checkbox" name="overdue" value="true" {% if filters.overdue %}checked{% endif %}>只看逾期</label>
+    <label class="checkbox"><input type="checkbox" name="overdue" value="true" {% if filters.overdue %}checked{% endif %}>只看逾期</label><label class="checkbox"><input type="checkbox" name="archived" value="true" {% if filters.archived %}checked{% endif %}>查看已归档</label>
     <div class="button-row"><button type="submit">筛选</button><a class="button button--secondary" href="/employee/tasks">重置</a></div>
   </form>
   </details>
+  {% if is_admin and filters.active and not filters.archived %}
+  <form class="bulk-archive" method="post" action="/employee/tasks/archive-filtered" data-confirm="确定把当前筛选出的全部终态任务移入归档吗？开放中的任务不会被归档，归档后可在「查看已归档」中恢复。">
+    <input type="hidden" name="csrf_token" value="{{ bulk_csrf_token }}">
+    <input type="hidden" name="status_filter" value="{{ filters.status.value if filters.status else '' }}">
+    <input type="hidden" name="task_type" value="{{ filters.task_type.value if filters.task_type else '' }}">
+    <input type="hidden" name="property_id" value="{{ filters.property_id or '' }}">
+    <button class="button button--secondary" type="submit">归档当前筛选的终态任务</button>
+  </form>
+  {% endif %}
   <div class="responsive-table"><table class="data-table"><caption class="visually-hidden">待办任务调度列表</caption><thead><tr><th scope="col">任务</th><th scope="col">服务日期</th><th scope="col">房源</th><th scope="col">执行员工</th><th scope="col">状态</th><th scope="col"><span class="visually-hidden">操作</span></th></tr></thead><tbody>
     {% for task in tasks %}<tr><td><strong>{{ task.task_type | status_zh }}</strong></td><td>{% if task.is_overdue %}{{ ui.badge("已逾期", "danger") }} {% endif %}{{ task.service_date | date_zh }}</td><td>{{ task.property_title }}</td><td>{{ task.assigned_employee_name }}</td><td>{{ ui.badge(task.status | status_zh, "warning" if task.status.value in ["pending_confirmation", "pending_assignment", "pending_inspection"] else "neutral") }}</td><td><a class="table-action" href="/employee/tasks/{{ task.id }}">处理任务</a></td></tr>{% else %}<tr><td colspan="6">当前没有符合筛选条件的任务。</td></tr>{% endfor %}
   </tbody></table></div>

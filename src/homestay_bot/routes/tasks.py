@@ -98,6 +98,19 @@ class TaskPageServicePort(Protocol):
     ) -> object:
         """保存执行员工上传的现场照片。"""
 
+    async def archive(self, task_id: int, employee: Employee) -> None:
+        """把单条终态任务移入归档。"""
+
+    async def restore(self, task_id: int, employee: Employee) -> None:
+        """把任务移出归档。"""
+
+    async def archive_filtered(
+        self,
+        employee: Employee,
+        filters: TaskFilters,
+    ) -> int:
+        """按筛选条件批量归档，返回归档数量。"""
+
     async def mark_ready(self, task_id: int, employee: Employee) -> object:
         """把具备完整证据的房间标记为可入住。"""
 
@@ -133,6 +146,9 @@ async def _issue_csrf(request: Request, task_id: int) -> str:
         family=TASK_CSRF_FAMILY,
         entity_id=task_id,
     )
+
+
+_BULK_CSRF_ENTITY = 0
 
 
 async def _consume_csrf(request: Request, task_id: int, token: str) -> None:
@@ -195,6 +211,7 @@ async def task_index(
         BeforeValidator(empty_query_to_none),
     ] = None,
     overdue: bool = False,
+    archived: bool = False,
 ) -> Response:
     """展示管理员全部待办或员工自己的任务。"""
     employee = await _current_employee(request)
@@ -210,6 +227,7 @@ async def task_index(
                 else None
             ),
             overdue=overdue,
+            archived=archived,
         )
         items = await _get_service(request).list_for(
             employee,
@@ -229,6 +247,7 @@ async def task_index(
             str(assigned_employee_id) if assigned_employee_id else ""
         ),
         "overdue": "true" if overdue else "",
+        "archived": "true" if archived else "",
     }
     active_params = {key: value for key, value in params.items() if value}
 
@@ -248,6 +267,7 @@ async def task_index(
             "next_url": page_url(page + 1) if len(items) > 50 else None,
             "filters": selected_filters,
             "task_statuses": list(BusinessTaskStatus),
+            "bulk_csrf_token": await _issue_csrf(request, _BULK_CSRF_ENTITY),
             "task_types": list(BusinessTaskType),
             "properties": options.get("properties", []),
             "employees": options.get("employees", []),
@@ -297,6 +317,85 @@ async def task_detail(request: Request, task_id: int) -> Response:
             "page_title": f"任务 #{task_id}",
             "active_nav": "tasks",
         },
+    )
+
+
+@router.post("/archive-filtered")
+async def archive_filtered_tasks(
+    request: Request,
+    csrf_token: str = Form(min_length=1, max_length=128),
+    status_filter: Annotated[
+        BusinessTaskStatus | None,
+        BeforeValidator(empty_query_to_none),
+        Form(),
+    ] = None,
+    task_type: Annotated[
+        BusinessTaskType | None,
+        BeforeValidator(empty_query_to_none),
+        Form(),
+    ] = None,
+    property_id: Annotated[
+        int | None,
+        BeforeValidator(empty_query_to_none),
+        Form(),
+    ] = None,
+) -> RedirectResponse:
+    """按当前筛选条件批量归档终态任务。
+
+    筛选条件即选择范围：不引入多选提交，列表页既有筛选器就是最自然的选择方式。
+    """
+    employee = await _current_employee(request)
+    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    filters = TaskFilters(
+        status=status_filter,
+        task_type=task_type,
+        property_id=property_id,
+    )
+    try:
+        await _get_service(request).archive_filtered(employee, filters)
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        "/employee/tasks?archived=true",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{task_id}/archive")
+async def archive_task(
+    request: Request,
+    task_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """管理员把单条终态任务移入归档。"""
+    employee = await _current_employee(request)
+    await _consume_csrf(request, task_id, csrf_token)
+    try:
+        await _get_service(request).archive(task_id, employee)
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        f"/employee/tasks/{task_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{task_id}/restore")
+async def restore_task(
+    request: Request,
+    task_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """管理员把任务移出归档，状态本身不变。"""
+    employee = await _current_employee(request)
+    await _consume_csrf(request, task_id, csrf_token)
+    try:
+        await _get_service(request).restore(task_id, employee)
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        f"/employee/tasks/{task_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

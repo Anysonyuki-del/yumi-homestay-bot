@@ -185,9 +185,14 @@ class SQLAlchemyOperationsRepository:
         property_id: int | None = None,
         assigned_employee_id: int | None = None,
         overdue_before: date | None = None,
+        archived: bool = False,
     ) -> list[BusinessTask]:
-        """按稳定顺序分页返回未关闭任务。"""
-        conditions: list[Any] = []
+        """按稳定顺序分页返回未关闭任务；默认排除已归档。"""
+        conditions: list[Any] = [
+            BusinessTask.archived_at.is_not(None)
+            if archived
+            else BusinessTask.archived_at.is_(None)
+        ]
         if status is None:
             conditions.append(
                 BusinessTask.status.not_in(
@@ -449,6 +454,130 @@ class SQLAlchemyOperationsRepository:
         )
         return attachment_id is not None
 
+    _ARCHIVABLE_STATUSES = (
+        BusinessTaskStatus.COMPLETED,
+        BusinessTaskStatus.CANCELLED,
+        BusinessTaskStatus.EXPIRED,
+    )
+
+    async def archive_task(
+        self,
+        task_id: int,
+        actor_employee_id: int,
+    ) -> BusinessTask:
+        """把单条终态任务移入归档，开放中的任务拒绝归档。"""
+        task = await self._session.scalar(
+            select(BusinessTask)
+            .where(BusinessTask.id == task_id)
+            .with_for_update()
+        )
+        if task is None:
+            raise LookupError("任务不存在")
+        if task.status not in self._ARCHIVABLE_STATUSES:
+            raise ValueError("只有已完成、已取消或已失效的任务可以归档")
+        if task.archived_at is not None:
+            return task
+        task.archived_at = datetime.now(UTC)
+        task.archived_by_employee_id = actor_employee_id
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="business_task_archived",
+                target_type="business_task",
+                target_id=str(task_id),
+                details={"status": task.status.value, "count": 1},
+            )
+        )
+        await self._session.flush()
+        return task
+
+    async def restore_task(
+        self,
+        task_id: int,
+        actor_employee_id: int,
+    ) -> BusinessTask:
+        """把任务移出归档，状态本身不变。"""
+        task = await self._session.scalar(
+            select(BusinessTask)
+            .where(BusinessTask.id == task_id)
+            .with_for_update()
+        )
+        if task is None:
+            raise LookupError("任务不存在")
+        if task.archived_at is None:
+            return task
+        task.archived_at = None
+        task.archived_by_employee_id = None
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="business_task_restored",
+                target_type="business_task",
+                target_id=str(task_id),
+                details={"status": task.status.value},
+            )
+        )
+        await self._session.flush()
+        return task
+
+    async def archive_matching(
+        self,
+        actor_employee_id: int,
+        *,
+        status: BusinessTaskStatus | None = None,
+        task_type: BusinessTaskType | None = None,
+        service_date: date | None = None,
+        property_id: int | None = None,
+        assigned_employee_id: int | None = None,
+    ) -> int:
+        """按当前筛选条件批量归档终态任务，返回归档数量。
+
+        筛选条件即选择范围：394 条失效任务逐条点击不现实，而为此新建一套
+        多选提交系统又过重，列表页既有的筛选器本身就是最自然的选择方式。
+        """
+        conditions: list[Any] = [
+            BusinessTask.archived_at.is_(None),
+            BusinessTask.status.in_(self._ARCHIVABLE_STATUSES),
+        ]
+        if status is not None:
+            conditions.append(BusinessTask.status == status)
+        for value, column in (
+            (task_type, BusinessTask.task_type),
+            (service_date, BusinessTask.service_date),
+            (property_id, BusinessTask.property_id),
+            (assigned_employee_id, BusinessTask.assigned_employee_id),
+        ):
+            if value is not None:
+                conditions.append(column == value)
+        now = datetime.now(UTC)
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                update(BusinessTask)
+                .where(*conditions)
+                .values(archived_at=now, archived_by_employee_id=actor_employee_id)
+            ),
+        )
+        archived = int(result.rowcount or 0)
+        if archived:
+            # 批量只记一条含数量与条件的汇总，不为每条任务各写一条审计。
+            self._session.add(
+                AuditLog(
+                    actor_employee_id=actor_employee_id,
+                    action="business_task_archived",
+                    target_type="business_task",
+                    target_id="bulk",
+                    details={
+                        "count": archived,
+                        "status": status.value if status else None,
+                        "task_type": task_type.value if task_type else None,
+                        "property_id": property_id,
+                    },
+                )
+            )
+        await self._session.flush()
+        return archived
+
     async def set_room_status(
         self,
         property_id: int,
@@ -516,6 +645,33 @@ class SQLAlchemyOperationsRepository:
         )
         await self._session.flush()
         return state
+
+    async def record_manual_override(
+        self,
+        *,
+        property_id: int,
+        actor_employee_id: int,
+        status: RoomOperationalStatus,
+    ) -> None:
+        """记录一次未经清单与照片证据的人工房态覆盖。
+
+        set_room_status 自带的审计只说明房态从什么变成什么，不区分来源。
+        向客人发放门锁密码要求房态为 READY，因此必须能分辨这个 READY 是
+        走完证据流程得到的，还是管理员直接设定的。
+        """
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="room_status_manual_override",
+                target_type="room_operational_state",
+                target_id=str(property_id),
+                details={
+                    "to_status": status.value,
+                    "evidence_required": False,
+                },
+            )
+        )
+        await self._session.flush()
 
     async def require_room_state_for_update(
         self,
