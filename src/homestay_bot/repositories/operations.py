@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
 from homestay_bot.domain.enums import (
+    ARCHIVABLE_TASK_STATUSES,
     BusinessTaskOrigin,
     BusinessTaskStatus,
     BusinessTaskType,
@@ -455,12 +456,6 @@ class SQLAlchemyOperationsRepository:
         )
         return attachment_id is not None
 
-    _ARCHIVABLE_STATUSES = (
-        BusinessTaskStatus.COMPLETED,
-        BusinessTaskStatus.CANCELLED,
-        BusinessTaskStatus.EXPIRED,
-    )
-
     async def archive_task(
         self,
         task_id: int,
@@ -474,7 +469,7 @@ class SQLAlchemyOperationsRepository:
         )
         if task is None:
             raise LookupError("任务不存在")
-        if task.status not in self._ARCHIVABLE_STATUSES:
+        if task.status not in ARCHIVABLE_TASK_STATUSES:
             raise ValueError("只有已完成、已取消或已失效的任务可以归档")
         if task.archived_at is not None:
             return task
@@ -547,7 +542,7 @@ class SQLAlchemyOperationsRepository:
         if blocked := sorted(
             task.id
             for task in tasks
-            if task.status not in self._ARCHIVABLE_STATUSES
+            if task.status not in ARCHIVABLE_TASK_STATUSES
         ):
             raise ValueError(
                 f"只有已完成、已取消或已失效的任务可以归档，以下仍在处理中：{blocked}"
@@ -590,7 +585,7 @@ class SQLAlchemyOperationsRepository:
         """
         conditions: list[Any] = [
             BusinessTask.archived_at.is_(None),
-            BusinessTask.status.in_(self._ARCHIVABLE_STATUSES),
+            BusinessTask.status.in_(ARCHIVABLE_TASK_STATUSES),
         ]
         if status is not None:
             conditions.append(BusinessTask.status == status)

@@ -96,6 +96,19 @@ class BusinessTaskStatus(StrEnum):
     EXPIRED = "expired"
 
 
+ARCHIVABLE_TASK_STATUSES = (
+    BusinessTaskStatus.COMPLETED,
+    BusinessTaskStatus.CANCELLED,
+    BusinessTaskStatus.EXPIRED,
+)
+"""可归档的任务终态。
+
+归档只影响列表可见性、不改变任务状态，因此只有已经走完流程的任务才允许归档；
+开放中的任务一旦可归档，就等于提供了「把没做的活藏起来」的入口。
+仓储用它做强制校验，页面用它决定是否给出勾选，两处必须同源。
+"""
+
+
 class BusinessTaskOrigin(StrEnum):
     """标记任务来自订单周转、提醒失败、模型建议或历史未知来源。"""
 

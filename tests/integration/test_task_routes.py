@@ -872,16 +872,29 @@ def test_bulk_archive_uses_current_filters_as_selection() -> None:
     assert tasks.bulk_archive_calls[0].status is BusinessTaskStatus.EXPIRED
 
 
-def test_admin_list_offers_checkbox_selection() -> None:
-    """任务列表必须提供真正的勾选，而不是只有「筛选即选择」。"""
-    client, _ = build_client(EmployeeRole.ADMIN)
+def test_open_task_gets_no_checkbox_but_terminal_task_does() -> None:
+    """只有终态任务给勾选框。
+
+    开放态任务提交后必然被整批拒绝，让它可勾选等于引导用户走进注定失败的操作；
+    从源头不渲染，比事后报错更早解决问题。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
     login(client)
 
-    page = client.get("/employee/tasks")
+    tasks.item.status = BusinessTaskStatus.ASSIGNED
+    open_page = client.get("/employee/tasks")
+    assert 'name="task_ids"' not in open_page.text
+    assert "本页 0 条可归档" in open_page.text
+    # 无可归档项时不给提交按钮
+    assert ">归档勾选的任务</button>" not in open_page.text
 
-    assert 'name="task_ids"' in page.text
-    assert "data-select-all" in page.text
-    assert 'action="/employee/tasks/archive-selected"' in page.text
+    tasks.item.status = BusinessTaskStatus.EXPIRED
+    terminal_page = client.get("/employee/tasks")
+    assert 'name="task_ids"' in terminal_page.text
+    assert "data-select-all" in terminal_page.text
+    assert 'action="/employee/tasks/archive-selected"' in terminal_page.text
+    assert "本页 1 条可归档" in terminal_page.text
+    assert ">归档勾选的任务</button>" in terminal_page.text
 
 
 def test_staff_list_has_no_selection_controls() -> None:

@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BeforeValidator, Field
 
 from homestay_bot.domain.enums import (
+    ARCHIVABLE_TASK_STATUSES,
     BusinessTaskStatus,
     BusinessTaskType,
     EmployeeRole,
@@ -280,6 +281,7 @@ async def task_index(
                 if employee.role is EmployeeRole.ADMIN
                 else ""
             ),
+            "archivable_statuses": ARCHIVABLE_TASK_STATUSES,
             "task_types": list(BusinessTaskType),
             "properties": options.get("properties", []),
             "employees": options.get("employees", []),
@@ -325,6 +327,7 @@ async def task_detail(request: Request, task_id: int) -> Response:
                 cast(BusinessTask, detail["task"]).assigned_employee_id
                 == employee.id
             ),
+            "archivable_statuses": ARCHIVABLE_TASK_STATUSES,
             "csrf_token": await _issue_csrf(request, task_id),
             "page_title": f"任务 #{task_id}",
             "active_nav": "tasks",

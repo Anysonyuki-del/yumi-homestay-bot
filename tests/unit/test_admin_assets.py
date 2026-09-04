@@ -208,3 +208,29 @@ def test_business_templates_extend_one_admin_shell() -> None:
         assert "<html" not in source
         assert '<script src="/static/admin.js"' not in source
         assert '<link rel="stylesheet" href="/static/app.css">' not in source
+
+
+def test_archivable_statuses_have_one_definition_only() -> None:
+    """可归档状态只能有一份定义，模板不得再硬编码副本。
+
+    仓储用它做强制校验、页面用它决定是否给出勾选；两份副本一旦漂移，
+    页面就会给出注定被服务端拒绝的操作入口。
+    """
+    from homestay_bot.domain.enums import (
+        ARCHIVABLE_TASK_STATUSES,
+        BusinessTaskStatus,
+    )
+
+    assert set(ARCHIVABLE_TASK_STATUSES) == {
+        BusinessTaskStatus.COMPLETED,
+        BusinessTaskStatus.CANCELLED,
+        BusinessTaskStatus.EXPIRED,
+    }
+
+    template_root = ASSET_ROOT / "templates"
+    for relative_path in ("tasks/index.html", "tasks/detail.html"):
+        source = (template_root / relative_path).read_text()
+        assert '"completed", "cancelled", "expired"' not in source, (
+            f"{relative_path} 又硬编码了可归档状态副本"
+        )
+        assert "archivable_statuses" in source
