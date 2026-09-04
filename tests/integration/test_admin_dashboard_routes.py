@@ -532,3 +532,23 @@ def test_operations_demotes_stable_rooms_and_states_timeline_span() -> None:
     assert response.text.index("长江中心") < response.text.index("稳定房间")
     assert response.text.index("稳定房间") < response.text.index("东湖小院")
     assert 'class="operations-stable"' in response.text
+
+
+def test_operations_page_offers_inline_room_status_control() -> None:
+    """房态与运营页必须能就地改房态。
+
+    此前改一次房态要走「运营页 → 点房间 → 详情页 → 提交 → 返回」四步，
+    而这是日常运营里最频繁的动作之一。
+    """
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    page = client.get("/employee/admin/operations")
+
+    assert page.status_code == 200
+    assert "/room-status" in page.text
+    assert 'name="room_status"' in page.text
+    assert 'name="csrf_token"' in page.text
+    # 六个房态全部可选，与房源详情页保持一致
+    for label in ("未开始", "保洁中", "待检查", "可入住", "已入住", "维修中"):
+        assert label in page.text

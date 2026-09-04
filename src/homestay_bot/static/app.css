@@ -452,3 +452,16 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* 运营页就地改房态：控件排成一行，不破坏卡片的扫描节奏。 */
+.room-status-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.room-status-form label { margin: 0; color: var(--muted); font-size: var(--t-xs); font-weight: 650; }
+.room-status-form select { flex: 1 1 8rem; min-width: 0; max-width: 12rem; }
+.stable-room-list .room-status-form { margin: 0 0 0 auto; }
+
+/* 任务勾选：复选框列保持窄，移动端把勾选放在卡片上方。 */
+.select-cell { width: 40px; text-align: center; }
+.data-table .select-cell input { width: 18px; min-height: 18px; margin: 0; }
+.card-select { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: var(--t-xs); font-weight: 600; }
+.card-select input { width: 18px; min-height: 18px; }
+.selection-actions { display: flex; justify-content: flex-end; margin-top: 12px; }

@@ -243,3 +243,26 @@ document.querySelectorAll("form").forEach((form) => {
     }, 0);
   });
 });
+
+// 全选本页：仅在脚本可用时增强；脚本缺失时逐条勾选仍然可用，不影响归档提交。
+document.querySelectorAll("[data-select-all]").forEach((toggle) => {
+  const form = toggle.closest("form");
+  if (!form) return;
+  const boxes = () =>
+    Array.from(form.querySelectorAll('input[name="task_ids"]'));
+  toggle.addEventListener("change", () => {
+    boxes().forEach((box) => {
+      box.checked = toggle.checked;
+    });
+  });
+  form.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.name !== "task_ids") return;
+    const all = boxes();
+    const checked = all.filter((box) => box.checked);
+    toggle.checked = checked.length === all.length && all.length > 0;
+    // 部分选中时显示不确定态，避免全选框看起来是「已全选」。
+    toggle.indeterminate = checked.length > 0 && checked.length < all.length;
+  });
+});

@@ -1546,6 +1546,20 @@ class SessionTaskPageService:
             await self._service(session).restore(task_id, employee)
             await session.commit()
 
+    async def archive_many(
+        self,
+        employee: Employee,
+        task_ids: list[int],
+    ) -> int:
+        """在会话内按显式勾选归档，返回归档数量。"""
+        async with self._factory() as session:
+            archived = await self._service(session).archive_many(
+                employee,
+                task_ids,
+            )
+            await session.commit()
+            return archived
+
     async def archive_filtered(
         self,
         employee: Employee,

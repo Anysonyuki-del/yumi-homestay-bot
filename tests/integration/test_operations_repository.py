@@ -994,3 +994,52 @@ async def test_archived_view_lists_tasks_without_extra_status_filter() -> None:
             BusinessTaskStatus.CANCELLED,
             BusinessTaskStatus.COMPLETED,
         }
+
+
+@pytest.mark.asyncio
+async def test_archive_selected_rejects_whole_batch_when_open_task_included() -> None:
+    """勾选中混入开放态任务时整批拒绝，不静默跳过。
+
+    静默跳过会让用户以为全部归档成功、实际漏了几条，比直接报错更难发现。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=101, title="测试房间"))
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        expired = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.EXPIRED,
+            property_id=101,
+            service_date=date(2026, 8, 1),
+            description="已失效",
+        )
+        assigned = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.ASSIGNED,
+            property_id=101,
+            service_date=date(2026, 8, 2),
+            description="进行中",
+        )
+        session.add_all([expired, assigned])
+        await session.flush()
+
+        with pytest.raises(ValueError):
+            await repository.archive_selected([expired.id, assigned.id], 1)
+
+        # 整批拒绝：终态那条也不能被归档
+        await session.refresh(expired)
+        assert expired.archived_at is None
+
+        assert await repository.archive_selected([expired.id], 1) == 1
+
+        with pytest.raises(ValueError):
+            await repository.archive_selected([], 1)
+
+        with pytest.raises(LookupError):
+            await repository.archive_selected([999999], 1)

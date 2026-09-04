@@ -29,6 +29,12 @@
       <div><dt>下次入住</dt><dd>{{ room.next_arrival | date_zh if room.next_arrival else "暂无" }}</dd></div>
       <div><dt>下次退房</dt><dd>{{ room.next_departure | date_zh if room.next_departure else "暂无" }}</dd></div>
     </dl>
+    <form class="room-status-form" method="post" action="/employee/properties/{{ room.property_id }}/room-status" data-confirm="确定直接设定该房间房态吗？该操作不经过检查清单与现场照片证据。">
+      <input type="hidden" name="csrf_token" value="{{ room_csrf_tokens[room.property_id] }}">
+      <label for="room-status-{{ room.property_id }}">房态</label>
+      <select id="room-status-{{ room.property_id }}" name="room_status" required>{% for state in room_statuses %}<option value="{{ state.value }}" {% if room.status == state %}selected{% endif %}>{{ state | status_zh }}</option>{% endfor %}</select>
+      <button class="button--secondary" type="submit">保存</button>
+    </form>
     {% if timeline %}<ol class="clean-list room-timeline" aria-label="{{ room.room_title }}近期房态">
       {% for day in timeline.days %}<li class="room-day{% if day.local_date == snapshot.local_date %} room-day--today{% endif %}{% if day.occupied %} room-day--occupied{% endif %}">
         <strong>{{ day.local_date.month }}/{{ day.local_date.day }}</strong>
@@ -40,7 +46,7 @@
 </section>
 {% if snapshot.stable_rooms %}<details class="operations-stable"><summary>稳定房间 · {{ snapshot.stable_rooms | length }} 间</summary>
   <ul class="clean-list stable-room-list">
-    {% for room in snapshot.stable_rooms %}<li><a href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_number or room.room_title }}</strong><span>{{ room.room_title }}</span></a>{{ ui.readiness_badge(room) }}<span class="muted">{{ room.next_action }}</span></li>{% endfor %}
+    {% for room in snapshot.stable_rooms %}<li><a href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_number or room.room_title }}</strong><span>{{ room.room_title }}</span></a>{{ ui.readiness_badge(room) }}<form class="room-status-form" method="post" action="/employee/properties/{{ room.property_id }}/room-status" data-confirm="确定直接设定该房间房态吗？该操作不经过检查清单与现场照片证据。"><input type="hidden" name="csrf_token" value="{{ room_csrf_tokens[room.property_id] }}"><label class="visually-hidden" for="stable-room-status-{{ room.property_id }}">{{ room.room_title }} 房态</label><select id="stable-room-status-{{ room.property_id }}" name="room_status" required>{% for state in room_statuses %}<option value="{{ state.value }}" {% if room.status == state %}selected{% endif %}>{{ state | status_zh }}</option>{% endfor %}</select><button class="button--secondary" type="submit">保存</button></form></li>{% endfor %}
   </ul>
 </details>{% endif %}
 {% else %}{{ ui.empty("暂无启用房源", "房源同步完成后，这里会展示近期运营状态。") }}{% endif %}

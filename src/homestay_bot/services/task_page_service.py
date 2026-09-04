@@ -52,6 +52,13 @@ class TaskPageRepository(Protocol):
     ) -> BusinessTask:
         """把任务移出归档。"""
 
+    async def archive_selected(
+        self,
+        task_ids: list[int],
+        actor_employee_id: int,
+    ) -> int:
+        """按显式勾选的编号归档，返回归档数量。"""
+
     async def archive_matching(
         self,
         actor_employee_id: int,
@@ -401,6 +408,15 @@ class TaskPageService:
         """管理员把任务移出归档。"""
         self._require_admin(employee)
         await self._tasks.restore_task(task_id, employee.id)
+
+    async def archive_many(
+        self,
+        employee: Employee,
+        task_ids: list[int],
+    ) -> int:
+        """按显式勾选归档，返回归档数量。"""
+        self._require_admin(employee)
+        return await self._tasks.archive_selected(task_ids, employee.id)
 
     async def archive_filtered(
         self,

@@ -104,6 +104,13 @@ class TaskPageServicePort(Protocol):
     async def restore(self, task_id: int, employee: Employee) -> None:
         """把任务移出归档。"""
 
+    async def archive_many(
+        self,
+        employee: Employee,
+        task_ids: list[int],
+    ) -> int:
+        """按显式勾选归档，返回归档数量。"""
+
     async def archive_filtered(
         self,
         employee: Employee,
@@ -267,7 +274,12 @@ async def task_index(
             "next_url": page_url(page + 1) if len(items) > 50 else None,
             "filters": selected_filters,
             "task_statuses": list(BusinessTaskStatus),
-            "bulk_csrf_token": await _issue_csrf(request, _BULK_CSRF_ENTITY),
+            # 批量与勾选归档是管理员能力；给员工签发只会白占令牌额度。
+            "bulk_csrf_token": (
+                await _issue_csrf(request, _BULK_CSRF_ENTITY)
+                if employee.role is EmployeeRole.ADMIN
+                else ""
+            ),
             "task_types": list(BusinessTaskType),
             "properties": options.get("properties", []),
             "employees": options.get("employees", []),
@@ -317,6 +329,25 @@ async def task_detail(request: Request, task_id: int) -> Response:
             "page_title": f"任务 #{task_id}",
             "active_nav": "tasks",
         },
+    )
+
+
+@router.post("/archive-selected")
+async def archive_selected_tasks(
+    request: Request,
+    csrf_token: str = Form(min_length=1, max_length=128),
+    task_ids: Annotated[list[int] | None, Form()] = None,
+) -> RedirectResponse:
+    """按勾选归档任务；混入开放态任务时整批拒绝。"""
+    employee = await _current_employee(request)
+    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    try:
+        await _get_service(request).archive_many(employee, task_ids or [])
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        "/employee/tasks?archived=true",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

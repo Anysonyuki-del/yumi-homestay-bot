@@ -8,7 +8,11 @@ from typing import Literal, Protocol, cast
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, Response
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import EmployeeRole, RoomOperationalStatus
+from homestay_bot.routes.admin_form_csrf import (
+    PROPERTY_CSRF_FAMILY,
+    issue_form_csrf,
+)
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.services.admin_dashboard_service import WUHAN_TIMEZONE, Snapshot
 from homestay_bot.services.admin_diagnostics_service import AuditPage, DiagnosticsSnapshot
@@ -207,6 +211,15 @@ async def admin_operations(
             None,
         ),
     )
+    # 房态就地修改复用房源写操作家族的一次性令牌，逐房间绑定，跨房间重放会失败。
+    room_csrf_tokens = {
+        room.property_id: await issue_form_csrf(
+            request,
+            family=PROPERTY_CSRF_FAMILY,
+            entity_id=room.property_id,
+        )
+        for room in snapshot.rooms
+    }
     return templates.TemplateResponse(
         request=request,
         name="admin/operations.html",
@@ -214,6 +227,8 @@ async def admin_operations(
             "page_title": "房态与运营",
             "active_nav": "operations",
             "snapshot": snapshot,
+            "room_csrf_tokens": room_csrf_tokens,
+            "room_statuses": list(RoomOperationalStatus),
         },
     )
 

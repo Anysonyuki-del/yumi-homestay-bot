@@ -521,6 +521,58 @@ class SQLAlchemyOperationsRepository:
         await self._session.flush()
         return task
 
+    async def archive_selected(
+        self,
+        task_ids: list[int],
+        actor_employee_id: int,
+    ) -> int:
+        """按显式勾选的编号归档，返回归档数量。
+
+        勾选里混入开放态任务时拒绝整批而不是静默跳过：用户以为都归档了、
+        实际漏了几条，比直接报错更难发现。
+        """
+        if not task_ids:
+            raise ValueError("请先勾选要归档的任务")
+        unique_ids = sorted(set(task_ids))
+        tasks = list(
+            await self._session.scalars(
+                select(BusinessTask)
+                .where(BusinessTask.id.in_(unique_ids))
+                .with_for_update()
+            )
+        )
+        found = {task.id for task in tasks}
+        if missing := sorted(set(unique_ids) - found):
+            raise LookupError(f"任务不存在：{missing}")
+        if blocked := sorted(
+            task.id
+            for task in tasks
+            if task.status not in self._ARCHIVABLE_STATUSES
+        ):
+            raise ValueError(
+                f"只有已完成、已取消或已失效的任务可以归档，以下仍在处理中：{blocked}"
+            )
+        now = datetime.now(UTC)
+        archived = 0
+        for task in tasks:
+            if task.archived_at is not None:
+                continue
+            task.archived_at = now
+            task.archived_by_employee_id = actor_employee_id
+            archived += 1
+        if archived:
+            self._session.add(
+                AuditLog(
+                    actor_employee_id=actor_employee_id,
+                    action="business_task_archived",
+                    target_type="business_task",
+                    target_id="selection",
+                    details={"count": archived, "task_ids": unique_ids},
+                )
+            )
+        await self._session.flush()
+        return archived
+
     async def archive_matching(
         self,
         actor_employee_id: int,

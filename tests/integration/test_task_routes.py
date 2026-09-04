@@ -56,6 +56,7 @@ class TaskPageStub:
         self.archive_calls: list[int] = []
         self.restore_calls: list[int] = []
         self.bulk_archive_calls: list[object] = []
+        self.selected_archive_calls: list[list[int]] = []
         self.private_file = None
         self.detail_error: Exception | None = None
         self.list_error: Exception | None = None
@@ -120,6 +121,13 @@ class TaskPageStub:
         if employee.role is not EmployeeRole.ADMIN:
             raise PermissionError("只有管理员可以恢复")
         self.restore_calls.append(task_id)
+
+    async def archive_many(self, employee, task_ids):
+        """记录勾选归档使用的编号。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以归档")
+        self.selected_archive_calls.append(list(task_ids))
+        return len(task_ids)
 
     async def archive_filtered(self, employee, filters):
         """记录批量归档使用的筛选条件。"""
@@ -862,3 +870,66 @@ def test_bulk_archive_uses_current_filters_as_selection() -> None:
     assert response.headers["location"] == "/employee/tasks?archived=true"
     assert len(tasks.bulk_archive_calls) == 1
     assert tasks.bulk_archive_calls[0].status is BusinessTaskStatus.EXPIRED
+
+
+def test_admin_list_offers_checkbox_selection() -> None:
+    """任务列表必须提供真正的勾选，而不是只有「筛选即选择」。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    page = client.get("/employee/tasks")
+
+    assert 'name="task_ids"' in page.text
+    assert "data-select-all" in page.text
+    assert 'action="/employee/tasks/archive-selected"' in page.text
+
+
+def test_staff_list_has_no_selection_controls() -> None:
+    """归档是管理员能力，普通员工列表不出现勾选。"""
+    client, _ = build_client(EmployeeRole.STAFF)
+    login(client)
+
+    page = client.get("/employee/tasks")
+
+    assert 'name="task_ids"' not in page.text
+    assert 'action="/employee/tasks/archive-selected"' not in page.text
+
+
+def test_admin_archives_selected_tasks() -> None:
+    """勾选提交后服务收到全部被选编号。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/archive-selected",
+        data={"csrf_token": token, "task_ids": ["11", "12", "13"]},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.selected_archive_calls == [[11, 12, 13]]
+
+
+def test_staff_cannot_archive_selected_tasks() -> None:
+    """普通员工不得提交勾选归档。
+
+    员工列表不签发批量令牌，因此请求先被令牌绑定拦下（409）；即便令牌有效，
+    服务层的管理员检查仍是第二道防线。这里断言请求被拒且服务从未被调用。
+    """
+    client, tasks = build_client(EmployeeRole.STAFF)
+    login(client)
+
+    page = client.get("/employee/tasks")
+    assert "bulk_csrf_token" not in page.text
+    assert 'action="/employee/tasks/archive-selected"' not in page.text
+
+    response = client.post(
+        "/employee/tasks/archive-selected",
+        data={"csrf_token": detail_csrf(client), "task_ids": ["11"]},
+        follow_redirects=False,
+    )
+
+    assert response.status_code >= 400
+    assert tasks.selected_archive_calls == []
