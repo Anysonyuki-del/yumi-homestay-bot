@@ -61,18 +61,23 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept
 
 
-def _safe_return_path(request: Request) -> str:
-    """从 Referer 取回跳路径；只接受同源的相对路径，避免开放重定向。"""
-    referer = request.headers.get("referer", "")
-    if not referer:
-        return "/employee/tasks"
-    parsed = urlparse(referer)
-    if parsed.scheme and parsed.netloc != request.url.netloc:
-        return "/employee/tasks"
-    path = parsed.path or "/employee/tasks"
-    if not path.startswith("/employee/"):
-        return "/employee/tasks"
-    return f"{path}?{parsed.query}" if parsed.query else path
+_FALLBACK_RETURN_PATH = "/employee/tasks"
+
+
+def safe_return_path(candidate: str | None) -> str:
+    """校验回跳路径；只接受本站 /employee/ 下的相对路径，避免开放重定向。
+
+    不使用 Referer：本应用发送 `referrer-policy: no-referrer`，该请求头在真实
+    浏览器里恒为空，靠它推断来源会让每次失败都落到兜底地址、丢掉当前筛选。
+    """
+    if not candidate:
+        return _FALLBACK_RETURN_PATH
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc:
+        return _FALLBACK_RETURN_PATH
+    if not parsed.path.startswith("/employee/"):
+        return _FALLBACK_RETURN_PATH
+    return f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
 
 
 async def handle_operation_refused(
@@ -90,6 +95,6 @@ async def handle_operation_refused(
         return JSONResponse({"detail": message}, status_code=status_code)
     set_page_error(request, message)
     return RedirectResponse(
-        _safe_return_path(request),
+        safe_return_path(getattr(exc, "return_to", None)),
         status_code=status.HTTP_303_SEE_OTHER,
     )

@@ -22,6 +22,7 @@ from homestay_bot.domain.enums import (
     BusinessTaskType,
     EmployeeRole,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import BusinessTask, Employee
 from homestay_bot.routes.admin_form_csrf import (
     TASK_CSRF_FAMILY,
@@ -326,6 +327,7 @@ async def task_detail(request: Request, task_id: int) -> Response:
 async def archive_selected_tasks(
     request: Request,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
     task_ids: Annotated[list[int] | None, Form()] = None,
 ) -> RedirectResponse:
     """按勾选归档任务；混入开放态任务时整批拒绝。"""
@@ -333,6 +335,9 @@ async def archive_selected_tasks(
     await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
     try:
         await _get_service(request).archive_many(employee, task_ids or [])
+    except OperationRefused as refused:
+        refused.return_to = return_to
+        raise
     except Exception as error:
         _raise_page_error(error)
     return RedirectResponse(
@@ -345,6 +350,7 @@ async def archive_selected_tasks(
 async def archive_filtered_tasks(
     request: Request,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
     status_filter: Annotated[
         BusinessTaskStatus | None,
         BeforeValidator(empty_query_to_none),
@@ -374,6 +380,9 @@ async def archive_filtered_tasks(
     )
     try:
         await _get_service(request).archive_filtered(employee, filters)
+    except OperationRefused as refused:
+        refused.return_to = return_to
+        raise
     except Exception as error:
         _raise_page_error(error)
     return RedirectResponse(

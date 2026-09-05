@@ -13,8 +13,19 @@ class OperationRefused(Exception):
 
     status_code = 409
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
-        """记录展示文案，并允许调用方覆盖对应的 HTTP 状态。"""
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        return_to: str | None = None,
+    ) -> None:
+        """记录展示文案、对应状态，以及失败后应当回到的页面。
+
+        回跳路径由调用方显式给出：本应用发送 `referrer-policy: no-referrer`，
+        浏览器不会带 Referer，靠请求头推断来源必然落到兜底地址。
+        """
         super().__init__(message)
         if status_code is not None:
             self.status_code = status_code
+        self.return_to = return_to

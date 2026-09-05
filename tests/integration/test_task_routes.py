@@ -970,11 +970,14 @@ def test_business_refusal_returns_to_page_with_reason() -> None:
 
     response = client.post(
         "/employee/tasks/archive-selected",
-        data={"csrf_token": token, "task_ids": ["12"]},
-        headers={
-            "accept": "text/html",
-            "referer": "http://testserver/employee/tasks?archived=true",
+        data={
+            "csrf_token": token,
+            "task_ids": ["12"],
+            # 回跳路径由表单携带：生产发送 referrer-policy: no-referrer，
+            # 浏览器恒不发 Referer，靠请求头推断来源必然丢掉当前筛选。
+            "return_to": "/employee/tasks?archived=true",
         },
+        headers={"accept": "text/html"},
         follow_redirects=False,
     )
 
@@ -1016,3 +1019,53 @@ def test_unknown_exception_text_never_reaches_the_page() -> None:
     assert "任务操作未完成" in response.text
     landed = client.get("/employee/tasks")
     assert "SECRET_CONNECTION_STRING" not in landed.text
+
+
+def test_refusal_without_referer_still_returns_to_the_filtered_view() -> None:
+    """没有 Referer 时也要回到提交时所在的筛选视图。
+
+    生产响应头含 referrer-policy: no-referrer，浏览器恒不发 Referer。首版实现
+    靠该请求头推断来源，实测每次失败都落到默认列表、丢掉当前筛选，而集成测试
+    因为手工塞了 referer 头没能发现。
+    """
+    from homestay_bot.domain.errors import OperationRefused
+
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    async def refuse(employee, task_ids):
+        raise OperationRefused("请先勾选要归档的任务")
+
+    tasks.archive_many = refuse
+    page = client.get("/employee/tasks?archived=true")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    # 表单必须自带回跳路径，而不是指望浏览器发 Referer
+    assert 'name="return_to" value="/employee/tasks?archived=true"' in page.text
+
+    response = client.post(
+        "/employee/tasks/archive-selected",
+        data={
+            "csrf_token": token,
+            "task_ids": [],
+            "return_to": "/employee/tasks?archived=true",
+        },
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/tasks?archived=true"
+
+
+def test_return_path_rejects_offsite_and_non_employee_targets() -> None:
+    """回跳路径只接受本站 /employee/ 下的相对路径，避免开放重定向。"""
+    from homestay_bot.routes.page_errors import safe_return_path
+
+    assert safe_return_path("/employee/tasks?archived=true") == (
+        "/employee/tasks?archived=true"
+    )
+    assert safe_return_path("https://evil.example/employee/tasks") == "/employee/tasks"
+    assert safe_return_path("//evil.example/employee/x") == "/employee/tasks"
+    assert safe_return_path("/admin/secret") == "/employee/tasks"
+    assert safe_return_path("") == "/employee/tasks"
+    assert safe_return_path(None) == "/employee/tasks"
