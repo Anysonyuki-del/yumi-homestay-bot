@@ -167,6 +167,8 @@ def test_admin_template_context_exposes_one_release_version(monkeypatch) -> None
         "app_name": "YuMi 管理后台",
         "app_version": "1.2.3",
         "app_version_label": "v1.2.3",
+        # 一次性失败提示：无会话时为空串，读取后即清除。
+        "page_error": "",
     }
 
 

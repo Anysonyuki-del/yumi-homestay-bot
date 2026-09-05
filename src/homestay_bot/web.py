@@ -148,12 +148,38 @@ def safe_external_url(value: object) -> str:
     return value
 
 
-def base_template_context(_request: object) -> dict[str, str]:
-    """为全部后台模板提供统一产品名称和发布版本。"""
+PAGE_ERROR_SESSION_KEY = "page_error"
+_PAGE_ERROR_MAX_LENGTH = 200
+
+
+def set_page_error(request: object, message: str) -> None:
+    """记录一条读取即清除的失败提示，供重定向后的页面展示。
+
+    只保存单条短消息且读取后立即删除，不会随浏览行为增长；长度上限避免签名
+    会话 Cookie 因异常文本膨胀。
+    """
+    session = getattr(request, "session", None)
+    if session is None:
+        return
+    session[PAGE_ERROR_SESSION_KEY] = message[:_PAGE_ERROR_MAX_LENGTH]
+
+
+def pop_page_error(request: object) -> str:
+    """取出并清除失败提示；没有会话时返回空串。"""
+    session = getattr(request, "session", None)
+    if session is None:
+        return ""
+    value = session.pop(PAGE_ERROR_SESSION_KEY, "")
+    return value if isinstance(value, str) else ""
+
+
+def base_template_context(request: object) -> dict[str, str]:
+    """为全部后台模板提供统一产品名称、发布版本和一次性失败提示。"""
     return {
         "app_name": "YuMi 管理后台",
         "app_version": get_app_version(),
         "app_version_label": get_app_version_label(),
+        "page_error": pop_page_error(request),
     }
 
 

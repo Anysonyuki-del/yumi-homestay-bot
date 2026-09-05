@@ -1,5 +1,4 @@
 import logging
-import secrets
 from typing import Annotated, Any, Literal, Protocol, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
@@ -14,12 +13,24 @@ from homestay_bot.routes.admin_form_csrf import (
     issue_form_csrf,
 )
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.routes.page_errors import raise_page_error
 from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.property_admin_service import PropertyFields
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/properties")
 logger = logging.getLogger(__name__)
+
+
+def _raise_page_error(error: Exception) -> None:
+    """把房源页面领域异常转换为稳定 HTTP 状态。"""
+    raise_page_error(
+        error,
+        forbidden="没有权限执行房源操作",
+        not_found="房源不存在或凭证不可用",
+        unknown="房源管理操作未完成",
+        log_subject="房源管理操作失败",
+    )
 
 
 class PropertyAdminServicePort(Protocol):
@@ -103,30 +114,6 @@ async def _consume_csrf(request: Request, property_id: int, token: str) -> None:
         token=token,
     )
 
-
-def _raise_page_error(error: Exception) -> None:
-    """把房源服务领域异常转换为稳定 HTTP 状态。"""
-    if isinstance(error, PermissionError):
-        raise HTTPException(
-            status_code=403,
-            detail="没有权限执行房源操作",
-        ) from error
-    if isinstance(error, LookupError):
-        raise HTTPException(
-            status_code=404,
-            detail="房源不存在或凭证不可用",
-        ) from error
-    # 未知异常只记录类型和内部追踪号，页面不得回显异常原文。
-    trace_id = secrets.token_hex(8)
-    logger.error(
-        "房源管理操作失败：error_type=%s trace_id=%s",
-        type(error).__name__,
-        trace_id,
-    )
-    raise HTTPException(
-        status_code=409,
-        detail="房源管理操作未完成",
-    ) from error
 
 
 @router.get("", response_class=HTMLResponse)

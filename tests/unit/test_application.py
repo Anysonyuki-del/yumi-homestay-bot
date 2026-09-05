@@ -1179,3 +1179,16 @@ def test_every_app_state_service_read_by_routes_is_actually_assigned() -> None:
             missing[route_file.name] = absent
 
     assert missing == {}, f"路由读取了未装配的 app.state 服务：{missing}"
+
+
+def test_real_app_registers_business_refusal_handler() -> None:
+    """真实应用必须注册业务拒绝处理器。
+
+    处理器只在 main.py 上注册，而集成测试各自建裸应用；漏注册时业务拒绝会直接
+    冒泡成 500，且这在桩化测试里发现不了。本轮已经因为「装配那一层缺失」返工
+    过三次，这里把它锁住。
+    """
+    from homestay_bot.domain.errors import OperationRefused
+    from homestay_bot.main import app
+
+    assert OperationRefused in app.exception_handlers

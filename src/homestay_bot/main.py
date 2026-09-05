@@ -9,6 +9,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.application import application_lifespan
 from homestay_bot.config import BootstrapSettings
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.logging import configure_logging_redaction
 from homestay_bot.middleware import AdminNoStoreMiddleware
 from homestay_bot.routes.admin import router as admin_router
@@ -20,6 +21,7 @@ from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.routes.health import router as health_router
 from homestay_bot.routes.hostex_webhook import router as hostex_webhook_router
 from homestay_bot.routes.knowledge import router as knowledge_router
+from homestay_bot.routes.page_errors import handle_operation_refused
 from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.properties import router as properties_router
 from homestay_bot.routes.runtime_config import router as runtime_config_router
@@ -61,6 +63,8 @@ app.add_middleware(
 )
 # 后加入的中间件先执行响应阶段，确保所有后台响应都带 no-store。
 app.add_middleware(AdminNoStoreMiddleware)
+# 业务拒绝带回原页面并显示原因，而不是把用户丢进一坨 JSON。
+app.add_exception_handler(OperationRefused, handle_operation_refused)
 app.include_router(wecom_callback_router)
 app.include_router(hostex_webhook_router)
 app.include_router(employee_auth_router)

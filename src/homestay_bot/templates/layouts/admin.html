@@ -67,6 +67,7 @@
         </details>
         <main class="page-content" id="main-content" tabindex="-1">
           {% if health_degraded %}<div class="alert alert--warning" role="alert">{{ icons.icon("warning") }}<span>系统当前处于降级状态，部分自动化能力可能不可用。请查看<a href="/employee/admin/diagnostics">系统诊断</a>。</span></div>{% endif %}
+          {% if page_error %}<div class="alert alert--danger" role="alert">{{ page_error }}</div>{% endif %}
           {% if error %}<div class="alert alert--danger" role="alert">{{ error }}</div>{% endif %}
           {% if flash %}<div class="alert alert--success" role="status">{{ flash }}</div>{% endif %}
           {% if notice %}<div class="alert alert--success" role="status">{{ notice }}</div>{% endif %}

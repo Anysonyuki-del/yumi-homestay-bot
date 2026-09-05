@@ -13,6 +13,7 @@ from homestay_bot.domain.enums import (
     TaskClosureReason,
     TaskClosureSource,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     AuditLog,
     Base,
@@ -861,7 +862,7 @@ async def test_archive_only_accepts_terminal_tasks_and_hides_them() -> None:
         await session.flush()
 
         # 开放中的任务不得归档
-        with pytest.raises(ValueError):
+        with pytest.raises(OperationRefused):
             await repository.archive_task(assigned.id, 1)
 
         archived = await repository.archive_task(expired.id, 1)
@@ -1029,8 +1030,10 @@ async def test_archive_selected_rejects_whole_batch_when_open_task_included() ->
         session.add_all([expired, assigned])
         await session.flush()
 
-        with pytest.raises(ValueError):
+        with pytest.raises(OperationRefused) as refused:
             await repository.archive_selected([expired.id, assigned.id], 1)
+        # 消息必须点名受阻的任务编号，否则用户不知道该取消勾选哪几条
+        assert str(assigned.id) in str(refused.value)
 
         # 整批拒绝：终态那条也不能被归档
         await session.refresh(expired)
@@ -1038,7 +1041,7 @@ async def test_archive_selected_rejects_whole_batch_when_open_task_included() ->
 
         assert await repository.archive_selected([expired.id], 1) == 1
 
-        with pytest.raises(ValueError):
+        with pytest.raises(OperationRefused):
             await repository.archive_selected([], 1)
 
         with pytest.raises(LookupError):

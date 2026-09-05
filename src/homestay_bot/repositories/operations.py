@@ -20,6 +20,7 @@ from homestay_bot.domain.enums import (
     TaskClosureReason,
     TaskClosureSource,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     AuditLog,
     BusinessTask,
@@ -470,7 +471,7 @@ class SQLAlchemyOperationsRepository:
         if task is None:
             raise LookupError("任务不存在")
         if task.status not in ARCHIVABLE_TASK_STATUSES:
-            raise ValueError("只有已完成、已取消或已失效的任务可以归档")
+            raise OperationRefused("只有已完成、已取消或已失效的任务可以归档")
         if task.archived_at is not None:
             return task
         task.archived_at = datetime.now(UTC)
@@ -527,7 +528,7 @@ class SQLAlchemyOperationsRepository:
         实际漏了几条，比直接报错更难发现。
         """
         if not task_ids:
-            raise ValueError("请先勾选要归档的任务")
+            raise OperationRefused("请先勾选要归档的任务")
         unique_ids = sorted(set(task_ids))
         tasks = list(
             await self._session.scalars(
@@ -544,7 +545,7 @@ class SQLAlchemyOperationsRepository:
             for task in tasks
             if task.status not in ARCHIVABLE_TASK_STATUSES
         ):
-            raise ValueError(
+            raise OperationRefused(
                 f"只有已完成、已取消或已失效的任务可以归档，以下仍在处理中：{blocked}"
             )
         now = datetime.now(UTC)

@@ -16,7 +16,9 @@ from homestay_bot.domain.enums import (
     BusinessTaskType,
     EmployeeRole,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.routes.employee_auth import router as employee_auth_router
+from homestay_bot.routes.page_errors import handle_operation_refused
 from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.tasks import router as tasks_router
 from homestay_bot.services.private_file_storage import StoredPrivateFile
@@ -188,6 +190,8 @@ def build_client(role: EmployeeRole) -> tuple[TestClient, TaskPageStub]:
     """创建带签名会话的任务页应用。"""
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key="task-test-secret")
+    # 与 main.py 一致地注册业务拒绝处理器；真实应用是否注册由结构性测试单独锁定。
+    app.add_exception_handler(OperationRefused, handle_operation_refused)
     app.include_router(employee_auth_router)
     app.include_router(tasks_router)
     app.include_router(private_files_router)
@@ -946,3 +950,69 @@ def test_staff_cannot_archive_selected_tasks() -> None:
 
     assert response.status_code >= 400
     assert tasks.selected_archive_calls == []
+
+
+def test_business_refusal_returns_to_page_with_reason() -> None:
+    """业务拒绝必须带着原因回到原页面，而不是把用户丢进 JSON。
+
+    此前失败一律返回 {"detail":"任务操作未完成"}：整个后台外壳消失，且服务里
+    刻意写给用户的原因被完全丢弃，用户只能靠浏览器后退。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    async def refuse(employee, task_ids):
+        raise OperationRefused("以下任务仍在处理中，请先取消勾选：[12, 34]")
+
+    tasks.archive_many = refuse
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/archive-selected",
+        data={"csrf_token": token, "task_ids": ["12"]},
+        headers={
+            "accept": "text/html",
+            "referer": "http://testserver/employee/tasks?archived=true",
+        },
+        follow_redirects=False,
+    )
+
+    # 回到来源页而不是返回 JSON
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/tasks?archived=true"
+
+    # 原因真正显示在页面上，且后台外壳完整
+    landed = client.get("/employee/tasks?archived=true")
+    assert "以下任务仍在处理中，请先取消勾选：[12, 34]" in landed.text
+    assert "任务中心" in landed.text
+
+    # 一次性：刷新后提示不再重复出现
+    again = client.get("/employee/tasks?archived=true")
+    assert "以下任务仍在处理中" not in again.text
+
+
+def test_unknown_exception_text_never_reaches_the_page() -> None:
+    """未知异常的原文绝不回显，安全边界不因本次改动放宽。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    async def leak(employee, task_ids):
+        raise RuntimeError("SECRET_CONNECTION_STRING=postgres://user:pw@host/db")
+
+    tasks.archive_many = leak
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/archive-selected",
+        data={"csrf_token": token, "task_ids": ["12"]},
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert "SECRET_CONNECTION_STRING" not in response.text
+    assert "任务操作未完成" in response.text
+    landed = client.get("/employee/tasks")
+    assert "SECRET_CONNECTION_STRING" not in landed.text
