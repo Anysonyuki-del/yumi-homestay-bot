@@ -335,13 +335,15 @@ def test_motion_layout_has_no_horizontal_overflow(
 
     if width == 375:
         page.click("[data-drawer-open]")
-        page.wait_for_timeout(220)
+        # 等抽屉真的停下，而不是睡一个固定时长：过渡是 --motion-panel 180ms，
+        # 原来的 220ms 只留 40 毫秒余量，机器一忙就会抓到动画中间的那一帧。
+        page.wait_for_function(
+            "() => getComputedStyle(document.querySelector('[data-drawer]'))"
+            ".transform === 'matrix(1, 0, 0, 1, 0, 0)'"
+        )
         assert page.evaluate(
             "() => document.documentElement.scrollWidth <= window.innerWidth"
         ) is True
-        assert page.locator("[data-drawer]").evaluate(
-            "node => getComputedStyle(node).transform"
-        ) == "matrix(1, 0, 0, 1, 0, 0)"
 
     page.close()
 
