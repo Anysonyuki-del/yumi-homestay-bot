@@ -142,6 +142,10 @@ document.addEventListener("keydown", (event) => {
 
 document.querySelectorAll("form[data-confirm], form[data-danger-confirm]").forEach((form) => {
   form.addEventListener("submit", (event) => {
+    // 带 data-typed-confirm 的按钮（如永久删除）已经做过更强的专属确认，表单级
+    // 文案是写给默认按钮的，此时再弹一次只会用「可以恢复」盖住不可逆的真相。
+    const submitter = event.submitter;
+    if (submitter instanceof HTMLElement && submitter.hasAttribute("data-typed-confirm")) return;
     const prompt = form.getAttribute("data-confirm")
       || form.getAttribute("data-danger-confirm")
       || "确定继续吗？";
@@ -244,26 +248,71 @@ document.querySelectorAll("form").forEach((form) => {
   });
 });
 
-// 全选本页：仅在脚本可用时增强；脚本缺失时逐条勾选仍然可用，不影响归档提交。
-document.querySelectorAll("[data-select-all]").forEach((toggle) => {
-  const form = toggle.closest("form");
-  if (!form) return;
-  const boxes = () =>
-    Array.from(form.querySelectorAll('input[name="task_ids"]'));
-  toggle.addEventListener("change", () => {
-    boxes().forEach((box) => {
-      box.checked = toggle.checked;
+// 桌面表格和手机卡片各渲染一份同名勾选框，同一个任务因此有两个控件。
+// 只让当前可见的那一份可提交：另一份保持同步但禁用，否则「全选」会连隐藏
+// 副本一起勾上，而用户取消可见那份时隐藏副本仍然被提交，条数也会翻倍。
+function selectableBoxes(form) {
+  return Array.from(
+    form.querySelectorAll('input[name="task_ids"]:not(:disabled)'),
+  );
+}
+
+/** 让每个任务只保留一个可提交的勾选框，并在断点切换后继承已有选择。 */
+function syncMirroredSelection(form) {
+  const groups = new Map();
+  form.querySelectorAll('input[name="task_ids"]').forEach((box) => {
+    const peers = groups.get(box.value) || [];
+    peers.push(box);
+    groups.set(box.value, peers);
+  });
+  groups.forEach((peers) => {
+    if (peers.length < 2) return;
+    // 只有仍然启用的副本代表真实选择；禁用副本的 checked 是上一轮的残留。
+    const checked = peers.some((box) => box.checked && !box.disabled);
+    const visible = peers.filter((box) => box.offsetParent !== null);
+    const active = visible.length ? visible[0] : peers[0];
+    peers.forEach((box) => {
+      box.disabled = box !== active;
+      box.checked = box === active && checked;
     });
   });
-  form.addEventListener("change", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    if (target.name !== "task_ids") return;
-    const all = boxes();
+}
+
+// 全选本页与镜像同步都只在脚本可用时增强；脚本缺失时逐条勾选仍然可用，且此时
+// 只有可见副本会被用户勾上，不会出现看不见的选择。
+const selectionForms = new Set();
+document.querySelectorAll('input[name="task_ids"]').forEach((box) => {
+  if (box.form) selectionForms.add(box.form);
+});
+
+selectionForms.forEach((form) => {
+  const toggle = form.querySelector("[data-select-all]");
+  const refreshToggle = () => {
+    if (!(toggle instanceof HTMLInputElement)) return;
+    const all = selectableBoxes(form);
     const checked = all.filter((box) => box.checked);
     toggle.checked = checked.length === all.length && all.length > 0;
     // 部分选中时显示不确定态，避免全选框看起来是「已全选」。
     toggle.indeterminate = checked.length > 0 && checked.length < all.length;
+  };
+  syncMirroredSelection(form);
+  if (toggle instanceof HTMLInputElement) {
+    toggle.addEventListener("change", () => {
+      selectableBoxes(form).forEach((box) => {
+        box.checked = toggle.checked;
+      });
+    });
+  }
+  form.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.name !== "task_ids") return;
+    refreshToggle();
+  });
+  // 换断点会互换可见副本，重新对齐后全选框也要跟着回到正确状态。
+  window.addEventListener("resize", () => {
+    syncMirroredSelection(form);
+    refreshToggle();
   });
 });
 
@@ -273,22 +322,28 @@ document.querySelectorAll("button[data-typed-confirm]").forEach((button) => {
   button.addEventListener("click", (event) => {
     const form = button.form;
     if (!form) return;
-    const selected = form.querySelectorAll('input[name="task_ids"]:checked');
+    // 按任务编号去重：镜像副本理应已被禁用，这里再兜一次，确保用户看到的
+    // 数字、输入的数字和服务端收到的编号数三者一致。
+    const selected = new Set(
+      Array.from(
+        form.querySelectorAll('input[name="task_ids"]:checked:not(:disabled)'),
+      ).map((box) => box.value),
+    );
     const field = form.querySelector("[data-confirm-count]");
-    if (selected.length === 0) {
+    if (selected.size === 0) {
       window.alert("请先勾选要删除的任务。");
       event.preventDefault();
       return;
     }
     const label = button.getAttribute("data-typed-confirm") || "删除";
     const answer = window.prompt(
-      `${label}：即将永久删除 ${selected.length} 条任务及其现场照片，此操作不可恢复。\n`
-        + `确认请输入数字 ${selected.length}。`,
+      `${label}：即将永久删除 ${selected.size} 条任务及其现场照片，此操作不可恢复。\n`
+        + `确认请输入数字 ${selected.size}。`,
     );
-    if (answer === null || answer.trim() !== String(selected.length)) {
+    if (answer === null || answer.trim() !== String(selected.size)) {
       event.preventDefault();
       return;
     }
-    if (field) field.value = String(selected.length);
+    if (field) field.value = String(selected.size);
   });
 });
