@@ -1588,6 +1588,24 @@ class SessionTaskPageService:
             await self._service(session).purge(task_id, employee)
             await session.commit()
 
+    async def purge_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+    ) -> int:
+        """永久删除勾选的已归档任务，先删磁盘照片再删数据库行。"""
+        async with self._factory() as session:
+            file_ids = await self._service(session).purge_many_file_ids(
+                task_ids,
+                employee,
+            )
+        for file_id in file_ids:
+            self._storage.delete(file_id)
+        async with self._factory() as session:
+            purged = await self._service(session).purge_many(task_ids, employee)
+            await session.commit()
+            return purged
+
     async def archive_many(
         self,
         employee: Employee,

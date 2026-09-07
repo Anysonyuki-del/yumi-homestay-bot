@@ -1112,3 +1112,67 @@ async def test_purge_task_requires_archive_and_keeps_audit() -> None:
         )
         assert len(purged) == 1
         assert purged[0].details["attachments"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_purge_validates_before_touching_any_file() -> None:
+    """混入未归档任务时整批拒绝，且校验必须发生在删除磁盘文件之前。
+
+    先删文件再发现某条不该删，照片已经找不回来了。这里断言校验会在返回任何
+    待删文件编号之前失败。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        await session.execute(text("PRAGMA foreign_keys=ON"))
+        actor = Employee(wecom_userid="admin", name="管理员", role=EmployeeRole.ADMIN)
+        session.add_all([PropertyProfile(id=101, title="测试房间"), actor])
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        def make(description: str) -> BusinessTask:
+            """构造一条终态任务。"""
+            return BusinessTask(
+                task_type=BusinessTaskType.CLEANING,
+                status=BusinessTaskStatus.EXPIRED,
+                property_id=101,
+                service_date=date(2026, 8, 1),
+                description=description,
+            )
+
+        archived = make("已归档")
+        open_task = make("未归档")
+        session.add_all([archived, open_task])
+        await session.flush()
+        session.add(
+            TaskAttachment(
+                task_id=archived.id,
+                private_file_id="fedcba9876543210",
+                kind="photo",
+            )
+        )
+        await session.flush()
+        await repository.archive_task(archived.id, actor.id)
+
+        # 混入未归档：整批拒绝，且消息点名具体编号
+        with pytest.raises(OperationRefused) as refused:
+            await repository.require_purgeable([archived.id, open_task.id])
+        assert str(open_task.id) in str(refused.value)
+
+        # 空选择同样拒绝
+        with pytest.raises(OperationRefused):
+            await repository.require_purgeable([])
+
+        # 只选已归档时才返回待删文件
+        assert await repository.require_purgeable([archived.id]) == [
+            "fedcba9876543210"
+        ]
+
+        assert await repository.purge_selected([archived.id], actor.id) == 1
+        await session.commit()
+        assert await session.get(BusinessTask, archived.id) is None
+        # 未归档那条完好无损
+        assert await session.get(BusinessTask, open_task.id) is not None

@@ -120,6 +120,13 @@ class TaskPageServicePort(Protocol):
     async def purge(self, task_id: int, employee: Employee) -> None:
         """永久删除一条已归档任务。"""
 
+    async def purge_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+    ) -> int:
+        """永久删除勾选的已归档任务，返回删除数量。"""
+
     async def archive_many(
         self,
         employee: Employee,
@@ -323,6 +330,36 @@ async def task_detail(request: Request, task_id: int) -> Response:
             "page_title": f"任务 #{task_id}",
             "active_nav": "tasks",
         },
+    )
+
+
+@router.post("/purge-selected")
+async def purge_selected_tasks(
+    request: Request,
+    csrf_token: str = Form(min_length=1, max_length=128),
+    confirm_count: Annotated[int, Form()] = 0,
+    task_ids: Annotated[list[int] | None, Form()] = None,
+) -> RedirectResponse:
+    """永久删除勾选的已归档任务；不可恢复。
+
+    要求提交的确认数字与实际勾选数一致：这挡住的是「习惯性点确定」这一整类
+    事故，提交者必须真的看过数量。
+    """
+    employee = await _current_employee(request)
+    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    selected = task_ids or []
+    if confirm_count != len(selected):
+        raise OperationRefused(
+            f"确认数字与勾选数量不一致：勾选了 {len(selected)} 条，"
+            f"确认输入 {confirm_count}。请重新确认后再删除。"
+        )
+    try:
+        await _get_service(request).purge_many(selected, employee)
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        "/employee/tasks?archived=true",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

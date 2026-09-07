@@ -58,6 +58,16 @@ class TaskPageRepository(Protocol):
     async def purge_task(self, task_id: int, actor_employee_id: int) -> None:
         """永久删除一条已归档任务。"""
 
+    async def require_purgeable(self, task_ids: list[int]) -> list[str]:
+        """校验可删除并返回待删除的私有文件编号。"""
+
+    async def purge_selected(
+        self,
+        task_ids: list[int],
+        actor_employee_id: int,
+    ) -> int:
+        """永久删除勾选的已归档任务，返回删除数量。"""
+
     async def archive_selected(
         self,
         task_ids: list[int],
@@ -428,6 +438,24 @@ class TaskPageService:
         """永久删除一条已归档任务。"""
         self._require_admin(employee)
         await self._tasks.purge_task(task_id, employee.id)
+
+    async def purge_many_file_ids(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+    ) -> list[str]:
+        """校验管理员身份与可删除性，返回待删除的文件编号。"""
+        self._require_admin(employee)
+        return await self._tasks.require_purgeable(task_ids)
+
+    async def purge_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+    ) -> int:
+        """永久删除勾选的已归档任务，返回删除数量。"""
+        self._require_admin(employee)
+        return await self._tasks.purge_selected(task_ids, employee.id)
 
     async def archive_many(
         self,

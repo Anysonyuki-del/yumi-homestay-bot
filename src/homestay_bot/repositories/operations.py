@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String, and_, exists, func, literal, or_, select, update
+from sqlalchemy import String, and_, delete, exists, func, literal, or_, select, update
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -526,6 +526,63 @@ class SQLAlchemyOperationsRepository:
                 )
             )
         )
+
+    async def require_purgeable(self, task_ids: list[int]) -> list[str]:
+        """校验全部任务存在且已归档，返回待删除的私有文件编号。
+
+        校验必须在删除磁盘文件之前完成：先删文件再发现某条不该删，照片已经
+        找不回来了。混入未归档任务时拒绝整批，不静默跳过。
+        """
+        if not task_ids:
+            raise OperationRefused("请先勾选要删除的任务")
+        unique_ids = sorted(set(task_ids))
+        tasks = list(
+            await self._session.scalars(
+                select(BusinessTask).where(BusinessTask.id.in_(unique_ids))
+            )
+        )
+        if missing := sorted(set(unique_ids) - {task.id for task in tasks}):
+            raise LookupError(f"任务不存在：{missing}")
+        if blocked := sorted(
+            task.id for task in tasks if task.archived_at is None
+        ):
+            raise OperationRefused(
+                f"只有已归档的任务可以永久删除，以下尚未归档：{blocked}"
+            )
+        return list(
+            await self._session.scalars(
+                select(TaskAttachment.private_file_id).where(
+                    TaskAttachment.task_id.in_(unique_ids)
+                )
+            )
+        )
+
+    async def purge_selected(
+        self,
+        task_ids: list[int],
+        actor_employee_id: int,
+    ) -> int:
+        """永久删除勾选的已归档任务，返回删除数量。
+
+        这里重新校验一次归档状态：校验与删除之间隔着磁盘文件删除，期间状态
+        可能已被其他会话改变。
+        """
+        await self.require_purgeable(task_ids)
+        unique_ids = sorted(set(task_ids))
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="business_task_purged",
+                target_type="business_task",
+                target_id="selection",
+                details={"count": len(unique_ids), "task_ids": unique_ids},
+            )
+        )
+        await self._session.execute(
+            delete(BusinessTask).where(BusinessTask.id.in_(unique_ids))
+        )
+        await self._session.flush()
+        return len(unique_ids)
 
     async def purge_task(self, task_id: int, actor_employee_id: int) -> None:
         """永久删除一条已归档任务；附件行由外键级联删除。

@@ -266,3 +266,29 @@ document.querySelectorAll("[data-select-all]").forEach((toggle) => {
     toggle.indeterminate = checked.length > 0 && checked.length < all.length;
   });
 });
+
+// 不可逆的批量操作要求手输条数：挡住「习惯性点确定」这一整类事故，
+// 提交者必须真的看过数量。脚本缺失时该按钮提交的确认数为 0，服务端会拒绝。
+document.querySelectorAll("button[data-typed-confirm]").forEach((button) => {
+  button.addEventListener("click", (event) => {
+    const form = button.form;
+    if (!form) return;
+    const selected = form.querySelectorAll('input[name="task_ids"]:checked');
+    const field = form.querySelector("[data-confirm-count]");
+    if (selected.length === 0) {
+      window.alert("请先勾选要删除的任务。");
+      event.preventDefault();
+      return;
+    }
+    const label = button.getAttribute("data-typed-confirm") || "删除";
+    const answer = window.prompt(
+      `${label}：即将永久删除 ${selected.length} 条任务及其现场照片，此操作不可恢复。\n`
+        + `确认请输入数字 ${selected.length}。`,
+    );
+    if (answer === null || answer.trim() !== String(selected.length)) {
+      event.preventDefault();
+      return;
+    }
+    if (field) field.value = String(selected.length);
+  });
+});

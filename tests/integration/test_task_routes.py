@@ -60,6 +60,7 @@ class TaskPageStub:
         self.bulk_archive_calls: list[object] = []
         self.selected_archive_calls: list[list[int]] = []
         self.purge_calls: list[int] = []
+        self.purge_many_calls: list[list[int]] = []
         self.private_file = None
         self.detail_error: Exception | None = None
         self.list_error: Exception | None = None
@@ -130,6 +131,13 @@ class TaskPageStub:
         if employee.role is not EmployeeRole.ADMIN:
             raise PermissionError("只有管理员可以删除")
         self.purge_calls.append(task_id)
+
+    async def purge_many(self, task_ids, employee):
+        """记录批量永久删除调用。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以删除")
+        self.purge_many_calls.append(list(task_ids))
+        return len(task_ids)
 
     async def archive_many(self, employee, task_ids):
         """记录勾选归档使用的编号。"""
@@ -1108,3 +1116,80 @@ def test_staff_cannot_purge_task() -> None:
 
     assert response.status_code >= 400
     assert tasks.purge_calls == []
+
+
+def test_bulk_purge_button_only_in_archived_view() -> None:
+    """永久删除只在已归档视图出现，其他视图不给这个入口。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    tasks.item.status = BusinessTaskStatus.EXPIRED
+
+    tasks.item.archived_at = None
+    open_view = client.get("/employee/tasks")
+    assert "永久删除勾选的任务" not in open_view.text
+    assert "归档勾选的任务" in open_view.text
+
+    tasks.item.archived_at = "2026-03-01T00:00:00Z"
+    archived_view = client.get("/employee/tasks?archived=true")
+    assert "永久删除勾选的任务" in archived_view.text
+    assert "不可恢复" in archived_view.text
+    # 已归档视图不再重复提供归档按钮
+    assert "归档勾选的任务" not in archived_view.text
+
+
+def test_bulk_purge_rejects_mismatched_confirmation_count() -> None:
+    """确认数字与勾选数不一致时拒绝，且不得删除任何任务。
+
+    这道校验挡的是「习惯性点确定」：数字对不上说明提交者没看过数量。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks?archived=true")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/purge-selected",
+        data={"csrf_token": token, "task_ids": ["11", "12"], "confirm_count": "1"},
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.purge_many_calls == []
+    landed = client.get("/employee/tasks?archived=true")
+    assert "确认数字与勾选数量不一致" in landed.text
+
+
+def test_bulk_purge_without_script_is_refused() -> None:
+    """脚本缺失时确认数为 0，服务端必须拒绝而不是删除全部勾选。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks?archived=true")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/purge-selected",
+        data={"csrf_token": token, "task_ids": ["11"], "confirm_count": "0"},
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.purge_many_calls == []
+
+
+def test_bulk_purge_deletes_when_count_matches() -> None:
+    """确认数字一致时执行删除。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks?archived=true")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/purge-selected",
+        data={"csrf_token": token, "task_ids": ["11", "12"], "confirm_count": "2"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.purge_many_calls == [[11, 12]]
