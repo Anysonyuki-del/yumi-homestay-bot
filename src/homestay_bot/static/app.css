@@ -226,13 +226,18 @@ tbody tr:hover { background: #fafcff; }
 .room-operation-facts > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
 .room-operation-facts dt { color: var(--muted); font-size: var(--t-sm); }
 .room-operation-facts dd { margin: 0; font-size: var(--t-sm); }
-.room-timeline { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; padding-bottom: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: thin; }
+/* 日期格给足最小宽度：装不下就横向滚动，绝不把 14 天等分压进半宽卡片。
+   76px 是「退房 1」这类最长标签加内边距后的实测下限。 */
+.room-timeline-block { display: grid; gap: 6px; }
+.timeline-note { margin: 0; color: var(--muted); font-size: var(--t-xs); }
+.room-timeline { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(76px, 1fr); gap: 6px; padding-bottom: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: thin; }
 .room-day { display: grid; min-height: 72px; align-content: start; gap: 6px; padding: 8px; scroll-snap-align: start; border: 1px solid var(--line); border-radius: var(--r-xs); background: var(--surface); }
 .room-day strong { color: #334155; font-size: var(--t-sm); font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .day-marks { display: grid; justify-items: start; gap: 3px; }
 .day-mark { display: inline-flex; padding: 1px 6px; border: 1px solid; border-radius: var(--r-xs); font-size: var(--t-xs); font-weight: 600; white-space: nowrap; }
 .day-mark--today { border-color: var(--primary); color: #fff; background: var(--primary); }
 .day-mark--vacant { border-color: var(--line); color: var(--muted); background: #f8fafc; }
+.day-mark--unknown { border-style: dashed; border-color: var(--line-strong); color: var(--muted); background: var(--surface); }
 .day-mark--occupied { border-color: #bfdbfe; color: var(--primary-hover); background: var(--primary-soft); }
 .day-mark--arrival { border-color: #bbf7d0; color: var(--success); background: var(--success-soft); }
 .day-mark--departure { border-color: #fde68a; color: var(--warning); background: var(--warning-soft); }
@@ -247,11 +252,15 @@ tbody tr:hover { background: #fafcff; }
 .operations-stable > summary { padding: 14px 0; font-weight: 700; cursor: pointer; }
 .operations-stable[open] > summary { border-bottom: 1px solid var(--line); }
 .stable-room-list { gap: 0; padding-bottom: 6px; }
-.stable-room-list li { display: flex; min-height: 44px; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.stable-room-list li { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.stable-room-head { display: flex; min-height: 44px; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.stable-room-facts { margin-bottom: 0; }
 .stable-room-list li:last-child { border-bottom: 0; }
 .stable-room-list a { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: #0f172a; text-decoration: none; }
 .stable-room-list a span { color: var(--muted); font-size: var(--t-sm); }
 .stable-room-list .muted { margin-left: auto; font-size: var(--t-sm); }
+/* 附加筛选摘要：队列由 tab 表达，队列之外多加了什么必须一眼看见并能一键清掉。 */
+.filter-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 10px; color: var(--muted); font-size: var(--t-sm); }
 .filter-disclosure { margin-bottom: 14px; }
 .filter-disclosure > summary { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: #f8fafc; font-weight: 650; cursor: pointer; }
 .filter-disclosure[open] > summary { margin-bottom: 10px; }
@@ -428,6 +437,8 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   .topbar__brand { visibility: hidden; }
   .dashboard-grid { grid-template-columns: minmax(0, 1.7fr) minmax(270px, .7fr); }
   .room-operations-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* 14 天时间轴塞进半宽卡片必然要滚动才看得全；长跨度时卡片改为整行。 */
+  .room-operations-list--wide { grid-template-columns: minmax(0, 1fr); }
   .property-grid { display: block; }
   .filter-toolbar { grid-template-columns: repeat(5, minmax(120px, 1fr)) auto; }
 }
@@ -459,7 +470,7 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .room-status-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
 .room-status-form label { margin: 0; color: var(--muted); font-size: var(--t-xs); font-weight: 650; }
 .room-status-form select { flex: 1 1 8rem; min-width: 0; max-width: 12rem; }
-.stable-room-list .room-status-form { margin: 0 0 0 auto; }
+.stable-room-head .room-status-form { margin: 0 0 0 auto; }
 
 /* 任务勾选：复选框列保持窄，移动端把勾选放在卡片上方。 */
 .select-cell { width: 40px; text-align: center; }

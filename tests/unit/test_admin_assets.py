@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from homestay_bot import web
@@ -125,6 +126,27 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     assert " .panel + .panel" not in css.replace(
         ".page-content > .panel + .panel", ""
     )
+
+
+def test_timeline_day_cells_keep_a_minimum_width_at_every_breakpoint() -> None:
+    """日期格必须始终有最小宽度，装不下就横向滚动。
+
+    `minmax(0, 1fr)` 允许日期格被压到任意窄：14 天塞进半宽卡片时，每格只剩
+    二十几像素，而「退房 1」这类标签本身就需要四十多像素，相邻信息直接重叠。
+    此前只有最窄断点设了下限，恰好把桌面这一档漏在外面。
+    """
+    css = (ASSET_ROOT / "static/app.css").read_text()
+
+    rules = re.findall(r"\.room-timeline \{([^}]*)\}", css)
+    assert rules, "找不到 .room-timeline 规则"
+    for rule in rules:
+        widths = re.findall(r"grid-auto-columns:\s*minmax\((\d+)px", rule)
+        assert widths, f"日期格没有最小宽度：{rule.strip()}"
+        assert all(int(width) >= 60 for width in widths), rule.strip()
+
+    assert "overflow-x: auto" in rules[0]
+    # 长跨度时卡片改为整行，滚动才是兜底而不是常态。
+    assert ".room-operations-list--wide" in css
 
 
 def test_admin_shell_uses_grouped_lightweight_navigation() -> None:

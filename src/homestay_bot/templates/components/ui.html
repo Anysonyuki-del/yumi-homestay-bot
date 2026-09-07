@@ -37,9 +37,30 @@
 {%- else %}{{ badge(room.occupancy_status | status_zh, "neutral") }}{% endif %}
 {%- endmacro %}
 
-{# 运营准备徽标：只有维修是风险，其余是状态事实；琥珀色留给今日周转，避免两类信息撞色。 #}
+{# 运营准备语义只有这一处定义：只有维修是风险，可入住是达标，其余是中性事实；
+   琥珀色留给今日周转，避免两类信息撞色。所有页面、所有断点都必须走这里，
+   否则同一个房间在桌面是绿、在手机是蓝，颜色就不再有含义。 #}
+{% macro readiness_status_badge(status) -%}
+{% set key = status | string %}
+{%- if key == "maintenance" %}{{ badge("运营：" ~ (status | status_zh), "danger") }}
+{%- elif key == "ready" %}{{ badge("运营：" ~ (status | status_zh), "success") }}
+{%- else %}{{ badge("运营：" ~ (status | status_zh), "neutral") }}{% endif %}
+{%- endmacro %}
+
 {% macro readiness_badge(room) -%}
-{% if room.status.value == "maintenance" %}{{ badge("运营：" ~ (room.status | status_zh), "danger") }}
-{%- elif room.status.value == "ready" %}{{ badge("运营：" ~ (room.status | status_zh), "success") }}
-{%- else %}{{ badge("运营：" ~ (room.status | status_zh), "neutral") }}{% endif %}
+{{ readiness_status_badge(room.status) }}
+{%- endmacro %}
+
+{# 近期房态时间轴：同步过期时如实说明这是上次同步记录，不把「本地没有记录」
+   直接写成确定的「空闲」。时间轴可横向滚动，因此本身要能被键盘聚焦。 #}
+{% macro room_timeline(timeline, today, stale, label) -%}
+{% if timeline %}<div class="room-timeline-block">
+  {% if stale %}<p class="timeline-note">以下为上次同步记录，入住信息待确认。</p>{% endif %}
+  <ol class="clean-list room-timeline" tabindex="0" aria-label="{{ label }}{% if stale %}（上次同步记录，待确认）{% endif %}">
+    {% for day in timeline.days %}<li class="room-day{% if day.local_date == today %} room-day--today{% endif %}{% if day.occupied %} room-day--occupied{% endif %}">
+      <strong>{{ day.local_date.month }}/{{ day.local_date.day }}</strong>
+      <span class="day-marks">{% if day.local_date == today %}<span class="day-mark day-mark--today">今天</span>{% endif %}{% if day.arrival_count %}<span class="day-mark day-mark--arrival">入住 {{ day.arrival_count }}</span>{% endif %}{% if day.departure_count %}<span class="day-mark day-mark--departure">退房 {{ day.departure_count }}</span>{% endif %}{% if day.occupied %}<span class="day-mark day-mark--occupied">在住</span>{% elif not day.arrival_count and not day.departure_count %}{% if stale %}<span class="day-mark day-mark--unknown">无记录</span>{% else %}<span class="day-mark day-mark--vacant">空闲</span>{% endif %}{% endif %}</span>
+    </li>{% endfor %}
+  </ol>
+</div>{% endif %}
 {%- endmacro %}

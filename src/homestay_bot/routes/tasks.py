@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from datetime import date
 from typing import Annotated, Any, Protocol, cast
 from urllib.parse import urlencode
@@ -39,6 +40,117 @@ from homestay_bot.web import templates
 router = APIRouter(prefix="/employee/tasks")
 logger = logging.getLogger(__name__)
 PositiveQueryId = Annotated[int, Field(ge=1)]
+
+
+# 任务中心的「队列」和「附加筛选」是两件事：队列回答「我现在在看哪一批」，
+# 附加筛选回答「在这一批里再缩小到哪些」。同一个 URL 可能同时带上归档、逾期和
+# 状态，若每个条件各自决定高亮，页面上会同时亮起多个队列，标题也说不清位置。
+# 这里给出唯一的队列判定，让高亮、标题和「清除附加筛选」都从同一个答案出发。
+_QUEUE_STATUSES = (
+    BusinessTaskStatus.PENDING_CONFIRMATION,
+    BusinessTaskStatus.PENDING_ASSIGNMENT,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskQueue:
+    """描述一个队列的入口地址，以及它在两种角色下的称呼。
+
+    管理员看的是全部任务，员工看的只有分配给自己的那些；同一个队列因此需要两
+    套说法，否则员工会以为「逾期」是全公司的逾期。
+    """
+
+    url: str
+    admin_title: str
+    admin_heading: str
+    staff_title: str
+    staff_heading: str
+
+    def title(self, *, is_admin: bool) -> str:
+        """返回浏览器标签页使用的完整称呼。"""
+        return self.admin_title if is_admin else self.staff_title
+
+    def heading(self, *, is_admin: bool) -> str:
+        """返回页面主标题使用的简短称呼。"""
+        return self.admin_heading if is_admin else self.staff_heading
+
+
+_QUEUES = {
+    "archived": _TaskQueue(
+        "/employee/tasks?archived=true",
+        "已归档任务",
+        "已归档",
+        "已归档任务",
+        "已归档",
+    ),
+    "overdue": _TaskQueue(
+        "/employee/tasks?overdue=true",
+        "逾期任务",
+        "逾期",
+        "我的逾期任务",
+        "我的逾期任务",
+    ),
+    "pending_confirmation": _TaskQueue(
+        "/employee/tasks?status_filter=pending_confirmation",
+        "待确认任务",
+        "待确认",
+        "我的待确认任务",
+        "我的待确认任务",
+    ),
+    "pending_assignment": _TaskQueue(
+        "/employee/tasks?status_filter=pending_assignment",
+        "待分派任务",
+        "待分派",
+        "我的待分派任务",
+        "我的待分派任务",
+    ),
+    "open": _TaskQueue(
+        "/employee/tasks",
+        "全部待办任务",
+        "全部待办",
+        "自己的任务",
+        "分配给我的任务",
+    ),
+}
+
+
+def _current_queue(filters: TaskFilters) -> str:
+    """按固定优先级定出当前所在的唯一队列。
+
+    归档是与开放任务互斥的另一维度，因此排在最前；其余按「哪一条最能说明用户
+    此刻在看什么」排序。判定放在这里而不是模板，是为了能被单独测试。
+    """
+    if filters.archived:
+        return "archived"
+    if filters.overdue:
+        return "overdue"
+    if filters.status in _QUEUE_STATUSES:
+        return filters.status.value
+    return "open"
+
+
+def _extra_filters(filters: TaskFilters, queue: str) -> tuple[str, ...]:
+    """列出队列本身之外仍然生效的筛选条件。
+
+    定义队列的那个条件不算「附加」，否则点一下「待分派」就会被当成加了筛选，
+    把整套高级表单展开在用户面前。
+    """
+    extras: list[str] = []
+    if filters.status is not None and filters.status.value != queue:
+        extras.append("status")
+    if filters.task_type is not None:
+        extras.append("task_type")
+    if filters.service_date is not None:
+        extras.append("service_date")
+    if filters.property_id is not None:
+        extras.append("property_id")
+    if filters.assigned_employee_id is not None:
+        extras.append("assigned_employee_id")
+    if filters.overdue and queue != "overdue":
+        extras.append("overdue")
+    if filters.archived and queue != "archived":
+        extras.append("archived")
+    return tuple(extras)
 
 
 def _raise_page_error(error: Exception) -> None:
@@ -265,6 +377,9 @@ async def task_index(
     }
     active_params = {key: value for key, value in params.items() if value}
 
+    queue = _current_queue(selected_filters)
+    is_admin = employee.role is EmployeeRole.ADMIN
+
     def page_url(target_page: int) -> str:
         """生成保留当前筛选条件的稳定分页链接。"""
         query_string = urlencode({**active_params, "page": target_page})
@@ -304,11 +419,11 @@ async def task_index(
             "task_types": list(BusinessTaskType),
             "properties": options.get("properties", []),
             "employees": options.get("employees", []),
-            "page_title": (
-                "全部待办任务"
-                if employee.role is EmployeeRole.ADMIN
-                else "自己的任务"
-            ),
+            "queue": queue,
+            "queue_heading": _QUEUES[queue].heading(is_admin=is_admin),
+            "queue_url": _QUEUES[queue].url,
+            "extra_filters": _extra_filters(selected_filters, queue),
+            "page_title": _QUEUES[queue].title(is_admin=is_admin),
             "active_nav": "tasks",
         },
     )
