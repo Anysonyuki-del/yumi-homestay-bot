@@ -22,14 +22,21 @@
     <div class="button-row"><button type="submit">筛选</button><a class="button button--secondary" href="/employee/tasks">重置</a></div>
   </form>
   </details>
-  {% if is_admin and filters.active and not filters.archived %}
-  <form class="bulk-archive" method="post" action="/employee/tasks/archive-filtered" data-confirm="确定把当前筛选出的全部终态任务移入归档吗？开放中的任务不会被归档，归档后可在「查看已归档」中恢复。">
+  {# 「逾期」无法在批量归档里表达，条件不完整时宁可不给这个入口，也不能按更宽的范围执行。 #}
+  {% if is_admin and filters.active and not filters.archived and not filters.overdue %}
+  {% set scope_property = properties | selectattr("id", "equalto", filters.property_id) | map(attribute="title") | first %}
+  {% set scope_employee = employees | selectattr("id", "equalto", filters.assigned_employee_id) | map(attribute="name") | first %}
+  {% set archive_scope %}{% if filters.status %}状态={{ filters.status | status_zh }}；{% endif %}{% if filters.task_type %}类型={{ filters.task_type | status_zh }}；{% endif %}{% if filters.service_date %}服务日期={{ filters.service_date | date_zh }}；{% endif %}{% if filters.property_id %}房源={{ scope_property or filters.property_id }}；{% endif %}{% if filters.assigned_employee_id %}执行员工={{ scope_employee or filters.assigned_employee_id }}；{% endif %}{% endset %}
+  <form class="bulk-archive" method="post" action="/employee/tasks/archive-filtered" data-confirm="确定把当前筛选出的全部终态任务移入归档吗？范围：{{ archive_scope or '未加任何条件，全部终态任务' }}开放中的任务不会被归档，归档后可在「查看已归档」中恢复。">
     <input type="hidden" name="csrf_token" value="{{ bulk_csrf_token }}">
     <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
     <input type="hidden" name="status_filter" value="{{ filters.status.value if filters.status else '' }}">
     <input type="hidden" name="task_type" value="{{ filters.task_type.value if filters.task_type else '' }}">
+    <input type="hidden" name="service_date" value="{{ filters.service_date or '' }}">
     <input type="hidden" name="property_id" value="{{ filters.property_id or '' }}">
+    <input type="hidden" name="assigned_employee_id" value="{{ filters.assigned_employee_id or '' }}">
     <button class="button button--secondary" type="submit">归档当前筛选的终态任务</button>
+    <p class="field-help">归档范围：{{ archive_scope or "当前未加任何条件，将归档全部终态任务。" }}</p>
   </form>
   {% endif %}
   {% if is_admin %}<form method="post" action="/employee/tasks/archive-selected" data-confirm="确定把勾选的任务移入归档吗？归档后不再出现在默认列表，可在「已归档」中恢复。">

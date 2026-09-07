@@ -448,22 +448,43 @@ async def archive_filtered_tasks(
         BeforeValidator(empty_query_to_none),
         Form(),
     ] = None,
+    service_date: Annotated[
+        date | None,
+        BeforeValidator(empty_query_to_none),
+        Form(),
+    ] = None,
     property_id: Annotated[
         int | None,
         BeforeValidator(empty_query_to_none),
         Form(),
     ] = None,
+    assigned_employee_id: Annotated[
+        int | None,
+        BeforeValidator(empty_query_to_none),
+        Form(),
+    ] = None,
+    overdue: Annotated[bool, Form()] = False,
 ) -> RedirectResponse:
     """按当前筛选条件批量归档终态任务。
 
     筛选条件即选择范围：不引入多选提交，列表页既有筛选器就是最自然的选择方式。
+    正因为范围由筛选决定，列表用到的每个条件都必须原样传到归档；少传一个，
+    实际归档的就是比用户看到的更宽的一批任务。
     """
     employee = await _current_employee(request)
     await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    if overdue:
+        # 归档查询表达不了「逾期」，与其按更宽的范围执行，不如直接拒绝。
+        raise OperationRefused(
+            "「只看逾期」不能作为批量归档的范围，请先取消该条件再归档",
+            return_to=return_to,
+        )
     filters = TaskFilters(
         status=status_filter,
         task_type=task_type,
+        service_date=service_date,
         property_id=property_id,
+        assigned_employee_id=assigned_employee_id,
     )
     try:
         await _get_service(request).archive_filtered(employee, filters)

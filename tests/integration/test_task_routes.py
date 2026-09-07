@@ -110,9 +110,17 @@ class TaskPageStub:
         """返回管理员可选员工和房间。"""
         if self.assignment_error is not None:
             raise self.assignment_error
+        # 首项刻意不是任务当前绑定的房间与员工：只有这样才能区分「回填成功」
+        # 和「浏览器默认选中第一项」。
         return {
-            "employees": [SimpleNamespace(id=2, name="阿姨")],
-            "properties": [SimpleNamespace(id=101, title="长江中心")],
+            "employees": [
+                SimpleNamespace(id=9, name="别的员工"),
+                SimpleNamespace(id=2, name="阿姨"),
+            ],
+            "properties": [
+                SimpleNamespace(id=100, title="别的房间"),
+                SimpleNamespace(id=101, title="长江中心"),
+            ],
         }
 
     async def archive(self, task_id, employee):
@@ -1274,3 +1282,99 @@ def test_bulk_purge_deletes_when_count_matches() -> None:
 
     assert response.status_code == 303
     assert tasks.purge_many_calls == [[11, 12]]
+
+
+def test_bulk_archive_carries_every_filter_the_list_applied() -> None:
+    """批量归档必须原样带上列表页用到的每一个筛选条件。
+
+    「归档当前筛选」的范围就是用户在列表里看到的那一批。少传一个条件，服务端
+    命中的是更宽的一批：按日期加员工筛完再点归档，会连别的日期、别人的任务
+    一起归掉，而页面上没有任何地方提示范围变宽了。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    query = (
+        "/employee/tasks?status_filter=expired&service_date=2026-08-02"
+        "&assigned_employee_id=2&property_id=101"
+    )
+    page = client.get(query)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/archive-filtered",
+        data={
+            "csrf_token": token,
+            "status_filter": "expired",
+            "task_type": "",
+            "service_date": "2026-08-02",
+            "property_id": "101",
+            "assigned_employee_id": "2",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert len(tasks.bulk_archive_calls) == 1
+    used = tasks.bulk_archive_calls[0]
+    assert used.status is BusinessTaskStatus.EXPIRED
+    assert used.service_date == date(2026, 8, 2)
+    assert used.property_id == 101
+    assert used.assigned_employee_id == 2
+
+
+def test_bulk_archive_form_ships_the_filters_it_needs() -> None:
+    """页面必须把日期和执行员工也放进归档表单，否则条件到不了服务端。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    page = client.get(
+        "/employee/tasks?status_filter=expired&service_date=2026-08-02"
+        "&assigned_employee_id=2"
+    )
+
+    form = page.text.split('action="/employee/tasks/archive-filtered"')[1]
+    form = form.split("</form>")[0]
+    assert 'name="service_date" value="2026-08-02"' in form
+    assert 'name="assigned_employee_id" value="2"' in form
+    # 范围要在点按钮之前就写在页面上，而不是只藏在提交里。
+    assert "归档范围：" in form
+
+
+def test_bulk_archive_is_refused_for_a_filter_it_cannot_express() -> None:
+    """归档查询表达不了「只看逾期」，此时宁可拒绝也不能按更宽的范围执行。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks?overdue=true")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    assert 'action="/employee/tasks/archive-filtered"' not in page.text
+
+    response = client.post(
+        "/employee/tasks/archive-filtered",
+        data={"csrf_token": token, "overdue": "true"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert tasks.bulk_archive_calls == []
+
+
+def test_assign_form_preselects_the_task_own_room_and_employee() -> None:
+    """分派表单必须回填任务已有的房间与员工，不能让浏览器默认落到第一项。
+
+    未回填时提交表单会把任务改到选项表的第一个房间上，而管理员以为自己只是
+    确认了原样。这条同时锁定占位项：缺信息时必须主动选择，不给默认值。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    page = client.get("/employee/tasks/1")
+
+    form = page.text.split('action="/employee/tasks/1/assign"')[1]
+    form = form.split("</form>")[0]
+    assert '<option value="101" selected>长江中心</option>' in form
+    assert '<option value="100">别的房间</option>' in form
+    assert '<option value="2" selected>阿姨</option>' in form
+    assert '<option value="9">别的员工</option>' in form
+    assert '<option value="">请选择房间…</option>' in form
+    assert '<option value="">请选择员工…</option>' in form

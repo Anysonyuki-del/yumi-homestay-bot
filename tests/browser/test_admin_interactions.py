@@ -369,3 +369,154 @@ def test_no_script_fallback(browser: Browser) -> None:
         "node => getComputedStyle(node).marginLeft"
     ) == "0px"
     context.close()
+
+
+def _selection_fixture() -> str:
+    """返回任务列表的双布局勾选结构：桌面表格与手机卡片各一份同名勾选框。"""
+    return """<!doctype html>
+    <html lang="zh-CN"><head></head><body class="admin-body">
+      <main class="page-content">
+        <form id="selection-form" method="post" action="/employee/tasks/archive-selected"
+              data-confirm="确定把勾选的任务移入归档吗？归档后不再出现在默认列表，可在「已归档」中恢复。">
+          <div class="responsive-table"><table class="data-table">
+            <thead><tr>
+              <th scope="col" class="select-cell">
+                <input type="checkbox" data-select-all aria-label="全选本页">
+              </th><th scope="col">任务</th>
+            </tr></thead>
+            <tbody>
+              <tr><td class="select-cell">
+                <input type="checkbox" name="task_ids" value="11" aria-label="选择任务 11">
+              </td><td>保洁</td></tr>
+              <tr><td class="select-cell">
+                <input type="checkbox" name="task_ids" value="12" aria-label="选择任务 12">
+              </td><td>维修</td></tr>
+            </tbody>
+          </table></div>
+          <ul class="mobile-card-list clean-list">
+            <li><label class="card-select">
+              <input type="checkbox" name="task_ids" value="11"><span>选择</span>
+            </label></li>
+            <li><label class="card-select">
+              <input type="checkbox" name="task_ids" value="12"><span>选择</span>
+            </label></li>
+          </ul>
+          <button class="button button--danger" type="submit"
+                  data-typed-confirm="永久删除">永久删除勾选的任务</button>
+          <input type="hidden" name="confirm_count" value="0" data-confirm-count>
+        </form>
+      </main>
+    </body></html>"""
+
+
+def _load_selection_page(page: Page) -> None:
+    """载入真实 CSS 与 JavaScript 的双布局勾选页面，并拦截真实提交。"""
+    page.set_content(_selection_fixture())
+    page.add_style_tag(content=ADMIN_CSS)
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    page.evaluate(
+        """() => {
+          window.confirmCalls = [];
+          window.promptCalls = [];
+          window.confirm = (message) => { window.confirmCalls.push(message); return true; };
+          document.getElementById("selection-form")
+            .addEventListener("submit", (event) => event.preventDefault());
+        }"""
+    )
+
+
+def _submitted_task_ids(page: Page) -> list[str]:
+    """返回浏览器真正会提交的任务编号，禁用副本不计入。"""
+    return page.evaluate(
+        """() => new FormData(document.getElementById("selection-form"))
+              .getAll("task_ids")"""
+    )
+
+
+def test_select_all_never_selects_an_invisible_duplicate(browser: Browser) -> None:
+    """全选只能选中当前可见的那一份勾选框。
+
+    桌面表格与手机卡片渲染了两份同名勾选框，全选如果无差别勾上两份，提交的编号
+    会翻倍，页面上却看不出任何异常。
+    """
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+
+    page.check("[data-select-all]")
+
+    assert _submitted_task_ids(page) == ["11", "12"]
+    page.close()
+
+
+def test_unchecking_a_visible_box_also_drops_its_hidden_copy(browser: Browser) -> None:
+    """取消一条可见勾选后，这条任务不能再被提交。
+
+    这是最危险的一种：用户明确取消了某条任务，页面显示未勾选，隐藏副本却仍然
+    带着它进入批量归档或永久删除。
+    """
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+
+    page.check("[data-select-all]")
+    page.uncheck('.responsive-table input[name="task_ids"][value="11"]')
+
+    assert _submitted_task_ids(page) == ["12"]
+    page.close()
+
+
+def test_selection_survives_a_layout_switch_without_duplicating(
+    browser: Browser,
+) -> None:
+    """切换到手机宽度后，已有选择被继承，且不会变成两份。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+    page.check('.responsive-table input[name="task_ids"][value="11"]')
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.wait_for_function(
+        """() => document
+             .querySelector('.mobile-card-list input[name="task_ids"][value="11"]')
+             .disabled === false"""
+    )
+
+    assert _submitted_task_ids(page) == ["11"]
+    assert page.is_checked('.mobile-card-list input[name="task_ids"][value="11"]')
+    page.close()
+
+
+def test_typed_confirm_counts_what_the_user_can_see(browser: Browser) -> None:
+    """手输确认的条数必须等于可见选择数，而不是两套布局的总和。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+    page.evaluate(
+        """() => {
+          window.prompt = (message) => { window.promptCalls.push(message); return "2"; };
+        }"""
+    )
+
+    page.check("[data-select-all]")
+    page.click("button[data-typed-confirm]")
+
+    assert len(page.evaluate("() => window.promptCalls")) == 1
+    assert "2 条" in page.evaluate("() => window.promptCalls[0]")
+    assert page.input_value("[data-confirm-count]") == "2"
+    page.close()
+
+
+def test_permanent_delete_never_shows_the_archive_recoverable_wording(
+    browser: Browser,
+) -> None:
+    """永久删除不得沿用归档表单「可以恢复」的确认文案。
+
+    删除按钮借用归档表单提交，表单级确认写的是「可在「已归档」中恢复」；它在
+    专属确认之后弹出，等于用一句「可以恢复」盖住了不可逆的真相。
+    """
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+    page.evaluate("""() => { window.prompt = () => "1"; }""")
+
+    page.check('.responsive-table input[name="task_ids"][value="11"]')
+    page.click("button[data-typed-confirm]")
+
+    assert page.evaluate("() => window.confirmCalls") == []
+    page.close()

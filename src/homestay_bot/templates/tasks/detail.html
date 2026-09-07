@@ -20,12 +20,12 @@
 {% endif %}
 
 {% if is_admin and task.status.value in ["pending_confirmation", "pending_assignment"] %}
-<section class="detail-section panel panel--padded"><h2>确认并分派</h2><p>请核对房间、日期和执行员工后再提交。</p>
+<section class="detail-section panel panel--padded"><h2>确认并分派</h2><p>请核对房间、日期和执行员工后再提交；任务已有的房间与员工已回填，缺失项需要主动选择。</p>
   <form method="post" action="/employee/tasks/{{ task.id }}/assign" data-unsaved-warning>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>房间<select name="property_id" required>{% for property in properties %}<option value="{{ property.id }}">{{ property.title }}</option>{% endfor %}</select></label>
+    <label>房间<select name="property_id" required><option value="">请选择房间…</option>{% for property in properties %}<option value="{{ property.id }}"{% if task.property_id == property.id %} selected{% endif %}>{{ property.title }}</option>{% endfor %}</select></label>
     <label>服务日期<input type="date" name="service_date" value="{{ task.service_date or '' }}" required></label>
-    <label>执行员工<select name="assigned_employee_id" required>{% for employee in employees %}<option value="{{ employee.id }}">{{ employee.name }}</option>{% endfor %}</select></label>
+    <label>执行员工<select name="assigned_employee_id" required><option value="">请选择员工…</option>{% for employee in employees %}<option value="{{ employee.id }}"{% if task.assigned_employee_id == employee.id %} selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select></label>
     <button type="submit">确认并分派任务</button>
   </form>
 </section>

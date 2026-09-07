@@ -170,6 +170,8 @@ button:active:not(:disabled), .button:active { transform: translateY(1px); box-s
 .record-list { gap: 0; }
 .record-link { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 8px; color: inherit; text-decoration: none; }
 .record-link small { display: block; margin-top: 3px; color: var(--muted); }
+/* .responsive-table 手机端整体隐藏，只能用于同时提供 .mobile-card-list 兄弟节点的表格；
+   没有手机端替代内容的表格必须用 .table-scroll，否则手机上会整块消失。 */
 .responsive-table { display: none; max-width: 100%; overflow-x: auto; }
 .table-scroll { display: block; max-width: 100%; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }

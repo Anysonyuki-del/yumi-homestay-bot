@@ -186,6 +186,24 @@ def test_core_list_templates_share_desktop_table_and_mobile_card_patterns() -> N
         assert "mobile-card-list" in source
 
 
+def test_no_table_disappears_on_phones() -> None:
+    """`.responsive-table` 在手机上整块隐藏，用它就必须另配手机端内容。
+
+    没有 `.mobile-card-list` 兄弟节点的表格套上这个类，手机上会一条记录也看不
+    到，DOM 里却有完整数据——页面既不报错也不留空状态，只是内容凭空消失。没有
+    手机端替代内容的表格应当用 `.table-scroll` 横向滚动。
+    """
+    template_root = ASSET_ROOT / "templates"
+    offenders = [
+        str(path.relative_to(template_root))
+        for path in sorted(template_root.rglob("*.html"))
+        if "responsive-table" in (source := path.read_text())
+        and "mobile-card-list" not in source
+    ]
+
+    assert offenders == []
+
+
 def test_business_templates_extend_one_admin_shell() -> None:
     """真实业务页只能继承统一后台，不能重复 meta、样式或脚本标签。"""
     template_root = ASSET_ROOT / "templates"

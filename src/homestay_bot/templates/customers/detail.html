@@ -20,7 +20,7 @@
 {% endif %}
 
 {% if active_tab == "stays" %}
-<section class="detail-section panel panel--padded"><h2>住宿记录</h2><div class="responsive-table"><table class="data-table"><caption class="visually-hidden">客户住宿记录</caption><thead><tr><th scope="col">房源</th><th scope="col">入住日期</th><th scope="col">状态</th></tr></thead><tbody>{% for order in orders|default([]) %}<tr><td>{{ order.property_title }}</td><td>{{ order.date_label }}</td><td>{{ order.status_label }}</td></tr>{% else %}<tr><td colspan="3">暂无住宿记录。</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="detail-section panel panel--padded"><h2>住宿记录</h2><div class="table-scroll"><table class="data-table"><caption class="visually-hidden">客户住宿记录</caption><thead><tr><th scope="col">房源</th><th scope="col">入住日期</th><th scope="col">状态</th></tr></thead><tbody>{% for order in orders|default([]) %}<tr><td>{{ order.property_title }}</td><td>{{ order.date_label }}</td><td>{{ order.status_label }}</td></tr>{% else %}<tr><td colspan="3">暂无住宿记录。</td></tr>{% endfor %}</tbody></table></div></section>
 {% endif %}
 
 {% if active_tab == "service" %}
