@@ -1588,6 +1588,22 @@ class SessionTaskPageService:
             await self._service(session).purge(task_id, employee)
             await session.commit()
 
+    async def assign_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+        assigned_employee_id: int,
+    ) -> int:
+        """在同一事务内批量分派，任一条失败则整批回滚。"""
+        async with self._factory() as session:
+            assigned = await self._service(session).assign_many(
+                task_ids,
+                employee,
+                assigned_employee_id,
+            )
+            await session.commit()
+            return assigned
+
     async def purge_many(
         self,
         task_ids: list[int],

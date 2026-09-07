@@ -120,6 +120,14 @@ class TaskPageServicePort(Protocol):
     async def purge(self, task_id: int, employee: Employee) -> None:
         """永久删除一条已归档任务。"""
 
+    async def assign_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+        assigned_employee_id: int,
+    ) -> int:
+        """批量分派给同一名执行员工，返回分派数量。"""
+
     async def purge_many(
         self,
         task_ids: list[int],
@@ -280,6 +288,19 @@ async def task_index(
                 else ""
             ),
             "archivable_statuses": ARCHIVABLE_TASK_STATUSES,
+            # 可批量分派的条件放在这里判定而不是模板里：规则含状态与两个字段，
+            # 写进模板既难读也无法单独测试。
+            "assignable_ids": {
+                item.id
+                for item in items[:50]
+                if item.status
+                in (
+                    BusinessTaskStatus.PENDING_CONFIRMATION,
+                    BusinessTaskStatus.PENDING_ASSIGNMENT,
+                )
+                and item.property_id is not None
+                and item.service_date is not None
+            },
             "task_types": list(BusinessTaskType),
             "properties": options.get("properties", []),
             "employees": options.get("employees", []),
@@ -359,6 +380,32 @@ async def purge_selected_tasks(
         _raise_page_error(error)
     return RedirectResponse(
         "/employee/tasks?archived=true",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/assign-selected")
+async def assign_selected_tasks(
+    request: Request,
+    csrf_token: str = Form(min_length=1, max_length=128),
+    assigned_employee_id: Annotated[int, Form()] = 0,
+    task_ids: Annotated[list[int] | None, Form()] = None,
+) -> RedirectResponse:
+    """把勾选的任务批量分派给同一名执行员工。"""
+    employee = await _current_employee(request)
+    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    if assigned_employee_id <= 0:
+        raise OperationRefused("请先选择要分派给哪位员工")
+    try:
+        await _get_service(request).assign_many(
+            task_ids or [],
+            employee,
+            assigned_employee_id,
+        )
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        "/employee/tasks",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

@@ -58,6 +58,12 @@ class TaskPageRepository(Protocol):
     async def purge_task(self, task_id: int, actor_employee_id: int) -> None:
         """永久删除一条已归档任务。"""
 
+    async def require_assignable(
+        self,
+        task_ids: list[int],
+    ) -> list[tuple[int, int, date]]:
+        """校验可批量分派，返回各自的编号、房间与服务日期。"""
+
     async def require_purgeable(self, task_ids: list[int]) -> list[str]:
         """校验可删除并返回待删除的私有文件编号。"""
 
@@ -438,6 +444,29 @@ class TaskPageService:
         """永久删除一条已归档任务。"""
         self._require_admin(employee)
         await self._tasks.purge_task(task_id, employee.id)
+
+    async def assign_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+        assigned_employee_id: int,
+    ) -> int:
+        """把勾选的任务批量分派给同一名执行员工，返回分派数量。
+
+        逐条复用既有 assign：状态机、权限校验和审计都不绕过。校验先整体做完，
+        避免前几条已改状态才发现后面某条不合格。
+        """
+        self._require_admin(employee)
+        targets = await self._tasks.require_assignable(task_ids)
+        for task_id, property_id, service_date in targets:
+            await self.assign(
+                task_id,
+                employee,
+                assigned_employee_id=assigned_employee_id,
+                property_id=property_id,
+                service_date=service_date,
+            )
+        return len(targets)
 
     async def purge_many_file_ids(
         self,

@@ -61,6 +61,7 @@ class TaskPageStub:
         self.selected_archive_calls: list[list[int]] = []
         self.purge_calls: list[int] = []
         self.purge_many_calls: list[list[int]] = []
+        self.assign_many_calls: list[tuple[list[int], int]] = []
         self.private_file = None
         self.detail_error: Exception | None = None
         self.list_error: Exception | None = None
@@ -131,6 +132,13 @@ class TaskPageStub:
         if employee.role is not EmployeeRole.ADMIN:
             raise PermissionError("只有管理员可以删除")
         self.purge_calls.append(task_id)
+
+    async def assign_many(self, task_ids, employee, assigned_employee_id):
+        """记录批量分派的编号与执行员工。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以分派")
+        self.assign_many_calls.append((list(task_ids), assigned_employee_id))
+        return len(task_ids)
 
     async def purge_many(self, task_ids, employee):
         """记录批量永久删除调用。"""
@@ -891,29 +899,102 @@ def test_bulk_archive_uses_current_filters_as_selection() -> None:
     assert tasks.bulk_archive_calls[0].status is BusinessTaskStatus.EXPIRED
 
 
-def test_open_task_gets_no_checkbox_but_terminal_task_does() -> None:
-    """只有终态任务给勾选框。
+def test_checkbox_appears_only_for_tasks_a_bulk_action_accepts() -> None:
+    """勾选框只在该任务确实能被某个批量操作接受时出现。
 
-    开放态任务提交后必然被整批拒绝，让它可勾选等于引导用户走进注定失败的操作；
-    从源头不渲染，比事后报错更早解决问题。
+    让用户勾选注定被拒的任务，等于引导他走进必然失败的操作。可批量的动作有两
+    个，各自的条件不同：分派要求待确认或待分派且房间与日期齐全，归档要求终态。
     """
     client, tasks = build_client(EmployeeRole.ADMIN)
     login(client)
 
+    # 已分派：两个批量动作都不接受
     tasks.item.status = BusinessTaskStatus.ASSIGNED
-    open_page = client.get("/employee/tasks")
-    assert 'name="task_ids"' not in open_page.text
-    assert "本页 0 条可归档" in open_page.text
-    # 无可归档项时不给提交按钮
-    assert ">归档勾选的任务</button>" not in open_page.text
+    neither = client.get("/employee/tasks")
+    assert 'name="task_ids"' not in neither.text
+    assert ">分派勾选的任务</button>" not in neither.text
+    assert ">归档勾选的任务</button>" not in neither.text
 
+    # 待分派且信息齐全：可分派
+    tasks.item.status = BusinessTaskStatus.PENDING_ASSIGNMENT
+    assignable = client.get("/employee/tasks")
+    assert 'name="task_ids"' in assignable.text
+    assert 'action="/employee/tasks/assign-selected"' in assignable.text
+    assert "本页 1 条可分派" in assignable.text
+
+    # 待分派但缺房间：不给勾选，需逐条补齐
+    tasks.item.property_id = None
+    incomplete = client.get("/employee/tasks")
+    assert 'name="task_ids"' not in incomplete.text
+    assert "本页 0 条可分派" in incomplete.text
+    tasks.item.property_id = 101
+
+    # 终态：可归档
     tasks.item.status = BusinessTaskStatus.EXPIRED
-    terminal_page = client.get("/employee/tasks")
-    assert 'name="task_ids"' in terminal_page.text
-    assert "data-select-all" in terminal_page.text
-    assert 'action="/employee/tasks/archive-selected"' in terminal_page.text
-    assert "本页 1 条可归档" in terminal_page.text
-    assert ">归档勾选的任务</button>" in terminal_page.text
+    terminal = client.get("/employee/tasks")
+    assert 'name="task_ids"' in terminal.text
+    assert 'action="/employee/tasks/archive-selected"' in terminal.text
+    assert ">归档勾选的任务</button>" in terminal.text
+
+
+def test_bulk_assign_requires_an_employee_choice() -> None:
+    """未选择员工时拒绝，不得把任务分派给不存在的执行人。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/assign-selected",
+        data={"csrf_token": token, "task_ids": ["11"], "assigned_employee_id": "0"},
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.assign_many_calls == []
+    landed = client.get("/employee/tasks")
+    assert "请先选择要分派给哪位员工" in landed.text
+
+
+def test_bulk_assign_passes_selection_and_employee() -> None:
+    """选定员工后，勾选的编号与员工编号一并送达服务。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/assign-selected",
+        data={
+            "csrf_token": token,
+            "task_ids": ["11", "12"],
+            "assigned_employee_id": "3",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.assign_many_calls == [([11, 12], 3)]
+
+
+def test_staff_cannot_bulk_assign() -> None:
+    """普通员工不得批量分派。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    login(client)
+
+    response = client.post(
+        "/employee/tasks/assign-selected",
+        data={
+            "csrf_token": detail_csrf(client),
+            "task_ids": ["11"],
+            "assigned_employee_id": "3",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code >= 400
+    assert tasks.assign_many_calls == []
 
 
 def test_staff_list_has_no_selection_controls() -> None:

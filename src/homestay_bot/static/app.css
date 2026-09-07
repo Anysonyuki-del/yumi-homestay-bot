@@ -465,3 +465,8 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .card-select { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: var(--t-xs); font-weight: 600; }
 .card-select input { width: 18px; min-height: 18px; }
 .selection-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+
+/* 批量分派：员工下拉与按钮排在同一行，不撑开操作区。 */
+.assign-inline { margin: 0; color: var(--muted); font-size: var(--t-xs); font-weight: 650; }
+.selection-actions { flex-wrap: wrap; align-items: center; gap: 8px; }
+.selection-actions select { max-width: 12rem; }

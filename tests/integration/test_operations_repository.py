@@ -1176,3 +1176,72 @@ async def test_bulk_purge_validates_before_touching_any_file() -> None:
         assert await session.get(BusinessTask, archived.id) is None
         # 未归档那条完好无损
         assert await session.get(BusinessTask, open_task.id) is not None
+
+
+@pytest.mark.asyncio
+async def test_bulk_assign_validation_rejects_incomplete_or_wrong_status() -> None:
+    """批量分派前整体校验：状态不符或缺房间日期的整批拒绝并点名。
+
+    校验必须先整体做完，否则前几条已改状态才发现后面某条不合格，任务会停在
+    半分派状态。返回值携带每条自己的房间与日期——批量覆盖这两项才是危险操作。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add_all(
+            [
+                PropertyProfile(id=101, title="房间甲"),
+                PropertyProfile(id=102, title="房间乙"),
+            ]
+        )
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        ready_a = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+            property_id=101,
+            service_date=date(2026, 8, 1),
+            description="甲",
+        )
+        ready_b = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+            property_id=102,
+            service_date=date(2026, 8, 5),
+            description="乙",
+        )
+        no_property = BusinessTask(
+            task_type=BusinessTaskType.MAINTENANCE,
+            status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            description="缺房间",
+        )
+        already_done = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.EXPIRED,
+            property_id=101,
+            service_date=date(2026, 8, 1),
+            description="已失效",
+        )
+        session.add_all([ready_a, ready_b, no_property, already_done])
+        await session.flush()
+
+        with pytest.raises(OperationRefused) as missing_fields:
+            await repository.require_assignable([ready_a.id, no_property.id])
+        assert str(no_property.id) in str(missing_fields.value)
+
+        with pytest.raises(OperationRefused) as wrong_status:
+            await repository.require_assignable([ready_a.id, already_done.id])
+        assert str(already_done.id) in str(wrong_status.value)
+
+        with pytest.raises(OperationRefused):
+            await repository.require_assignable([])
+
+        # 合格时各自带回自己的房间与日期，不做统一覆盖
+        assert await repository.require_assignable([ready_b.id, ready_a.id]) == [
+            (ready_a.id, 101, date(2026, 8, 1)),
+            (ready_b.id, 102, date(2026, 8, 5)),
+        ]

@@ -527,6 +527,49 @@ class SQLAlchemyOperationsRepository:
             )
         )
 
+    async def require_assignable(
+        self,
+        task_ids: list[int],
+    ) -> list[tuple[int, int, date]]:
+        """校验任务可批量分派，返回各自的编号、房间与服务日期。
+
+        沿用每条任务自身的房间与日期，只补执行人：这些任务分属不同房间和
+        日期，批量覆盖这两项才是危险操作。缺房间或日期的任务本就需要人工
+        补齐，混入批量没有意义，这里连同状态不符的一起整批拒绝。
+        """
+        if not task_ids:
+            raise OperationRefused("请先勾选要分派的任务")
+        unique_ids = sorted(set(task_ids))
+        tasks = list(
+            await self._session.scalars(
+                select(BusinessTask).where(BusinessTask.id.in_(unique_ids))
+            )
+        )
+        if missing := sorted(set(unique_ids) - {task.id for task in tasks}):
+            raise LookupError(f"任务不存在：{missing}")
+        assignable_statuses = (
+            BusinessTaskStatus.PENDING_CONFIRMATION,
+            BusinessTaskStatus.PENDING_ASSIGNMENT,
+        )
+        if blocked := sorted(
+            task.id for task in tasks if task.status not in assignable_statuses
+        ):
+            raise OperationRefused(
+                f"只有待确认或待分派的任务可以分派，以下状态不符：{blocked}"
+            )
+        if incomplete := sorted(
+            task.id
+            for task in tasks
+            if task.property_id is None or task.service_date is None
+        ):
+            raise OperationRefused(
+                f"以下任务缺少房间或服务日期，请先逐条补齐：{incomplete}"
+            )
+        return [
+            (task.id, cast(int, task.property_id), cast(date, task.service_date))
+            for task in sorted(tasks, key=lambda item: item.id)
+        ]
+
     async def require_purgeable(self, task_ids: list[int]) -> list[str]:
         """校验全部任务存在且已归档，返回待删除的私有文件编号。
 
