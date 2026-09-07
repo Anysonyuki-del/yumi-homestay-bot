@@ -123,6 +123,18 @@ def test_deferred_ack_and_final_use_distinct_outbox_delivery_phases() -> None:
     ) is None
 
 
+class _StubStorage:
+    """记录清理循环请求删除的私有文件编号。"""
+
+    def __init__(self) -> None:
+        """初始化删除记录。"""
+        self.deleted: list[str] = []
+
+    def delete(self, file_id: str) -> None:
+        """记录一次删除请求。"""
+        self.deleted.append(file_id)
+
+
 @pytest.mark.asyncio
 async def test_retention_loop_purges_and_commits_daily(monkeypatch) -> None:
     """历史记录维护应每天清理一次，并在独立事务提交。"""
@@ -157,6 +169,12 @@ async def test_retention_loop_purges_and_commits_daily(monkeypatch) -> None:
             calls.append("purge")
             return {"jobs": 2}
 
+        async def purge_archived_tasks(self, *, delete_file, now=None):
+            """记录归档任务清理，并确认拿到了可用的文件删除入口。"""
+            assert callable(delete_file)
+            calls.append("purge_archived_tasks")
+            return 0
+
     async def stop_after_cycle(delay: float) -> None:
         """观察到一天调度间隔后终止无限循环。"""
         assert delay == 86_400
@@ -172,10 +190,12 @@ async def test_retention_loop_purges_and_commits_daily(monkeypatch) -> None:
 
     with pytest.raises(StopRetentionLoop):
         await application._run_retention_loop(
-            cast(Any, lambda: SessionContext())
+            cast(Any, lambda: SessionContext()),
+            cast(Any, _StubStorage()),
         )
 
-    assert calls == ["purge", "commit"]
+    # 归档任务清理必须在同一事务内、提交之前完成
+    assert calls == ["purge", "purge_archived_tasks", "commit"]
 
 
 @pytest.mark.asyncio

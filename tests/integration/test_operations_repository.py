@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -1046,3 +1046,69 @@ async def test_archive_selected_rejects_whole_batch_when_open_task_included() ->
 
         with pytest.raises(LookupError):
             await repository.archive_selected([999999], 1)
+
+
+@pytest.mark.asyncio
+async def test_purge_task_requires_archive_and_keeps_audit() -> None:
+    """只有已归档任务可彻底删除，审计记录必须保留。
+
+    删除是本项目第一个不可逆操作：状态在仓储内重新读取校验，不信任调用方；
+    审计本就应当比它描述的实体活得久。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        # 开启外键强制，否则级联删除不会被真正验证
+        await session.execute(text("PRAGMA foreign_keys=ON"))
+        actor = Employee(wecom_userid="admin", name="管理员", role=EmployeeRole.ADMIN)
+        session.add_all([PropertyProfile(id=101, title="测试房间"), actor])
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        task = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.EXPIRED,
+            property_id=101,
+            service_date=date(2026, 8, 1),
+            description="待删除",
+        )
+        session.add(task)
+        await session.flush()
+        session.add(
+            TaskAttachment(
+                task_id=task.id,
+                private_file_id="abcdef0123456789",
+                kind="photo",
+            )
+        )
+        await session.flush()
+
+        # 未归档时拒绝删除
+        with pytest.raises(OperationRefused):
+            await repository.purge_task(task.id, actor.id)
+
+        await repository.archive_task(task.id, actor.id)
+        assert await repository.attachment_file_ids(task.id) == ["abcdef0123456789"]
+
+        await repository.purge_task(task.id, actor.id)
+        await session.commit()
+
+        assert await session.get(BusinessTask, task.id) is None
+        # 附件行随外键级联消失
+        remaining = list(
+            await session.scalars(
+                select(TaskAttachment).where(TaskAttachment.task_id == task.id)
+            )
+        )
+        assert remaining == []
+        # 审计保留，且记录了附件数量
+        purged = list(
+            await session.scalars(
+                select(AuditLog).where(AuditLog.action == "business_task_purged")
+            )
+        )
+        assert len(purged) == 1
+        assert purged[0].details["attachments"] == 1

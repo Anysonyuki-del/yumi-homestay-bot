@@ -517,6 +517,49 @@ class SQLAlchemyOperationsRepository:
         await self._session.flush()
         return task
 
+    async def attachment_file_ids(self, task_id: int) -> list[str]:
+        """返回任务全部附件的私有文件编号，供调用方先行删除磁盘文件。"""
+        return list(
+            await self._session.scalars(
+                select(TaskAttachment.private_file_id).where(
+                    TaskAttachment.task_id == task_id
+                )
+            )
+        )
+
+    async def purge_task(self, task_id: int, actor_employee_id: int) -> None:
+        """永久删除一条已归档任务；附件行由外键级联删除。
+
+        只接受已归档任务：归档是删除的前置门槛，不提供从列表直接删除的路径。
+        状态在这里重新读取校验，不信任调用方传入的判断。
+        审计记录不删——审计本就应当比它描述的实体活得久。
+        """
+        task = await self._session.scalar(
+            select(BusinessTask)
+            .where(BusinessTask.id == task_id)
+            .with_for_update()
+        )
+        if task is None:
+            raise LookupError("任务不存在")
+        if task.archived_at is None:
+            raise OperationRefused("只有已归档的任务可以彻底删除，请先移入归档")
+        attachment_count = len(await self.attachment_file_ids(task_id))
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="business_task_purged",
+                target_type="business_task",
+                target_id=str(task_id),
+                details={
+                    "status": task.status.value,
+                    "archived_at": task.archived_at.isoformat(),
+                    "attachments": attachment_count,
+                },
+            )
+        )
+        await self._session.delete(task)
+        await self._session.flush()
+
     async def archive_selected(
         self,
         task_ids: list[int],

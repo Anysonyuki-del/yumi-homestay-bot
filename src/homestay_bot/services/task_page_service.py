@@ -52,6 +52,12 @@ class TaskPageRepository(Protocol):
     ) -> BusinessTask:
         """把任务移出归档。"""
 
+    async def attachment_file_ids(self, task_id: int) -> list[str]:
+        """返回任务附件的私有文件编号。"""
+
+    async def purge_task(self, task_id: int, actor_employee_id: int) -> None:
+        """永久删除一条已归档任务。"""
+
     async def archive_selected(
         self,
         task_ids: list[int],
@@ -408,6 +414,20 @@ class TaskPageService:
         """管理员把任务移出归档。"""
         self._require_admin(employee)
         await self._tasks.restore_task(task_id, employee.id)
+
+    async def purge_attachment_ids(
+        self,
+        task_id: int,
+        employee: Employee,
+    ) -> list[str]:
+        """校验管理员身份后返回待删除的附件文件编号。"""
+        self._require_admin(employee)
+        return await self._tasks.attachment_file_ids(task_id)
+
+    async def purge(self, task_id: int, employee: Employee) -> None:
+        """永久删除一条已归档任务。"""
+        self._require_admin(employee)
+        await self._tasks.purge_task(task_id, employee.id)
 
     async def archive_many(
         self,

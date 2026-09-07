@@ -1571,6 +1571,23 @@ class SessionTaskPageService:
             await self._service(session).restore(task_id, employee)
             await session.commit()
 
+    async def purge(self, task_id: int, employee: Employee) -> None:
+        """永久删除一条已归档任务，先删磁盘照片再删数据库行。
+
+        顺序是刻意的：先删库成功而删文件失败，照片就永远没人认领；反过来失败
+        只留下一条指向缺失文件的记录，可以修复。
+        """
+        async with self._factory() as session:
+            file_ids = await self._service(session).purge_attachment_ids(
+                task_id,
+                employee,
+            )
+        for file_id in file_ids:
+            self._storage.delete(file_id)
+        async with self._factory() as session:
+            await self._service(session).purge(task_id, employee)
+            await session.commit()
+
     async def archive_many(
         self,
         employee: Employee,
@@ -2427,21 +2444,28 @@ async def _run_faq_maintenance_loop(
 
 async def _run_retention_loop(
     factory: async_sessionmaker[AsyncSession],
+    storage: PrivateFileStorage,
 ) -> None:
     """每天在独立事务清理过期终态历史，失败时保活并等待下一轮。"""
     while True:
         try:
             async with factory() as session:
-                deleted = await SQLAlchemyRetentionRepository(session).purge()
+                repository = SQLAlchemyRetentionRepository(session)
+                deleted = await repository.purge()
+                deleted["archived_tasks"] = await repository.purge_archived_tasks(
+                    delete_file=storage.delete,
+                )
                 await session.commit()
                 logger.info(
                     "历史记录清理完成：approval_pii=%s jobs=%s "
-                    "external_requests=%s hostex_events=%s audit_logs=%s",
+                    "external_requests=%s hostex_events=%s audit_logs=%s "
+                    "archived_tasks=%s",
                     deleted.get("booking_approval_pii", 0),
                     deleted.get("jobs", 0),
                     deleted.get("external_requests", 0),
                     deleted.get("hostex_webhook_events", 0),
                     deleted.get("audit_logs", 0),
+                    deleted.get("archived_tasks", 0),
                 )
         except asyncio.CancelledError:
             raise
@@ -3508,7 +3532,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 started_tasks.append(
                     _create_runtime_task(_run_faq_maintenance_loop(factory=factory))
                 )
-                started_tasks.append(_create_runtime_task(_run_retention_loop(factory)))
+                started_tasks.append(_create_runtime_task(
+                        _run_retention_loop(factory, private_file_storage)
+                    ))
                 started_tasks.append(
                     _create_runtime_task(
                         _run_context_maintenance_loop(

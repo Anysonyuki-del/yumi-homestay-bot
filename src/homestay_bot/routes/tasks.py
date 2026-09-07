@@ -117,6 +117,9 @@ class TaskPageServicePort(Protocol):
     async def restore(self, task_id: int, employee: Employee) -> None:
         """把任务移出归档。"""
 
+    async def purge(self, task_id: int, employee: Employee) -> None:
+        """永久删除一条已归档任务。"""
+
     async def archive_many(
         self,
         employee: Employee,
@@ -406,6 +409,26 @@ async def archive_task(
         _raise_page_error(error)
     return RedirectResponse(
         f"/employee/tasks/{task_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{task_id}/purge")
+async def purge_task(
+    request: Request,
+    task_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """永久删除一条已归档任务；不可恢复。"""
+    employee = await _current_employee(request)
+    await _consume_csrf(request, task_id, csrf_token)
+    try:
+        await _get_service(request).purge(task_id, employee)
+    except Exception as error:
+        _raise_page_error(error)
+    # 任务已不存在，回列表而不是回详情页。
+    return RedirectResponse(
+        "/employee/tasks?archived=true",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

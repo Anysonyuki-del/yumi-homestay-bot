@@ -59,6 +59,7 @@ class TaskPageStub:
         self.restore_calls: list[int] = []
         self.bulk_archive_calls: list[object] = []
         self.selected_archive_calls: list[list[int]] = []
+        self.purge_calls: list[int] = []
         self.private_file = None
         self.detail_error: Exception | None = None
         self.list_error: Exception | None = None
@@ -123,6 +124,12 @@ class TaskPageStub:
         if employee.role is not EmployeeRole.ADMIN:
             raise PermissionError("只有管理员可以恢复")
         self.restore_calls.append(task_id)
+
+    async def purge(self, task_id, employee):
+        """记录永久删除调用。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以删除")
+        self.purge_calls.append(task_id)
 
     async def archive_many(self, employee, task_ids):
         """记录勾选归档使用的编号。"""
@@ -1069,3 +1076,35 @@ def test_return_path_rejects_offsite_and_non_employee_targets() -> None:
     assert safe_return_path("/admin/secret") == "/employee/tasks"
     assert safe_return_path("") == "/employee/tasks"
     assert safe_return_path(None) == "/employee/tasks"
+
+
+def test_purge_entry_appears_only_for_archived_task() -> None:
+    """永久删除只对已归档任务开放：归档是删除的前置门槛。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    tasks.item.status = BusinessTaskStatus.EXPIRED
+    tasks.item.archived_at = None
+    not_archived = client.get("/employee/tasks/1")
+    assert 'action="/employee/tasks/1/purge"' not in not_archived.text
+
+    tasks.item.archived_at = "2026-03-01T00:00:00Z"
+    archived = client.get("/employee/tasks/1")
+    assert 'action="/employee/tasks/1/purge"' in archived.text
+    assert "永久删除" in archived.text
+    assert "不可恢复" in archived.text
+
+
+def test_staff_cannot_purge_task() -> None:
+    """普通员工不得永久删除任务。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    login(client)
+
+    response = client.post(
+        "/employee/tasks/1/purge",
+        data={"csrf_token": detail_csrf(client)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code >= 400
+    assert tasks.purge_calls == []

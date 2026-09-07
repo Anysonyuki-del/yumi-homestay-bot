@@ -1,7 +1,8 @@
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, or_, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,9 +10,11 @@ from homestay_bot.domain.enums import ApprovalStatus, JobStatus
 from homestay_bot.domain.models import (
     AuditLog,
     BookingApproval,
+    BusinessTask,
     ExternalRequest,
     HostexWebhookEvent,
     Job,
+    TaskAttachment,
 )
 
 
@@ -24,6 +27,7 @@ class SQLAlchemyRetentionRepository:
     AUDIT_RETENTION_DAYS = 365
     BOOKED_APPROVAL_PII_RETENTION_DAYS = 30
     TERMINAL_APPROVAL_PII_RETENTION_DAYS = 90
+    ARCHIVED_TASK_RETENTION_DAYS = 180
 
     def __init__(self, session: AsyncSession) -> None:
         """绑定清理事务。"""
@@ -95,3 +99,46 @@ class SQLAlchemyRetentionRepository:
             result = cast(CursorResult[Any], await self._session.execute(statement))
             deleted[name] = int(result.rowcount or 0)
         return deleted
+
+    async def purge_archived_tasks(
+        self,
+        *,
+        delete_file: Callable[[str], None],
+        now: datetime | None = None,
+    ) -> int:
+        """删除归档超过保留期的任务及其现场照片，返回删除数量。
+
+        与 purge 分开是因为这是唯一带副作用的清理：附件行由外键级联删除，但
+        磁盘上的照片必须显式删除，否则会留下永远无人认领的孤儿文件。
+
+        只删已归档任务。未归档的任务无论多旧都不会被自动删除——自动删除掉
+        还没人处理的活，比留着它危险得多。
+        """
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        cutoff = current - timedelta(days=self.ARCHIVED_TASK_RETENTION_DAYS)
+        expired = list(
+            await self._session.scalars(
+                select(BusinessTask).where(
+                    BusinessTask.archived_at.is_not(None),
+                    BusinessTask.archived_at < cutoff,
+                )
+            )
+        )
+        if not expired:
+            return 0
+        task_ids = [task.id for task in expired]
+        file_ids = list(
+            await self._session.scalars(
+                select(TaskAttachment.private_file_id).where(
+                    TaskAttachment.task_id.in_(task_ids)
+                )
+            )
+        )
+        # 先删磁盘文件：删库成功而删文件失败会留下无人认领的照片，反过来只留
+        # 一条指向缺失文件的记录，可以修复。
+        for file_id in file_ids:
+            delete_file(file_id)
+        await self._session.execute(
+            delete(BusinessTask).where(BusinessTask.id.in_(task_ids))
+        )
+        return len(task_ids)
