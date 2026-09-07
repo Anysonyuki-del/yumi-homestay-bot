@@ -13,7 +13,7 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <section class="detail-section panel panel--padded">
   <p class="eyebrow">百居易房间 #{{ property.id }}</p>
-  <div class="section-heading"><h2>运营概览</h2>{{ ui.badge(overview.operational_status | status_zh, "success" if (overview.operational_status.value if overview.operational_status.value is defined else overview.operational_status) == "ready" else "warning") }}</div>
+  <div class="section-heading"><h2>运营概览</h2>{{ ui.readiness_status_badge(overview.operational_status) }}</div>
   <dl class="detail-grid"><dt>今日安排</dt><dd>{{ overview.today_stay_labels|join("、") if overview.today_stay_labels else "今日无入住退房" }}</dd><dt>开放任务</dt><dd>{{ overview.open_task_count }} 项待处理</dd><dt>下次入住</dt><dd>{{ overview.next_check_in_date | date_zh if overview.next_check_in_date else "暂无" }}</dd><dt>凭证状态</dt><dd>{% if credential %}凭证版本 {{ credential.version }}{% else %}尚未配置{% endif %}</dd><dt>资料完整度</dt><dd>{{ overview.profile_completeness }}%</dd><dt>待补资料</dt><dd>{{ overview.missing_profile_labels|join("、") if overview.missing_profile_labels else "资料完整" }}</dd></dl>
 </section>
 

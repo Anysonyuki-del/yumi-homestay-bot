@@ -1378,3 +1378,99 @@ def test_assign_form_preselects_the_task_own_room_and_employee() -> None:
     assert '<option value="9">别的员工</option>' in form
     assert '<option value="">请选择房间…</option>' in form
     assert '<option value="">请选择员工…</option>' in form
+
+
+def _current_queue_links(html: str) -> list[str]:
+    """提取任务队列里被标记为当前位置的链接文本。"""
+    block = re.search(
+        r'<nav class="tab-nav" aria-label="任务队列">(.*?)</nav>',
+        html,
+        re.S,
+    )
+    assert block is not None
+    return re.findall(
+        r'<a [^>]*aria-current="page"[^>]*>([^<]+)</a>',
+        block.group(1),
+    )
+
+
+def test_only_one_queue_is_ever_marked_as_the_current_one() -> None:
+    """任何筛选组合下，队列里都只能有一个当前位置。
+
+    归档、逾期和状态各自判断高亮时，`?archived=true&status_filter=pending_confirmation`
+    会让「已归档」和「待确认」同时亮起，读屏也会读到两个当前位置。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    combinations = (
+        "/employee/tasks",
+        "/employee/tasks?overdue=true",
+        "/employee/tasks?status_filter=pending_assignment",
+        "/employee/tasks?archived=true&status_filter=pending_confirmation",
+        "/employee/tasks?overdue=true&status_filter=pending_confirmation",
+        "/employee/tasks?status_filter=expired&property_id=101",
+    )
+    for url in combinations:
+        assert len(_current_queue_links(client.get(url).text)) == 1, url
+
+
+def test_page_title_and_heading_follow_the_queue_being_viewed() -> None:
+    """已归档队列不能继续自称「全部待办」。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    archived = client.get("/employee/tasks?archived=true")
+
+    assert _current_queue_links(archived.text) == ["已归档"]
+    assert "<h2>已归档</h2>" in archived.text
+    assert "<title>已归档任务 · YuMi 管理后台</title>" in archived.text
+    assert "全部待办" not in archived.text
+
+
+def test_choosing_a_queue_is_not_treated_as_an_extra_filter() -> None:
+    """点一个队列不等于加了筛选，不该把整套高级表单展开。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/tasks?status_filter=pending_assignment")
+
+    assert 'class="filter-summary"' not in response.text
+    disclosure = re.search(
+        r"<details class=\"filter-disclosure\"([^>]*)>",
+        response.text,
+    )
+    assert disclosure is not None
+    assert "open" not in disclosure.group(1)
+
+
+def test_filters_beyond_the_queue_are_summarised_and_clearable() -> None:
+    """队列之外多加的条件必须写在页面上，并能一键退回纯队列。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get(
+        "/employee/tasks?status_filter=pending_assignment&property_id=101"
+        "&service_date=2026-08-02"
+    )
+
+    assert _current_queue_links(response.text) == ["待分派"]
+    summary = re.search(r'<p class="filter-summary">(.*?)</p>', response.text, re.S)
+    assert summary is not None
+    assert "2 项" in summary.group(1)
+    assert "房源" in summary.group(1)
+    assert "服务日期" in summary.group(1)
+    # 定义队列的那个状态不算附加筛选。
+    assert "状态" not in summary.group(1).replace("服务日期", "")
+    assert 'href="/employee/tasks?status_filter=pending_assignment"' in summary.group(1)
+
+
+def test_status_placeholder_does_not_claim_open_tasks_on_the_archive_queue() -> None:
+    """已归档队列里的状态占位项不能写「全部开放状态」。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    response = client.get("/employee/tasks?archived=true")
+
+    assert "全部开放状态" not in response.text
+    assert '<option value="">不限状态</option>' in response.text

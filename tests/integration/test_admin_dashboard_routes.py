@@ -1,5 +1,7 @@
 import asyncio
+import re
 from concurrent.futures import CancelledError as FutureCancelledError
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
 from types import SimpleNamespace
@@ -552,3 +554,105 @@ def test_operations_page_offers_inline_room_status_control() -> None:
     # 六个房态全部可选，与房源详情页保持一致
     for label in ("未开始", "保洁中", "待检查", "可入住", "已入住", "维修中"):
         assert label in page.text
+
+
+class StaleTimelineOperationsStub(OperationsStub):
+    """提供同步已过期、且本地没有任何入住记录的时间轴。"""
+
+    async def snapshot(
+        self,
+        now: datetime | None = None,
+        *,
+        horizon_days: int = 3,
+        source_synced_at: datetime | None = None,
+    ) -> OperationsSnapshot:
+        """把默认桩的时间轴换成「本地无记录」的空日子。"""
+        base = await super().snapshot(
+            now,
+            horizon_days=horizon_days,
+            source_synced_at=source_synced_at,
+        )
+        empty_days = tuple(
+            RoomDayOperation(day.local_date, 0, 0, False) for day in base.seven_day_rooms[0].days
+        )
+        return replace(
+            base,
+            seven_day_rooms=(SevenDayRoomItem(101, "101", "长江中心", empty_days),),
+        )
+
+
+def test_stale_timeline_does_not_call_a_missing_record_vacant() -> None:
+    """同步过期时，本地没有记录只能说成「无记录」，不能说成确定的「空闲」。
+
+    页面顶部已经声明房态待确认，时间轴却仍然逐日写「空闲」，等于用最具体的
+    形式把「我们不知道」讲成了「我们确定这天没人」。
+    """
+    client = build_client()
+    client.app.state.admin_operations_service = StaleTimelineOperationsStub()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin/operations")
+
+    assert response.status_code == 200
+    assert "房态待确认" in response.text
+    assert "以下为上次同步记录，入住信息待确认。" in response.text
+    assert "day-mark--unknown" in response.text
+    assert "day-mark--vacant" not in response.text
+
+
+def test_synced_timeline_still_states_vacancy_as_a_fact() -> None:
+    """同步可信时，空闲就是事实，不该被降级成「无记录」。"""
+    client = build_client()
+    client.app.state.admin_operations_service = StableRoomOperationsStub()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin/operations")
+
+    assert "day-mark--vacant" in response.text
+    assert "day-mark--unknown" not in response.text
+    assert "以下为上次同步记录" not in response.text
+
+
+def test_expanded_stable_rooms_show_the_future_they_promise() -> None:
+    """稳定房间展开后必须能看到未来安排，而不只是房名和房态控件。
+
+    页面顶部提供「未来 3／7／14 天」入口，稳定房间却只有房名、准备状态和一个
+    下拉框，展开等于什么也没多看到。
+    """
+    client = build_client()
+    client.app.state.admin_operations_service = StableRoomOperationsStub()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin/operations")
+
+    block = response.text.split('<details class="operations-stable"')[1]
+    assert "东湖小院" in block
+    assert "下次入住" in block
+    assert "开放任务" in block
+    assert 'href="/employee/tasks?property_id=202"' in block
+    assert 'class="clean-list room-timeline"' in block
+
+
+def test_scrollable_timelines_can_be_reached_by_keyboard() -> None:
+    """时间轴会横向滚动，因此必须自己可聚焦，否则键盘用户看不到后面的日子。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin/operations")
+
+    timelines = re.findall(r'<ol class="clean-list room-timeline"[^>]*>', response.text)
+    assert timelines
+    assert all('tabindex="0"' in tag for tag in timelines)
+    assert all("aria-label=" in tag for tag in timelines)
+
+
+def test_long_horizon_gives_room_cards_a_full_row() -> None:
+    """14 天时间轴不能被塞进半宽卡片里等分压缩。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    short = client.get("/employee/admin/operations?days=3")
+    long_range = client.get("/employee/admin/operations?days=14")
+
+    assert "room-operations-list--wide" not in short.text
+    assert "room-operations-list--wide" in long_range.text

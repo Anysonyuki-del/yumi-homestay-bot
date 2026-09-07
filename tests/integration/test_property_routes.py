@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.sessions import SessionMiddleware
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import EmployeeRole, RoomOperationalStatus
 from homestay_bot.domain.models import (
     AuditLog,
     Base,
@@ -52,7 +52,7 @@ class PropertyAdminStub:
             address_hint="地铁站附近",
             parking_instructions="停车前联系管理员",
             is_active=True,
-            operational_status="ready",
+            operational_status=RoomOperationalStatus.READY,
             today_stay_labels=("今日入住",),
             open_task_count=2,
             credential_version=3,
@@ -462,3 +462,32 @@ def test_property_csrf_rejects_cross_entity_replay(tmp_path) -> None:
 
     assert response.status_code == 409
     assert properties.profile_calls == []
+
+
+def test_room_readiness_looks_the_same_on_desktop_and_phone(tmp_path) -> None:
+    """同一个房间的运营准备度，桌面和手机必须给出同一个徽标。
+
+    此前桌面按 ready/其他 取绿或黄，手机固定用蓝色，同一间房在两块屏幕上是两
+    种颜色，颜色也就不再有含义。维修更是完全没有风险表达。
+    """
+    client, properties = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+
+    ready = client.get("/employee/properties")
+    properties.property.operational_status = RoomOperationalStatus.MAINTENANCE
+    maintenance = client.get("/employee/properties")
+
+    assert ready.text.count('<span class="badge badge--success">运营：可入住</span>') == 2
+    assert maintenance.text.count('<span class="badge badge--danger">运营：维修中</span>') == 2
+    assert "badge--info" not in maintenance.text
+
+
+def test_property_detail_reuses_the_same_readiness_badge(tmp_path) -> None:
+    """房源详情不得给运营准备度另立一套颜色规则。"""
+    client, properties = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+    properties.property.operational_status = RoomOperationalStatus.MAINTENANCE
+
+    response = client.get("/employee/properties/101")
+
+    assert '<span class="badge badge--danger">运营：维修中</span>' in response.text

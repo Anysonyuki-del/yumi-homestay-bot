@@ -520,3 +520,75 @@ def test_permanent_delete_never_shows_the_archive_recoverable_wording(
 
     assert page.evaluate("() => window.confirmCalls") == []
     page.close()
+
+
+def _timeline_fixture(day_count: int) -> str:
+    """返回两张并排房间卡片，各带一条 day_count 天的时间轴。"""
+    days = "".join(
+        f'<li class="room-day"><strong>8/{index + 1}</strong>'
+        f'<span class="day-marks"><span class="day-mark day-mark--departure">退房 1</span>'
+        f'</span></li>'
+        for index in range(day_count)
+    )
+    card = (
+        '<article class="room-operation-card">'
+        '<div class="room-timeline-block">'
+        f'<ol class="clean-list room-timeline" tabindex="0" aria-label="近期房态">{days}</ol>'
+        "</div></article>"
+    )
+    return f"""<!doctype html>
+    <html lang="zh-CN"><head></head><body class="admin-body">
+      <main class="page-content">
+        <div class="room-operations-list">{card}{card}</div>
+      </main>
+    </body></html>"""
+
+
+def test_timeline_day_cells_stay_wide_enough_to_read(browser: Browser) -> None:
+    """半宽卡片里的 14 天时间轴不得把日期格压到标签放不下。
+
+    这条量的是真实渲染宽度：`minmax(0, 1fr)` 会让 18 天等分半宽卡片，每格只剩
+    二十几像素，而「退房 1」本身就要四十多像素，相邻信息直接叠在一起。
+    """
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.set_content(_timeline_fixture(18))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    overflowing = page.evaluate(
+        """() => Array.from(document.querySelectorAll(".room-day")).filter((cell) => {
+             const mark = cell.querySelector(".day-mark");
+             return mark.getBoundingClientRect().width > cell.clientWidth;
+           }).length"""
+    )
+    narrowest = page.evaluate(
+        """() => Math.min(...Array.from(document.querySelectorAll(".room-day"))
+             .map((cell) => cell.getBoundingClientRect().width))"""
+    )
+
+    assert overflowing == 0
+    assert narrowest >= 76
+    page.close()
+
+
+def test_a_timeline_too_long_for_its_card_scrolls_instead_of_shrinking(
+    browser: Browser,
+) -> None:
+    """装不下时时间轴自己横向滚动，而不是把每一天压得更窄。
+
+    只看 `scrollWidth > clientWidth` 不够：日期格被压窄时，超出的标签同样会把
+    滚动宽度撑大。这里要求滚动宽度真的等于「每格都拿到最小宽度」之后的总和。
+    """
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.set_content(_timeline_fixture(18))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    measured = page.evaluate(
+        """() => {
+             const list = document.querySelector(".room-timeline");
+             return {scroll: list.scrollWidth, visible: list.clientWidth};
+           }"""
+    )
+
+    assert measured["scroll"] > measured["visible"]
+    assert measured["scroll"] >= 18 * 76
+    page.close()
