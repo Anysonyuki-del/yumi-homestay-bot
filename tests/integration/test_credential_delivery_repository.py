@@ -11,6 +11,7 @@ from homestay_bot.domain.enums import (
     CredentialDeliveryStatus,
     CustomerIdentityProvider,
     EmployeeRole,
+    JobStatus,
     MessageOrigin,
     RoomOperationalStatus,
 )
@@ -257,5 +258,180 @@ async def test_real_repository_creates_only_three_safe_part_jobs() -> None:
         assert "839201" not in serialized
         assert "入住指南正文" not in serialized
         assert "wm-1" not in serialized
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_async_failure_receipt_stops_the_whole_delivery() -> None:
+    """异步失败回执必须回写凭证状态，并暂停同组尚未发送的部件。
+
+    平台接口受理只证明服务端收下了，不证明客人收到。此前失败回执没有任何地方
+    与凭证部件关联，部件和整组都停在 SENT——「已发送」和「确实送达」被混为一谈，
+    人工也拿不到任何待办。按用户决定：已成功的不重放，失败与未开始的一并转人工。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        customer = Customer(display_name="入住客户")
+        room = PropertyProfile(id=101, title="长江中心")
+        session.add_all([customer, room])
+        await session.flush()
+        order = StayOrder(
+            hostex_reservation_code="R-FAIL-1",
+            stay_code="S-FAIL-1",
+            customer_id=customer.id,
+            property_id=101,
+            check_in_date=date(2026, 8, 2),
+            check_out_date=date(2026, 8, 3),
+            status="confirmed",
+        )
+        session.add(order)
+        await session.flush()
+        credential = RoomCredential(
+            property_id=101,
+            version=1,
+            password_ciphertext=b"x",
+            guide_ciphertext=b"y",
+            qr_file_id="b" * 32 + ".png",
+            is_active=True,
+        )
+        session.add(credential)
+        await session.flush()
+        delivery = CredentialDelivery(
+            order_id=order.id,
+            credential_id=credential.id,
+            status=CredentialDeliveryStatus.SENT,
+        )
+        session.add(delivery)
+        await session.flush()
+        sent = CredentialDeliveryPart(
+            delivery_id=delivery.id,
+            part_type="guide",
+            status=CredentialDeliveryStatus.SENT,
+            external_message_id="msg-guide",
+        )
+        pending = CredentialDeliveryPart(
+            delivery_id=delivery.id,
+            part_type="password",
+            status=CredentialDeliveryStatus.PENDING,
+        )
+        session.add_all([sent, pending])
+        await session.commit()
+
+        repository = SQLAlchemyCredentialDeliveryRepository(session)
+        failed = await repository.mark_part_failed_by_external_message_id(
+            "msg-guide",
+            error_code="wecom_async_4",
+        )
+        await session.commit()
+
+        assert failed is not None
+        assert sent.status is CredentialDeliveryStatus.MANUAL_FOLLOWUP
+        assert sent.error_code == "wecom_async_4"
+        # 尚未开始的同组部件暂停，客人不会收到缺一块的入住信息。
+        assert pending.status is CredentialDeliveryStatus.MANUAL_FOLLOWUP
+        assert delivery.status is CredentialDeliveryStatus.MANUAL_FOLLOWUP
+
+        # 幂等：重复回执不重复处理。
+        again = await repository.mark_part_failed_by_external_message_id(
+            "msg-guide",
+            error_code="wecom_async_4",
+        )
+        assert again is not None
+        # 未知编号不误改其他消息。
+        unknown = await repository.mark_part_failed_by_external_message_id(
+            "msg-not-here",
+            error_code="wecom_async_4",
+        )
+        assert unknown is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_leaves_a_business_state_and_a_human_todo() -> None:
+    """worker 超时被判失败前，凭证状态与人工待办必须先落地。
+
+    `credential_send_part` 不可重放：外部调用可能已经发出，结果未知。原先只把
+    Job 置为 FAILED 并清空载荷，凭证部件仍停在 PENDING、人工任务为 0——系统不再
+    自动处理，却没有任何人能接手。结果未知时也不自动重发密码或二维码。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        customer = Customer(display_name="入住客户")
+        room = PropertyProfile(id=101, title="长江中心")
+        session.add_all([customer, room])
+        await session.flush()
+        order = StayOrder(
+            hostex_reservation_code="R-STALE-1",
+            stay_code="S-STALE-1",
+            customer_id=customer.id,
+            property_id=101,
+            check_in_date=date(2026, 8, 2),
+            check_out_date=date(2026, 8, 3),
+            status="confirmed",
+        )
+        credential = RoomCredential(
+            property_id=101,
+            version=1,
+            password_ciphertext=b"x",
+            guide_ciphertext=b"y",
+            qr_file_id="c" * 32 + ".png",
+            is_active=True,
+        )
+        session.add_all([order, credential])
+        await session.flush()
+        delivery = CredentialDelivery(
+            order_id=order.id,
+            credential_id=credential.id,
+            status=CredentialDeliveryStatus.PENDING,
+        )
+        session.add(delivery)
+        await session.flush()
+        running = CredentialDeliveryPart(
+            delivery_id=delivery.id,
+            part_type="password",
+            status=CredentialDeliveryStatus.PENDING,
+        )
+        untouched = CredentialDeliveryPart(
+            delivery_id=delivery.id,
+            part_type="qr",
+            status=CredentialDeliveryStatus.PENDING,
+        )
+        session.add_all([running, untouched])
+        await session.flush()
+
+        jobs = SQLAlchemyJobRepository(session)
+        job = await jobs.enqueue(
+            "credential_send_part",
+            {"part_id": running.id},
+            dedupe_key="credential:stale:1",
+        )
+        job.status = JobStatus.RUNNING
+        job.locked_at = datetime(2026, 8, 2, 0, tzinfo=UTC)
+        await session.commit()
+
+        await jobs.recover_stale(before=datetime(2026, 8, 2, 1, tzinfo=UTC))
+        await session.commit()
+
+        assert job.status is JobStatus.FAILED
+        # 载荷被清空之前，凭证关联已经取到并落成明确状态。
+        assert running.status is CredentialDeliveryStatus.MANUAL_FOLLOWUP
+        assert running.error_code == "stale_worker_result_unknown"
+        assert untouched.status is CredentialDeliveryStatus.MANUAL_FOLLOWUP
+        assert delivery.status is CredentialDeliveryStatus.MANUAL_FOLLOWUP
+        review = await session.scalar(
+            select(Job).where(Job.job_type == "credential_failure_review")
+        )
+        assert review is not None
+        assert review.payload["delivery_id"] == delivery.id
 
     await engine.dispose()

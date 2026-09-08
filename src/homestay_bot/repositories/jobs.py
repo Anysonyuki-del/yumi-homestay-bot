@@ -8,8 +8,17 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from homestay_bot.domain.enums import ComplaintReviewStatus, JobStatus
-from homestay_bot.domain.models import ComplaintReview, Job
+from homestay_bot.domain.enums import (
+    ComplaintReviewStatus,
+    CredentialDeliveryStatus,
+    JobStatus,
+)
+from homestay_bot.domain.models import (
+    ComplaintReview,
+    CredentialDelivery,
+    CredentialDeliveryPart,
+    Job,
+)
 
 _SQLITE_CLAIM_LOCKS: WeakKeyDictionary[AsyncEngine, asyncio.Lock] = WeakKeyDictionary()
 _SENSITIVE_PAYLOAD_JOB_TYPES = frozenset(
@@ -187,6 +196,9 @@ class SQLAlchemyJobRepository:
             before=before,
             max_attempts=max_attempts,
         )
+        # 必须在清空载荷之前：part_id 只存在于 payload 里，先把它抹掉再补偿，
+        # 就再也找不到这条任务对应的是哪个凭证部件了。
+        await self._compensate_stale_credential_parts(before)
         failed_statement = (
             update(Job)
             .where(
@@ -295,6 +307,56 @@ class SQLAlchemyJobRepository:
                 {"message_id": message_id},
                 dedupe_key=f"delivery-compensate:{message_id}",
             )
+
+    async def _compensate_stale_credential_parts(self, before: datetime) -> None:
+        """worker 超时被判定失败前，先把凭证部件与整组落成明确状态并留下人工待办。
+
+        `credential_send_part` 属于不可重放任务：外部调用可能已经发出，结果未知。
+        原先只把 Job 置为 FAILED 并清空载荷，凭证部件仍停在 PENDING，人工任务为 0
+        ——系统不再自动处理，却没有任何人能接手的业务待办。
+
+        结果未知时不自动重发密码或二维码：整组转人工，尚未开始的同组部件一并暂停。
+        """
+        stale_jobs = list(
+            (
+                await self._session.scalars(
+                    select(Job).where(
+                        Job.status == JobStatus.RUNNING,
+                        Job.locked_at < before,
+                        Job.job_type == "credential_send_part",
+                        *self._job_type_conditions(),
+                    )
+                )
+            ).all()
+        )
+        for job in stale_jobs:
+            raw_part_id = job.payload.get("part_id")
+            if not isinstance(raw_part_id, int):
+                continue
+            part = await self._session.get(CredentialDeliveryPart, raw_part_id)
+            if part is None or part.status is not CredentialDeliveryStatus.PENDING:
+                continue
+            part.status = CredentialDeliveryStatus.MANUAL_FOLLOWUP
+            part.error_code = "stale_worker_result_unknown"
+            delivery = await self._session.get(CredentialDelivery, part.delivery_id)
+            if delivery is None:
+                continue
+            siblings = await self._session.scalars(
+                select(CredentialDeliveryPart).where(
+                    CredentialDeliveryPart.delivery_id == delivery.id
+                )
+            )
+            for sibling in siblings:
+                if sibling.status is CredentialDeliveryStatus.PENDING:
+                    sibling.status = CredentialDeliveryStatus.MANUAL_FOLLOWUP
+                    sibling.error_code = "sibling_part_result_unknown"
+            delivery.status = CredentialDeliveryStatus.MANUAL_FOLLOWUP
+            await self.enqueue(
+                "credential_failure_review",
+                {"delivery_id": delivery.id},
+                dedupe_key=f"credential-failure-review:{delivery.id}",
+            )
+        await self._session.flush()
 
     async def _mark_stale_complaint_deliveries(self, before: datetime) -> None:
         """把遗留客诉发送任务同步回写为投递失败，避免状态永久排队。"""

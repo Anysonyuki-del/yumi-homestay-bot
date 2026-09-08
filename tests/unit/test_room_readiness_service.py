@@ -1,3 +1,4 @@
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -179,31 +180,121 @@ async def test_admin_cannot_revoke_room_that_is_not_ready() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mark_ready_only_triggers_credential_safety_evaluation() -> None:
-    """房态请求只登记凭证评估，不直接向客人发送任何内容。"""
-    calls: list[dict[str, object]] = []
+class EvaluatorStub:
+    """记录凭证安全评估参数。"""
 
-    class EvaluatorStub:
-        """记录凭证安全评估参数。"""
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.calls: list[dict[str, object]] = []
 
-        async def evaluate(self, **fields):
-            """记录任务订单与房间关联。"""
-            calls.append(fields)
-            return None
+    async def evaluate(self, **fields):
+        """记录被选中的订单与房间关联。"""
+        self.calls.append(fields)
+        return None
 
+
+class CheckInOrdersStub:
+    """按房间与日期返回当日入住订单编号。"""
+
+    def __init__(self, order_ids: list[int]) -> None:
+        """保存要返回的候选。"""
+        self._order_ids = order_ids
+        self.queries: list[tuple[int, date]] = []
+
+    async def find_check_in_orders(self, property_id: int, local_date: date):
+        """记录查询条件并返回预设候选。"""
+        self.queries.append((property_id, local_date))
+        return list(self._order_ids)
+
+
+class ManualFollowupStub:
+    """记录转人工的凭证复核请求。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.calls: list[dict[str, object]] = []
+
+    async def create_credential_review(self, **fields):
+        """记录房间、日期与候选订单。"""
+        self.calls.append(fields)
+        return None
+
+
+async def test_mark_ready_sends_to_the_arriving_guest_not_the_departing_one() -> None:
+    """凭证必须发给当天入住的客人，而不是任务自带的退房订单。
+
+    周转保洁任务绑定的是**退房**订单，直接把它交给凭证评估等于拿离店客人的订单
+    去发当天入住客人的凭证：日期不符会被安全门拒绝，而当天真有新客人时也没人替
+    他重新选订单。房间可入住与凭证发给谁是两件事。
+    """
+    evaluator = EvaluatorStub()
+    check_in = CheckInOrdersStub([88])
     service = RoomReadinessService(
         TaskEvidenceStub(),
         RoomStateStub(),
-        EvaluatorStub(),
+        evaluator,
+        check_in_orders=check_in,
+        manual_followup=ManualFollowupStub(),
+        today=lambda: date(2026, 8, 2),
     )
 
     await service.mark_ready(7, employee(2))
 
-    assert calls == [
+    # 任务自带的退房订单是 77，绝不能被当成收件人。
+    assert evaluator.calls == [
         {
-            "order_id": 77,
+            "order_id": 88,
             "expected_property_id": 101,
             "source_task_id": 7,
+        }
+    ]
+    assert check_in.queries == [(101, date(2026, 8, 2))]
+
+
+async def test_mark_ready_stays_quiet_when_nobody_checks_in_today() -> None:
+    """当天没有入住订单时安静结束，不发也不报错。"""
+    evaluator = EvaluatorStub()
+    manual = ManualFollowupStub()
+    service = RoomReadinessService(
+        TaskEvidenceStub(),
+        RoomStateStub(),
+        evaluator,
+        check_in_orders=CheckInOrdersStub([]),
+        manual_followup=manual,
+        today=lambda: date(2026, 8, 2),
+    )
+
+    state = await service.mark_ready(7, employee(2))
+
+    assert state is not None
+    assert evaluator.calls == []
+    assert manual.calls == []
+
+
+async def test_mark_ready_refuses_to_guess_between_two_arriving_orders() -> None:
+    """当日入住订单不唯一时不猜选，交人工确认。
+
+    把门锁密码发错人的代价远高于晚一点发。
+    """
+    evaluator = EvaluatorStub()
+    manual = ManualFollowupStub()
+    service = RoomReadinessService(
+        TaskEvidenceStub(),
+        RoomStateStub(),
+        evaluator,
+        check_in_orders=CheckInOrdersStub([88, 99]),
+        manual_followup=manual,
+        today=lambda: date(2026, 8, 2),
+    )
+
+    await service.mark_ready(7, employee(2))
+
+    assert evaluator.calls == []
+    assert manual.calls == [
+        {
+            "property_id": 101,
+            "local_date": date(2026, 8, 2),
+            "order_ids": [88, 99],
         }
     ]
 

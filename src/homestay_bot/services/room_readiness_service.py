@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from datetime import date
 from typing import Protocol
 
 from homestay_bot.domain.enums import (
@@ -10,6 +12,7 @@ from homestay_bot.domain.models import (
     Employee,
     RoomOperationalState,
 )
+from homestay_bot.services.stay_date_range import wuhan_today
 
 
 class ReadinessRuleError(ValueError):
@@ -53,6 +56,30 @@ class RoomStateRepository(Protocol):
         """记录一次未经证据的人工房态覆盖。"""
 
 
+class CheckInOrderLookup(Protocol):
+    """定义按房间与业务当日查找入住订单的最小边界。"""
+
+    async def find_check_in_orders(
+        self,
+        property_id: int,
+        local_date: date,
+    ) -> list[int]:
+        """返回该房间当日入住且未取消的订单编号。"""
+
+
+class ManualFollowupPort(Protocol):
+    """定义把不确定情形交给人工的最小边界。"""
+
+    async def create_credential_review(
+        self,
+        *,
+        property_id: int,
+        local_date: date,
+        order_ids: list[int],
+    ) -> object:
+        """按房间与日期幂等创建一条凭证人工复核任务。"""
+
+
 class CredentialDeliveryEvaluator(Protocol):
     """定义房间可入住后触发凭证安全评估的接口。"""
 
@@ -76,11 +103,18 @@ class RoomReadinessService:
         tasks: TaskEvidenceRepository,
         rooms: RoomStateRepository,
         credential_delivery: CredentialDeliveryEvaluator | None = None,
+        check_in_orders: CheckInOrderLookup | None = None,
+        manual_followup: ManualFollowupPort | None = None,
+        today: Callable[[], date] | None = None,
     ) -> None:
-        """注入任务证据、房态仓储和可选凭证评估器。"""
+        """注入任务证据、房态仓储、凭证评估器与当日入住订单查找。"""
         self._tasks = tasks
         self._rooms = rooms
         self._credential_delivery = credential_delivery
+        self._check_in_orders = check_in_orders
+        self._manual_followup = manual_followup
+        # 业务当日按武汉时区判定，与凭证安全门保持同一口径。
+        self._today = today or wuhan_today
 
     async def mark_ready(
         self,
@@ -109,13 +143,47 @@ class RoomReadinessService:
             RoomOperationalStatus.READY,
             actor.id,
         )
-        if self._credential_delivery is not None:
-            await self._credential_delivery.evaluate(
-                order_id=task.order_id,
-                expected_property_id=task.property_id,
-                source_task_id=task.id,
-            )
+        await self._hand_credentials_to_arriving_guest(task)
         return state
+
+    async def _hand_credentials_to_arriving_guest(
+        self,
+        task: BusinessTask,
+    ) -> None:
+        """按「同房间 + 业务当日入住」重新选订单，再走全部现有安全门。
+
+        周转保洁任务绑定的是**退房**订单，把它直接交给凭证评估，等于拿离店客人
+        的订单去发当天入住客人的凭证：日期不符会被安全门拒绝，而当天真有新客人
+        时也没人替他重新选订单。房间可入住与凭证发给谁是两件事。
+
+        没有当日入住订单是正常情况，安静结束不报错；出现多个候选则不猜，交人工。
+        """
+        if self._credential_delivery is None or task.property_id is None:
+            return
+        local_date = self._today()
+        order_ids = (
+            await self._check_in_orders.find_check_in_orders(
+                task.property_id,
+                local_date,
+            )
+            if self._check_in_orders is not None
+            else []
+        )
+        if not order_ids:
+            return
+        if len(order_ids) > 1:
+            if self._manual_followup is not None:
+                await self._manual_followup.create_credential_review(
+                    property_id=task.property_id,
+                    local_date=local_date,
+                    order_ids=sorted(order_ids),
+                )
+            return
+        await self._credential_delivery.evaluate(
+            order_id=order_ids[0],
+            expected_property_id=task.property_id,
+            source_task_id=task.id,
+        )
 
     async def set_status_by_admin(
         self,

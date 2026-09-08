@@ -31,6 +31,11 @@ class TaskLifecycleCandidate:
     reminder_type: ReminderType | None
     reminder_scheduled_at: datetime | None
     expires_at: datetime | None = None
+    # 任务自己的房间，以及来源订单当前的房间与退房日。三者不一致说明订单改期
+    # 或换房，为旧计划建的任务已经没有对应的现实。
+    property_id: int | None = None
+    order_property_id: int | None = None
+    order_check_out_date: date | None = None
 
 
 def manual_contact_expires_at(

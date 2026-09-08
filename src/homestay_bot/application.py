@@ -281,6 +281,36 @@ class SessionHostexEventRecorder:
             return created
 
 
+async def _guest_reply_is_stale(
+    session: AsyncSession,
+    payload: dict[str, Any],
+) -> bool:
+    """判断排队中的客人回复在真正出站前是否已被新活动取代。
+
+    复用生成阶段同一套排序口径（`has_newer_conversation_activity`），不另建消息
+    版本系统。只有带来源客人消息的回复才参与判定：重试、客诉投递和员工通知各有
+    自己的幂等与审批边界，不该被这条规则拦下。
+    """
+    boundary = payload.get("source_guest_message_id")
+    open_kfid = payload.get("open_kfid")
+    external_userid = payload.get("external_userid")
+    if not boundary or not open_kfid or not external_userid:
+        return False
+    repository = SQLAlchemyMessageRepository(session)
+    conversation_id = await repository.find_conversation_id(
+        str(open_kfid),
+        str(external_userid),
+    )
+    if conversation_id is None:
+        return False
+    return bool(
+        await repository.has_newer_conversation_activity(
+            conversation_id,
+            str(boundary),
+        )
+    )
+
+
 class TransactionalOutboxWeCom:
     """把客人回复和员工通知写入同一数据库事务，避免业务回滚后重复发送。"""
 
@@ -291,9 +321,13 @@ class TransactionalOutboxWeCom:
         source_message_id: str,
         delivery_phase: str | None = None,
         source_guest_message_id: str | None = None,
+        conversation_id: int | None = None,
     ) -> None:
         """绑定来源消息及可选发送阶段，确保分阶段回复分别保持幂等。"""
         self._repository = SQLAlchemyJobRepository(session)
+        # 会话编号随出站载荷保留：真实发送发生在提交之后，届时必须能回到同一
+        # 会话复核「排队期间是否又来了新消息」。
+        self._conversation_id = conversation_id
         self._source_message_id = (
             f"{source_message_id}:{delivery_phase}" if delivery_phase else source_message_id
         )
@@ -332,6 +366,8 @@ class TransactionalOutboxWeCom:
         }
         if self._source_guest_message_id:
             payload["source_guest_message_id"] = self._source_guest_message_id
+        if self._conversation_id is not None:
+            payload["conversation_id"] = self._conversation_id
         await self._repository.enqueue(
             "wecom_send_text",
             payload,
@@ -1564,6 +1600,9 @@ class SessionTaskPageService:
                     credential_repository,
                     SQLAlchemyJobRepository(session),
                 ),
+                # 凭证发给当天入住的客人，而不是任务自带的退房订单。
+                check_in_orders=repository,
+                manual_followup=repository,
             ).mark_ready(task_id, employee)
             await session.commit()
             return state
@@ -2300,6 +2339,23 @@ async def _run_worker_loop(
                 ) -> None:
                     """发送客人回复并回写真实 msgid，同时更新客诉投递状态。"""
                     source_message_id = str(payload.get("source_message_id", ""))
+                    if await _guest_reply_is_stale(session, payload):
+                        # 生成阶段的过时判定管不到排队期间：入队时有效的回复，可能
+                        # 在真正出站前已经被新的客人消息或人工回复取代，发出去就会
+                        # 打断人工、或回答一个已经不成立的问题。这里记可审计的跳过
+                        # 原因，不记作已发送。外部请求一旦发起无法撤回，因此这道
+                        # 校验只覆盖已经入库的活动，不承诺消除全部并发时间窗。
+                        logger.info(
+                            "跳过已过时的客人回复：source_message_id=%s",
+                            source_message_id,
+                        )
+                        await _record_complaint_delivery(
+                            session,
+                            source_message_id,
+                            delivered=False,
+                            error_code="superseded_before_send",
+                        )
+                        return
                     try:
                         real_message_id = await client.send_text(
                             str(payload["open_kfid"]),
@@ -3283,6 +3339,21 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                         agent_id=bundle.agent_id,
                         employee_userids=list(bundle.duty_userids),
                     )
+            # 凭证部件也可能是这条失败回执的主人。此前没有任何地方按外部消息编号
+            # 关联凭证，于是部件和整组一直停在 SENT，人工也拿不到待办。
+            failed_part = await SQLAlchemyCredentialDeliveryRepository(
+                session
+            ).mark_part_failed_by_external_message_id(
+                external_message_id,
+                error_code=f"wecom_async_{fail_type}",
+            )
+            if failed_part is not None:
+                await SQLAlchemyOperationsRepository(
+                    session
+                ).create_credential_failure_review(
+                    delivery_id=failed_part.delivery_id,
+                    reason=f"wecom_async_{fail_type}",
+                )
             await build_lifecycle_service(session, bundle).handle_send_failure(
                 external_message_id,
                 fail_type,

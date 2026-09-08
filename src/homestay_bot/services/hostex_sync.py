@@ -107,16 +107,35 @@ class HostexSyncService:
         await self._operations.mark_event_completed(event)
 
     async def reconcile(self, start_date: date, end_date: date) -> int:
-        """补回日期窗口内遗漏的 Webhook 订单。"""
-        reservations = await self._hostex.list_reservations(
+        """补回与运营窗口重叠的遗漏订单。
+
+        只按入住日过滤会漏掉仍在住的长住单：三天前入住、两天后离店的订单既不在
+        入住日窗口内，也就补不回来，而心跳照常成功，运营页把这间房显示成空闲。
+
+        这里发两次查询而不是一次组合查询：入住日区间捕获窗口内开始的订单，退房日
+        区间捕获窗口内结束的订单（包含更早入住的在住单），两者按订单编号合并。
+        单独使用任一过滤条件的语义是明确的，组合条件是 AND 还是 OR 尚未经过授权
+        的契约验证——而只用退房日又会漏掉退房远在窗口之后的长住单。分页与传输
+        失败都会从 list_reservations 抛出，调用方因此不会刷新可信心跳。
+        """
+        by_check_in = await self._hostex.list_reservations(
             ReservationQuery(
                 start_check_in_date=start_date,
                 end_check_in_date=end_date,
             )
         )
-        for reservation in reservations:
+        by_check_out = await self._hostex.list_reservations(
+            ReservationQuery(
+                start_check_out_date=start_date,
+                end_check_out_date=end_date,
+            )
+        )
+        merged: dict[tuple[str, str], Reservation] = {}
+        for reservation in (*by_check_in, *by_check_out):
+            merged[(reservation.reservation_code, reservation.stay_code)] = reservation
+        for reservation in merged.values():
             await self._sync_reservation(reservation)
-        return len(reservations)
+        return len(merged)
 
     async def _sync_reservation(self, reservation: Reservation) -> StayOrder:
         """写入一笔订单，并为未取消订单创建唯一周转保洁任务。"""

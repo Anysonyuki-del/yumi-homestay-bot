@@ -140,6 +140,24 @@ class SQLAlchemyMessageRepository:
         )
         return bool(await self._session.scalar(statement))
 
+    async def find_conversation_id(
+        self,
+        open_kfid: str,
+        external_userid: str,
+    ) -> int | None:
+        """按企业微信客服账号与外部用户编号反查会话编号。
+
+        出站载荷里带的是这两个字段，真实发送发生在提交之后；要在那一刻复核
+        「排队期间会话里是否又发生了新活动」，就得先回到同一个会话。
+        """
+        found = await self._session.scalar(
+            select(Conversation.id).where(
+                Conversation.open_kfid == open_kfid,
+                Conversation.external_userid == external_userid,
+            )
+        )
+        return int(found) if found is not None else None
+
     async def has_newer_conversation_activity(
         self,
         conversation_id: int,

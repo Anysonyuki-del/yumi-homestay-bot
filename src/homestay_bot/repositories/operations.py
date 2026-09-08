@@ -675,6 +675,87 @@ class SQLAlchemyOperationsRepository:
         await self._session.delete(task)
         await self._session.flush()
 
+    async def find_check_in_orders(
+        self,
+        property_id: int,
+        local_date: date,
+    ) -> list[int]:
+        """返回该房间当日入住且未取消的订单编号。
+
+        周转保洁任务绑定的是退房订单；房间就绪后要发凭证的是当天入住的那位客人，
+        必须另行选订单，不能沿用任务自带的来源。
+        """
+        rows = await self._session.scalars(
+            select(StayOrder.id).where(
+                StayOrder.property_id == property_id,
+                StayOrder.check_in_date == local_date,
+                func.lower(func.trim(StayOrder.status)).not_in(
+                    ("cancelled", "canceled", "declined", "expired", "deleted")
+                ),
+            )
+        )
+        return list(rows)
+
+    async def create_credential_failure_review(
+        self,
+        *,
+        delivery_id: int,
+        reason: str,
+    ) -> BusinessTask:
+        """凭证投递失败或结果未知时，幂等创建一条人工处理任务。
+
+        自动流程已经停下，必须留下有人能接手的待办；只记投递编号与原因码，
+        不含密码、二维码或客户身份。
+        """
+        dedupe_key = f"credential-failure:{delivery_id}"
+        existing = await self._session.scalar(
+            select(BusinessTask).where(BusinessTask.dedupe_key == dedupe_key)
+        )
+        if existing is not None:
+            return existing
+        task = BusinessTask(
+            dedupe_key=dedupe_key,
+            task_type=BusinessTaskType.MANUAL_CONTACT,
+            status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            origin_kind=BusinessTaskOrigin.UNKNOWN,
+            description=f"入住凭证投递 #{delivery_id} 需要人工处理：{reason[:64]}",
+        )
+        self._session.add(task)
+        await self._session.flush()
+        return task
+
+    async def create_credential_review(
+        self,
+        *,
+        property_id: int,
+        local_date: date,
+        order_ids: list[int],
+    ) -> BusinessTask:
+        """当日入住订单不唯一时，幂等创建一条凭证人工复核任务。
+
+        不猜选订单：把门锁密码发错人的代价远高于晚一点发。任务只记房间、日期和
+        候选编号，不含客户身份或凭证内容。
+        """
+        dedupe_key = f"credential-review:{property_id}:{local_date.isoformat()}"
+        existing = await self._session.scalar(
+            select(BusinessTask).where(BusinessTask.dedupe_key == dedupe_key)
+        )
+        if existing is not None:
+            return existing
+        candidates = "、".join(str(value) for value in sorted(order_ids))
+        task = BusinessTask(
+            dedupe_key=dedupe_key,
+            task_type=BusinessTaskType.MANUAL_CONTACT,
+            status=BusinessTaskStatus.PENDING_CONFIRMATION,
+            origin_kind=BusinessTaskOrigin.UNKNOWN,
+            property_id=property_id,
+            service_date=local_date,
+            description=f"当日入住订单不唯一，需人工确认凭证发给哪一笔：{candidates}",
+        )
+        self._session.add(task)
+        await self._session.flush()
+        return task
+
     async def _purged_mark(self, dedupe_key: str) -> PurgedTaskMark | None:
         """返回仍在保留期内的删除墓碑；过期墓碑视为不存在并顺手清掉。"""
         mark = await self._session.scalar(
@@ -1087,6 +1168,17 @@ class SQLAlchemyOperationsRepository:
                 BusinessTask.service_date < local_today,
             ),
         )
+        # 订单改期或换房后，为旧退房日建的周转任务已经没有对应的现实，但它既没被
+        # 取消也没过窗口期，因此原先根本进不了候选。这里按「任务的房间或服务日期
+        # 与来源订单当前值不一致」把它收进来，是否真的作废仍由 _reason 判断。
+        superseded_turnover = and_(
+            BusinessTask.origin_kind == BusinessTaskOrigin.TURNOVER,
+            StayOrder.id.is_not(None),
+            or_(
+                BusinessTask.service_date != StayOrder.check_out_date,
+                BusinessTask.property_id != StayOrder.property_id,
+            ),
+        )
         statement = (
             select(
                 BusinessTask.id,
@@ -1102,6 +1194,9 @@ class SQLAlchemyOperationsRepository:
                 LifecycleReminder.reminder_type,
                 LifecycleReminder.scheduled_at,
                 BusinessTask.expires_at,
+                BusinessTask.property_id,
+                StayOrder.property_id,
+                StayOrder.check_out_date,
             )
             .outerjoin(StayOrder, StayOrder.id == BusinessTask.order_id)
             .outerjoin(
@@ -1115,7 +1210,7 @@ class SQLAlchemyOperationsRepository:
                         BusinessTaskStatus.PENDING_ASSIGNMENT,
                     )
                 ),
-                or_(cancelled_order, expired_window),
+                or_(cancelled_order, expired_window, superseded_turnover),
             )
             .order_by(BusinessTask.updated_at, BusinessTask.id)
             .limit(limit)
@@ -1138,6 +1233,9 @@ class SQLAlchemyOperationsRepository:
                 reminder_type=reminder_type,
                 reminder_scheduled_at=reminder_scheduled_at,
                 expires_at=expires_at,
+                property_id=property_id,
+                order_property_id=order_property_id,
+                order_check_out_date=order_check_out_date,
             )
             for (
                 task_id,
@@ -1153,6 +1251,9 @@ class SQLAlchemyOperationsRepository:
                 reminder_type,
                 reminder_scheduled_at,
                 expires_at,
+                property_id,
+                order_property_id,
+                order_check_out_date,
             ) in rows
         )
 

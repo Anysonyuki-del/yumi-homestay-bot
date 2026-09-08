@@ -161,12 +161,15 @@ async def test_phase_one_order_to_ready_and_credentials_flow(
             reservation_code="R-PHASE-ONE",
             payload={"reservation_code": "R-PHASE-ONE"},
         )
+        # A 单今天退房：周转保洁的服务日因此天然就是今天，不需要事后把它改成入住日。
+        # 原来的写法只有一笔「今天入住、明天退房」的订单，再把任务服务日强行改成
+        # 今天，绕过了真实的周转日期关系，也就测不出「凭证被发给了退房客人」。
         reservation = Reservation(
             reservation_code="R-PHASE-ONE",
             stay_code="S-PHASE-ONE",
             property_id=101,
-            check_in_date=today,
-            check_out_date=today + timedelta(days=1),
+            check_in_date=today - timedelta(days=1),
+            check_out_date=today,
             status="confirmed",
             guest_name="一期测试客户",
             created_at="2026-08-01T00:00:00Z",
@@ -194,8 +197,25 @@ async def test_phase_one_order_to_ready_and_credentials_flow(
             )
         )
         assert order is not None
-        customer_id = order.customer_id
+        departing_customer_id = order.customer_id
+        assert departing_customer_id is not None
+
+        # B 单：今天入住的新客人。凭证应当发给他，而不是任务自带的 A 单退房客人。
+        arriving = Reservation(
+            reservation_code="R-PHASE-ONE-B",
+            stay_code="S-PHASE-ONE-B",
+            property_id=101,
+            check_in_date=today,
+            check_out_date=today + timedelta(days=2),
+            status="confirmed",
+            guest_name="今天入住的客户",
+            created_at="2026-08-01T00:00:00Z",
+        )
+        arriving_order = await operations.upsert_reservation(arriving)
+        await session.flush()
+        customer_id = arriving_order.customer_id
         assert customer_id is not None
+        assert customer_id != departing_customer_id
         conversation = Conversation(
             customer_id=customer_id,
             open_kfid="wk-phase-one",
@@ -261,7 +281,8 @@ async def test_phase_one_order_to_ready_and_credentials_flow(
             admin,
             assigned_employee_id=staff.id,
             property_id=101,
-            service_date=today,
+            # 沿用任务自带的服务日（A 单的退房日），不再为了让凭证能发而改成入住日。
+            service_date=task.service_date or today,
         )
         await pages.transition(task.id, staff, "in_progress")
         await operations.update_task_checklist(
@@ -293,6 +314,9 @@ async def test_phase_one_order_to_ready_and_credentials_flow(
             operations,
             operations,
             credential_service,
+            check_in_orders=operations,
+            manual_followup=operations,
+            today=lambda: today,
         )
         state = await readiness.mark_ready(task.id, staff)
         await session.flush()
@@ -360,6 +384,11 @@ async def test_phase_one_order_to_ready_and_credentials_flow(
         ]
         assert wecom.images == ["media-phase-one"]
         assert "839201" not in str([job.payload for job in part_jobs])
+        # F-02 的核心断言：凭证发给今天入住的 B 单，而不是周转任务自带的 A 单。
+        # 退房客人永远不该收到下一位客人的门锁密码。
+        assert delivery.order_id == arriving_order.id
+        assert delivery.order_id != order.id
+        assert all(job.payload.get("order_id") != order.id for job in part_jobs)
         assert "839201" not in audit_text
 
     await engine.dispose()

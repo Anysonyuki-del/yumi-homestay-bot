@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from homestay_bot.domain.enums import (
+    BusinessTaskOrigin,
     BusinessTaskStatus,
     BusinessTaskType,
     TaskClosureReason,
@@ -86,6 +87,23 @@ class TaskLifecycleService:
         ):
             return None
         normalized_order_status = (candidate.order_status or "").strip().lower()
+        # 订单改期或换房：为旧退房日建的周转任务已经没有对应的现实。这里只作废
+        # 确定被替代、且没有任何执行痕迹的系统任务——上面的守卫已经排除了已分派、
+        # 有清单或有现场照片的任务，那些交给人工处理，不能自动关掉别人做过的活。
+        if (
+            candidate.origin_kind is BusinessTaskOrigin.TURNOVER
+            and candidate.order_id is not None
+            and candidate.order_check_out_date is not None
+            and normalized_order_status not in _CANCELLED_ORDER_STATUSES
+            and (
+                candidate.service_date != candidate.order_check_out_date
+                or (
+                    candidate.order_property_id is not None
+                    and candidate.property_id != candidate.order_property_id
+                )
+            )
+        ):
+            return TaskClosureReason.SUPERSEDED
         if (
             normalized_order_status in _CANCELLED_ORDER_STATUSES
             and candidate.task_type in _ORDER_BOUND_TYPES

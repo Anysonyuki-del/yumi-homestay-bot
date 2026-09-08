@@ -61,6 +61,9 @@ def _candidate(
     has_attachments: bool = False,
     reminder_type: ReminderType | None = None,
     reminder_scheduled_at: datetime | None = None,
+    property_id: int | None = None,
+    order_property_id: int | None = None,
+    order_check_out_date: date | None = None,
 ) -> TaskLifecycleCandidate:
     """构造不含客户正文的生命周期候选。"""
     return TaskLifecycleCandidate(
@@ -76,6 +79,9 @@ def _candidate(
         has_attachments=has_attachments,
         reminder_type=reminder_type,
         reminder_scheduled_at=reminder_scheduled_at,
+        property_id=property_id,
+        order_property_id=order_property_id,
+        order_check_out_date=order_check_out_date,
     )
 
 
@@ -153,4 +159,66 @@ async def test_overdue_maintenance_remains_for_human_review() -> None:
 
     assert result.expired == 0
     assert result.skipped == 1
+    assert repository.expired == []
+
+
+async def test_rescheduled_order_supersedes_the_old_turnover_plan() -> None:
+    """订单改期后，为旧退房日建的纯计划任务失效，有执行证据的保留。
+
+    改期既不是取消也没到窗口期，此前根本进不了候选，于是旧日和新日两个待分派
+    任务同时存在，可能出现错误日期的清扫。
+    """
+    repository = LifecycleRepositoryStub(
+        (
+            _candidate(
+                1,
+                task_type=BusinessTaskType.CLEANING,
+                status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+                origin=BusinessTaskOrigin.TURNOVER,
+                service_date=date(2026, 8, 2),
+                property_id=101,
+                order_property_id=101,
+                order_check_out_date=date(2026, 8, 4),
+            ),
+            # 已经有人做过：交人工，不自动关掉别人做过的活。
+            _candidate(
+                2,
+                task_type=BusinessTaskType.CLEANING,
+                status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+                origin=BusinessTaskOrigin.TURNOVER,
+                service_date=date(2026, 8, 2),
+                has_attachments=True,
+                property_id=101,
+                order_property_id=101,
+                order_check_out_date=date(2026, 8, 4),
+            ),
+        )
+    )
+    service = TaskLifecycleService(repository)
+
+    await service.sweep(now=datetime(2026, 8, 1, tzinfo=UTC))
+
+    assert repository.expired == [(1, TaskClosureReason.SUPERSEDED)]
+
+
+async def test_unchanged_order_keeps_its_turnover_task() -> None:
+    """订单没有改期时不得作废：普通逾期仍有执行价值，不能批量关闭。"""
+    repository = LifecycleRepositoryStub(
+        (
+            _candidate(
+                1,
+                task_type=BusinessTaskType.CLEANING,
+                status=BusinessTaskStatus.PENDING_ASSIGNMENT,
+                origin=BusinessTaskOrigin.TURNOVER,
+                service_date=date(2026, 8, 2),
+                property_id=101,
+                order_property_id=101,
+                order_check_out_date=date(2026, 8, 2),
+            ),
+        )
+    )
+    service = TaskLifecycleService(repository)
+
+    await service.sweep(now=datetime(2026, 8, 1, tzinfo=UTC))
+
     assert repository.expired == []
