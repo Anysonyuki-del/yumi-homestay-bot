@@ -30,6 +30,10 @@ class RuntimeHealthStatusPort(Protocol):
         """返回值班人配置是否完整。"""
 
     @property
+    def hostex_webhook_configured(self) -> bool:
+        """返回百居易 Webhook 密钥是否已配置。"""
+
+    @property
     def contact_configured(self) -> bool:
         """返回可选客户联系是否配置。"""
 
@@ -60,7 +64,8 @@ class UnconfiguredHealthService:
             "database": "not_configured",
             "worker_heartbeat": "not_configured",
             "wecom_polling": "not_configured",
-            "hostex_webhook_sync": "not_configured",
+            "hostex_reconcile": "not_configured",
+            "hostex_webhook": "not_configured",
             "context_maintenance": "not_configured",
             "lifecycle_scheduler": "not_configured",
             "task_lifecycle": "not_configured",
@@ -80,6 +85,10 @@ class OperationalHealthService:
         heartbeat_getter: Callable[[], datetime | None],
         poll_heartbeat_getter: Callable[[], datetime | None],
         hostex_heartbeat_getter: Callable[[], datetime | None],
+        # 由真实 Webhook 事件驱动，与对账轮询的心跳分开。此前两者共用一个心跳，
+        # 于是一个叫 hostex_webhook_sync 的健康项实际测的是轮询：webhook 一次
+        # 都没到达过，它照样报 ok。
+        hostex_webhook_heartbeat_getter: Callable[[], datetime | None] | None = None,
         context_heartbeat_getter: Callable[[], datetime | None],
         lifecycle_heartbeat_getter: Callable[[], datetime | None],
         configuration_ok: bool | Callable[[], bool],
@@ -102,6 +111,7 @@ class OperationalHealthService:
         self._heartbeat_getter = heartbeat_getter
         self._poll_heartbeat_getter = poll_heartbeat_getter
         self._hostex_heartbeat_getter = hostex_heartbeat_getter
+        self._hostex_webhook_heartbeat_getter = hostex_webhook_heartbeat_getter
         self._context_heartbeat_getter = context_heartbeat_getter
         self._lifecycle_heartbeat_getter = lifecycle_heartbeat_getter
         self._task_lifecycle_heartbeat_getter = task_lifecycle_heartbeat_getter
@@ -156,6 +166,7 @@ class OperationalHealthService:
         hostex_max_age = self._hostex_max_age
         lifecycle_max_age = self._lifecycle_max_age
         contact_sync_configured = self._contact_sync_configured
+        webhook_configured = False
         if runtime_status is not None:
             poll_max_age = timedelta(
                 seconds=max(60, runtime_status.wecom_poll_interval_seconds * 3)
@@ -168,6 +179,7 @@ class OperationalHealthService:
             )
             lifecycle_max_age = hostex_max_age
             contact_sync_configured = runtime_status.contact_configured
+            webhook_configured = runtime_status.hostex_webhook_configured
         poll_ok = self._is_recent(
             poll_heartbeat,
             poll_max_age,
@@ -176,6 +188,21 @@ class OperationalHealthService:
             self._hostex_heartbeat_getter(),
             hostex_max_age,
         )
+        # Webhook 有自己的心跳，且从不拿启动时间冒充新鲜度：从没收到过就要看得出来。
+        # 未配置时报 not_configured 且不参与降级——与 wecom_contact_sync 一致；
+        # 配置了却从未收到，才是真正需要有人去查的故障。
+        webhook_heartbeat = (
+            self._hostex_webhook_heartbeat_getter()
+            if self._hostex_webhook_heartbeat_getter is not None
+            else None
+        )
+        if not webhook_configured:
+            webhook_state = "not_configured"
+        elif webhook_heartbeat is None:
+            webhook_state = "never_received"
+        else:
+            webhook_state = "ok" if self._is_recent(webhook_heartbeat, hostex_max_age) else "stale"
+        webhook_ok = webhook_state in ("ok", "not_configured")
         context_ok = self._is_recent(
             self._context_heartbeat_getter(),
             self._context_max_age,
@@ -216,12 +243,15 @@ class OperationalHealthService:
                 and task_lifecycle_ok
                 and configuration_ok
                 and web_search_ok
+                and webhook_ok
                 else "degraded"
             ),
             "database": "ok" if database_ok else "error",
             "worker_heartbeat": "ok" if worker_ok else "stale",
             "wecom_polling": "ok" if poll_ok else "stale",
-            "hostex_webhook_sync": "ok" if hostex_ok else "stale",
+            # 正名：这一项测的一直是对账轮询的心跳，而不是 Webhook。
+            "hostex_reconcile": "ok" if hostex_ok else "stale",
+            "hostex_webhook": webhook_state,
             "context_maintenance": "ok" if context_ok else "stale",
             "lifecycle_scheduler": (
                 "ok" if lifecycle_ok else "stale"

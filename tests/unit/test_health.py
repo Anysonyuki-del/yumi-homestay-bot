@@ -203,7 +203,7 @@ async def test_optional_wecom_contact_sync_is_reported_without_degrading() -> No
 @pytest.mark.parametrize(
     ("stale_component", "field"),
     [
-        ("hostex", "hostex_webhook_sync"),
+        ("hostex", "hostex_reconcile"),
         ("context", "context_maintenance"),
         ("lifecycle", "lifecycle_scheduler"),
     ],
@@ -371,7 +371,7 @@ async def test_runtime_health_reads_current_revision_contact_and_intervals() -> 
     assert initial["configuration"] == "ok"
     assert initial["wecom_contact_sync"] == "not_configured"
     assert initial["wecom_polling"] == "ok"
-    assert initial["hostex_webhook_sync"] == "ok"
+    assert initial["hostex_reconcile"] == "ok"
 
     status = RuntimeClientStatus(
         revision=2,
@@ -386,4 +386,72 @@ async def test_runtime_health_reads_current_revision_contact_and_intervals() -> 
     assert current["configuration"] == "ok"
     assert current["wecom_contact_sync"] == "ok"
     assert current["wecom_polling"] == "stale"
-    assert current["hostex_webhook_sync"] == "stale"
+    assert current["hostex_reconcile"] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_webhook_health_never_borrows_the_reconcile_heartbeat() -> None:
+    """Webhook 的健康状态必须由 Webhook 自己的心跳决定。
+
+    此前只有一个心跳，同时被对账轮询和 Webhook 事件刷新，而对账每 15 分钟必成功
+    一次。于是一个叫 `hostex_webhook_sync` 的健康项，在 Webhook 一次都没到达过的
+    情况下照样报 ok——名字说的是回调，测的是轮询。生产实测：`hostex_webhook_events`
+    表 0 行，该项仍为 ok。
+    """
+    now = datetime.now(UTC)
+    fresh = now - timedelta(seconds=30)
+
+    async def probe() -> bool:
+        """模拟健康数据库连接。"""
+        return True
+
+    async def _same_revision() -> int:
+        """与运行状态一致的 revision，避免因不匹配而整体降级。"""
+        return 1
+
+    def build(*, webhook_heartbeat, configured):
+        """按给定的 Webhook 心跳与配置状态装配健康检查。"""
+
+        async def status_provider() -> RuntimeClientStatus:
+            """返回只在 Webhook 配置位上有差异的运行状态。"""
+            return RuntimeClientStatus(
+                revision=1,
+                has_duty=True,
+                contact_configured=False,
+                wecom_poll_interval_seconds=60.0,
+                hostex_reconcile_interval_seconds=200.0,
+                resources_healthy=True,
+                hostex_webhook_configured=configured,
+            )
+
+        return OperationalHealthService(
+            database_probe=probe,
+            heartbeat_getter=lambda: fresh,
+            poll_heartbeat_getter=lambda: fresh,
+            hostex_heartbeat_getter=lambda: fresh,
+            hostex_webhook_heartbeat_getter=lambda: webhook_heartbeat,
+            context_heartbeat_getter=lambda: fresh,
+            lifecycle_heartbeat_getter=lambda: fresh,
+            configuration_ok=True,
+            web_search_status_getter=lambda: "ok",
+            runtime_status_provider=status_provider,
+            # 两个 provider 必须成对提供，否则 check() 会退回 runtime_status=None，
+            # 读不到 Webhook 的配置位。
+            runtime_revision_provider=_same_revision,
+        )
+
+    # 配置了回调却从未收到：对账心跳再新鲜也不能替它作证。
+    never = await build(webhook_heartbeat=None, configured=True).check()
+    assert never["hostex_reconcile"] == "ok"
+    assert never["hostex_webhook"] == "never_received"
+    assert never["status"] == "degraded"
+
+    # 根本没配回调：如实报未配置，且不因此降级——与 wecom_contact_sync 一致。
+    unset = await build(webhook_heartbeat=None, configured=False).check()
+    assert unset["hostex_webhook"] == "not_configured"
+    assert unset["status"] == "ok"
+
+    # 真收到过才算 ok。
+    live = await build(webhook_heartbeat=fresh, configured=True).check()
+    assert live["hostex_webhook"] == "ok"
+    assert live["status"] == "ok"

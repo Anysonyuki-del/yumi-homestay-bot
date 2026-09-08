@@ -35,6 +35,7 @@ from homestay_bot.domain.models import (
     BookingApproval,
     Conversation,
     Employee,
+    ExternalRequest,
     Message,
 )
 from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot, RuntimeConfigView
@@ -2260,6 +2261,8 @@ def _record_committed_job_heartbeat(
     if job.job_type != "hostex_event":
         return
     completed_at = (now_provider or (lambda: datetime.now(UTC)))()
+    # 只有真实 Webhook 事件任务提交才走到这里，因此它是 webhook 通路唯一的证据。
+    app.state.hostex_webhook_last_success = completed_at
     app.state.hostex_sync_last_success = completed_at
     app.state.hostex_data_last_success = completed_at
     app.state.lifecycle_scheduler_last_success = completed_at
@@ -3162,6 +3165,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.hostex_sync_last_success = startup_time
     # 页面只接受完成过真实订单同步的时间，不能把启动宽限期冒充数据新鲜度。
     app.state.hostex_data_last_success = None
+    # Webhook 心跳同理，而且更严格：从未收到过就应当一直是 None，健康检查据此
+    # 报 never_received。用启动时间初始化会让「回调从没接通」永远看不出来。
+    app.state.hostex_webhook_last_success = None
     app.state.context_maintenance_last_success = startup_time
     app.state.lifecycle_scheduler_last_success = startup_time
     app.state.task_lifecycle_last_success = startup_time
@@ -3178,6 +3184,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         heartbeat_getter=lambda: app.state.worker_last_heartbeat,
         poll_heartbeat_getter=lambda: app.state.wecom_poll_last_success,
         hostex_heartbeat_getter=lambda: app.state.hostex_sync_last_success,
+        hostex_webhook_heartbeat_getter=lambda: app.state.hostex_webhook_last_success,
         context_heartbeat_getter=lambda: app.state.context_maintenance_last_success,
         lifecycle_heartbeat_getter=lambda: app.state.lifecycle_scheduler_last_success,
         task_lifecycle_heartbeat_getter=(
@@ -3220,6 +3227,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             faq_candidate_context=faq_candidate_context,
             safety_hmac_key=bootstrap.session_secret.encode(),
             web_search_status_setter=web_search_state.set,
+            external_call_recorder=record_external_call,
         )
 
     async def handle_message(
@@ -3542,6 +3550,25 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
 
         return handle
+
+    async def record_external_call(record: Any) -> None:
+        """把一次外部调用结果写入独立短事务。
+
+        与业务事务分开：调用记录是可观测性，不该因为它写不进去而回滚一次成功
+        的同步，也不该反过来被业务回滚抹掉——排障时最想看的恰恰是失败那一次。
+        """
+        async with factory() as session:
+            session.add(
+                ExternalRequest(
+                    provider=record.provider,
+                    method=record.method,
+                    path=record.path,
+                    request_id=record.request_id or None,
+                    business_code=record.business_code,
+                    succeeded=record.succeeded,
+                )
+            )
+            await session.commit()
 
     async def build_worker_bindings(
         session: AsyncSession,

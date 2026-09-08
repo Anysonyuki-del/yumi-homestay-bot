@@ -1265,3 +1265,34 @@ async def test_queued_guest_reply_is_checked_for_staleness_before_it_goes_out() 
         return_value=RepositoryStub(7, True),
     ):
         assert await _guest_reply_is_stale(object(), {"open_kfid": "wk-1"}) is False
+
+
+def test_only_a_real_webhook_event_refreshes_the_webhook_heartbeat() -> None:
+    """Webhook 心跳只能由真实 Webhook 事件任务刷新，且启动时必须是空的。
+
+    用启动时间初始化，或者让对账轮询顺手刷新它，都会让「回调从没接通」永远看不
+    出来——生产实测 `hostex_webhook_events` 表 0 行，而健康检查一直报 ok。
+    """
+    from homestay_bot.application import _record_committed_job_heartbeat
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    app.state.hostex_webhook_last_success = None
+    app.state.hostex_sync_last_success = None
+    app.state.hostex_data_last_success = None
+    app.state.lifecycle_scheduler_last_success = None
+    moment = datetime(2026, 9, 8, 12, tzinfo=UTC)
+
+    # 别的任务类型提交，绝不能顺手把 Webhook 说成通了。
+    _record_committed_job_heartbeat(
+        app,
+        SimpleNamespace(job_type="credential_send_part"),
+        now_provider=lambda: moment,
+    )
+    assert app.state.hostex_webhook_last_success is None
+
+    _record_committed_job_heartbeat(
+        app,
+        SimpleNamespace(job_type="hostex_event"),
+        now_provider=lambda: moment,
+    )
+    assert app.state.hostex_webhook_last_success == moment
