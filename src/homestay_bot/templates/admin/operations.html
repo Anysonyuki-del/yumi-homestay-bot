@@ -28,6 +28,7 @@
     {# 两行事件：本次退房、下一单入住。姓名、倒计时、绝对时间均绑定同一订单；
        倒计时文本由前端按经过时间算，无 JS 时仍有状态词与绝对时间。 #}
     {% if room.checkout_event or room.checkin_event %}
+    {% if snapshot.source_stale %}<p class="field-help">以下时间按上次同步计划，待核实。</p>{% endif %}
     <dl class="room-events">
       {% if room.checkout_event %}{% set e = room.checkout_event %}
       <div class="room-event"><dt>本次退房</dt><dd>

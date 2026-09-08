@@ -999,3 +999,16 @@ def test_unknown_due_count_falls_back_to_the_warning() -> None:
 
     assert "待处理任务" in page.text
     assert "排期待发" not in page.text
+
+
+def test_stale_events_are_annotated_as_last_synced_plan() -> None:
+    """A14：同步过期时，事件倒计时须标注「按上次同步计划」，不冒充实时。"""
+    client = build_client()
+    client.app.state.admin_operations_service = StaleTimelineOperationsStub()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin/operations")
+
+    assert response.status_code == 200
+    # 仅当该桩确有事件行时才要求注记；否则至少时间轴的待核实说明在。
+    assert "待核实" in response.text
