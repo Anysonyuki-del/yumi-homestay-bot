@@ -50,7 +50,7 @@ class OperationsSyncPort(Protocol):
         property_id: int,
         service_date: date,
         order_id: int,
-    ) -> BusinessTask:
+    ) -> BusinessTask | None:
         """幂等创建订单退房日的周转保洁任务。"""
 
     async def reconcile_reservations(

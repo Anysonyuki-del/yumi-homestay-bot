@@ -22,7 +22,7 @@ class BusinessTaskRepository(Protocol):
         property_id: int,
         service_date: date,
         order_id: int,
-    ) -> BusinessTask:
+    ) -> BusinessTask | None:
         """幂等创建周转保洁任务。"""
 
     async def create_pending_confirmation(
@@ -112,8 +112,11 @@ class BusinessTaskService:
         property_id: int,
         service_date: date,
         order_id: int,
-    ) -> BusinessTask:
-        """为订单退房日创建唯一周转保洁任务。"""
+    ) -> BusinessTask | None:
+        """为订单退房日创建唯一周转保洁任务。
+
+        返回 None 表示该来源已被永久删除且仍在保留期内，刻意不重建。
+        """
         return await self._tasks.create_turnover(
             property_id=property_id,
             service_date=service_date,
@@ -124,7 +127,7 @@ class BusinessTaskService:
         self,
         reminder: Any,
         reason: str,
-    ) -> BusinessTask:
+    ) -> BusinessTask | None:
         """把主动提醒限制或失败转换为幂等人工联系任务。"""
         return await self._tasks.create_manual_contact_for_reminder(
             reminder,

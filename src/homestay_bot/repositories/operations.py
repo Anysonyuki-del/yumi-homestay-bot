@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -31,6 +31,7 @@ from homestay_bot.domain.models import (
     Job,
     LifecycleReminder,
     PropertyProfile,
+    PurgedTaskMark,
     RoomOperationalState,
     StayOrder,
     TaskAttachment,
@@ -52,6 +53,11 @@ WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 def _wuhan_today() -> date:
     """返回武汉本地日期，避免 UTC 跨日导致退房观察日偏移。"""
     return datetime.now(WUHAN_TIMEZONE).date()
+
+
+# 删除墓碑的保留期：与归档任务保留期一致。墓碑只防止「刚删完又被同步造回来」，
+# 过期后允许重建，避免永久封禁某个房间的某一天。
+PURGED_MARK_RETENTION_DAYS = 180
 
 
 class SQLAlchemyOperationsRepository:
@@ -93,13 +99,21 @@ class SQLAlchemyOperationsRepository:
         property_id: int,
         service_date: date,
         order_id: int | None = None,
-    ) -> BusinessTask:
-        """按房间和服务日幂等创建周转保洁任务。"""
+    ) -> BusinessTask | None:
+        """按房间和服务日幂等创建周转保洁任务。
+
+        返回 None 表示这条来源已被管理员永久删除且仍在保留期内，因此刻意不重建。
+        这不是错误：同步照常继续，只是不把已经处理完并清理掉的历史工作造回来。
+        """
         dedupe_key = f"turnover:{property_id}:{service_date.isoformat()}"
         lookup = select(BusinessTask).where(BusinessTask.dedupe_key == dedupe_key)
         existing = await self._session.scalar(lookup)
         if existing is not None:
             return existing
+        # 永久删除会把去重依据一并删掉，只查现存任务的话，下一次同步就会把已经
+        # 处理完并被清理的历史工作重新造成待分派任务。墓碑在保留期内挡住重建。
+        if await self._purged_mark(dedupe_key) is not None:
+            return None
         task = BusinessTask(
             dedupe_key=dedupe_key,
             task_type=BusinessTaskType.CLEANING,
@@ -657,8 +671,41 @@ class SQLAlchemyOperationsRepository:
                 },
             )
         )
+        await self._mark_purged(task.dedupe_key)
         await self._session.delete(task)
         await self._session.flush()
+
+    async def _purged_mark(self, dedupe_key: str) -> PurgedTaskMark | None:
+        """返回仍在保留期内的删除墓碑；过期墓碑视为不存在并顺手清掉。"""
+        mark = await self._session.scalar(
+            select(PurgedTaskMark).where(PurgedTaskMark.dedupe_key == dedupe_key)
+        )
+        if mark is None:
+            return None
+        cutoff = datetime.now(UTC) - timedelta(days=PURGED_MARK_RETENTION_DAYS)
+        purged_at = mark.purged_at
+        if purged_at.tzinfo is None:
+            purged_at = purged_at.replace(tzinfo=UTC)
+        if purged_at < cutoff:
+            # 过期即失效：墓碑只防止「刚删完又被同步造回来」，不永久封禁
+            # 某个房间的某一天。
+            await self._session.delete(mark)
+            await self._session.flush()
+            return None
+        return mark
+
+    async def _mark_purged(self, dedupe_key: str | None) -> None:
+        """为带去重键的系统任务留下删除墓碑；人工任务没有去重键，不留。"""
+        if not dedupe_key:
+            return
+        existing = await self._session.scalar(
+            select(PurgedTaskMark).where(PurgedTaskMark.dedupe_key == dedupe_key)
+        )
+        now = datetime.now(UTC)
+        if existing is not None:
+            existing.purged_at = now
+            return
+        self._session.add(PurgedTaskMark(dedupe_key=dedupe_key, purged_at=now))
 
     async def archive_selected(
         self,
