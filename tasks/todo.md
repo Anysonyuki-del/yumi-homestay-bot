@@ -1,3 +1,59 @@
+# 当前任务：可用性审计报告 UX-01～11 实施（Spec 已确认，待「开始」）
+
+来源：`docs/reviews/2026-09-08_deployed-usability-audit-report.md`。
+UX-07 已在 v1.16.0 完成，其余 10 条待做。报告行号基于 ec7ca36，下表已按
+v1.16.0 当前代码逐条重新取证。
+
+## 用户已确认的四项决策（2026-09-08）
+
+| 决策 | 结论 |
+| --- | --- |
+| UX-08 | **把外部调用结果做出来**，不是只改文案。`ExternalCallRecord` 刻意只存 provider/method/path/request_id/business_code/succeeded，不含参数与正文 |
+| UX-09 | **逐项降级 + 已结束审批不拉参考数据**。只禁用「确认下单」，拒绝仍可执行；绝不用旧房态旧价格兜底放行下单 |
+| UX-05 | **无 tab = overview**，旧 URL 仍可访问，不新增页面层级 |
+| UX-11 | **统一到 128**（服务层现有约束），表单给字段级错误 |
+
+## 第一组 · 日常任务闭环
+
+| 编号 | 改动点（文件::符号） | 验证目标 |
+| --- | --- | --- |
+| UX-01 | `services/room_readiness_service.py::ReadinessRuleError` 归入 `OperationRefused` 家族，使其自有文案经 `routes/page_errors.py::raise_page_error:33` 原样上抛；`templates/tasks/detail.html` 证据不足时禁用主动作并给出补齐入口 | 缺照片/缺清单/状态已变均留在任务上下文且给出可执行提示；JSON 客户端仍得到明确错误；不回显任意异常原文 |
+| UX-02 | `templates/tasks/detail.html` 所有操作表单透传 `return_to`；`routes/tasks.py::assign_task:803` 及同类 POST 经 `safe_return_path` 回源 | POST 回环测试：分派/清单/照片/状态更新后房间、状态、日期、页码均保留；恶意 `return_to` 回落安全默认 |
+| UX-03 | `services/admin_operations_service.py::_next_step:521` 到店/离店分支按 `task_count` 开放任务数决定去处与按钮文案 | 到店/离店/未来到店 × 有任务/无任务 六种组合，零任务不再进空列表；不因点击自动补造生产任务 |
+| UX-04 | `templates/admin/operations.html` 状态表单带来源；`routes/properties.py::set_room_operational_status:261` 回原 `days` 范围与房间锚点 | 3/7/14 天运营页与房间详情两种来源各自回到原场景；拒绝时同样可继续操作 |
+
+## 第二组 · 日常页面与维护
+
+| 编号 | 改动点（文件::符号） | 验证目标 |
+| --- | --- | --- |
+| UX-05 | `routes/customers.py::customer_detail:371` 无 tab 视为 overview；`::_customer_redirect:399` 按写操作回对应标签页（记忆审核回 memory，合并回 governance） | 列表进入只见概览；五标签内容正确；保存/删除/审核后留在相关标签页 |
+| UX-06 | `templates/account/detail.html:1` 改用后台布局并给「返回工作台」；`routes/employee_auth.py::employee_account:559` 接收一次性成功提示，`::employee_change_password:570` 触发 | 已登录账号页有返回路径、改密有明确反馈；错误密码留在表单且不泄露信息；**强制改密账号不得借此绕过门禁** |
+| UX-10 | `routes/knowledge.py` 的 `convert_candidate:540`/`snooze_candidate:572`/`update_knowledge:587`/`toggle_knowledge:619` 全部经安全来源回跳，保留 `query`/`enabled`/`category`/`page`/`candidate_page` | 从非首页、停用筛选、分类搜索执行操作后回原视图；处理最后一条时页码合理回退；目标移出筛选时显示说明而不强行塞回 |
+
+## 第三组 · 诊断与条件边界
+
+| 编号 | 改动点（文件::符号） | 验证目标 |
+| --- | --- | --- |
+| UX-08 | `repositories/admin_diagnostics.py::SQLAlchemyAdminDiagnosticsRepository` 增加读取 `ExternalRequest` 的分页方法；审计页新增脱敏外部调用结果区 | `hostex_reconcile/stale` 指引指向的页面确实包含承诺的信息；**不得展示原始请求、密钥或客户正文** |
+| UX-09 | `services/approval_page_service.py::ApprovalPageService.get_detail:74-81` 三个外部调用各自 try/except 并逐项标注；已结束审批跳过参考数据；`routes/approvals.py::approval_detail` 在参考数据缺失时只禁用确认下单 | 三接口分别超时/失败下仍能查看与合法拒绝，确认下单不可用；正常数据下确认路径仍走原有确定性门禁 |
+| UX-11 | `templates/properties/detail.html:41` 与 `routes/properties.py::replace_property_credentials:214` 由 256 收到 128，对齐 `services/property_admin_service.py::replace_credentials:343` | 128 字符可提交，129 字符页面即时提示，绕过页面仍被服务端拒绝；全程合成凭证 |
+
+## 顺带一并处理
+
+- 诊断页「待处理任务」徽标用告警色显示总数，但生产 49 条全部 `available_at` 在
+  未来（最早次日 01:00，最晚 9/22），0 条到期、0 条锁定。数字准确却会被读成积压，
+  与 UX 系列同类。改为区分「已到期未处理」与「排期待发」。
+
+## 实施约束
+
+- 复用现有 Jinja、原生表单、`OperationRefused`、`safe_return_path`；不引入前端框架
+  或通用工作流引擎；不依赖 Referer，不放开跨站回跳。
+- 每条改动先写会失败的测试，`git stash push -- src` 验红再恢复验绿。
+- 门禁用 CI 原命令：`ruff check .`、裸 `mypy`、`alembic upgrade head`、`pytest -q`。
+- 生产写操作（真实下单、真实凭证替换）不代做，验收用合成数据与本地复现。
+
+---
+
 # 当前任务：无进行中工作单，以下为挂起事项
 
 2026-09-08 当天完成并上线的工作单已全部归档，见文末「已完成工作单」。
