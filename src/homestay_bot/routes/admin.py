@@ -175,7 +175,17 @@ async def admin_dashboard(request: Request) -> Response:
     # 读失败时安静降级为空列表：工作台的其余部分仍然可用。
     attention_rooms: tuple[RoomOperationItem, ...] = ()
     try:
-        operations = await _operations_service(request).snapshot(observed_at)
+        operations = await _operations_service(request).snapshot(
+            observed_at,
+            # 必须与房间视图取同一个同步时间：不传就默认 None，快照会把每间房都
+            # 判成来源过期，于是「先处理」整列变成「先确认百居易实时房态」且没有
+            # 任何可点的去向——同一份数据在两个视图里给出互相矛盾的可信度。
+            source_synced_at=getattr(
+                request.app.state,
+                "hostex_data_last_success",
+                None,
+            ),
+        )
         attention_rooms = operations.attention_rooms
     except Exception as error:
         logger.warning("工作台先处理读取失败：error_type=%s", type(error).__name__)
