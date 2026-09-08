@@ -241,6 +241,18 @@ class TaskPageServicePort(Protocol):
     async def assignment_options(self) -> dict[str, list[Any]]:
         """返回员工和房间选项。"""
 
+    async def create_manual(
+        self,
+        employee: Employee,
+        *,
+        task_type: BusinessTaskType,
+        property_id: int,
+        service_date: date,
+        description: str,
+        assigned_employee_id: int | None = None,
+    ) -> BusinessTask:
+        """管理员手动创建任务。"""
+
     async def update_checklist(
         self,
         task_id: int,
@@ -341,6 +353,8 @@ async def _issue_csrf(request: Request, task_id: int) -> str:
 
 
 _BULK_CSRF_ENTITY = 0
+# 建单表单没有任务 id，用独立 entity，与批量(0)及任何任务(正数)都不撞。
+_CREATE_CSRF_ENTITY = -1
 
 
 async def _consume_csrf(request: Request, task_id: int, token: str) -> None:
@@ -441,6 +455,11 @@ async def task_index(
             # 批量与勾选归档是管理员能力；给员工签发只会白占令牌额度。
             "bulk_csrf_token": (
                 await _issue_csrf(request, _BULK_CSRF_ENTITY)
+                if employee.role is EmployeeRole.ADMIN
+                else ""
+            ),
+            "create_csrf_token": (
+                await _issue_csrf(request, _CREATE_CSRF_ENTITY)
                 if employee.role is EmployeeRole.ADMIN
                 else ""
             ),
@@ -705,6 +724,36 @@ async def archive_filtered_tasks(
         _raise_page_error(error)
     return RedirectResponse(
         "/employee/tasks?archived=true",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/create")
+async def create_manual_task(
+    request: Request,
+    task_type: Annotated[BusinessTaskType, Form()],
+    property_id: Annotated[int, Form(ge=1)],
+    service_date_value: Annotated[str, Form(min_length=10, max_length=10, alias="service_date")],
+    description: Annotated[str, Form(min_length=1, max_length=2000)],
+    csrf_token: str = Form(min_length=1, max_length=128),
+    assigned_employee_id: Annotated[int | None, Form(ge=1)] = None,
+) -> RedirectResponse:
+    """管理员手动创建一条运营任务并跳转到新任务详情。"""
+    employee = await _current_employee(request)
+    await _consume_csrf(request, _CREATE_CSRF_ENTITY, csrf_token)
+    try:
+        task = await _get_service(request).create_manual(
+            employee,
+            task_type=task_type,
+            property_id=property_id,
+            service_date=date.fromisoformat(service_date_value),
+            description=description,
+            assigned_employee_id=assigned_employee_id,
+        )
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        f"/employee/tasks/{task.id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

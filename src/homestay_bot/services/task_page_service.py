@@ -126,6 +126,18 @@ class TaskPageRepository(Protocol):
     async def assignment_options(self) -> dict[str, list[object]]:
         """返回可分派员工和可用房间。"""
 
+    async def create_manual_task(
+        self,
+        *,
+        task_type: BusinessTaskType,
+        property_id: int,
+        service_date: date,
+        description: str,
+        actor_employee_id: int,
+        assigned_employee_id: int | None = None,
+    ) -> BusinessTask:
+        """管理员手动创建可执行任务。"""
+
     async def update_task_checklist(
         self,
         *,
@@ -426,6 +438,27 @@ class TaskPageService:
     async def assignment_options(self) -> dict[str, list[object]]:
         """返回管理员分派表单需要的安全选项。"""
         return await self._tasks.assignment_options()
+
+    async def create_manual(
+        self,
+        employee: Employee,
+        *,
+        task_type: BusinessTaskType,
+        property_id: int,
+        service_date: date,
+        description: str,
+        assigned_employee_id: int | None = None,
+    ) -> BusinessTask:
+        """只允许管理员手动创建任务；校验与审计在仓储内完成。"""
+        self._require_admin(employee)
+        return await self._tasks.create_manual_task(
+            task_type=task_type,
+            property_id=property_id,
+            service_date=service_date,
+            description=description,
+            actor_employee_id=employee.id,
+            assigned_employee_id=assigned_employee_id,
+        )
 
     async def update_checklist(
         self,

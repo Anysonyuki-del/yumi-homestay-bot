@@ -115,6 +115,8 @@ class BusinessTaskOrigin(StrEnum):
     TURNOVER = "turnover"
     LIFECYCLE_REMINDER = "lifecycle_reminder"
     AI_SUGGESTION = "ai_suggestion"
+    # 管理员在任务中心手动录入，用于订单未派生的紧急事项。
+    MANUAL = "manual"
     UNKNOWN = "unknown"
 
 

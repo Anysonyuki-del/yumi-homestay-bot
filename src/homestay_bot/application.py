@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from homestay_bot.config import BootstrapSettings, RuntimeEnvironmentSettings
 from homestay_bot.db import create_engine, create_session_factory
 from homestay_bot.domain.enums import (
+    BusinessTaskType,
     ComplaintReviewStatus,
     EmployeeRole,
     JobStatus,
@@ -1555,6 +1556,29 @@ class SessionTaskPageService:
         """返回启用员工和房间选项。"""
         async with self._factory() as session:
             return await self._service(session).assignment_options()
+
+    async def create_manual(
+        self,
+        employee: Employee,
+        *,
+        task_type: BusinessTaskType,
+        property_id: int,
+        service_date: date,
+        description: str,
+        assigned_employee_id: int | None = None,
+    ) -> Any:
+        """在独立事务手动创建任务并提交。"""
+        async with self._factory() as session:
+            result = await self._service(session).create_manual(
+                employee,
+                task_type=task_type,
+                property_id=property_id,
+                service_date=service_date,
+                description=description,
+                assigned_employee_id=assigned_employee_id,
+            )
+            await session.commit()
+            return result
 
     async def update_checklist(
         self,

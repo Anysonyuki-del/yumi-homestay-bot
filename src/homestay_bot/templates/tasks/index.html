@@ -69,6 +69,23 @@
   </div>
   <input type="hidden" name="confirm_count" value="0" data-confirm-count>
   </form>{% endif %}
+  {% if is_admin %}
+  {# 手动建单：订单未派生的紧急事项（临时维修、加急补耗材等）由管理员直接录入。
+     留空保留原值语义不适用于建单，故房间、服务日期、说明均为必填。放在批量表单
+     之后，其 csrf 令牌不会顶掉批量表单的首个令牌位置。 #}
+  <details class="filter-disclosure create-task">
+    <summary>新建任务</summary>
+    <form method="post" action="/employee/tasks/create" class="filter-toolbar" data-confirm="确认按填写内容创建这条任务吗？">
+      <input type="hidden" name="csrf_token" value="{{ create_csrf_token }}">
+      <label>任务类型<select name="task_type" required>{% for type in task_types %}{% if type.value != "manual_contact" %}<option value="{{ type.value }}">{{ type | status_zh }}</option>{% endif %}{% endfor %}</select></label>
+      <label>房源<select name="property_id" required><option value="" selected disabled>请选择房间</option>{% for property in properties %}<option value="{{ property.id }}">{{ property.title }}</option>{% endfor %}</select></label>
+      <label>服务日期<input type="date" name="service_date" required></label>
+      <label>执行员工（可选）<select name="assigned_employee_id"><option value="">暂不分派</option>{% for employee in employees %}<option value="{{ employee.id }}">{{ employee.name }}</option>{% endfor %}</select></label>
+      <label class="create-task__desc">任务说明<input type="text" name="description" maxlength="2000" required placeholder="例如：301 房热水器不出热水，需尽快维修"></label>
+      <button type="submit">创建任务</button>
+    </form>
+  </details>
+  {% endif %}
   <nav class="pagination" aria-label="任务分页">{% if previous_url %}<a class="button button--secondary" href="{{ previous_url }}">上一页</a>{% endif %}<span>第 {{ page }} 页</span>{% if next_url %}<a class="button button--secondary" href="{{ next_url }}">下一页</a>{% endif %}</nav>
 </section>
 {% endblock %}

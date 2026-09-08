@@ -70,6 +70,7 @@ class TaskPageStub:
         self.detail_error: Exception | None = None
         self.ready_error: Exception | None = None
         self.attachments: list[object] = []
+        self.create_calls: list[dict] = []
         self.list_error: Exception | None = None
         self.assignment_error: Exception | None = None
         self.list_calls: list[tuple[int, int]] = []
@@ -129,6 +130,13 @@ class TaskPageStub:
                 SimpleNamespace(id=101, title="长江中心"),
             ],
         }
+
+    async def create_manual(self, employee, **kwargs):
+        """记录手动创建；非管理员拒绝。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以创建任务")
+        self.create_calls.append({"employee_id": employee.id, **kwargs})
+        return SimpleNamespace(id=777)
 
     async def archive(self, task_id, employee):
         """记录单条归档。"""
@@ -1799,3 +1807,66 @@ def test_purging_a_task_returns_to_the_list_it_came_from() -> None:
 
     assert response.status_code == 303
     assert response.headers["location"] == SOURCE_LIST
+
+
+def test_admin_sees_manual_task_creation_form_but_staff_does_not() -> None:
+    """建单入口是管理员能力；普通员工不渲染，也白占不到令牌。"""
+    admin_client, _ = build_client(EmployeeRole.ADMIN)
+    login(admin_client)
+    admin_page = admin_client.get("/employee/tasks")
+
+    staff_client, _ = build_client(EmployeeRole.STAFF)
+    login(staff_client)
+    staff_page = staff_client.get("/employee/tasks")
+
+    assert 'action="/employee/tasks/create"' in admin_page.text
+    assert 'action="/employee/tasks/create"' not in staff_page.text
+
+
+def test_admin_creates_a_manual_task_and_lands_on_it() -> None:
+    """提交建单表单后创建并跳到新任务详情。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks")
+    token = re.search(
+        r'action="/employee/tasks/create".*?name="csrf_token" value="([^"]+)"',
+        page.text,
+        re.S,
+    ).group(1)
+
+    response = client.post(
+        "/employee/tasks/create",
+        data={
+            "csrf_token": token,
+            "task_type": "maintenance",
+            "property_id": "101",
+            "service_date": "2026-09-20",
+            "description": "热水器维修",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/tasks/777"
+    assert tasks.create_calls and tasks.create_calls[0]["property_id"] == 101
+    assert tasks.create_calls[0]["task_type"].value == "maintenance"
+
+
+def test_staff_cannot_post_manual_task_creation() -> None:
+    """普通员工直接 POST 建单接口应被拒。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    login(client)
+    # staff 拿不到建单令牌，直接构造请求验证服务端权限门。
+    response = client.post(
+        "/employee/tasks/create",
+        data={
+            "csrf_token": "x" * 20,
+            "task_type": "maintenance",
+            "property_id": "101",
+            "service_date": "2026-09-20",
+            "description": "x",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code in (403, 409)
+    assert tasks.create_calls == []

@@ -127,6 +127,79 @@ class SQLAlchemyOperationsRepository:
         saved, _ = await self._add_business_task_once(task, lookup)
         return saved
 
+    # 允许管理员手动创建的运营事项；manual_contact 由生命周期派生，排除在外。
+    _MANUAL_TASK_TYPES = frozenset(
+        {
+            BusinessTaskType.CLEANING,
+            BusinessTaskType.MAINTENANCE,
+            BusinessTaskType.SUPPLIES,
+            BusinessTaskType.SPECIAL_SERVICE,
+            BusinessTaskType.EARLY_CHECK_IN,
+            BusinessTaskType.LATE_CHECK_OUT,
+        }
+    )
+
+    async def create_manual_task(
+        self,
+        *,
+        task_type: BusinessTaskType,
+        property_id: int,
+        service_date: date,
+        description: str,
+        actor_employee_id: int,
+        assigned_employee_id: int | None = None,
+    ) -> BusinessTask:
+        """管理员手动创建可执行任务；不参与去重，来源标记为手动。
+
+        校验放在插入之前，让被拒时得到具体文案（OperationRefused），而不是撞上
+        数据库 CHECK 约束抛出无法向用户解释的 IntegrityError。待分派及之后的状态
+        都要求 property 与 service_date，故两者在此为必填。
+        """
+        if task_type not in self._MANUAL_TASK_TYPES:
+            raise OperationRefused("该任务类型不支持手动创建")
+        cleaned_description = description.strip()
+        if not cleaned_description:
+            raise OperationRefused("请填写任务说明")
+        prop = await self._session.get(PropertyProfile, property_id)
+        if prop is None or not prop.is_active:
+            raise OperationRefused("房间不存在或已停用")
+        status = BusinessTaskStatus.PENDING_ASSIGNMENT
+        assignee_id: int | None = None
+        if assigned_employee_id is not None:
+            assignee = await self._session.get(Employee, assigned_employee_id)
+            if assignee is None or not assignee.is_active:
+                raise OperationRefused("执行员工不存在或已停用")
+            assignee_id = assigned_employee_id
+            status = BusinessTaskStatus.ASSIGNED
+        task = BusinessTask(
+            dedupe_key=None,
+            task_type=task_type,
+            status=status,
+            origin_kind=BusinessTaskOrigin.MANUAL,
+            property_id=property_id,
+            service_date=service_date,
+            assigned_employee_id=assignee_id,
+            description=cleaned_description,
+        )
+        self._session.add(task)
+        await self._session.flush()
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="business_task_manual_created",
+                target_type="business_task",
+                target_id=str(task.id),
+                details={
+                    "task_type": task_type.value,
+                    "property_id": property_id,
+                    "service_date": service_date.isoformat(),
+                    "assigned": assignee_id is not None,
+                },
+            )
+        )
+        await self._session.flush()
+        return task
+
     async def create_manual_contact_for_reminder(
         self,
         reminder: LifecycleReminder,
