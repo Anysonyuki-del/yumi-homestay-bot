@@ -33,6 +33,18 @@
 </section>
 {% endif %}
 
+{# 待检查阶段原本同时摆着保存清单、上传照片、确认可入住、标记完成四个并列提交
+   入口，两个「完成」含义还不同：确认可入住改的是房态并触发凭证评估，标记完成改
+   的是任务状态。这里先把「还缺什么」提到动作之前说清楚，再突出当前唯一主动作，
+   其余收进次级区域。本阶段只统一布局与提示，不改任何提交语义。 #}
+{% if missing_evidence and is_assignee and task.status.value in ["assigned", "in_progress", "pending_inspection"] %}
+<section class="detail-section panel panel--padded execution-gaps">
+  <div class="section-heading"><h2>还差这些才能标记可入住</h2>{{ ui.badge(missing_evidence | length ~ " 项", "warning") }}</div>
+  <ul class="plain-list">{% for item in missing_evidence %}<li>{{ item }}</li>{% endfor %}</ul>
+  <p class="field-help">补齐后「确认房间可入住」才会被接受；服务端仍会独立复核，页面提示不替代校验。</p>
+</section>
+{% endif %}
+
 <section class="detail-section panel panel--padded"><h2>任务操作</h2><div class="action-stack">
   {% if task.status.value == "assigned" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="in_progress"><button type="submit">开始处理</button></form>
   {% elif task.status.value == "in_progress" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="pending_inspection"><button type="submit">提交检查</button></form>{% endif %}

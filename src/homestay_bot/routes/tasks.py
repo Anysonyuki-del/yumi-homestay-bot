@@ -34,6 +34,9 @@ from homestay_bot.routes.admin_form_csrf import (
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.page_errors import raise_page_error, safe_return_path
 from homestay_bot.routes.query_params import empty_query_to_none
+from homestay_bot.services.room_readiness_service import (
+    REQUIRED_READINESS_CHECKS,
+)
 from homestay_bot.services.task_page_service import TaskFilters
 from homestay_bot.web import templates
 
@@ -151,6 +154,25 @@ def _extra_filters(filters: TaskFilters, queue: str) -> tuple[str, ...]:
     if filters.archived and queue != "archived":
         extras.append("archived")
     return tuple(extras)
+
+
+def _missing_readiness_evidence(
+    task: BusinessTask,
+    attachments: list[Any],
+) -> list[str]:
+    """列出距离「可标记可入住」还缺的材料，供页面提前说明。
+
+    只做展示，不替代服务端守卫：真正的判定仍在 RoomReadinessService.mark_ready，
+    这里与它共用同一份必填清单定义，避免页面说齐了而提交仍被拒绝。
+    """
+    missing = [
+        label
+        for key, label in REQUIRED_READINESS_CHECKS
+        if task.checklist.get(key) is not True
+    ]
+    if not attachments:
+        missing.append("至少一张现场照片")
+    return missing
 
 
 def _raise_page_error(error: Exception) -> None:
@@ -483,6 +505,12 @@ async def task_detail(
             "csrf_token": await _issue_csrf(request, task_id),
             # 回跳路径必须经过校验：它来自查询串，未经校验就是开放重定向。
             "return_to": safe_return_path(return_to),
+            # 「还缺什么」在提交之前就说清楚：此前执行员工要先点「确认可入住」
+            # 被拒绝，才知道少了哪一项。判据与 mark_ready 的守卫同源。
+            "missing_evidence": _missing_readiness_evidence(
+                cast(BusinessTask, detail["task"]),
+                cast(list[Any], detail.get("attachments") or []),
+            ),
             "page_title": f"任务 #{task_id}",
             "active_nav": "tasks",
         },

@@ -1591,3 +1591,47 @@ def test_detail_return_path_refuses_anything_off_site() -> None:
         assert detail.status_code == 200
         assert "evil.example" not in detail.text
         assert '/admin/secret">返回任务列表' not in detail.text
+
+
+def test_detail_says_what_is_missing_before_the_action_is_attempted() -> None:
+    """缺什么材料要在动手之前说清楚，而不是提交后被拒绝才知道。
+
+    待检查阶段原本同时摆着保存清单、上传照片、确认可入住、标记完成四个并列提交
+    入口，执行员工得先点「确认可入住」被拒，才知道少了哪一项。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    tasks.item.status = BusinessTaskStatus.PENDING_INSPECTION
+    tasks.item.assigned_employee_id = 1
+    tasks.item.checklist = {"clean": True}
+
+    detail = client.get("/employee/tasks/1")
+
+    gaps = re.search(
+        r'<section class="detail-section panel panel--padded execution-gaps">(.*?)</section>',
+        detail.text,
+        re.S,
+    )
+    assert gaps is not None
+    # 已完成的不再重复提示，未完成的逐项列出。
+    assert "清洁已完成" not in gaps.group(1)
+    assert "布草与耗材已补齐" in gaps.group(1)
+    assert "设施完好已确认" in gaps.group(1)
+    assert "至少一张现场照片" in gaps.group(1)
+
+
+def test_missing_evidence_uses_the_same_definition_as_the_server_guard() -> None:
+    """页面提示与服务端守卫必须同源，否则会出现「说齐了却仍被拒绝」。"""
+    from homestay_bot.routes.tasks import _missing_readiness_evidence
+    from homestay_bot.services.room_readiness_service import (
+        REQUIRED_READINESS_CHECKS,
+        RoomReadinessService,
+    )
+
+    assert RoomReadinessService._required_checklist == frozenset(
+        key for key, _ in REQUIRED_READINESS_CHECKS
+    )
+
+    complete = SimpleNamespace(checklist={key: True for key, _ in REQUIRED_READINESS_CHECKS})
+    assert _missing_readiness_evidence(complete, [object()]) == []
+    assert _missing_readiness_evidence(complete, []) == ["至少一张现场照片"]
