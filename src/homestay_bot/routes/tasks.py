@@ -32,7 +32,7 @@ from homestay_bot.routes.admin_form_csrf import (
     issue_form_csrf,
 )
 from homestay_bot.routes.employee_auth import require_employee_session
-from homestay_bot.routes.page_errors import raise_page_error
+from homestay_bot.routes.page_errors import raise_page_error, safe_return_path
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.task_page_service import TaskFilters
 from homestay_bot.web import templates
@@ -444,7 +444,11 @@ async def task_index(
 
 
 @router.get("/{task_id}", response_class=HTMLResponse)
-async def task_detail(request: Request, task_id: int) -> Response:
+async def task_detail(
+    request: Request,
+    task_id: int,
+    return_to: Annotated[str, Query(max_length=200)] = "",
+) -> Response:
     """展示不含客户电话、金额、完整地址和凭证的任务详情。"""
     try:
         employee = await _current_employee(request)
@@ -477,6 +481,8 @@ async def task_detail(request: Request, task_id: int) -> Response:
             ),
             "archivable_statuses": ARCHIVABLE_TASK_STATUSES,
             "csrf_token": await _issue_csrf(request, task_id),
+            # 回跳路径必须经过校验：它来自查询串，未经校验就是开放重定向。
+            "return_to": safe_return_path(return_to),
             "page_title": f"任务 #{task_id}",
             "active_nav": "tasks",
         },

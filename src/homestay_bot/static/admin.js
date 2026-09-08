@@ -140,12 +140,38 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+/** 把确认文案里的占位符换成本次提交的真实数值。 */
+function fillConfirmPlaceholders(text, form) {
+  const selected = new Set(
+    Array.from(
+      form.querySelectorAll('input[name="task_ids"]:checked:not(:disabled)'),
+    ).map((box) => box.value),
+  );
+  const employee = form.querySelector('select[name="assigned_employee_id"]');
+  const chosen = employee instanceof HTMLSelectElement
+    ? employee.options[employee.selectedIndex]?.textContent?.trim() || ""
+    : "";
+  return text.replace("{n}", String(selected.size)).replace("{employee}", chosen);
+}
+
+// 确认文案必须跟随「这次点的是哪个动作」，而不是表单的默认动作。同一个表单上
+// 挂着归档、分派、取消、永久删除四个按钮，后三个靠 formaction 改写目标；表单级
+// data-confirm 是写给默认动作（归档）的，被它们继承就会出现「点分派，问你是否
+// 移入归档」这种把人引向错误心理模型的提示。
 document.querySelectorAll("form[data-confirm], form[data-danger-confirm]").forEach((form) => {
   form.addEventListener("submit", (event) => {
-    // 带 data-typed-confirm 的按钮（如永久删除）已经做过更强的专属确认，表单级
-    // 文案是写给默认按钮的，此时再弹一次只会用「可以恢复」盖住不可逆的真相。
     const submitter = event.submitter;
-    if (submitter instanceof HTMLElement && submitter.hasAttribute("data-typed-confirm")) return;
+    if (submitter instanceof HTMLElement) {
+      // 已经做过更强的手输确认，不再叠加一句更弱的。
+      if (submitter.hasAttribute("data-typed-confirm")) return;
+      const own = submitter.getAttribute("data-confirm");
+      if (own) {
+        if (!window.confirm(fillConfirmPlaceholders(own, form))) event.preventDefault();
+        return;
+      }
+      // 改写了目标动作却没带自己的文案：表单级文案不属于它，宁可不问也不误导。
+      if (submitter.hasAttribute("formaction")) return;
+    }
     const prompt = form.getAttribute("data-confirm")
       || form.getAttribute("data-danger-confirm")
       || "确定继续吗？";

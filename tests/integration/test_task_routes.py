@@ -3,7 +3,9 @@ import logging
 import re
 from base64 import b64decode, b64encode
 from datetime import date
+from html import escape
 from types import SimpleNamespace
+from urllib.parse import quote
 
 from admin_auth_helpers import configure_admin_auth, login_admin
 from fastapi import FastAPI
@@ -632,17 +634,29 @@ def test_task_center_keeps_quick_queue_small_and_defers_advanced_filters() -> No
     assert response.text.index("filter-disclosure") < response.text.index("data-filter-form")
 
 
-def test_task_center_opens_advanced_filters_when_a_filter_is_applied() -> None:
-    """已经生效的筛选必须保持展开，避免员工看不到当前生效条件。"""
+def test_applied_filters_are_visible_without_unfolding_the_whole_form() -> None:
+    """生效的筛选必须看得见，但不能因此把整套表单展开。
+
+    原来的做法是有筛选就 `open`。可见性确实要保证——员工看不到当前条件会以为
+    列表就是全部——但展开整套表单不是唯一实现方式，代价却很大：手机上从房间卡
+    进来只加了一个房源条件，要先翻过状态、类型、日期、房源、员工、逾期、归档
+    七类控件才看得到第一条任务。摘要行已经说清加了什么，展开与否交给用户。
+    """
     client, _ = build_client(EmployeeRole.ADMIN)
     login(client)
 
     response = client.get("/employee/tasks", params={"task_type": "cleaning"})
 
     assert response.status_code == 200
+    # 条件本身可见：摘要行与折叠标题都写明了。
+    summary = re.search(r'<p class="filter-summary">(.*?)</p>', response.text, re.S)
+    assert summary is not None
+    assert "任务类型" in summary.group(1)
+    assert "已生效 1 项" in response.text
+    # 但表单保持收起，首屏留给任务本身。
     disclosure = re.search(r"<details class=\"filter-disclosure\"([^>]*)>", response.text)
     assert disclosure is not None
-    assert "open" in disclosure.group(1)
+    assert "open" not in disclosure.group(1)
 
 
 SESSION_SECRET = "task-test-secret"
@@ -1545,3 +1559,35 @@ def test_typed_confirm_wording_belongs_to_the_button_not_the_script() -> None:
     assert "data-typed-confirm-detail=" in cancel_button
     assert "状态机没有回头路" in cancel_button
     assert "现场照片" not in cancel_button
+
+
+def test_detail_returns_to_the_list_you_came_from() -> None:
+    """从带筛选和页码的列表进入详情，返回按钮要回到原处。
+
+    此前详情页的返回固定指向 `/employee/tasks`：从「某房间的待确认队列第 2 页」
+    进来，处理完被丢回全部待办，等于每处理一条就要把筛选重设一遍。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+    source = "/employee/tasks?property_id=101&status_filter=pending_confirmation&page=2"
+
+    listing = client.get(source)
+    # 列表里的链接自己带上来源，不依赖 Referer——本站发送 referrer-policy: no-referrer。
+    assert "return_to=" in listing.text
+
+    detail = client.get(f"/employee/tasks/1?return_to={quote(source, safe='')}")
+
+    assert detail.status_code == 200
+    assert f'href="{escape(source)}">返回任务列表' in detail.text
+
+
+def test_detail_return_path_refuses_anything_off_site() -> None:
+    """回跳路径来自查询串，未经校验就是开放重定向。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    for hostile in ("https://evil.example/steal", "//evil.example", "/admin/secret"):
+        detail = client.get(f"/employee/tasks/1?return_to={quote(hostile, safe='')}")
+        assert detail.status_code == 200
+        assert "evil.example" not in detail.text
+        assert '/admin/secret">返回任务列表' not in detail.text

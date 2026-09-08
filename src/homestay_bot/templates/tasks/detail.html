@@ -1,7 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
 
-{% block page_actions %}<a class="button button--secondary" href="/employee/tasks">返回任务列表</a>{% endblock %}
+{# 返回到进来时那个列表，而不是固定的默认列表：从「某房间的逾期队列第 2 页」
+   进来，处理完却被丢回全部待办，等于每处理一条就要把筛选重设一遍。 #}
+{% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">返回任务列表</a>{% endblock %}
 {% block content %}
 <section class="detail-section panel panel--padded">
   <div class="section-heading"><h2>{{ task.task_type | status_zh }}</h2>{{ ui.badge(task.status | status_zh, "warning") }}</div>
