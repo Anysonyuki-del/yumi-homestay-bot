@@ -403,6 +403,17 @@ def _selection_fixture() -> str:
               <input type="checkbox" name="task_ids" value="12"><span>选择</span>
             </label></li>
           </ul>
+          <button type="submit">归档勾选的任务</button>
+          <button type="submit"
+                  formaction="/employee/tasks/assign-selected"
+                  data-confirm="确定把勾选的 {n} 条任务分派给「{employee}」吗？"
+                  >分派勾选的任务</button>
+          <button type="submit"
+                  formaction="/employee/tasks/other-action">没有自带文案的动作</button>
+          <select name="assigned_employee_id">
+            <option value="">选择员工…</option>
+            <option value="3" selected>阿姨</option>
+          </select>
           <button class="button button--danger" type="submit"
                   data-typed-confirm="永久删除">永久删除勾选的任务</button>
           <input type="hidden" name="confirm_count" value="0" data-confirm-count>
@@ -593,4 +604,53 @@ def test_a_timeline_too_long_for_its_card_scrolls_instead_of_shrinking(
 
     assert measured["scroll"] > measured["visible"]
     assert measured["scroll"] >= 18 * 76
+    page.close()
+
+
+def test_confirm_text_follows_the_action_that_was_clicked(browser: Browser) -> None:
+    """确认文案必须跟随点下去的那个动作，而不是表单的默认动作。
+
+    同一个表单挂着归档、分派、取消、永久删除四个按钮，后三个靠 formaction 改写
+    目标。表单级 data-confirm 是写给默认动作（归档）的，被它们继承就会出现
+    「点分派，问你是否移入归档」——把人引向错误的心理模型，而他正要做的是一件
+    完全不同、且会真实改变任务归属的事。
+    """
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+    page.check("[data-select-all]")
+
+    page.click('button[formaction$="assign-selected"]')
+    assign_prompt = page.evaluate("() => window.confirmCalls.at(-1)")
+
+    assert "分派" in assign_prompt
+    assert "归档" not in assign_prompt
+    # 占位符换成本次提交的真实数值。
+    assert "2 条" in assign_prompt
+    assert "阿姨" in assign_prompt
+    page.close()
+
+
+def test_default_action_still_uses_the_form_level_confirm(browser: Browser) -> None:
+    """没有改写目标的默认按钮仍然读表单级文案，不能因为收紧规则而丢掉确认。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+    page.check("[data-select-all]")
+
+    page.click("button[type='submit']:not([formaction]):not([data-typed-confirm])")
+
+    assert "移入归档" in page.evaluate("() => window.confirmCalls.at(-1)")
+    page.close()
+
+
+def test_an_action_without_its_own_wording_asks_nothing_rather_than_the_wrong_thing(
+    browser: Browser,
+) -> None:
+    """改写了目标却没带自己文案的动作，宁可不问，也不问一件它不做的事。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+    page.check("[data-select-all]")
+
+    page.click('button[formaction$="other-action"]')
+
+    assert page.evaluate("() => window.confirmCalls") == []
     page.close()
