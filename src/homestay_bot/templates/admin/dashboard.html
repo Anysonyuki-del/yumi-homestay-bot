@@ -1,7 +1,25 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/workbench.html" as workbench %}
 {% block title %}运营总览 · {{ app_name }}{% endblock %}
 {% block content %}
+{{ workbench.views("today") }}
+{# 先处理：把「现在该做什么」放在指标之前。指标回答有多少，这里回答先动哪一件。
+   数据来自运营快照里已经排好风险序的房间，不另建第四套待办投影；每行的原因与
+   去向出自服务里同一组分支，没有可靠入口时不渲染空按钮。 #}
+{% if attention_rooms %}
+<section class="panel panel--padded workbench-first" aria-labelledby="workbench-first">
+  <div class="section-heading"><div><p class="eyebrow">{{ snapshot.local_date | date_zh }}</p><h2 id="workbench-first">先处理 · {{ attention_rooms | length }} 间</h2></div><a class="button button--secondary" href="/employee/admin/operations">查看全部房间</a></div>
+  <ul class="clean-list first-list">
+    {% for room in attention_rooms %}<li>
+      <a class="first-list__room" href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_number or room.room_title }}</strong><span>{{ room.room_title }}</span></a>
+      <span class="first-list__why{% if room.overdue_task_count %} first-list__why--urgent{% endif %}">{{ room.next_action }}</span>
+      {% if room.next_action_url %}<a class="button button--secondary" href="{{ room.next_action_url }}">去处理</a>{% else %}<span class="muted">暂无可直接进入的入口</span>{% endif %}
+    </li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 <section class="metric-group" aria-labelledby="metrics-risk">
   <h2 class="metric-group__label" id="metrics-risk">需要人工处理的风险</h2>
   <div class="metric-grid">

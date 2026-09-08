@@ -487,6 +487,7 @@ class StableRoomOperationsStub:
                 occupancy_status=RoomOccupancyStatus.TURNOVER_TODAY,
                 overdue_task_count=1,
                 next_action="优先处理 1 项逾期任务",
+                next_action_url="/employee/tasks?property_id=101&overdue=true",
                 source_stale=False,
             ),
             RoomOperationItem(
@@ -689,3 +690,76 @@ def test_attention_lets_reminders_be_closed_where_they_are_listed() -> None:
     assert "标记勾选的提醒为已处理" in response.text
     # 提醒不再被送去一个没有它的列表
     assert 'href="/employee/tasks?property_id=' not in response.text
+
+
+def test_workbench_is_one_entry_with_three_views() -> None:
+    """总览、房间、全部任务收敛成一个入口下的三个视图。
+
+    此前它们是三个并列导航项，同一件工作散在里面，管家得先判断记录属于哪个模块
+    再找具体工作。三个旧 URL 必须保持可达——深链接和书签不能因为改导航而失效。
+    """
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    today = client.get("/employee/admin")
+    rooms = client.get("/employee/admin/operations")
+
+    for page in (today, rooms):
+        views = re.search(
+            r'<nav class="tab-nav workbench-views"[^>]*>(.*?)</nav>',
+            page.text,
+            re.S,
+        )
+        assert views is not None
+        labels = re.findall(r"<a [^>]*>([^<]+)</a>", views.group(1))
+        assert labels == ["今天", "房间", "全部任务"]
+
+    assert 'aria-current="page">今天' in today.text
+    assert 'aria-current="page">房间' in rooms.text
+    # 侧边栏只剩一个日常入口，但旧地址仍然 200。
+    assert ">工作台</span>" in today.text
+    assert "待我关注</span>" not in today.text
+    assert client.get("/employee/admin/attention").status_code == 200
+
+
+def test_workbench_puts_the_next_action_within_reach() -> None:
+    """「下一步」必须带一个能直接点的去向，而不只是一句文字。
+
+    原先只展示文字，管家读完还得回列表重新筛选才能动手；文字与去向分开算就会
+    各说各话，因此两者出自服务里同一组分支。
+    """
+    client = build_client()
+    stub = StableRoomOperationsStub()
+    client.app.state.admin_operations_service = stub
+    login_admin(client, next_path="/employee/admin")
+
+    today = client.get("/employee/admin")
+
+    first = re.search(
+        r'<section class="panel panel--padded workbench-first".*?</section>',
+        today.text,
+        re.S,
+    )
+    assert first is not None
+    assert "优先处理 1 项逾期任务" in first.group(0)
+    # 去向本身由服务计算，见 test_admin_operations_service 里的同源断言；
+    # 这里只验「服务给了去向，页面就渲染成可点的动作」。
+    assert 'href="/employee/tasks?property_id=101&amp;overdue=true"' in first.group(0)
+    assert ">去处理</a>" in first.group(0)
+
+
+def test_no_button_is_rendered_when_there_is_nowhere_reliable_to_go() -> None:
+    """同步不可信时没有能真正解决它的页面入口，不渲染看起来能点的空按钮。"""
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    today = client.get("/employee/admin")
+
+    first = re.search(
+        r'<section class="panel panel--padded workbench-first".*?</section>',
+        today.text,
+        re.S,
+    )
+    assert first is not None
+    assert "先确认百居易实时房态" in first.group(0)
+    assert "暂无可直接进入的入口" in first.group(0)

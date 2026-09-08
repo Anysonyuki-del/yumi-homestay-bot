@@ -679,3 +679,51 @@ async def test_dashboard_count_and_attention_total_come_from_one_source() -> Non
     assert dashboard.manual_attention_count == attention.attention_count
 
     await engine.dispose()
+
+
+def test_every_next_action_carries_a_destination_or_none_at_all() -> None:
+    """「下一步」的文字与去向必须出自同一组分支，不能各说各话。
+
+    原先只产出文字，管家读完还得回列表重新筛选才能动手。分开计算就会漂移：
+    文字说「优先处理 2 项逾期任务」，链接却只带房源、点进去是该房间全部任务。
+    确实没有可靠入口时返回 None，页面不渲染看起来能点的空按钮。
+    """
+    from homestay_bot.repositories.admin_operations import RoomTaskCountRecord
+    from homestay_bot.services.admin_operations_service import AdminOperationsService
+
+    def step(**overrides):
+        fields = {
+            "source_stale": False,
+            "operational_status": RoomOperationalStatus.READY,
+            "arrivals": 0,
+            "departures": 0,
+            "occupied": False,
+            "task_count": RoomTaskCountRecord(101, 0, 0),
+            "next_arrival": None,
+            "property_id": 101,
+        }
+        fields.update(overrides)
+        return AdminOperationsService._next_step(**fields)
+
+    # 同步不可信：没有能真正解决它的入口，不给按钮。
+    reason, url = step(source_stale=True)
+    assert "百居易" in reason and url is None
+
+    # 逾期是首要原因，去向就带上房间与逾期条件，而不是该房间全部任务。
+    reason, url = step(task_count=RoomTaskCountRecord(101, 3, 2))
+    assert "2 项逾期" in reason
+    assert url == "/employee/tasks?property_id=101&overdue=true"
+
+    # 维修是房间本身的问题，去房源页而不是任务列表。
+    reason, url = step(operational_status=RoomOperationalStatus.MAINTENANCE)
+    assert "维修" in reason
+    assert url == "/employee/properties/101"
+
+    # 有开放任务但不逾期：进该房间的任务列表。
+    reason, url = step(task_count=RoomTaskCountRecord(101, 3, 0))
+    assert "3 项开放任务" in reason
+    assert url == "/employee/tasks?property_id=101"
+
+    # 无事可做时同样不渲染空按钮。
+    reason, url = step()
+    assert reason == "暂无近期运营动作" and url is None
