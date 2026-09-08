@@ -1,0 +1,9 @@
+turnover_credentials: departing_order_selected, reason=not_checkin_day, send_jobs=0
+reschedule: both_old_and_new_turnover_tasks_pending ['2026-08-02', '2026-08-04']
+purge_reconcile: deleted_completed_task_recreated_as_pending_assignment
+purge_commit_failure: task_and_attachment_restored, photo_permanently_missing
+queued_final: stale_reply_sent_after_new_staff_message_and_human_takeover
+credential_clock: Wuhan_01:00_rejected_by_UTC_default, accepted_by_business_date
+reconcile_window: ongoing_order_excluded, fresh_heartbeat=True, room_display=vacant
+credential_async_failure: fail_type=4 ignored, part_and_delivery_still_sent, manual_tasks=0
+credential_stale_job: job=failed, part=pending, manual_tasks=0

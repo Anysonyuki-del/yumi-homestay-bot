@@ -5,6 +5,10 @@ from typing import Any
 
 from homestay_bot.config import RuntimeEnvironmentSettings
 
+# 凭据「尚未配置」的占位值。它是公开写在代码和文档里的字符串，因此任何拿它
+# 做相等比较的认证路径都必须先判定「未配置」并直接拒绝，不能让它充当密钥。
+UNCONFIGURED_SECRET = "未配置"
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfigView:

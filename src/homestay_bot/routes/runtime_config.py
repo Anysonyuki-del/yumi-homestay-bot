@@ -251,6 +251,7 @@ async def activate_settings(
     wecom_duty_userids: Annotated[str | None, Form()] = None,
     wecom_poll_interval_seconds: Annotated[float | None, Form(ge=5, le=300)] = None,
     clear_wecom_contact_secret: Annotated[bool, Form()] = False,
+    clear_hostex_webhook_secret_token: Annotated[bool, Form()] = False,
 ) -> Response:
     """消费激活 nonce，绑定会话版本与页面 revision 后测试并保存候选。"""
     employee_id, admin_id, session_version = await _admin_context(request)
@@ -293,6 +294,7 @@ async def activate_settings(
         wecom_duty_userids=wecom_duty_userids,
         wecom_poll_interval_seconds=wecom_poll_interval_seconds,
         clear_wecom_contact_secret=clear_wecom_contact_secret,
+        clear_hostex_webhook_secret_token=clear_hostex_webhook_secret_token,
     )
     try:
         await _service(request).create_and_test(

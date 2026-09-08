@@ -5,7 +5,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from homestay_bot.domain.enums import RuntimeConfigVersionStatus
-from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot
+from homestay_bot.domain.runtime_config import UNCONFIGURED_SECRET, RuntimeConfigSnapshot
 from homestay_bot.repositories.runtime_config import RuntimeConfigConflictError
 from homestay_bot.services.runtime_config_cipher import RuntimeConfigCipher
 from homestay_bot.services.runtime_config_service import (
@@ -645,3 +645,33 @@ async def test_stale_page_revision_is_rejected_before_candidate_or_test() -> Non
 
     assert repository.versions == {}
     assert tester.snapshots == []
+
+
+def test_clearing_webhook_secret_resets_it_to_the_unconfigured_sentinel() -> None:
+    """清空回调密钥必须落到「未配置」哨兵值，而不是 None 或空串。
+
+    hostex_webhook_secret_token 的快照字段是 str（不同于 wecom_contact_secret 的
+    str | None），写 None 会在 validate 和 runtime_clients 的 .strip() 上炸。
+    落到哨兵值则同时满足两侧：hostex_webhook_configured 判定为未配置因而不再
+    降级，HostexWebhookService 也把它当未配置一律拒绝认证。
+    """
+    updates = UpdateRuntimeConfig(clear_hostex_webhook_secret_token=True).normalized_updates()
+
+    assert updates == {"hostex_webhook_secret_token": UNCONFIGURED_SECRET}
+    assert UpdateRuntimeConfig(
+        clear_hostex_webhook_secret_token=True
+    ).changed_fields() == ("hostex_webhook_secret_token",)
+
+
+def test_filling_and_clearing_the_same_secret_is_refused() -> None:
+    """同时填写和勾选清除是自相矛盾的提交，必须报错而不是任选其一。"""
+    with pytest.raises(ValueError, match="百居易回调密钥"):
+        UpdateRuntimeConfig(
+            hostex_webhook_secret_token="new-secret",
+            clear_hostex_webhook_secret_token=True,
+        ).normalized_updates()
+
+
+def test_blank_webhook_secret_alone_still_keeps_the_original_value() -> None:
+    """只留空不勾选清除，仍是「保留原值」——清空必须是显式动作。"""
+    assert UpdateRuntimeConfig(hostex_webhook_secret_token="   ").normalized_updates() == {}

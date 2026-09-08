@@ -77,9 +77,8 @@ v1.15.0 之前健康项叫 `hostex_webhook_sync`，实际读的是
 - **历史数据只读盘点未做**。代码审查报告要求盘点：缺照片但保留附件记录的任务、
   改期旧任务、疑似删除后重建的任务、`SENT` 但收到失败回执的部件、`FAILED` job
   对应的 `PENDING` 凭证。需要独立方案与授权，不混入代码修复。
-- **多次部署均未做生产备份**。`.stage/remote.sh` 没有备份步骤。2026-09-08 核实
-  `/opt/yumi-backups/` 最新一份是 `pre-v1.4.2-20260904T181621Z`——**此后 v1.5.0 至
-  v1.15.1 共 12 个版本没有任何备份**，其中 v1.13.0 起的部署包含真实迁移。
+- ~~多次部署均未做生产备份~~ **已完成（v1.16.0）**。`.stage/remote.sh` 新增部署前
+  备份，失败即中止；已在生产实跑并恢复进独立临时库逐表比对验证。
 
 ### 本次核实中新发现
 
@@ -94,9 +93,20 @@ v1.15.0 之前健康项叫 `hostex_webhook_sync`，实际读的是
 
 ### 仓库与本机
 
-- `docs/reviews/` 始终未纳入版本库：含两份审查报告与离线复现脚本。是否纳入由用户决定。
-- 本机 `127.0.0.1:8010` 仍在运行 v1.0.4 的旧实例
-  （`~/Library/Application Support/HomestayBot/.venv`），从该端口访问会看到很旧的界面。
+- ~~`docs/reviews/` 未纳入版本库~~ **已完成（v1.16.0）**。三份报告与证据脚本已入库，
+  附 `README.md` 说明它们是某一时刻的观察而非当前事实。
+- ~~本机 8010 旧实例~~ **已停止（2026-09-08）**。它由 launchd 托管
+  （`com.rin.homestay-bot`，`KeepAlive`+`RunAtLoad`），直接 kill 会被拉起，
+  因此已 `launchctl bootout` 并把 plist 改名为 `.plist.disabled`。
+  恢复：`mv ~/Library/LaunchAgents/com.rin.homestay-bot.plist{.disabled,}`
+  后 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.rin.homestay-bot.plist`。
+  该目录下的数据与 `.env` 未做任何改动。
+
+### 新增挂起：第三份审查报告尚未逐项处理
+
+- `docs/reviews/2026-09-08_deployed-usability-audit-report.md`（24 KB）是针对已部署
+  版本的可用性审计，**本轮只处理了其中被牵连出来的 UX-07（回调密钥清不掉）**，
+  其余 UX 编号发现一条未做。
 
 ## 已完成工作单（2026-09-08）
 

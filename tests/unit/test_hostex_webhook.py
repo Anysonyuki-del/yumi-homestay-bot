@@ -145,3 +145,42 @@ async def test_hostex_webhook_rejects_oversized_event_fields() -> None:
 
     assert response.status_code == 422
     assert recorder.calls == []
+
+
+@pytest.mark.parametrize("unset", ["未配置", "", "   "])
+def test_unconfigured_secret_never_authenticates(unset: str) -> None:
+    """未配置的占位值和空串都不得充当有效密钥。
+
+    verify_secret 只做常量时间字符串比较。密钥为空串时，攻击者发一个空的
+    Secret 头就能通过——这是可直接利用的。占位符「未配置」是中文，作为
+    latin-1 的 HTTP 头发不出去，实际打不进来，但同样不该被当作密钥：
+    它公开写在代码和文档里，且并非所有认证路径都走 HTTP 头。
+    """
+    service = HostexWebhookService(unset, EventRecorderStub())
+
+    with pytest.raises(PermissionError):
+        service.verify_secret(unset)
+
+
+@pytest.mark.asyncio
+async def test_blank_secret_rejects_blank_header_over_http() -> None:
+    """密钥为空时，发空 Secret 头必须被拒，且不得写入任何事件。"""
+    recorder = EventRecorderStub()
+    service = HostexWebhookService("", recorder)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_hostex_webhook_service] = lambda: service
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/hostex",
+            headers={"Hostex-Webhook-Secret-Token": ""},
+            json={"event": "reservation_updated", "reservation_code": "R-1"},
+        )
+
+    assert response.status_code == 401
+    assert recorder.calls == []
+    # 失败文案不得区分「未配置」和「密钥不对」，否则未认证的调用方
+    # 能靠对比响应探出这台部署有没有配回调。
+    assert response.json()["detail"] == "百居易 Webhook Secret 无效"

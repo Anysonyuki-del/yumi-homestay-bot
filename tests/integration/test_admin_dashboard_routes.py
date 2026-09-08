@@ -822,6 +822,9 @@ def test_diagnostics_shows_degrading_check_with_meaning_and_action() -> None:
     assert "从未收到" in response.text
     assert "整体状态显示为「降级」，由这一项引起" in response.text
     assert "从未收到过任何一次百居易推送" in response.text
+    # 处理方法必须指向界面上真实存在的动作：v1.15.1 曾让用户去「清空回调密钥」，
+    # 而当时设置页根本没有这个开关，留空只表示保留原值。
+    assert "明确清除 Webhook Secret" in response.text
     assert "怎么处理" in response.text
     assert "https://akros.icu/webhooks/hostex" in response.text
     # 良性项要明确说明不是降级原因，避免看的人误判。

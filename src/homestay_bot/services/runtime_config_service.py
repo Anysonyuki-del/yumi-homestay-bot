@@ -8,12 +8,34 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from homestay_bot.domain.runtime_config import (
+    UNCONFIGURED_SECRET,
     RuntimeConfigSnapshot,
     RuntimeConfigView,
 )
 from homestay_bot.repositories.runtime_config import RuntimeConfigConflictError
 from homestay_bot.services.cancellation import complete_cleanup
 from homestay_bot.services.runtime_config_cipher import RuntimeConfigCipher
+
+# 可清空的敏感字段。留空在这张表单里表示「保留原值」，所以「想清掉」必须有
+# 独立开关，否则它和「不想改」在提交里无法区分。
+#
+# 清空值按字段各不相同：wecom_contact_secret 的快照字段是 str | None，清成 None；
+# hostex_webhook_secret_token 是 str，只能清成占位值，而占位值已被
+# HostexWebhookService 判定为「未配置」并一律拒绝认证。
+CLEARABLE_SECRETS: tuple[tuple[str, str, str, object | None], ...] = (
+    (
+        "clear_wecom_contact_secret",
+        "wecom_contact_secret",
+        "企业微信 Contact Secret",
+        None,
+    ),
+    (
+        "clear_hostex_webhook_secret_token",
+        "hostex_webhook_secret_token",
+        "百居易回调密钥",
+        UNCONFIGURED_SECRET,
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +58,7 @@ class UpdateRuntimeConfig:
     wecom_duty_userids: str | None = None
     wecom_poll_interval_seconds: float | None = None
     clear_wecom_contact_secret: bool = False
+    clear_hostex_webhook_secret_token: bool = False
 
     @classmethod
     def from_snapshot(cls, snapshot: RuntimeConfigSnapshot) -> "UpdateRuntimeConfig":
@@ -61,8 +84,9 @@ class UpdateRuntimeConfig:
     def normalized_updates(self) -> dict[str, object | None]:
         """把空白文本转换为保留语义，并保持数字字段原值。"""
         updates: dict[str, object | None] = {}
+        clear_flags = {flag for flag, _, _, _ in CLEARABLE_SECRETS}
         for field in fields(self):
-            if field.name == "clear_wecom_contact_secret":
+            if field.name in clear_flags:
                 continue
             value = getattr(self, field.name)
             if isinstance(value, str):
@@ -71,10 +95,12 @@ class UpdateRuntimeConfig:
                     updates[field.name] = stripped
             elif value is not None:
                 updates[field.name] = value
-        if self.clear_wecom_contact_secret:
-            if "wecom_contact_secret" in updates:
-                raise ValueError("不能同时填写并清除企业微信 Contact Secret")
-            updates["wecom_contact_secret"] = None
+        for flag, target, label, cleared_value in CLEARABLE_SECRETS:
+            if not getattr(self, flag):
+                continue
+            if target in updates:
+                raise ValueError(f"不能同时填写并清除{label}")
+            updates[target] = cleared_value
         return updates
 
     def changed_fields(self) -> tuple[str, ...]:

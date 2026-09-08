@@ -426,3 +426,33 @@ def test_password_verification_capacity_returns_retryable_safe_response() -> Non
     assert response.headers["cache-control"] == "no-store"
     assert "认证服务繁忙" in response.text
     assert "password-sentinel-must-not-leak" not in response.text
+
+
+def test_settings_form_offers_a_way_to_clear_the_webhook_secret() -> None:
+    """诊断页教用户「清空回调密钥」，设置页就必须真有这个开关。
+
+    留空在这张表单里表示保留原值，所以没有独立开关时回调密钥根本清不掉——
+    v1.15.1 的诊断文案曾指向一个界面上不存在的动作。
+    """
+    client, service = build_client()
+    login_admin(client, next_path="/employee/admin/settings")
+    page = client.get("/employee/admin/settings")
+    csrf = tokens(page.text, "/employee/admin/settings/activate")[0]
+
+    assert 'name="clear_hostex_webhook_secret_token"' in page.text
+
+    response = client.post(
+        "/employee/admin/settings/activate",
+        data={
+            "csrf_token": csrf,
+            "password": "correct-password",
+            "expected_revision": "6",
+            "clear_hostex_webhook_secret_token": "true",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    command = service.activation_calls[0]["command"]
+    assert isinstance(command, UpdateRuntimeConfig)
+    assert command.clear_hostex_webhook_secret_token is True

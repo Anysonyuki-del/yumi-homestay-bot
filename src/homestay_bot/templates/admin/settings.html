@@ -32,6 +32,7 @@
       <label>Access Token <small>{{ page.view.hostex_access_token }}</small><input type="password" name="hostex_access_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
       <label>Webhook Secret <small>{{ page.view.hostex_webhook_secret_token }}</small><input type="password" name="hostex_webhook_secret_token" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
       <label>对账间隔（秒）<input type="number" name="hostex_reconcile_interval_seconds" min="60" max="86400" step="1" value="{{ page.view.hostex_reconcile_interval_seconds|int }}" required></label>
+      <label class="check-row"><input type="checkbox" name="clear_hostex_webhook_secret_token" value="true">明确清除 Webhook Secret（订单改为只靠对账轮询同步，系统诊断不再因此降级）</label>
     </fieldset>
 
     <fieldset class="config-group config-group--wide">

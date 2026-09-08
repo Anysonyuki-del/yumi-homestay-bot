@@ -7,6 +7,8 @@ from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
+from homestay_bot.domain.runtime_config import UNCONFIGURED_SECRET
+
 router = APIRouter()
 
 # 百居易事件允许携带较多字段，但仍需限制认证前的请求体内存占用。
@@ -93,10 +95,19 @@ class HostexWebhookService:
     def __init__(self, secret_token: str, recorder: HostexEventRecorder) -> None:
         """注入 Secret 和同事务事件记录器。"""
         self._secret_token = secret_token
+        # 占位值和空串不是密钥。密钥为空时 compare_digest("", "") 为真，发一个
+        # 空 Secret 头就能往事件表里塞行——这是可直接利用的。中文占位符「未配置」
+        # 作为 latin-1 的 HTTP 头发不出去，实际打不进来，但同样不放行：它公开
+        # 写在代码和文档里，不该在任何比较里充当有效密钥。
+        self._configured = secret_token.strip() not in ("", UNCONFIGURED_SECRET)
         self._recorder = recorder
 
     def verify_secret(self, secret_token: str) -> None:
         """在读取和解析请求体前校验 Webhook Secret。"""
+        # 未配置与密钥不符共用同一句文案：区分开会让未认证的调用方靠对比
+        # 响应探出这台部署有没有配回调。
+        if not self._configured:
+            raise PermissionError("百居易 Webhook Secret 无效")
         if not secrets.compare_digest(secret_token, self._secret_token):
             raise PermissionError("百居易 Webhook Secret 无效")
 

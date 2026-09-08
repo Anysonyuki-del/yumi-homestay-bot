@@ -13,7 +13,10 @@ from typing import Any
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
-from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot
+from homestay_bot.domain.runtime_config import (
+    UNCONFIGURED_SECRET,
+    RuntimeConfigSnapshot,
+)
 from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
     HostexReadOnlyToolExecutor,
@@ -476,7 +479,8 @@ async def build_runtime_client_bundle(
                 hostex_event_recorder,
             ),
             hostex_webhook_configured=(
-                snapshot.hostex_webhook_secret_token.strip() not in ("", "未配置")
+                snapshot.hostex_webhook_secret_token.strip()
+                not in ("", UNCONFIGURED_SECRET)
             ),
             agent_id=snapshot.wecom_agent_id,
             duty_userids=duty_userids,
