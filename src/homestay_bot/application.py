@@ -1436,6 +1436,20 @@ class SessionAdminDiagnosticsRepository:
                 session
             ).recent_job_error_codes(limit=limit)
 
+    async def pending_due_count(self, *, now: datetime) -> int:
+        """读取已到期任务数后立即释放连接。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(
+                session
+            ).pending_due_count(now=now)
+
+    async def list_external_calls(self, *, limit: int) -> tuple[Any, ...]:
+        """读取外部调用汇总后立即释放连接。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(
+                session
+            ).list_external_calls(limit=limit)
+
     async def list_audits(
         self,
         *,

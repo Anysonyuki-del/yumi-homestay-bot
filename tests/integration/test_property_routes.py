@@ -232,7 +232,7 @@ def test_property_pages_use_admin_shell_and_protect_credential_replacement(
     )
     assert 'name="password" value=' not in detail.text
     assert 'name="guide">入住后' not in detail.text
-    assert 'name="password" maxlength="256"' in detail.text
+    assert 'name="password" maxlength="128"' in detail.text
     assert 'name="room_number" value="" maxlength="64"' in profile.text
 
 
@@ -570,3 +570,28 @@ def test_room_status_refuses_a_foreign_source(tmp_path) -> None:
 
     assert response.status_code == 303
     assert response.headers["location"] == "/employee/properties/101"
+
+
+def test_credential_password_limit_is_consistent_end_to_end(tmp_path) -> None:
+    """128 与 256 两套限制并存时，用户会在填完全部材料后才被拒。
+
+    模板与路由此前允许 256，服务层 replace_credentials 拒绝超过 128；129–256 的
+    输入能通过浏览器与表单解析，却在最后一步失败，而门锁密码、入住指南和二维码
+    是一起提交的。统一按服务层现有约束收到 128。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/properties/101/credentials",
+        data={"csrf_token": token, "password": "x" * 129, "guide": "指南"},
+        files={"qr_image": ("qr.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        follow_redirects=False,
+    )
+
+    # 表单层就要拒，而不是让人走到服务层才失败。
+    assert response.status_code == 422
+    page = client.get("/employee/properties/101?tab=credentials")
+    assert 'name="password" maxlength="128"' in page.text
+    assert 'name="password" maxlength="256"' not in page.text

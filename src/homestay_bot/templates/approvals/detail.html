@@ -5,7 +5,18 @@
 {% block content %}
 <section class="detail-section panel panel--padded"><div class="section-heading"><h2>预订资料</h2>{{ ui.badge(approval.status | status_zh, "warning") }}</div><dl class="detail-grid"><dt>客人</dt><dd>{{ approval.guest_name }}</dd><dt>手机号</dt><dd>{{ masked_mobile }}</dd><dt>入住日期</dt><dd>{{ approval.check_in_date | date_zh }}</dd><dt>退房日期</dt><dd>{{ approval.check_out_date | date_zh }}</dd><dt>入住人数</dt><dd>{{ approval.number_of_guests }}</dd><dt>房型偏好</dt><dd>{{ approval.room_type_preference }}</dd><dt>备注</dt><dd class="long-text">{{ approval.special_requests or "无" }}</dd></dl></section>
 <section class="detail-section panel panel--padded"><h2>渠道日历参考价</h2><p>仅供人工参考，最终成交金额以确认值为准（人民币）。</p><ul class="price-list">{% for item in reference_prices %}<li><span>{{ item.date }}</span><strong>¥{{ item.price }}</strong></li>{% else %}<li>暂无参考价</li>{% endfor %}</ul></section>
-{% if approval.status.value == "pending" %}
+{% if reference_unavailable %}
+{# 逐项说明缺了什么：员工据此判断是等上游恢复还是直接拒绝，而不是面对一个
+   没有解释的灰按钮。已有的本地资料和拒绝入口都不受影响。 #}
+<div class="alert alert--warning" role="status"><div><strong>百居易参考数据暂不可用</strong><p>缺少：{{ reference_unavailable | join("、") }}。本地审批资料照常可看，也可以拒绝；确认下单需要实时房态与金额，暂不开放。</p></div></div>
+{% endif %}
+{% if approval.status.value == "pending" and not can_confirm %}
+<section class="decision-panel panel panel--padded">
+  <p class="eyebrow">高风险确认</p>
+  <h2>金额与收款确认</h2>
+  <p class="field-help">参考数据不完整时不提供确认入口——用旧房态或旧价格下单会造成真实超售或错价。上游恢复后刷新本页即可。</p>
+</section>
+{% elif approval.status.value == "pending" %}
 <section class="decision-panel panel panel--padded">
   <p class="eyebrow">高风险确认</p>
   <h2>金额与收款确认</h2>

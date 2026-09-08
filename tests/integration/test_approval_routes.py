@@ -32,6 +32,7 @@ class ApprovalPageStub:
             special_requests="高楼层",
         )
 
+        self.reference_unavailable: list[str] = []
     async def list_pending(self, *, offset: int, limit: int):
         """记录审批分页边界并返回足够判断下一页的数据。"""
         self.list_calls.append((offset, limit))
@@ -46,6 +47,8 @@ class ApprovalPageStub:
             "properties": [{"id": 101, "title": "江景大床房 101"}],
             "reference_prices": [{"date": "2026-08-01", "price": 399}],
             "income_methods": [{"id": 1, "name": "微信支付"}],
+            "reference_unavailable": self.reference_unavailable,
+            "can_confirm": not self.reference_unavailable,
         }
 
     async def confirm(self, approval_id: int, employee_id: int, command):
@@ -292,3 +295,22 @@ def test_rejection_requires_non_empty_reason() -> None:
 
     assert response.status_code == 422
     assert approvals.reject_calls == []
+
+
+def test_degraded_reference_data_keeps_the_page_and_the_reject_path() -> None:
+    """参考数据缺失时页面照常可看、可拒，只有确认下单不再提供入口。"""
+    client, approvals = build_client(EmployeeRole.ADMIN)
+    login(client)
+    approvals.reference_unavailable = ["渠道日历参考价"]
+
+    page = client.get("/employee/approvals/1")
+
+    assert page.status_code == 200
+    # 本地资料与拒绝入口不受上游影响。
+    assert "138****8000" in page.text
+    assert 'action="/employee/approvals/1/reject"' in page.text
+    # 缺什么要说清楚，而不是给一个没有解释的灰按钮。
+    assert "渠道日历参考价" in page.text
+    assert "百居易参考数据暂不可用" in page.text
+    # 下单入口必须真的消失，不能只是视觉禁用。
+    assert 'action="/employee/approvals/1/confirm"' not in page.text

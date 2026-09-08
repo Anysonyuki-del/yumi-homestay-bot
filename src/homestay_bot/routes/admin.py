@@ -122,7 +122,8 @@ _CHECK_GUIDANCE: dict[tuple[str, str], tuple[str, str, str]] = {
     ),
     ("hostex_reconcile", "stale"): (
         "订单对账轮询超过预期周期没有成功。房态与订单可能不是最新的。",
-        "检查百居易访问令牌是否有效、接口是否可达；系统诊断的审计记录里可以看到最近的调用结果。",
+        "检查百居易访问令牌是否有效、接口是否可达；操作记录页的「外部接口调用」"
+        "会按端点列出最近一次调用的时间与成败。",
         "/employee/admin/diagnostics/audits",
     ),
     ("web_search", "unknown"): (
@@ -434,8 +435,30 @@ async def admin_diagnostics(request: Request) -> Response:
     if diagnostic_snapshot is not None and diagnostic_snapshot.job_status_counts:
         for key, (label, tone) in _TASK_STATUS_PRESENTATION.items():
             count = diagnostic_snapshot.job_status_counts.get(key, 0)
-            if count > 0:
+            if count <= 0:
+                continue
+            if key != "pending":
                 attention_tasks.append({"label": label, "count": count, "tone": tone})
+                continue
+            # 「待处理」同时包含已到期没人做的和排在未来还没轮到的。生产上 49 条
+            # 全属后者（入住提醒排在次日到两周后），一个告警色徽标显示总数会被
+            # 读成积压。拆开：到期的才告警，排期的是中性事实。
+            due = diagnostic_snapshot.pending_due_count
+            if due is None:
+                # 到期数未知时不做拆分：宁可沿用原来的告警，也不把未知说成排期。
+                attention_tasks.append(
+                    {"label": label, "count": count, "tone": tone}
+                )
+                continue
+            scheduled = max(0, count - due)
+            if due > 0:
+                attention_tasks.append(
+                    {"label": "已到期待处理", "count": due, "tone": "warning"}
+                )
+            if scheduled > 0:
+                attention_tasks.append(
+                    {"label": "排期待发", "count": scheduled, "tone": "neutral"}
+                )
 
     started_at = getattr(request.app.state, "started_at", None)
     response = templates.TemplateResponse(
@@ -497,6 +520,11 @@ async def admin_audits(
             has_previous=page > 1,
             has_next=False,
         )
+    # 诊断页的「对账轮询已超时」指引到这里查看最近的调用结果，此前这一页只读
+    # AuditLog，根本没有外部调用记录——承诺兑现不了。补上真正的来源。
+    external_calls = ()
+    if hasattr(service, "list_external_calls"):
+        external_calls = await service.list_external_calls(limit=20)
     response = templates.TemplateResponse(
         request=request,
         name="admin/audits.html",
@@ -504,6 +532,7 @@ async def admin_audits(
             "page_title": "操作记录",
             "active_nav": "diagnostics",
             "audit_page": audit_page,
+            "external_calls": external_calls,
         },
     )
     return _no_store(response)

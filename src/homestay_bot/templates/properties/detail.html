@@ -38,7 +38,7 @@
 <section class="detail-section panel panel--padded"><h2>入住凭证</h2>
   {% if credential %}<div class="alert alert--warning"><span>当前凭证版本 {{ credential.version }}。密码和入住指南不会在页面回显。</span></div><a href="/employee/properties/{{ property.id }}/qr" target="_blank" rel="noopener">查看当前二维码</a>{% else %}<p>尚未配置入住凭证。</p>{% endif %}
   <form method="post" enctype="multipart/form-data" action="/employee/properties/{{ property.id }}/credentials" data-confirm="确定替换整套入住凭证吗？旧版本将立即停用。" data-unsaved-warning>
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>新门锁密码<input type="password" name="password" maxlength="256" autocomplete="new-password" required></label><label>新入住指南<textarea name="guide" maxlength="10000" required></textarea></label><label>新入住二维码<input type="file" name="qr_image" accept="image/png,image/jpeg,image/webp" required></label><p class="help-text">提交后创建新版本并停用旧版本，请完整填写以上三项。</p><button class="button button--danger" type="submit">替换入住凭证</button>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>新门锁密码<input type="password" name="password" maxlength="128" autocomplete="new-password" required></label><label>新入住指南<textarea name="guide" maxlength="10000" required></textarea></label><label>新入住二维码<input type="file" name="qr_image" accept="image/png,image/jpeg,image/webp" required></label><p class="help-text">提交后创建新版本并停用旧版本，请完整填写以上三项。</p><button class="button button--danger" type="submit">替换入住凭证</button>
   </form>
 </section>
 {% endif %}

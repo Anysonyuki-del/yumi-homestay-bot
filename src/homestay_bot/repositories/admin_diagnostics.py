@@ -4,11 +4,13 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from homestay_bot.domain.enums import JobStatus
 from homestay_bot.domain.models import (
     AuditLog,
+    ExternalRequest,
     Job,
     PropertyProfile,
     RuntimeConfigState,
@@ -28,6 +30,19 @@ class SafeAuditEntry:
     action: str
     target_type: str
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class SafeExternalCallRollup:
+    """按端点汇总的外部调用结果，只含机器码与计数。"""
+
+    provider: str
+    method: str
+    path: str
+    total: int
+    failed: int
+    last_at: datetime
+    last_succeeded: bool
 
 
 class SQLAlchemyAdminDiagnosticsRepository:
@@ -94,6 +109,23 @@ class SQLAlchemyAdminDiagnosticsRepository:
         )
         await self._session.flush()
 
+    async def pending_due_count(self, *, now: datetime) -> int:
+        """统计已到期仍未处理的任务数。
+
+        「待处理」在这套队列里同时包含「已到期没人做」和「排到未来还没轮到」。
+        生产上 49 条待处理全部属于后者（入住提醒按 available_at 排在未来数日到
+        两周），用一个告警色徽标显示总数，会被读成积压。分开数才说得清。
+        """
+        return int(
+            await self._session.scalar(
+                select(func.count(Job.id)).where(
+                    Job.status == JobStatus.PENDING,
+                    Job.available_at <= now,
+                )
+            )
+            or 0
+        )
+
     async def job_status_counts(self) -> dict[str, int]:
         """按状态统计任务数量，不选择 payload。"""
         rows = await self._session.execute(
@@ -122,6 +154,79 @@ class SQLAlchemyAdminDiagnosticsRepository:
             .limit(max(0, limit))
         )
         return tuple(self._safe_code(str(code), "unknown_error") for code, _ in rows if code)
+
+    async def list_external_calls(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[SafeExternalCallRollup, ...]:
+        """按端点汇总最近的外部调用结果。
+
+        诊断页的「订单对账轮询已超时」曾指引用户去审计记录查看调用结果，但审计
+        只读 AuditLog，根本没有这些行——承诺兑现不了。这里补上真正的来源。
+
+        逐条罗列没有意义：对账轮询每 15 分钟一次，同一端点在生产上已有上百条
+        完全相同的记录。要回答的是「这个接口现在还通不通」，所以按端点聚合出
+        总次数、失败次数和最近一次的时间与结果。
+
+        字段仍按机器码校验：ExternalCallRecord 本就刻意不存参数与正文，这里再
+        拦一道，避免将来有人往 path 里塞查询串把客户信息带进页面。
+        """
+        rows = await self._session.execute(
+            select(
+                ExternalRequest.provider,
+                ExternalRequest.method,
+                ExternalRequest.path,
+                func.count().label("total"),
+                func.sum(
+                    case((ExternalRequest.succeeded.is_(False), 1), else_=0)
+                ).label("failed"),
+                func.max(ExternalRequest.created_at).label("last_at"),
+            )
+            .group_by(
+                ExternalRequest.provider,
+                ExternalRequest.method,
+                ExternalRequest.path,
+            )
+            .order_by(desc("last_at"))
+            .limit(max(0, limit))
+        )
+        summaries = rows.all()
+        results: list[SafeExternalCallRollup] = []
+        for row in summaries:
+            last_succeeded = await self._session.scalar(
+                select(ExternalRequest.succeeded)
+                .where(
+                    ExternalRequest.provider == row.provider,
+                    ExternalRequest.method == row.method,
+                    ExternalRequest.path == row.path,
+                    ExternalRequest.created_at == row.last_at,
+                )
+                .order_by(ExternalRequest.id.desc())
+                .limit(1)
+            )
+            results.append(
+                SafeExternalCallRollup(
+                    provider=self._safe_code(str(row.provider), "unknown_provider"),
+                    method=self._safe_code(str(row.method), "unknown_method"),
+                    path=self._safe_path(str(row.path)),
+                    total=int(row.total),
+                    failed=int(row.failed or 0),
+                    last_at=row.last_at,
+                    last_succeeded=bool(last_succeeded),
+                )
+            )
+        return tuple(results)
+
+    @staticmethod
+    def _safe_path(value: str) -> str:
+        """只允许稳定的端点路径，拒绝查询串、正文和非 ASCII 内容。"""
+        normalized = value.strip()
+        if not normalized or len(normalized) > 128:
+            return "unknown_path"
+        if re.fullmatch(r"/[A-Za-z0-9_./:-]*", normalized) is None:
+            return "unknown_path"
+        return normalized
 
     async def list_audits(
         self,

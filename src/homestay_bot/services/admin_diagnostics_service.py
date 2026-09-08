@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,9 @@ class HealthPort(Protocol):
 class DiagnosticsRepositoryPort(Protocol):
     """定义诊断所需的安全数据库投影。"""
 
+    async def pending_due_count(self, *, now: datetime) -> int:
+        """返回已到期仍未处理的任务数。"""
+
     async def job_status_counts(self) -> dict[str, int]:
         """返回任务状态计数。"""
 
@@ -30,6 +33,9 @@ class DiagnosticsRepositoryPort(Protocol):
 
     async def list_audits(self, *, offset: int, limit: int) -> tuple[Any, ...]:
         """返回 limit+1 条安全审计投影。"""
+
+    async def list_external_calls(self, *, limit: int) -> tuple[Any, ...]:
+        """返回按端点汇总的外部调用结果。"""
 
 
 class RuntimeStatusPort(Protocol):
@@ -52,6 +58,10 @@ class DiagnosticsSnapshot:
     configuration_revision: int | None
     configuration_revision_source: ConfigurationRevisionSource
     report_text: str
+    # 已到期仍未处理的任务数。「待处理」同时包含排在未来的预约任务，只报总数
+    # 会被读成积压。None 表示读取失败因而未知——此时页面退回原来的告警显示，
+    # 而不是把全部待处理说成「排期待发」，那会在失败时低报真实积压。
+    pending_due_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +112,14 @@ class AdminDiagnosticsService:
             counts = None
             health = {**health, "status": "degraded"}
 
+        pending_due: int | None = None
+        try:
+            pending_due = await self._repository.pending_due_count(
+                now=datetime.now(UTC)
+            )
+        except Exception:
+            logger.warning("管理员诊断到期任务计数失败 error_type=upstream_error")
+
         error_codes: tuple[str, ...] | None
         try:
             error_codes = await self._repository.recent_job_error_codes(limit=8)
@@ -140,6 +158,7 @@ class AdminDiagnosticsService:
             health=health,
             health_available=health_available,
             job_status_counts=counts,
+            pending_due_count=pending_due,
             recent_job_error_codes=error_codes,
             started_at=self._started_at,
             version=self._version,
@@ -163,6 +182,16 @@ class AdminDiagnosticsService:
             has_previous=normalized_page > 1,
             has_next=len(rows) > normalized_size,
         )
+
+    async def list_external_calls(self, *, limit: int = 20) -> tuple[Any, ...]:
+        """返回按端点汇总的外部调用结果；读取失败只返回空，不拖垮审计页。"""
+        try:
+            return await self._repository.list_external_calls(
+                limit=min(50, max(1, limit))
+            )
+        except Exception:
+            logger.warning("外部调用汇总读取失败 error_type=upstream_error")
+            return ()
 
     def _build_report(
         self,

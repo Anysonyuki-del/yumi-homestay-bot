@@ -1,4 +1,5 @@
-from collections.abc import Sequence
+import logging
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
@@ -11,6 +12,8 @@ from homestay_bot.domain.models import AuditLog, BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.booking_service import BookingService
+
+logger = logging.getLogger(__name__)
 
 
 class ApprovalHostexPort(Protocol):
@@ -69,31 +72,77 @@ class ApprovalPageService:
         self._booking = booking
         self._sensitive_data = sensitive_data
 
+    # 只有仍可能落单的审批才需要下单参考数据；已结束的审批不必为看一眼历史
+    # 就去请求外部接口。
+    _NEEDS_REFERENCE_DATA = frozenset(
+        {
+            ApprovalStatus.PENDING,
+            ApprovalStatus.CREATING,
+            ApprovalStatus.NEEDS_REVIEW,
+            ApprovalStatus.CONFLICT,
+        }
+    )
+
+    async def _reference(
+        self,
+        label: str,
+        call: Callable[[], Awaitable[Sequence[Any]]],
+        unavailable: list[str],
+    ) -> list[Any]:
+        """取一项参考数据；失败只记下这一项，不牵连其余。
+
+        逐项降级而不是整体作废：三项里挂一项，其余两项仍然有用，员工也还能看
+        本地审批并合法拒绝。失败原因不回显给页面——外部异常文本可能带上游地址
+        或请求细节。
+        """
+        try:
+            return [item.model_dump(mode="json") for item in await call()]
+        except Exception:
+            logger.warning(
+                "审批参考数据不可用 item=%s error_type=%s",
+                label,
+                "upstream_error",
+            )
+            unavailable.append(label)
+            return []
+
     async def get_detail(self, approval_id: int) -> dict[str, Any]:
-        """读取审批单，并并行所需小规模参考数据。"""
+        """读取审批单，并按需取小规模参考数据；上游失败时逐项降级。"""
         approval = await self._session.get(BookingApproval, approval_id)
         if approval is None:
             raise LookupError(f"审批单不存在: {approval_id}")
-        properties = await self._hostex.list_properties()
-        prices = await self._hostex.list_reference_prices(
-            approval.check_in_date, approval.check_out_date
-        )
-        income_methods = await self._hostex.list_income_methods()
+        unavailable: list[str] = []
+        needs_reference = approval.status in self._NEEDS_REFERENCE_DATA
+        if needs_reference:
+            properties = await self._reference(
+                "房源字典", self._hostex.list_properties, unavailable
+            )
+            prices = await self._reference(
+                "渠道日历参考价",
+                lambda: self._hostex.list_reference_prices(
+                    approval.check_in_date, approval.check_out_date
+                ),
+                unavailable,
+            )
+            income_methods = await self._reference(
+                "收入方式", self._hostex.list_income_methods, unavailable
+            )
+        else:
+            properties, prices, income_methods = [], [], []
         sensitive = self._sensitive_data.read(approval)
         return {
+            # 下单依赖实时房态与价格：缺任何一项都不许确认，绝不拿旧数据兜底。
+            "can_confirm": needs_reference and not unavailable,
+            "reference_unavailable": unavailable,
             "approval": self._to_view(approval),
             "masked_mobile": (
                 self.mask_mobile(sensitive.guest_mobile)
                 if sensitive.guest_mobile is not None
                 else "已清理"
             ),
-            "properties": [item.model_dump(mode="json") for item in properties],
-            "reference_prices": [
-                item.model_dump(mode="json") for item in prices
-            ],
-            "income_methods": [
-                item.model_dump(mode="json") for item in income_methods
-            ],
+            "properties": properties,
+            "reference_prices": prices,
+            "income_methods": income_methods,
         }
 
     async def list_pending(

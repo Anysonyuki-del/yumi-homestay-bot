@@ -211,7 +211,9 @@ async def replace_property_credentials(
     request: Request,
     property_id: int,
     qr_image: Annotated[UploadFile, File()],
-    password: str = Form(min_length=1, max_length=256),
+    # 与 PropertyAdminService.replace_credentials 的 128 上限对齐。此前表单和
+    # 路由收 256，服务层拒 128，用户要在填完密码、指南和二维码之后才被拒。
+    password: str = Form(min_length=1, max_length=128),
     guide: str = Form(min_length=1, max_length=10_000),
     csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:

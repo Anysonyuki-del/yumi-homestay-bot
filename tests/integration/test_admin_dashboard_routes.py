@@ -862,3 +862,137 @@ def test_operations_status_form_carries_the_current_range_back() -> None:
     assert page.status_code == 200
     assert 'name="return_to"' in page.text
     assert escape("/employee/admin/operations?days=7#room-") in page.text
+
+
+class ExternalCallDiagnosticsStub(DiagnosticsStub):
+    """在既有诊断桩上补出外部调用汇总。"""
+
+    async def list_external_calls(self, *, limit: int = 20):
+        """返回一条成功与一条失败的端点汇总。"""
+        return (
+            SimpleNamespace(
+                provider="hostex",
+                method="GET",
+                path="/reservations",
+                total=99,
+                failed=0,
+                last_at=datetime(2026, 9, 8, 14, tzinfo=UTC),
+                last_succeeded=True,
+            ),
+            SimpleNamespace(
+                provider="wecom",
+                method="POST",
+                path="/message/send",
+                total=8,
+                failed=3,
+                last_at=datetime(2026, 9, 8, 13, tzinfo=UTC),
+                last_succeeded=False,
+            ),
+        )
+
+
+def test_audit_page_shows_the_external_call_results_it_is_pointed_at() -> None:
+    """诊断把「同步异常」指向这一页，这一页就必须真有调用结果。
+
+    此前该页只读 AuditLog，不含任何外部调用记录；用户按指引点进来，只会看到
+    一串管理动作，并把「有审计记录」误当成「有接口结果」。
+    """
+    client = build_client()
+    client.app.state.admin_diagnostics_service = ExternalCallDiagnosticsStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    page = client.get("/employee/admin/diagnostics/audits")
+
+    assert page.status_code == 200
+    assert "外部接口调用" in page.text
+    assert "/reservations" in page.text
+    assert "/message/send" in page.text
+    # 最近一次的成败要一眼看到，而不是只给一串计数。
+    assert "失败" in page.text
+
+
+def test_reconcile_guidance_points_at_a_page_that_now_delivers() -> None:
+    """对账超时的处理说明必须与目标页实际内容一致。"""
+    client = build_client()
+    client.app.state.health_service = ReconcileStaleHealthStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    page = client.get("/employee/admin/diagnostics")
+
+    assert "订单对账轮询" in page.text
+    assert "外部接口调用" in page.text
+    assert "/employee/admin/diagnostics/audits" in page.text
+
+
+class ReconcileStaleHealthStub:
+    """只让对账轮询超时的健康桩。"""
+
+    async def check(self) -> dict[str, str]:
+        """返回 hostex_reconcile 超时。"""
+        return {
+            "status": "degraded",
+            "database": "ok",
+            "hostex_reconcile": "stale",
+        }
+
+
+class ScheduledJobsDiagnosticsStub(DiagnosticsStub):
+    """待处理任务全部排期在未来的诊断桩。"""
+
+    async def snapshot(self):
+        """49 条待处理，其中 0 条已到期——与生产实况一致。"""
+        base = await DiagnosticsStub.snapshot(self)
+        return replace(
+            base,
+            job_status_counts={"pending": 49, "completed": 669},
+            pending_due_count=0,
+        )
+
+
+def test_scheduled_jobs_are_not_presented_as_a_backlog() -> None:
+    """排期在未来的任务不该用告警色显示成积压。
+
+    生产 49 条待处理全部是 lifecycle_send，available_at 最早在次日、最晚两周后，
+    0 条到期、0 条被锁。数字准确，却会被读成「有 49 件事堆着没做」——与
+    「联网信息查询待确认」同一类认知问题：只给数字，不说它意味着什么。
+    """
+    client = build_client()
+    client.app.state.admin_diagnostics_service = ScheduledJobsDiagnosticsStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    page = client.get("/employee/admin/diagnostics")
+
+    assert page.status_code == 200
+    assert "排期待发" in page.text
+    assert "49" in page.text
+    # 没有已到期的任务时，不出现「已到期待处理」这一项。
+    assert "已到期待处理" not in page.text
+
+
+class UnknownDueDiagnosticsStub(DiagnosticsStub):
+    """到期数读取失败的诊断桩。"""
+
+    async def snapshot(self):
+        """待处理有数，但到期数未知。"""
+        base = await DiagnosticsStub.snapshot(self)
+        return replace(
+            base,
+            job_status_counts={"pending": 12},
+            pending_due_count=None,
+        )
+
+
+def test_unknown_due_count_falls_back_to_the_warning() -> None:
+    """到期数读取失败时宁可沿用原告警，也不把未知说成「排期待发」。
+
+    默认成 0 会在读取失败时把全部待处理显示成中性的排期，正好在出问题的时候
+    低报真实积压——失败要往保守方向倒。
+    """
+    client = build_client()
+    client.app.state.admin_diagnostics_service = UnknownDueDiagnosticsStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    page = client.get("/employee/admin/diagnostics")
+
+    assert "待处理任务" in page.text
+    assert "排期待发" not in page.text

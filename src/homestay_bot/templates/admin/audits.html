@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
 {% block title %}操作记录 · {{ app_name }}{% endblock %}
 {% block content %}
 <section class="panel">
@@ -12,5 +13,24 @@
     <span>第 {{ audit_page.page }} 页</span>
     {% if audit_page.has_next %}<a class="button button--secondary" href="?page={{ audit_page.page + 1 }}">下一页</a>{% endif %}
   </nav>
+</section>
+<section class="panel">
+  <div class="panel__header"><div><p class="eyebrow">排障依据</p><h2>外部接口调用</h2></div></div>
+  <p>按端点汇总，只有调用结果，不含请求参数、密钥或客户正文。同步异常时先看这里最近一次是否成功。</p>
+  {% if external_calls %}
+  <div class="table-scroll"><table class="data-table"><thead><tr><th>接口</th><th>最近一次</th><th>结果</th><th>累计</th><th>失败</th></tr></thead><tbody>
+    {% for call in external_calls %}
+    <tr>
+      <td>{{ call.provider }} {{ call.method }} {{ call.path }}</td>
+      <td>{{ call.last_at|datetime_zh }}</td>
+      <td>{{ ui.badge("成功" if call.last_succeeded else "失败", "success" if call.last_succeeded else "danger") }}</td>
+      <td>{{ call.total }}</td>
+      <td>{{ call.failed }}</td>
+    </tr>
+    {% endfor %}
+  </tbody></table></div>
+  {% else %}
+  <p class="empty-state">暂无外部接口调用记录。</p>
+  {% endif %}
 </section>
 {% endblock %}
