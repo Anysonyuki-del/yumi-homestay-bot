@@ -461,6 +461,8 @@ def test_diagnostics_detail_and_audit_page_use_safe_server_view_models() -> None
 class StableRoomOperationsStub:
     """返回一间需要关注的房间和一间稳定房间。"""
 
+    received_sync_times: list[datetime | None] = []
+
     async def snapshot(
         self,
         now: datetime | None = None,
@@ -468,7 +470,8 @@ class StableRoomOperationsStub:
         horizon_days: int = 3,
         source_synced_at: datetime | None = None,
     ) -> OperationsSnapshot:
-        """构造已同步、可区分风险层级的房态投影。"""
+        """构造已同步、可区分风险层级的房态投影，并记录收到的同步时间。"""
+        self.received_sync_times.append(source_synced_at)
         local_date = date(2026, 8, 11)
         days = tuple(
             RoomDayOperation(local_date, 0, 0, False)
@@ -763,3 +766,29 @@ def test_no_button_is_rendered_when_there_is_nowhere_reliable_to_go() -> None:
     assert first is not None
     assert "先确认百居易实时房态" in first.group(0)
     assert "暂无可直接进入的入口" in first.group(0)
+
+
+def test_workbench_and_rooms_view_agree_on_how_fresh_the_source_is() -> None:
+    """两个视图看的是同一份数据，就不能对来源可信度给出相反结论。
+
+    工作台的快照曾漏传 source_synced_at，默认 None 会把每间房都判成来源过期：
+    「先处理」整列变成「先确认百居易实时房态」且没有任何可点的去向，而同一时刻
+    房间视图显示同步正常、下一步是真实原因。
+    """
+    client = build_client()
+    stub = StableRoomOperationsStub()
+    stub.received_sync_times = []
+    client.app.state.admin_operations_service = stub
+    synced = datetime(2026, 8, 28, 16, tzinfo=UTC)
+    client.app.state.hostex_data_last_success = synced
+    login_admin(client, next_path="/employee/admin")
+
+    today = client.get("/employee/admin")
+    rooms = client.get("/employee/admin/operations")
+
+    # 房间视图不认为来源过期，工作台也不能。
+    assert "房态待确认" not in rooms.text
+    assert "先确认百居易实时房态" not in today.text
+    # 真正的判据：两个视图都必须把同一个同步时间交给快照。桩自己的 source_stale
+    # 是硬编码的，只断言渲染结果不会暴露「其中一个忘了传参」。
+    assert stub.received_sync_times == [synced, synced]
