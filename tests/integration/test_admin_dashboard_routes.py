@@ -15,6 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from homestay_bot.domain.enums import (
     BusinessTaskStatus,
     EmployeeRole,
+    ReminderStatus,
     RoomOccupancyStatus,
     RoomOperationalStatus,
 )
@@ -92,6 +93,19 @@ class OperationsStub:
         return OperationsSnapshot(
             local_date=local_date,
             attention_items=(
+                AttentionItem(
+                    kind="reminder",
+                    record_id=31,
+                    status=ReminderStatus.MANUAL_FOLLOWUP,
+                    title="入住提醒需要跟进",
+                    summary="该房源共有 2 项入住提醒需要跟进",
+                    target_url="",
+                    property_id=101,
+                    room_title="长江中心",
+                    updated_at=datetime(2026, 8, 11, tzinfo=UTC),
+                    related_count=2,
+                    record_ids=(31, 32),
+                ),
                 AttentionItem(
                     kind="task",
                     record_id=7,
@@ -656,3 +670,22 @@ def test_long_horizon_gives_room_cards_a_full_row() -> None:
 
     assert "room-operations-list--wide" not in short.text
     assert "room-operations-list--wide" in long_range.text
+
+
+def test_attention_lets_reminders_be_closed_where_they_are_listed() -> None:
+    """提醒既不是任务也没有自己的页面，因此必须能在关注页就地了结。
+
+    此前提醒的「立即处理」指向任务列表，而那里根本没有提醒；更要命的是提醒
+    没有出口状态，一旦转入人工跟进就永远留在「待我关注」里，数字只增不减。
+    """
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    response = client.get("/employee/admin/attention")
+
+    assert response.status_code == 200
+    assert 'action="/employee/admin/attention/resolve-reminders"' in response.text
+    assert 'name="reminder_ids"' in response.text
+    assert "标记勾选的提醒为已处理" in response.text
+    # 提醒不再被送去一个没有它的列表
+    assert 'href="/employee/tasks?property_id=' not in response.text

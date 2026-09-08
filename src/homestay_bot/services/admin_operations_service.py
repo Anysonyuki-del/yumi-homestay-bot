@@ -83,6 +83,9 @@ class AttentionItem:
     room_title: str | None
     updated_at: datetime
     related_count: int = 1
+    # 归并后的分组要带上它覆盖的全部记录编号：批量处置按编号提交，
+    # 不靠「再查一次同样的筛选」，避免提交时的集合与页面上看到的不是同一批。
+    record_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +225,9 @@ class AdminOperationsRepositoryPort(Protocol):
     async def list_attention(self) -> tuple[AttentionRecord, ...]:
         """返回分领域人工事项。"""
 
+    async def count_attention(self) -> int:
+        """返回人工事项总数，与 list_attention 同源。"""
+
     async def list_active_rooms(self) -> tuple[ActiveRoomRecord, ...]:
         """返回启用房间与当前房态。"""
 
@@ -256,6 +262,7 @@ class AdminOperationsService:
         record: AttentionRecord,
         *,
         related_count: int = 1,
+        record_ids: tuple[int, ...] = (),
     ) -> AttentionItem:
         """按领域状态生成安全中文文案和可靠页面入口。"""
         room_context = f"，关联房间：{record.room_title}" if record.room_title else ""
@@ -271,10 +278,11 @@ class AdminOperationsService:
                 if related_count > 1
                 else f"凭证投递 #{record.record_id}：{status_text}{room_context}"
             )
+            # 凭证投递不是任务，送进任务列表必然什么也看不到；房源凭证页签才是它的归宿。
             target_url = (
-                f"/employee/tasks?property_id={record.property_id}"
+                f"/employee/properties/{record.property_id}?tab=credentials"
                 if record.property_id is not None
-                else "/employee/tasks"
+                else "/employee/properties"
             )
         elif record.kind == "reminder":
             title = "入住提醒需要跟进"
@@ -283,11 +291,8 @@ class AdminOperationsService:
                 if related_count > 1
                 else f"提醒 #{record.record_id}：{status_text}{room_context}"
             )
-            target_url = (
-                f"/employee/tasks?property_id={record.property_id}"
-                if record.property_id is not None
-                else "/employee/tasks"
-            )
+            # 提醒同样不是任务。它就地在本页处置，不再把人送去一个没有它的列表。
+            target_url = ""
         elif record.kind == "customer_merge":
             title = "客户档案合并待复核"
             summary = f"合并建议 #{record.record_id}：{status_text}"
@@ -302,9 +307,14 @@ class AdminOperationsService:
             if related_count == 1:
                 target_url = f"/employee/tasks/{record.record_id}"
             elif record.property_id is not None:
-                target_url = f"/employee/tasks?property_id={record.property_id}"
+                # 少了状态条件就会落到该房源的全部开放任务上，点进去看到的
+                # 是一堆已分派任务，而用户点的是「待确认」。
+                target_url = (
+                    f"/employee/tasks?property_id={record.property_id}"
+                    "&status_filter=pending_confirmation"
+                )
             else:
-                target_url = "/employee/tasks"
+                target_url = "/employee/tasks?status_filter=pending_confirmation"
         return AttentionItem(
             kind=record.kind,
             record_id=record.record_id,
@@ -316,6 +326,7 @@ class AdminOperationsService:
             room_title=record.room_title,
             updated_at=record.updated_at,
             related_count=related_count,
+            record_ids=record_ids or (record.record_id,),
         )
 
     @classmethod
@@ -342,6 +353,7 @@ class AdminOperationsService:
                 cls._attention_item(
                     latest,
                     related_count=len(records_in_group),
+                    record_ids=tuple(item.record_id for item in records_in_group),
                 )
             )
         return tuple(

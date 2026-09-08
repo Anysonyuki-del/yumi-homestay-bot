@@ -14,6 +14,7 @@ from homestay_bot.domain.enums import (
     ReminderStatus,
     ReminderType,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     AuditLog,
     Base,
@@ -331,5 +332,85 @@ async def test_reconfirmed_same_dates_rearms_cancelled_schedule() -> None:
         assert reactivated.failure_reason is None
         assert job.status is JobStatus.PENDING
         assert job.attempts == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_many_gives_manual_followup_an_exit() -> None:
+    """人工跟进必须有出口，否则「待我关注」只增不减。
+
+    提醒转入人工跟进后原本再也出不来：它是否显示在关注页取决于那条派生任务
+    是否还在、还停在哪一格，而任务被处理或被永久删除都是完全合法的操作。
+    RESOLVED 把判据交还给提醒自己。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        order = await seed_order_context(session)
+        repository = SQLAlchemyLifecycleReminderRepository(session)
+        first = LifecycleReminder(
+            order_id=order.id,
+            reminder_type=ReminderType.ARRIVAL_DAY,
+            scheduled_local_date=date(2026, 8, 2),
+            scheduled_at=datetime(2026, 8, 2, 1, tzinfo=UTC),
+            status=ReminderStatus.MANUAL_FOLLOWUP,
+        )
+        second = LifecycleReminder(
+            order_id=order.id,
+            reminder_type=ReminderType.PRE_ARRIVAL,
+            scheduled_local_date=date(2026, 8, 1),
+            scheduled_at=datetime(2026, 8, 1, 1, tzinfo=UTC),
+            status=ReminderStatus.MANUAL_FOLLOWUP,
+        )
+        session.add_all([first, second])
+        await session.commit()
+
+        resolved = await repository.resolve_many([first.id, second.id], 1)
+        await session.commit()
+
+        assert resolved == 2
+        assert first.status is ReminderStatus.RESOLVED
+        assert second.status is ReminderStatus.RESOLVED
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_many_refuses_the_whole_batch_on_a_wrong_state() -> None:
+    """混入非人工跟进的提醒时整批拒绝，与批量归档、批量删除同一种失败方式。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        order = await seed_order_context(session)
+        repository = SQLAlchemyLifecycleReminderRepository(session)
+        followup = LifecycleReminder(
+            order_id=order.id,
+            reminder_type=ReminderType.ARRIVAL_DAY,
+            scheduled_local_date=date(2026, 8, 2),
+            scheduled_at=datetime(2026, 8, 2, 1, tzinfo=UTC),
+            status=ReminderStatus.MANUAL_FOLLOWUP,
+        )
+        scheduled = LifecycleReminder(
+            order_id=order.id,
+            reminder_type=ReminderType.PRE_ARRIVAL,
+            scheduled_local_date=date(2026, 8, 1),
+            scheduled_at=datetime(2026, 8, 1, 1, tzinfo=UTC),
+            status=ReminderStatus.SCHEDULED,
+        )
+        session.add_all([followup, scheduled])
+        await session.commit()
+
+        with pytest.raises(OperationRefused) as refused:
+            await repository.resolve_many([followup.id, scheduled.id], 1)
+
+        assert str(scheduled.id) in str(refused.value)
+        assert followup.status is ReminderStatus.MANUAL_FOLLOWUP
 
     await engine.dispose()

@@ -62,6 +62,7 @@ class TaskPageStub:
         self.purge_calls: list[int] = []
         self.purge_many_calls: list[list[int]] = []
         self.assign_many_calls: list[tuple[list[int], int]] = []
+        self.cancel_many_calls: list[list[int]] = []
         self.private_file = None
         self.detail_error: Exception | None = None
         self.list_error: Exception | None = None
@@ -146,6 +147,13 @@ class TaskPageStub:
         if employee.role is not EmployeeRole.ADMIN:
             raise PermissionError("只有管理员可以分派")
         self.assign_many_calls.append((list(task_ids), assigned_employee_id))
+        return len(task_ids)
+
+    async def cancel_many(self, task_ids, employee):
+        """记录批量取消使用的编号。"""
+        if employee.role is not EmployeeRole.ADMIN:
+            raise PermissionError("只有管理员可以取消")
+        self.cancel_many_calls.append(list(task_ids))
         return len(task_ids)
 
     async def purge_many(self, task_ids, employee):
@@ -907,42 +915,50 @@ def test_bulk_archive_uses_current_filters_as_selection() -> None:
     assert tasks.bulk_archive_calls[0].status is BusinessTaskStatus.EXPIRED
 
 
-def test_checkbox_appears_only_for_tasks_a_bulk_action_accepts() -> None:
-    """勾选框只在该任务确实能被某个批量操作接受时出现。
+def test_every_task_can_be_selected_because_every_status_has_an_action() -> None:
+    """每条任务都可勾选，因为每个状态都有一个真能落下去的批量动作。
 
-    让用户勾选注定被拒的任务，等于引导他走进必然失败的操作。可批量的动作有两
-    个，各自的条件不同：分派要求待确认或待分派且房间与日期齐全，归档要求终态。
+    此前只有「可分派」和「可归档」两个动作，中间三档（已分派、进行中、待检查）
+    一个都不接受，于是管理员点进任务列表看到全选框却一条都选不了。原来的做法是
+    干脆不给勾选框——那避免了「勾了必然被拒」，却也等于承认这些任务无法批量处置。
+
+    真正的出路在状态机里：取消从每个开放态都可达，且只有管理员走得通。补上批量
+    取消之后，开放态可取消、终态可归档、已归档可永久删除，没有哪一格是死的，勾
+    选框因此对所有任务出现。这条测试锁的是「勾选框出现 ⟺ 至少有一个动作接受它」
+    这个不变量本身，而不是当时恰好有哪两个动作。
     """
     client, tasks = build_client(EmployeeRole.ADMIN)
     login(client)
 
-    # 已分派：两个批量动作都不接受
+    # 中间态：既不能分派也不能归档，但可以取消
     tasks.item.status = BusinessTaskStatus.ASSIGNED
-    neither = client.get("/employee/tasks")
-    assert 'name="task_ids"' not in neither.text
-    assert ">分派勾选的任务</button>" not in neither.text
-    assert ">归档勾选的任务</button>" not in neither.text
+    mid = client.get("/employee/tasks")
+    assert 'name="task_ids"' in mid.text
+    assert 'formaction="/employee/tasks/cancel-selected"' in mid.text
+    assert "1 条可取消" in mid.text
+    assert ">分派勾选的任务</button>" not in mid.text
+    assert ">归档勾选的任务</button>" not in mid.text
 
-    # 待分派且信息齐全：可分派
+    # 待分派且信息齐全：可分派，也仍然可取消
     tasks.item.status = BusinessTaskStatus.PENDING_ASSIGNMENT
     assignable = client.get("/employee/tasks")
-    assert 'name="task_ids"' in assignable.text
     assert 'action="/employee/tasks/assign-selected"' in assignable.text
-    assert "本页 1 条可分派" in assignable.text
+    assert 'formaction="/employee/tasks/cancel-selected"' in assignable.text
 
-    # 待分派但缺房间：不给勾选，需逐条补齐
+    # 待分派但缺房间：分派不接受它，取消仍然接受
     tasks.item.property_id = None
     incomplete = client.get("/employee/tasks")
-    assert 'name="task_ids"' not in incomplete.text
-    assert "本页 0 条可分派" in incomplete.text
+    assert 'name="task_ids"' in incomplete.text
+    assert "0 条可分派" in incomplete.text
+    assert "1 条可取消" in incomplete.text
     tasks.item.property_id = 101
 
-    # 终态：可归档
+    # 终态：可归档，且不再提供取消（状态机里已经没有出路）
     tasks.item.status = BusinessTaskStatus.EXPIRED
     terminal = client.get("/employee/tasks")
-    assert 'name="task_ids"' in terminal.text
     assert 'action="/employee/tasks/archive-selected"' in terminal.text
     assert ">归档勾选的任务</button>" in terminal.text
+    assert "0 条可取消" in terminal.text
 
 
 def test_bulk_assign_requires_an_employee_choice() -> None:
@@ -1474,3 +1490,58 @@ def test_status_placeholder_does_not_claim_open_tasks_on_the_archive_queue() -> 
 
     assert "全部开放状态" not in response.text
     assert '<option value="">不限状态</option>' in response.text
+
+
+def test_bulk_cancel_gives_every_open_status_a_way_out() -> None:
+    """批量取消让停在中间态的任务也有一个真能落下去的处置动作。
+
+    取消是状态机里唯一一条从每个开放态都通向终点、且只有管理员走得通的路径，
+    因此批量取消不需要放宽任何规则，只是把既有能力做成了批量入口。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    tasks.item.status = BusinessTaskStatus.ASSIGNED
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/cancel-selected",
+        data={"csrf_token": token, "task_ids": ["11", "12"], "confirm_count": "2"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.cancel_many_calls == [[11, 12]]
+
+
+def test_bulk_cancel_requires_the_typed_count() -> None:
+    """取消不可逆，条数对不上就整批拒绝，不弹个框点确定就算数。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/tasks/cancel-selected",
+        data={"csrf_token": token, "task_ids": ["11", "12"], "confirm_count": "0"},
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert tasks.cancel_many_calls == []
+
+
+def test_typed_confirm_wording_belongs_to_the_button_not_the_script() -> None:
+    """手输确认的后果说明由按钮提供，取消不能读到删除的措辞。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    tasks.item.status = BusinessTaskStatus.ASSIGNED
+
+    open_queue = client.get("/employee/tasks")
+    cancel_button = open_queue.text.split('formaction="/employee/tasks/cancel-selected"')[1]
+    cancel_button = cancel_button.split(">")[0]
+
+    assert "data-typed-confirm-detail=" in cancel_button
+    assert "状态机没有回头路" in cancel_button
+    assert "现场照片" not in cancel_button

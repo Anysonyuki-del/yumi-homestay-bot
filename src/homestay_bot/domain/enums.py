@@ -181,6 +181,10 @@ class ReminderStatus(StrEnum):
     SCHEDULED = "scheduled"
     PLATFORM_ACCEPTED = "platform_accepted"
     MANUAL_FOLLOWUP = "manual_followup"
+    # 人工跟进原本没有出口：一旦进入就只能停在那里，「待我关注」因此只增不减。
+    # RESOLVED 是管理员亲自确认「这条不用再管了」的终点，与 CANCELLED 语义不同——
+    # 后者表示这条提醒根本不该发出去，前者表示人已经看过并了结。
+    RESOLVED = "resolved"
     CANCELLED = "cancelled"
 
 

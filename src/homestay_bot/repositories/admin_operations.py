@@ -154,12 +154,15 @@ class SQLAlchemyAdminOperationsRepository:
             for record_id, status, property_id, room_title, updated_at in credential_rows
         )
 
+        # 这里刻意不再限定派生任务的状态。原先只认「仍处于待确认」的派生任务，
+        # 于是管理员一旦推进或取消那条任务，提醒就重新冒回「待我关注」——而提醒
+        # 自己没有出口状态，所以再也下不去。判据应当是「这条提醒是否已被移交」，
+        # 而不是「移交出去的那条任务此刻停在哪一格」。
         derived_manual_task_exists = exists(
             select(BusinessTask.id).where(
                 BusinessTask.dedupe_key
                 == literal("lifecycle-manual:")
                 + sa_cast(LifecycleReminder.id, String),
-                BusinessTask.status == BusinessTaskStatus.PENDING_CONFIRMATION,
             )
         )
         reminder_rows = await self._session.execute(
@@ -221,6 +224,15 @@ class SQLAlchemyAdminOperationsRepository:
             for record_id, status, property_id, room_title, updated_at in task_rows
         )
         return tuple(records)
+
+    async def count_attention(self) -> int:
+        """返回人工事项总数，与关注页列表严格同源。
+
+        总览此前自己写了一份 COUNT，与本方法的谓词有三处分歧（不计业务任务、
+        不排除已移交的提醒、漏掉客诉的退回状态），于是两个页面对同一件事给出
+        两个数字。数字要一致，唯一可靠的办法是共用同一段查询而不是各写一遍。
+        """
+        return len(await self.list_attention())
 
     async def list_active_rooms(self) -> tuple[ActiveRoomRecord, ...]:
         """批量读取全部启用房间，缺失房态统一投影为未开始。"""

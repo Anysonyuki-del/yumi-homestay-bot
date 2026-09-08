@@ -12,6 +12,7 @@ from homestay_bot.domain.enums import (
     ReminderStatus,
     ReminderType,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     AuditLog,
     Conversation,
@@ -344,6 +345,58 @@ class SQLAlchemyLifecycleReminderRepository:
             )
         )
         await self._session.flush()
+
+    async def resolve_many(
+        self,
+        reminder_ids: list[int],
+        actor_employee_id: int,
+    ) -> int:
+        """把管理员确认过的人工跟进提醒批量了结，返回实际了结数量。
+
+        只接受当前确实处于人工跟进的提醒；混入其它状态时整批拒绝并列出编号，
+        与批量归档、批量删除保持同一种失败方式：宁可一条不动，也不做一半。
+        """
+        unique_ids = list(dict.fromkeys(reminder_ids))
+        if not unique_ids:
+            raise OperationRefused("请先选择要标记为已处理的提醒")
+        rows = await self._session.scalars(
+            select(LifecycleReminder)
+            .where(LifecycleReminder.id.in_(unique_ids))
+            .with_for_update()
+        )
+        reminders = list(rows)
+        found = {reminder.id for reminder in reminders}
+        missing = [str(value) for value in unique_ids if value not in found]
+        if missing:
+            raise OperationRefused(
+                "以下提醒不存在：" + "、".join(missing)
+            )
+        wrong_state = [
+            str(reminder.id)
+            for reminder in reminders
+            if reminder.status is not ReminderStatus.MANUAL_FOLLOWUP
+        ]
+        if wrong_state:
+            raise OperationRefused(
+                "以下提醒不在人工跟进状态，无法标记已处理："
+                + "、".join(wrong_state)
+            )
+        now = datetime.now(UTC)
+        for reminder in reminders:
+            reminder.status = ReminderStatus.RESOLVED
+            reminder.manual_followup_at = reminder.manual_followup_at or now
+        # 批量只记一条含数量的汇总，与业务任务的批量归档保持一致。
+        self._session.add(
+            AuditLog(
+                actor_employee_id=actor_employee_id,
+                action="lifecycle_reminder_resolved",
+                target_type="lifecycle_reminder",
+                target_id="bulk",
+                details={"count": len(reminders), "reminder_ids": sorted(found)},
+            )
+        )
+        await self._session.flush()
+        return len(reminders)
 
     async def _require_for_update(
         self,

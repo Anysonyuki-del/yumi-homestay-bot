@@ -24,6 +24,7 @@ PROPERTY_CSRF_FAMILY = "property-write"
 COMPLAINT_CSRF_FAMILY = "complaint-write"
 CUSTOMER_CSRF_FAMILY = "customer-write"
 CUSTOMER_MERGE_CSRF_FAMILY = "customer-merge"
+REMINDER_CSRF_FAMILY = "reminder-resolve"
 # 审批确认会创建真实订单，保持服务端默认的十五分钟，超时强制刷新重读当前状态。
 APPROVAL_CSRF_FAMILY = "approval-confirm"
 

@@ -316,6 +316,29 @@ selectionForms.forEach((form) => {
   });
 });
 
+// 待我关注的提醒分组全选：与任务列表不同，这里每个勾选框代表一整组提醒，
+// 不存在双布局镜像，因此只需要一个直白的全选。脚本缺失时逐组勾选仍然可用。
+document.querySelectorAll("[data-select-all-reminders]").forEach((toggle) => {
+  const form = toggle.closest("form");
+  if (!form) return;
+  const groups = () =>
+    Array.from(form.querySelectorAll("[data-reminder-group]"));
+  toggle.addEventListener("change", () => {
+    groups().forEach((box) => {
+      box.checked = toggle.checked;
+    });
+  });
+  form.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.hasAttribute("data-reminder-group")) return;
+    const all = groups();
+    const checked = all.filter((box) => box.checked);
+    toggle.checked = checked.length === all.length && all.length > 0;
+    toggle.indeterminate = checked.length > 0 && checked.length < all.length;
+  });
+});
+
 // 不可逆的批量操作要求手输条数：挡住「习惯性点确定」这一整类事故，
 // 提交者必须真的看过数量。脚本缺失时该按钮提交的确认数为 0，服务端会拒绝。
 document.querySelectorAll("button[data-typed-confirm]").forEach((button) => {
@@ -336,9 +359,12 @@ document.querySelectorAll("button[data-typed-confirm]").forEach((button) => {
       return;
     }
     const label = button.getAttribute("data-typed-confirm") || "删除";
+    // 后果由按钮自己说明：同一套手输确认现在服务于删除和取消两种不可逆动作，
+    // 把措辞写死在脚本里，另一种动作就会读到一句与它无关的警告。
+    const detail = (button.getAttribute("data-typed-confirm-detail")
+      || "即将处理 {n} 条任务，此操作不可恢复。").replace("{n}", String(selected.size));
     const answer = window.prompt(
-      `${label}：即将永久删除 ${selected.size} 条任务及其现场照片，此操作不可恢复。\n`
-        + `确认请输入数字 ${selected.size}。`,
+      `${label}：${detail}\n确认请输入数字 ${selected.size}。`,
     );
     if (answer === null || answer.trim() !== String(selected.size)) {
       event.preventDefault();

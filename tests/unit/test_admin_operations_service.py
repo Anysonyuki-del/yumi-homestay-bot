@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -34,6 +35,7 @@ from homestay_bot.repositories.admin_operations import (
     RoomTaskCountRecord,
     StayRecord,
 )
+from homestay_bot.services.admin_dashboard_service import AdminDashboardService
 from homestay_bot.services.admin_operations_service import AdminOperationsService
 
 
@@ -126,8 +128,10 @@ async def test_snapshot_keeps_attention_statuses_separate_and_returns_safe_links
     assert items["complaint"].target_url.startswith("/employee/complaints/")
     assert items["customer_merge"].target_url.startswith("/employee/customers/merge/")
     assert items["task"].target_url.startswith("/employee/tasks/")
-    assert items["credential"].target_url.startswith("/employee/tasks")
-    assert items["reminder"].target_url.startswith("/employee/tasks")
+    # 凭证投递不是任务：送进任务列表必然什么也看不到，它的归宿是房源凭证页签。
+    assert items["credential"].target_url == "/employee/properties/7?tab=credentials"
+    # 提醒既不是任务也没有自己的页面，因此不给跳转，改为在关注页就地了结。
+    assert items["reminder"].target_url == ""
     assert all(item.title and item.summary for item in snapshot.attention_items)
     snapshot_text = repr(snapshot)
     for secret in (
@@ -198,7 +202,7 @@ async def test_snapshot_groups_repeated_room_followups_without_hiding_total() ->
     assert len(snapshot.attention_items) == 1
     assert snapshot.attention_items[0].related_count == 3
     assert "3 项" in snapshot.attention_items[0].summary
-    assert snapshot.attention_items[0].target_url == "/employee/tasks?property_id=7"
+    assert snapshot.attention_items[0].target_url == ""
 
 
 async def test_snapshot_groups_repeated_business_tasks_into_one_work_queue() -> None:
@@ -254,7 +258,11 @@ async def test_snapshot_groups_repeated_business_tasks_into_one_work_queue() -> 
     assert len(snapshot.attention_items) == 1
     assert snapshot.attention_items[0].related_count == 3
     assert "3 项" in snapshot.attention_items[0].summary
-    assert snapshot.attention_items[0].target_url == "/employee/tasks"
+    # 少了状态条件就会落到全部开放任务上，而用户点的是「待确认」。
+    assert (
+        snapshot.attention_items[0].target_url
+        == "/employee/tasks?status_filter=pending_confirmation"
+    )
 
 
 async def test_snapshot_counts_manual_reminder_and_derived_task_once() -> None:
@@ -580,3 +588,94 @@ async def test_stale_source_keeps_every_room_in_the_attention_group() -> None:
     assert snapshot.stable_rooms == ()
     assert [room.room_title for room in snapshot.attention_rooms] == ["一号房"]
     await engine.dispose()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_count_and_attention_total_come_from_one_source() -> None:
+    """总览的「需人工关注」必须等于关注页列出的总数。
+
+    这两个数字曾由两套独立查询产生，谓词有三处分歧：总览不计待确认的业务任务、
+    不排除已移交给任务的提醒、漏掉客诉的退回状态。于是同一时刻两个页面给出两个
+    数字，处理掉一条任务关注页减一而总览纹丝不动。这条测试把未来再次分叉变成
+    CI 失败，而不是又一次静默不一致。
+    """
+    engine, factory = await _factory()
+    today = date(2026, 8, 29)
+
+    async with factory() as session:
+        room = PropertyProfile(id=101, title="长江中心", is_active=True)
+        customer = Customer(display_name="客人")
+        conversation = Conversation(open_kfid="kf-1", external_userid="guest-1")
+        session.add_all([room, customer, conversation])
+        await session.flush()
+        order = StayOrder(
+            hostex_reservation_code="r-1",
+            stay_code="s-1",
+            property_id=room.id,
+            check_in_date=today,
+            check_out_date=today + timedelta(days=1),
+            status="confirmed",
+        )
+        session.add(order)
+        await session.flush()
+        handed_over = LifecycleReminder(
+            order_id=order.id,
+            reminder_type=ReminderType.ARRIVAL_DAY,
+            scheduled_local_date=today,
+            scheduled_at=datetime(2026, 8, 29, 1, tzinfo=UTC),
+            status=ReminderStatus.MANUAL_FOLLOWUP,
+        )
+        still_open = LifecycleReminder(
+            order_id=order.id,
+            reminder_type=ReminderType.PRE_ARRIVAL,
+            scheduled_local_date=today,
+            scheduled_at=datetime(2026, 8, 29, 2, tzinfo=UTC),
+            status=ReminderStatus.MANUAL_FOLLOWUP,
+        )
+        session.add_all([handed_over, still_open])
+        await session.flush()
+        session.add_all(
+            [
+                # 派生任务刻意不是「待确认」：管理员已经处置过它（这里是取消），
+                # 提醒不该因此复活——那正是「待我关注」只增不减的成因。
+                BusinessTask(
+                    task_type=BusinessTaskType.MANUAL_CONTACT,
+                    status=BusinessTaskStatus.CANCELLED,
+                    dedupe_key=f"lifecycle-manual:{handed_over.id}",
+                    description="人工联系",
+                ),
+                BusinessTask(
+                    task_type=BusinessTaskType.CLEANING,
+                    status=BusinessTaskStatus.PENDING_CONFIRMATION,
+                    description="待确认保洁",
+                ),
+                # 客诉的退回状态：总览此前漏掉这一档。
+                ComplaintReview(
+                    conversation_id=conversation.id,
+                    source_message_id="m-1",
+                    reason="service_issue",
+                    risk_level="high",
+                    status=ComplaintReviewStatus.RETURNED,
+                ),
+            ]
+        )
+        await session.commit()
+
+        open_reminder_id = still_open.id
+
+    # 两个服务在生产里各用独立短会话，一致读要求它是新事务的第一条语句。
+    observed_at = datetime(2026, 8, 28, 16, 30, tzinfo=UTC)
+    async with factory() as session:
+        attention = await AdminOperationsService(session).snapshot(observed_at)
+    async with factory() as session:
+        dashboard = await AdminDashboardService(session).snapshot(observed_at)
+
+    reminder_ids = {
+        item.record_id
+        for item in attention.attention_items
+        if item.kind == "reminder"
+    }
+    assert reminder_ids == {open_reminder_id}
+    assert dashboard.manual_attention_count == attention.attention_count
+
+    await engine.dispose()

@@ -1288,6 +1288,26 @@ class SessionAdminDashboardService:
             return await AdminDashboardService(session).snapshot(now)
 
 
+class SessionLifecycleReminderAdmin:
+    """为提醒的人工了结创建独立写事务，逐次提交后立即释放。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def resolve_many(
+        self,
+        reminder_ids: list[int],
+        actor_employee_id: int,
+    ) -> int:
+        """在短事务中批量了结人工跟进提醒，返回实际了结数量。"""
+        async with self._factory() as session:
+            repository = SQLAlchemyLifecycleReminderRepository(session)
+            resolved = await repository.resolve_many(reminder_ids, actor_employee_id)
+            await session.commit()
+            return resolved
+
+
 class SessionAdminOperationsService:
     """为每次运营工作台读取创建独立只读数据库会话。"""
 
@@ -1603,6 +1623,17 @@ class SessionTaskPageService:
             )
             await session.commit()
             return assigned
+
+    async def cancel_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+    ) -> int:
+        """在同一事务内批量取消，任一条失败则整批回滚。"""
+        async with self._factory() as session:
+            cancelled = await self._service(session).cancel_many(task_ids, employee)
+            await session.commit()
+            return cancelled
 
     async def purge_many(
         self,
@@ -3013,6 +3044,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     approval_sensitive_data = ApprovalSensitiveData(sensitive_data)
     app.state.admin_dashboard_service = SessionAdminDashboardService(factory)
     app.state.admin_operations_service = SessionAdminOperationsService(factory)
+    app.state.lifecycle_reminder_admin = SessionLifecycleReminderAdmin(factory)
     app.state.task_page_service = SessionTaskPageService(
         factory,
         private_file_storage,

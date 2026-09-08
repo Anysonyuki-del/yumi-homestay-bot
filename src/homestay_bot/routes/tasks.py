@@ -240,6 +240,13 @@ class TaskPageServicePort(Protocol):
     ) -> int:
         """批量分派给同一名执行员工，返回分派数量。"""
 
+    async def cancel_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+    ) -> int:
+        """批量取消开放态任务，返回取消数量。"""
+
     async def purge_many(
         self,
         task_ids: list[int],
@@ -403,6 +410,13 @@ async def task_index(
                 else ""
             ),
             "archivable_statuses": ARCHIVABLE_TASK_STATUSES,
+            # 可取消 == 非终态。判定放在这里而不是模板：它与 cancel_many 的
+            # 校验必须是同一条规则，写进模板就没法和服务端一起被测试锁住。
+            "cancellable_count": sum(
+                1
+                for item in items[:50]
+                if item.status not in ARCHIVABLE_TASK_STATUSES
+            ),
             # 可批量分派的条件放在这里判定而不是模板里：规则含状态与两个字段，
             # 写进模板既难读也无法单独测试。
             "assignable_ids": {
@@ -521,6 +535,40 @@ async def assign_selected_tasks(
         _raise_page_error(error)
     return RedirectResponse(
         "/employee/tasks",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/cancel-selected")
+async def cancel_selected_tasks(
+    request: Request,
+    csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
+    confirm_count: Annotated[int, Form(ge=0)] = 0,
+    task_ids: Annotated[list[int] | None, Form()] = None,
+) -> RedirectResponse:
+    """把勾选的开放态任务批量取消。
+
+    取消不可逆，因此与永久删除同样要求手输条数：数字对不上说明操作者没有真正
+    看过数量，直接拒绝。脚本不可用时提交的确认数为 0，同样被这里挡下。
+    """
+    employee = await _current_employee(request)
+    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    selected = task_ids or []
+    if confirm_count != len(selected) or not selected:
+        raise OperationRefused(
+            f"已勾选 {len(selected)} 条，确认输入 {confirm_count}。请重新确认后再取消。",
+            return_to=return_to,
+        )
+    try:
+        await _get_service(request).cancel_many(selected, employee)
+    except OperationRefused as refused:
+        refused.return_to = return_to
+        raise
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        return_to or "/employee/tasks",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
