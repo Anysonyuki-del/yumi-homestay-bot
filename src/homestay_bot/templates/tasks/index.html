@@ -1,7 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/workbench.html" as workbench %}
 
 {% block content %}
+{% if is_admin %}{{ workbench.views("tasks") }}{% endif %}
 <section class="panel panel--padded">
   <div class="section-heading"><div><p class="eyebrow">YuMi 任务中心</p><h2>{{ queue_heading }}</h2></div>{{ ui.badge("管理员调度" if is_admin else "员工执行", "info") }}</div>
   {# 队列只能亮一个：aria-current 由服务端算好的唯一队列决定，不再让每个条件各自判断。 #}

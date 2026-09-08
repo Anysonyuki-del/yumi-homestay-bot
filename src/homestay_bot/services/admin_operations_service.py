@@ -114,6 +114,8 @@ class RoomOperationItem:
     overdue_task_count: int = 0
     next_departure: date | None = None
     next_action: str = "暂无近期运营动作"
+    # 与 next_action 同源的去向；确实没有可靠入口时为 None，页面不渲染空按钮。
+    next_action_url: str | None = None
     source_stale: bool = True
 
     @property
@@ -408,6 +410,16 @@ class AdminOperationsService:
             )
             next_arrival = min(future_arrivals, default=None)
             next_departure = min(future_departures, default=None)
+            next_step = AdminOperationsService._next_step(
+                source_stale=source_stale,
+                operational_status=room.status,
+                arrivals=today_arrivals,
+                departures=today_departures,
+                occupied=occupied_today,
+                task_count=task_count,
+                next_arrival=next_arrival,
+                property_id=room.property_id,
+            )
             room_items.append(
                 RoomOperationItem(
                     property_id=room.property_id,
@@ -421,15 +433,8 @@ class AdminOperationsService:
                     occupancy_status=occupancy_status,
                     overdue_task_count=task_count.overdue_count,
                     next_departure=next_departure,
-                    next_action=AdminOperationsService._next_action(
-                        source_stale=source_stale,
-                        operational_status=room.status,
-                        arrivals=today_arrivals,
-                        departures=today_departures,
-                        occupied=occupied_today,
-                        task_count=task_count,
-                        next_arrival=next_arrival,
-                    ),
+                    next_action=next_step[0],
+                    next_action_url=next_step[1],
                     source_stale=source_stale,
                 )
             )
@@ -494,29 +499,70 @@ class AdminOperationsService:
         next_arrival: date | None,
     ) -> str:
         """根据确定性事实给出单一优先行动，不替代员工经营判断。"""
+        return AdminOperationsService._next_step(
+            source_stale=source_stale,
+            operational_status=operational_status,
+            arrivals=arrivals,
+            departures=departures,
+            occupied=occupied,
+            task_count=task_count,
+            next_arrival=next_arrival,
+            property_id=0,
+        )[0]
+
+    @staticmethod
+    def _next_step(
+        *,
+        source_stale: bool,
+        operational_status: RoomOperationalStatus,
+        arrivals: int,
+        departures: int,
+        occupied: bool,
+        task_count: RoomTaskCountRecord,
+        next_arrival: date | None,
+        property_id: int,
+    ) -> tuple[str, str | None]:
+        """同时给出「下一步是什么」和「去哪做」，两者出自同一组分支。
+
+        原先只产出一句文字，管家读完还得自己回到列表重新筛选才能动手。文字与
+        去向分开算就会各说各话，因此放在同一个函数里；确实没有可靠去向时返回
+        None，页面不渲染空按钮，而不是编一个看起来能点的链接。
+        """
+        tasks_url = f"/employee/tasks?property_id={property_id}"
+        room_url = f"/employee/properties/{property_id}"
         if source_stale:
-            return "先确认百居易实时房态"
+            # 同步不可信时没有能真正解决它的页面入口，不给按钮。
+            return "先确认百居易实时房态", None
         if task_count.overdue_count:
-            return f"优先处理 {task_count.overdue_count} 项逾期任务"
+            return (
+                f"优先处理 {task_count.overdue_count} 项逾期任务",
+                f"{tasks_url}&overdue=true",
+            )
         if arrivals and departures:
-            return "安排退房周转并核对今日入住"
+            return "安排退房周转并核对今日入住", tasks_url
         if departures:
-            return "安排退房检查与周转"
+            return "安排退房检查与周转", tasks_url
         if arrivals:
             return (
-                "核对入住资料并接待"
-                if operational_status is RoomOperationalStatus.READY
-                else "优先完成房间准备并接待入住"
+                (
+                    "核对入住资料并接待"
+                    if operational_status is RoomOperationalStatus.READY
+                    else "优先完成房间准备并接待入住"
+                ),
+                tasks_url,
             )
         if operational_status is RoomOperationalStatus.MAINTENANCE:
-            return "跟进维修并确认房间可用性"
+            return "跟进维修并确认房间可用性", room_url
         if task_count.count:
-            return f"推进 {task_count.count} 项开放任务"
+            return f"推进 {task_count.count} 项开放任务", tasks_url
         if occupied:
-            return "关注在住服务"
+            return "关注在住服务", room_url
         if next_arrival is not None:
-            return f"{next_arrival.month}月{next_arrival.day}日前完成房间准备"
-        return "暂无近期运营动作"
+            return (
+                f"{next_arrival.month}月{next_arrival.day}日前完成房间准备",
+                tasks_url,
+            )
+        return "暂无近期运营动作", None
 
     @staticmethod
     def _source_is_stale(

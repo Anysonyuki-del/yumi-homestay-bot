@@ -21,10 +21,11 @@
         <nav class="side-nav">
           <div class="nav-group">
             <p class="nav-group__label">运营</p>
+          {# 总览、待我关注、房态与运营原本并列在这里，同一件工作散在三个入口，
+             管家得先判断记录属于哪个模块。收敛成一个「工作台」，三个视图由页内
+             标签切换；三个旧 URL 全部保留可达，深链接和书签不失效。 #}
           {% if nav_is_admin %}
-          <a href="/employee/admin" {% if active_nav == "dashboard" %}aria-current="page"{% endif %}>{{ icons.icon("home") }}<span>总览</span></a>
-          <a href="/employee/admin/attention" {% if active_nav == "attention" %}aria-current="page"{% endif %}>{{ icons.icon("warning") }}<span>待我关注</span></a>
-          <a href="/employee/admin/operations" {% if active_nav == "operations" %}aria-current="page"{% endif %}>{{ icons.icon("rooms") }}<span>房态与运营</span></a>
+          <a href="/employee/admin" {% if active_nav in ("dashboard", "operations", "attention") %}aria-current="page"{% endif %}>{{ icons.icon("home") }}<span>工作台</span></a>
           {% endif %}
           <a href="/employee/tasks" {% if active_nav == "tasks" %}aria-current="page"{% endif %}>{{ icons.icon("tasks") }}<span>任务中心</span></a>
           {% if nav_is_admin %}

@@ -238,7 +238,10 @@ tbody tr:hover { background: var(--surface-sunk); }
 .entry-card h3 a:hover, .candidate-card h3 a:hover { text-decoration: underline; }
 .room-operation-card__header small { display: block; margin-top: 3px; color: var(--muted); }
 .room-status-pair { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
-.room-next-action { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 10px; margin: 14px 0; padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: var(--r-xs); background: var(--primary-soft); }
+.room-next-action { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; flex-wrap: wrap; gap: 10px; margin: 14px 0; padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: var(--r-xs); background: var(--primary-soft); }
+/* 「去处理」按钮与原因同排：读到为什么，就能在原地动手。窄屏下换行不挤压文字。 */
+.room-next-action .button { padding: 6px 12px; min-height: 36px; white-space: nowrap; }
+@media (max-width: 520px) { .room-next-action { grid-template-columns: minmax(0, 1fr); } }
 .room-next-action span { color: var(--ink-mid); font-size: var(--t-xs); font-weight: 650; }
 .room-operation-facts { display: grid; gap: 8px; margin: 0 0 12px; }
 .room-operation-facts > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
@@ -270,6 +273,17 @@ tbody tr:hover { background: var(--surface-sunk); }
 .operations-stable > summary { padding: 14px 0; font-weight: 700; cursor: pointer; }
 .operations-stable[open] > summary { border-bottom: 1px solid var(--line); }
 .stable-room-list { gap: 0; padding-bottom: 6px; }
+/* 工作台「先处理」：房间、原因、动作一行读完，窄屏改为堆叠不挤压原因文字。 */
+.workbench-first { margin-bottom: 16px; }
+.first-list { gap: 0; }
+.first-list li { display: grid; min-height: 52px; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; align-items: center; gap: 8px 14px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.first-list li:last-child { border-bottom: 0; }
+.first-list__room { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: var(--ink-strong); text-decoration: none; }
+.first-list__room span { color: var(--muted); font-size: var(--t-sm); }
+.first-list__why { min-width: 0; color: var(--ink); font-size: var(--t-sm); }
+.first-list__why--urgent { color: var(--danger); font-weight: 600; }
+.first-list .button { padding: 6px 12px; min-height: 36px; white-space: nowrap; }
+@media (max-width: 620px) { .first-list li { grid-template-columns: minmax(0, 1fr); } }
 .stable-room-list li { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .stable-room-head { display: flex; min-height: 44px; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .stable-room-facts { margin-bottom: 0; }

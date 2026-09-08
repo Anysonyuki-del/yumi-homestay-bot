@@ -1,0 +1,13 @@
+{# 工作台的三个视图标签。
+
+   总览、待我关注、房态与运营原本是三个并列的导航入口，同一件工作散在里面，
+   管家得先判断记录属于哪个模块再找具体工作。这里把它们收敛成一个入口下的三
+   个视图；房间视图仍然就是既有的运营页 URL，旧深链接原样可达，也不另造一套
+   待办数据。 #}
+{% macro views(current) -%}
+<nav class="tab-nav workbench-views" aria-label="工作台视图">
+  <a href="/employee/admin" {% if current == "today" %}aria-current="page"{% endif %}>今天</a>
+  <a href="/employee/admin/operations" {% if current == "rooms" %}aria-current="page"{% endif %}>房间</a>
+  <a href="/employee/tasks" {% if current == "tasks" %}aria-current="page"{% endif %}>全部任务</a>
+</nav>
+{%- endmacro %}

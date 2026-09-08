@@ -20,7 +20,10 @@ from homestay_bot.routes.admin_form_csrf import (
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.services.admin_dashboard_service import WUHAN_TIMEZONE, Snapshot
 from homestay_bot.services.admin_diagnostics_service import AuditPage, DiagnosticsSnapshot
-from homestay_bot.services.admin_operations_service import OperationsSnapshot
+from homestay_bot.services.admin_operations_service import (
+    OperationsSnapshot,
+    RoomOperationItem,
+)
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/admin")
@@ -168,6 +171,14 @@ async def admin_dashboard(request: Request) -> Response:
         aware_time = observed_at.replace(tzinfo=UTC) if observed_at.tzinfo is None else observed_at
         snapshot = Snapshot.empty(aware_time.astimezone(WUHAN_TIMEZONE).date())
         snapshot_error = "运营数据暂时不可用，当前显示安全空态。"
+    # 「先处理」直接用运营快照里已经排好风险序的房间，不另建第四套待办投影。
+    # 读失败时安静降级为空列表：工作台的其余部分仍然可用。
+    attention_rooms: tuple[RoomOperationItem, ...] = ()
+    try:
+        operations = await _operations_service(request).snapshot(observed_at)
+        attention_rooms = operations.attention_rooms
+    except Exception as error:
+        logger.warning("工作台先处理读取失败：error_type=%s", type(error).__name__)
     health = await _safe_health(request)
     return templates.TemplateResponse(
         request=request,
@@ -176,6 +187,7 @@ async def admin_dashboard(request: Request) -> Response:
             "page_title": "运营总览",
             "active_nav": "dashboard",
             "snapshot": snapshot,
+            "attention_rooms": attention_rooms,
             "health_degraded": snapshot_error is not None or health.get("status") != "ok",
             "error": snapshot_error,
         },

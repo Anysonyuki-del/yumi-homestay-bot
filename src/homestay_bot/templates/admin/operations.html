@@ -1,7 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
+{% import "components/workbench.html" as workbench %}
 
 {% block content %}
+{{ workbench.views("rooms") }}
 <section class="operations-heading panel panel--padded">
   <div class="section-heading">
     <div><p class="eyebrow">{{ snapshot.local_date | date_zh }}</p><h2>房间近期运营</h2><p class="muted">入住状态来自百居易订单事实，运营准备度来自本地任务证据。</p></div>
@@ -23,7 +25,9 @@
       <div><h3 class="room-operation-card__title" id="room-{{ room.property_id }}"><a href="/employee/properties/{{ room.property_id }}">{{ room.room_title }}</a></h3><small>{{ room.room_number or "房号待补充" }}</small></div>
       <div class="room-status-pair">{{ ui.occupancy_badge(room) }}{{ ui.readiness_badge(room) }}</div>
     </header>
-    <div class="room-next-action{% if room.overdue_task_count %} room-next-action--urgent{% endif %}"><span>下一步</span><strong>{{ room.next_action }}</strong></div>
+    {# 「下一步」此前只是一句文字，管家读完还得回列表重新筛选才能动手。
+       去向与文字出自服务里同一组分支；没有可靠入口时不渲染空按钮。 #}
+    <div class="room-next-action{% if room.overdue_task_count %} room-next-action--urgent{% endif %}"><span>下一步</span><strong>{{ room.next_action }}</strong>{% if room.next_action_url %}<a class="button button--secondary" href="{{ room.next_action_url }}">去处理</a>{% endif %}</div>
     <dl class="room-operation-facts">
       <div><dt>开放任务</dt><dd><a href="/employee/tasks?property_id={{ room.property_id }}">{{ room.open_task_count }} 项{% if room.overdue_task_count %}，其中 {{ room.overdue_task_count }} 项逾期{% endif %}</a></dd></div>
       <div><dt>下次入住</dt><dd>{{ room.next_arrival | date_zh if room.next_arrival else "暂无" }}</dd></div>
