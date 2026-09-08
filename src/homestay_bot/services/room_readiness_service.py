@@ -14,6 +14,14 @@ from homestay_bot.domain.models import (
 )
 from homestay_bot.services.stay_date_range import wuhan_today
 
+# 标记可入住所需的检查项。页面的「还缺什么」提示与 mark_ready 的守卫共用这一份
+# 定义：分开写就会出现「页面说齐了、服务端仍然拒绝」这类只有提交后才发现的矛盾。
+REQUIRED_READINESS_CHECKS: tuple[tuple[str, str], ...] = (
+    ("clean", "清洁已完成"),
+    ("supplies", "布草与耗材已补齐"),
+    ("damage", "设施完好已确认"),
+)
+
 
 class ReadinessRuleError(ValueError):
     """表示房间可入住所需证据或任务状态不完整。"""
@@ -96,7 +104,7 @@ class CredentialDeliveryEvaluator(Protocol):
 class RoomReadinessService:
     """校验证据后允许执行员工标记可入住、管理员撤回。"""
 
-    _required_checklist = frozenset({"clean", "supplies", "damage"})
+    _required_checklist = frozenset(key for key, _ in REQUIRED_READINESS_CHECKS)
 
     def __init__(
         self,
