@@ -1,5 +1,7 @@
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Self
 
@@ -9,6 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 HOSTEX_BASE_URL = "https://api.myhostex.com/v3"
 HOSTEX_SUCCESS_CODES = {0, 200}
 TRANSIENT_ERROR_CODES = {429, 500, 502, 503, 504}
+
+
+logger = logging.getLogger(__name__)
 
 
 class HostexBusinessError(RuntimeError):
@@ -165,6 +170,23 @@ class CreateReservationResult(HostexModel):
     request_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class ExternalCallRecord:
+    """一次外部调用的非敏感结果，字段与 external_requests 表逐一对应。
+
+    刻意不含请求参数、请求体和响应正文：这张表是为了回答「这次调用成功了吗」，
+    不是为了留存业务数据，把参数记进去就等于给日期、房号甚至令牌开了一条新的
+    外泄路径。
+    """
+
+    provider: str
+    method: str
+    path: str
+    request_id: str
+    business_code: int | None
+    succeeded: bool
+
+
 class HostexClient:
     """封装百居易 OpenAPI，并统一处理信封响应和只读重试。"""
 
@@ -175,9 +197,13 @@ class HostexClient:
         transport: httpx.AsyncBaseTransport | None = None,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         timeout_seconds: float = 10.0,
+        record: Callable[[ExternalCallRecord], Awaitable[None]] | None = None,
     ) -> None:
         """创建不泄露 Token 的异步 API 客户端。"""
         self._sleeper = sleeper
+        # 记录是可观测性而不是业务：没有注入时照常调用，注入后落盘失败也不能
+        # 让业务调用跟着失败。
+        self._record = record
         self._client = httpx.AsyncClient(
             base_url=HOSTEX_BASE_URL,
             headers={
@@ -228,12 +254,17 @@ class HostexClient:
                 envelope: dict[str, Any] = response.json()
             except (httpx.HTTPError, ValueError) as error:
                 if attempt + 1 >= max_attempts:
+                    # 没拿到有效响应：没有 request_id 也没有业务码，仍然要留下
+                    # 「这次调用失败了」的记录，否则排障时只能靠间接推断。
+                    await self._note(method, path, "", None, False)
                     raise HostexTransportError("百居易请求未得到有效响应") from error
                 await self._sleeper(float(2**attempt))
                 continue
 
             error_code = int(envelope.get("error_code", -1))
+            request_id = str(envelope.get("request_id", ""))
             if error_code in HOSTEX_SUCCESS_CODES:
+                await self._note(method, path, request_id, error_code, True)
                 return envelope
 
             retry_after_header = response.headers.get("Retry-After")
@@ -247,9 +278,36 @@ class HostexClient:
             if retry_safe and error_code in TRANSIENT_ERROR_CODES and attempt + 1 < max_attempts:
                 await self._sleeper(retry_after or float(2**attempt))
                 continue
+            await self._note(method, path, request_id, error_code, False)
             raise business_error
 
+        await self._note(method, path, "", None, False)
         raise HostexTransportError("百居易请求超过最大尝试次数")
+
+    async def _note(
+        self,
+        method: str,
+        path: str,
+        request_id: str,
+        business_code: int | None,
+        succeeded: bool,
+    ) -> None:
+        """记录一次调用结果；记录本身出问题绝不影响业务调用。"""
+        if self._record is None:
+            return
+        try:
+            await self._record(
+                ExternalCallRecord(
+                    provider="hostex",
+                    method=method,
+                    path=path,
+                    request_id=request_id,
+                    business_code=business_code,
+                    succeeded=succeeded,
+                )
+            )
+        except Exception:
+            logger.warning("外部调用记录写入失败：provider=hostex path=%s", path)
 
     async def list_properties(self, *, retry_safe: bool = True) -> list[Property]:
         """读取物理房间，供房型映射、房态查询和员工选房使用。"""

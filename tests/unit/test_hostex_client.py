@@ -12,6 +12,10 @@ from homestay_bot.integrations.hostex_client import (
 )
 
 
+async def _instant_sleep(_seconds: float) -> None:
+    """跳过重试退避，让失败路径测试立即完成。"""
+
+
 def json_transport(
     responder: Callable[[httpx.Request], httpx.Response],
 ) -> httpx.MockTransport:
@@ -584,3 +588,82 @@ async def test_create_reservation_sends_required_fields_without_retry() -> None:
         await client.create_reservation(request)
 
     assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_every_call_outcome_is_recorded_without_leaking_inputs() -> None:
+    """每次调用都要留下可查记录，且记录里不含参数、令牌或响应正文。
+
+    external_requests 表原本只有保留期清理在删它，没有任何地方写入：表注释写着
+    「便于审计和排障」，实际是一张永远为空的表。「这次百居易调用成功了吗」在生产
+    上因此无从查证，排障只能靠订单写入时间之类的间接推断。
+    """
+    records: list[object] = []
+
+    async def record(item):
+        records.append(item)
+
+    ok = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"error_code": 200, "request_id": "req-1", "data": {"properties": []}},
+        )
+    )
+    async with HostexClient("token-secret", transport=ok, record=record) as client:
+        await client.list_properties()
+
+    assert len(records) == 1
+    entry = records[0]
+    assert entry.provider == "hostex"
+    assert entry.method == "GET"
+    assert entry.path == "/properties"
+    assert entry.request_id == "req-1"
+    assert entry.business_code == 200
+    assert entry.succeeded is True
+    # 令牌与查询参数都不得出现在记录里。
+    assert "token-secret" not in str(entry)
+    assert "limit" not in str(entry)
+
+
+@pytest.mark.asyncio
+async def test_failures_are_recorded_too_because_that_is_what_debugging_needs() -> None:
+    """失败同样要记录——排障时最想看的恰恰是失败那一次。"""
+    records: list[object] = []
+
+    async def record(item):
+        records.append(item)
+
+    refused = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"error_code": 4001, "request_id": "req-2", "error_msg": "bad"},
+        )
+    )
+    async with HostexClient(
+        "token",
+        transport=refused,
+        record=record,
+        sleeper=_instant_sleep,
+    ) as client:
+        with pytest.raises(HostexBusinessError):
+            await client.list_properties()
+
+    assert [r.succeeded for r in records] == [False]
+    assert records[0].business_code == 4001
+
+
+@pytest.mark.asyncio
+async def test_a_broken_recorder_never_breaks_the_business_call() -> None:
+    """记录是可观测性，不是业务：它自己出问题不能让同步跟着失败。"""
+
+    async def broken(_item):
+        raise RuntimeError("记录后端不可用")
+
+    ok = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"error_code": 200, "request_id": "req-3", "data": {"properties": []}},
+        )
+    )
+    async with HostexClient("token", transport=ok, record=broken) as client:
+        assert await client.list_properties() == []

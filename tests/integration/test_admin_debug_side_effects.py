@@ -386,7 +386,11 @@ async def test_production_bundle_assistant_is_read_only_end_to_end(
         "build_public_https_client",
         lambda policy, **kwargs: FakeRawHttp(),
     )
-    monkeypatch.setattr(runtime_clients, "HostexClient", lambda token: hostex)
+    monkeypatch.setattr(
+        runtime_clients,
+        "HostexClient",
+        lambda token, **_options: hostex,
+    )
     monkeypatch.setattr(runtime_clients, "WeComApiClient", lambda *args: wecom)
     monkeypatch.setattr(runtime_clients, "WeComContactClient", lambda *args: contact)
 

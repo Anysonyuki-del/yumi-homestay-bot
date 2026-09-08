@@ -71,6 +71,9 @@ class RuntimeClientBundle:
     wecom_poll_interval_seconds: float
     hostex_reconcile_interval_seconds: float
     closeables: tuple[Any, ...] = field(repr=False, compare=False)
+    # 百居易 Webhook 密钥是否已真正配置。默认 False：没显式说明配置过就按未配置
+    # 处理，宁可少报健康也不把「没配」误报成正常。
+    hostex_webhook_configured: bool = False
     _close_state: _BundleCloseState = field(
         default_factory=_BundleCloseState,
         repr=False,
@@ -122,6 +125,10 @@ class RuntimeClientStatus:
     hostex_reconcile_interval_seconds: float
     resources_healthy: bool
     configuration_healthy: bool = True
+    # 百居易 Webhook 密钥是否已真正配置。未配置时健康检查报 not_configured 而不是
+    # 降级——与 wecom_contact_sync 的既有约定一致；配了却从没收到才是故障。
+    # 默认 False：没显式说明配置过就按未配置处理，宁可少报健康也不误报。
+    hostex_webhook_configured: bool = False
 
 
 @dataclass(slots=True)
@@ -204,6 +211,7 @@ class RuntimeClientRegistry:
                 revision=bundle.revision,
                 has_duty=bool(bundle.duty_userids),
                 contact_configured=bundle.contact_client is not None,
+                hostex_webhook_configured=bundle.hostex_webhook_configured,
                 wecom_poll_interval_seconds=bundle.wecom_poll_interval_seconds,
                 hostex_reconcile_interval_seconds=(
                     bundle.hostex_reconcile_interval_seconds
@@ -351,6 +359,7 @@ async def build_runtime_client_bundle(
     safety_hmac_key: bytes,
     web_search_status_setter: Callable[[Any], None],
     outbound_url_policy: OutboundUrlPolicy | None = None,
+    external_call_recorder: Any = None,
 ) -> RuntimeClientBundle:
     """从完整快照构造一个 revision 的生产客户端，并明确连接池所有权。"""
     snapshot.validate()
@@ -386,7 +395,12 @@ async def build_runtime_client_bundle(
         )
         owned[-1] = deepseek_anthropic
 
-        hostex = HostexClient(snapshot.hostex_access_token)
+        # 记录外部调用结果：external_requests 表原本只有清理任务在删它、
+        # 没有任何地方写入，于是「这次百居易调用成功了吗」在生产上无从查证。
+        hostex = HostexClient(
+            snapshot.hostex_access_token,
+            record=external_call_recorder,
+        )
         owned.append(hostex)
         wecom = WeComApiClient(
             snapshot.wecom_corp_id,
@@ -460,6 +474,9 @@ async def build_runtime_client_bundle(
             hostex_webhook_service=HostexWebhookService(
                 snapshot.hostex_webhook_secret_token,
                 hostex_event_recorder,
+            ),
+            hostex_webhook_configured=(
+                snapshot.hostex_webhook_secret_token.strip() not in ("", "未配置")
             ),
             agent_id=snapshot.wecom_agent_id,
             duty_userids=duty_userids,
