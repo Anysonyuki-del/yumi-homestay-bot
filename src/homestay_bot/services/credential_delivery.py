@@ -10,6 +10,7 @@ from homestay_bot.domain.enums import (
 from homestay_bot.domain.models import CredentialDelivery
 from homestay_bot.services.private_file_storage import PrivateFileStorage
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
+from homestay_bot.services.stay_date_range import wuhan_today
 
 
 @dataclass
@@ -153,8 +154,13 @@ class CredentialSafetyRules:
         today: Callable[[], date] | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
-        """保存可测试的武汉业务日期和 UTC 当前时间。"""
-        self._today = today or date.today
+        """保存可测试的武汉业务日期和 UTC 当前时间。
+
+        默认必须是武汉业务日而不是 `date.today`：容器按 UTC 运行时，武汉 8 月 2 日
+        凌晨 1 点在 UTC 还是 8 月 1 日，安全门会把当天入住的客人判成「不是入住日」
+        而拒绝发送。文档字符串写的是「武汉业务日期」，默认值却取系统日期。
+        """
+        self._today = today or wuhan_today
         self._now = now or (lambda: datetime.now(UTC))
 
     def invalid_reason(

@@ -394,3 +394,18 @@ async def test_uncertain_image_result_is_not_replayed(tmp_path) -> None:
     assert wecom.images == 1
     assert repository.sent == []
     assert repository.review == [(51, "TimeoutError")]
+
+
+def test_safety_gate_defaults_to_the_wuhan_business_day() -> None:
+    """凭证安全门的默认日期必须是武汉业务日，不是系统日期。
+
+    容器按 UTC 运行时，武汉 8 月 2 日凌晨 1 点在 UTC 还是 8 月 1 日；默认取
+    `date.today` 会把当天入住的客人判成「不是入住日」而拒绝发送。这条测试不依赖
+    运行环境的时区，只断言默认值确实绑定到业务日函数。
+    """
+    from homestay_bot.services.credential_delivery import CredentialSafetyRules
+    from homestay_bot.services.stay_date_range import wuhan_today
+
+    rules = CredentialSafetyRules()
+
+    assert rules._today is wuhan_today

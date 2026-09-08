@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -1212,3 +1213,55 @@ def test_real_app_registers_business_refusal_handler() -> None:
     from homestay_bot.main import app
 
     assert OperationRefused in app.exception_handlers
+
+
+@pytest.mark.asyncio
+async def test_queued_guest_reply_is_checked_for_staleness_before_it_goes_out() -> None:
+    """排队中的客人回复在真正出站前必须再判一次是否已被取代。
+
+    生成阶段的过时判定管不到排队期间：入队时有效的回复，可能在真正出站前已经
+    被新的客人消息或人工回复取代，发出去就会打断人工、或回答一个已经不成立的
+    问题。这条只覆盖已经入库的活动——外部请求一旦发起无法撤回，不承诺消除全部
+    并发时间窗。
+    """
+    from homestay_bot.application import _guest_reply_is_stale
+
+    class RepositoryStub:
+        """按预设结果回答会话查找与过时判定。"""
+
+        def __init__(self, conversation_id, stale):
+            self.conversation_id = conversation_id
+            self.stale = stale
+            self.calls = []
+
+        async def find_conversation_id(self, open_kfid, external_userid):
+            self.calls.append((open_kfid, external_userid))
+            return self.conversation_id
+
+        async def has_newer_conversation_activity(self, conversation_id, boundary):
+            return self.stale
+
+    payload = {
+        "open_kfid": "wk-1",
+        "external_userid": "wm-1",
+        "source_guest_message_id": "guest-1",
+    }
+
+    with patch(
+        "homestay_bot.application.SQLAlchemyMessageRepository",
+        return_value=RepositoryStub(7, True),
+    ):
+        assert await _guest_reply_is_stale(object(), payload) is True
+
+    with patch(
+        "homestay_bot.application.SQLAlchemyMessageRepository",
+        return_value=RepositoryStub(7, False),
+    ):
+        assert await _guest_reply_is_stale(object(), payload) is False
+
+    # 没有来源客人消息的出站不参与判定：重试、客诉投递和员工通知各有自己的边界。
+    with patch(
+        "homestay_bot.application.SQLAlchemyMessageRepository",
+        return_value=RepositoryStub(7, True),
+    ):
+        assert await _guest_reply_is_stale(object(), {"open_kfid": "wk-1"}) is False

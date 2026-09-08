@@ -217,3 +217,40 @@ async def test_synced_order_schedules_lifecycle_through_shared_path() -> None:
     await service.handle_event("event-1")
 
     assert lifecycle.order_ids == [1]
+
+
+async def test_reconcile_also_covers_orders_that_are_still_ongoing() -> None:
+    """对账必须覆盖仍在住的长住单，而不只是窗口内入住的订单。
+
+    只按入住日过滤会漏掉三天前入住、两天后离店的订单：漏了 Webhook 就补不回来，
+    而心跳照常成功，运营页把这间房显示成空闲——「没查到」被当成了「确定空置」。
+
+    两次独立查询而不是一次组合查询：单一过滤条件的语义是明确的，组合条件是
+    AND 还是 OR 尚未经过授权的契约验证；而只用退房日又会漏掉退房远在窗口之后
+    的长住单。
+    """
+    ongoing = Reservation(
+        reservation_code="R-ONGOING",
+        stay_code="S-ONGOING",
+        property_id=101,
+        check_in_date=date(2026, 8, 1),
+        check_out_date=date(2026, 8, 6),
+        status="confirmed",
+        guest_name="长住客人",
+        created_at="2026-08-01T00:00:00Z",
+    )
+    hostex = HostexStub([ongoing])
+    operations = OperationsStub()
+    service = HostexSyncService(hostex, operations)
+
+    synced = await service.reconcile(date(2026, 8, 4), date(2026, 8, 20))
+
+    # 同一笔订单被两次查询都捞到时只同步一次。
+    assert synced == 1
+    assert len(operations.upserts) == 1
+    assert len(hostex.queries) == 2
+    by_check_in, by_check_out = hostex.queries
+    assert by_check_in.start_check_in_date == date(2026, 8, 4)
+    assert by_check_in.start_check_out_date is None
+    assert by_check_out.start_check_out_date == date(2026, 8, 4)
+    assert by_check_out.start_check_in_date is None

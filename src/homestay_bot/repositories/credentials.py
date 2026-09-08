@@ -198,6 +198,51 @@ class SQLAlchemyCredentialDeliveryRepository:
             qr_file_id=credential.qr_file_id,
         )
 
+    async def mark_part_failed_by_external_message_id(
+        self,
+        external_message_id: str,
+        *,
+        error_code: str,
+    ) -> CredentialDeliveryPart | None:
+        """按外部消息编号把凭证部件标记为失败，并暂停同组未发送的部件。
+
+        平台受理只证明服务端收下了，不证明客人收到。异步失败回执此前没有任何
+        地方与凭证部件关联，于是部件和整组都停在 SENT——「已发送」和「确实送达」
+        被混为一谈，也没有任何人工待办接手。
+
+        按用户决定：已成功的部件不重放；失败部件与整组转人工；尚未开始的同组
+        部件一并暂停，避免客人收到缺一块的入住信息。幂等：重复回执不重复处理。
+        """
+        part = await self._session.scalar(
+            select(CredentialDeliveryPart)
+            .where(CredentialDeliveryPart.external_message_id == external_message_id[:128])
+            .with_for_update()
+        )
+        if part is None:
+            return None
+        if part.status is CredentialDeliveryStatus.MANUAL_FOLLOWUP:
+            return part
+        part.status = CredentialDeliveryStatus.MANUAL_FOLLOWUP
+        part.error_code = error_code[:64]
+        delivery = await self._session.get(CredentialDelivery, part.delivery_id)
+        if delivery is None:
+            raise LookupError("凭证投递不存在")
+        siblings = list(
+            await self._session.scalars(
+                select(CredentialDeliveryPart)
+                .where(CredentialDeliveryPart.delivery_id == delivery.id)
+                .with_for_update()
+            )
+        )
+        for sibling in siblings:
+            # 已经确认送达的不动；还没开始的暂停，别让客人收到半套凭证。
+            if sibling.status is CredentialDeliveryStatus.PENDING:
+                sibling.status = CredentialDeliveryStatus.MANUAL_FOLLOWUP
+                sibling.error_code = "sibling_part_failed"
+        delivery.status = CredentialDeliveryStatus.MANUAL_FOLLOWUP
+        await self._session.flush()
+        return part
+
     async def mark_part_sent(
         self,
         part_id: int,
