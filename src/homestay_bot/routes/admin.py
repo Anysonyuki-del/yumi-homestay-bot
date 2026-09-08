@@ -359,8 +359,10 @@ async def admin_operations(
     await _require_admin(request)
     # 查询字符串天然是文本；通过白名单后再转换为运营服务需要的整数。
     horizon_days = int(days)
+    # 观察时刻交给前端算倒计时：前端按经过时间推进，不依赖设备时钟正确。
+    observed_at = _clock(request)
     snapshot = await _operations_service(request).snapshot(
-        _clock(request),
+        observed_at,
         horizon_days=horizon_days,
         source_synced_at=getattr(
             request.app.state,
@@ -386,6 +388,7 @@ async def admin_operations(
             "snapshot": snapshot,
             "room_csrf_tokens": room_csrf_tokens,
             "room_statuses": list(RoomOperationalStatus),
+            "server_now_iso": observed_at.isoformat(),
         },
     )
 

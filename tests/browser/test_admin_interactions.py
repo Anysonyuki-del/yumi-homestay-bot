@@ -536,18 +536,22 @@ def test_permanent_delete_never_shows_the_archive_recoverable_wording(
 
 
 def _timeline_fixture(day_count: int) -> str:
-    """返回两张并排房间卡片，各带一条 day_count 天的时间轴。"""
-    days = "".join(
-        f'<li class="room-day"><strong>8/{index + 1}</strong>'
-        f'<span class="day-marks"><span class="day-mark day-mark--departure">退房 1</span>'
-        f'</span></li>'
-        for index in range(day_count)
+    """返回两张并排房间卡片，各带一条 day_count 天的住宿条时间轴。"""
+    cols = f"grid-template-columns: repeat({day_count}, minmax(48px, 1fr));"
+    dates = "".join(
+        f'<span class="stay-date">8/{index + 1}</span>' for index in range(day_count)
+    )
+    bars = (
+        '<span class="stay-bar" style="grid-column: 1 / span 2;">'
+        '<span class="stay-bar__label">客人示例 · 1 晚</span></span>'
     )
     card = (
         '<article class="room-operation-card">'
         '<div class="room-timeline-block">'
-        f'<ol class="clean-list room-timeline" tabindex="0" aria-label="近期房态">{days}</ol>'
-        "</div></article>"
+        f'<div class="room-timeline stay-grid" tabindex="0" aria-label="近期房态" role="group">'
+        f'<div class="stay-grid__dates" style="{cols}">{dates}</div>'
+        f'<div class="stay-grid__bars" style="{cols}">{bars}</div>'
+        "</div></div></article>"
     )
     return f"""<!doctype html>
     <html lang="zh-CN"><head></head><body class="admin-body">
@@ -567,19 +571,13 @@ def test_timeline_day_cells_stay_wide_enough_to_read(browser: Browser) -> None:
     page.set_content(_timeline_fixture(18))
     page.add_style_tag(content=ADMIN_CSS)
 
-    overflowing = page.evaluate(
-        """() => Array.from(document.querySelectorAll(".room-day")).filter((cell) => {
-             const mark = cell.querySelector(".day-mark");
-             return mark.getBoundingClientRect().width > cell.clientWidth;
-           }).length"""
-    )
     narrowest = page.evaluate(
-        """() => Math.min(...Array.from(document.querySelectorAll(".room-day"))
+        """() => Math.min(...Array.from(document.querySelectorAll(".stay-date"))
              .map((cell) => cell.getBoundingClientRect().width))"""
     )
 
-    assert overflowing == 0
-    assert narrowest >= 76
+    # 日期列至少 48px（与 minmax 下限一致），装不下时应横向滚动而非继续压缩。
+    assert narrowest >= 48
     page.close()
 
 
@@ -603,7 +601,7 @@ def test_a_timeline_too_long_for_its_card_scrolls_instead_of_shrinking(
     )
 
     assert measured["scroll"] > measured["visible"]
-    assert measured["scroll"] >= 18 * 76
+    assert measured["scroll"] >= 18 * 48
     page.close()
 
 
@@ -653,4 +651,78 @@ def test_an_action_without_its_own_wording_asks_nothing_rather_than_the_wrong_th
     page.click('button[formaction$="other-action"]')
 
     assert page.evaluate("() => window.confirmCalls") == []
+    page.close()
+
+
+def _countdown_fixture(server_now: str, target: str, kind: str,
+                       verified: str = "0", ambiguous: str = "0") -> str:
+    """构造带单个倒计时单元的入住安排页面片段。"""
+    return f"""<!doctype html>
+    <html lang="zh-CN"><head></head><body class="admin-body">
+      <main class="page-content">
+        <section class="operations-heading" data-operations-refresh
+                 data-server-now="{server_now}"></section>
+        <span class="countdown" data-target="{target}" data-kind="{kind}"
+              data-verified="{verified}" data-ambiguous="{ambiguous}">初始</span>
+      </main>
+    </body></html>"""
+
+
+def test_countdown_checkout_shows_hours_and_minutes(browser: Browser) -> None:
+    """A04：04:00 观察、12:00 计划退房 → 距计划退房还有 8 小时。"""
+    page = browser.new_page()
+    page.set_content(_countdown_fixture(
+        "2026-09-09T04:00:00+08:00", "2026-09-09T12:00:00+08:00", "checkout"))
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    text = page.inner_text(".countdown")
+    # 8 小时会因加载毫秒流逝 floor 成 7 小时 59 分钟——这是 §6 的 floor 行为；
+    # 验证措辞与小时/分钟格式即可，不钉整点。
+    assert text.startswith("距计划退房还有")
+    assert "小时" in text and "-" not in text
+    page.close()
+
+
+def test_countdown_checkin_shows_distance(browser: Browser) -> None:
+    """A04：04:00 观察、15:00 起入住 → 距可入住时间还有 11 小时。"""
+    page = browser.new_page()
+    page.set_content(_countdown_fixture(
+        "2026-09-09T04:00:00+08:00", "2026-09-09T15:00:00+08:00", "checkin"))
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    text = page.inner_text(".countdown")
+    assert text.startswith("距可入住时间还有")
+    assert "小时" in text and "-" not in text
+    page.close()
+
+
+def test_countdown_past_checkout_is_waiting_not_negative(browser: Browser) -> None:
+    """A05：过了计划退房未核验 → 显示已过时间与退房待确认，不显示负数。"""
+    page = browser.new_page()
+    page.set_content(_countdown_fixture(
+        "2026-09-09T12:30:00+08:00", "2026-09-09T12:00:00+08:00", "checkout"))
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    text = page.inner_text(".countdown")
+    assert "退房待确认" in text
+    assert "计划退房时间已过" in text and "分钟" in text
+    assert "-" not in text
+    page.close()
+
+
+def test_countdown_past_checkin_is_arrival_pending(browser: Browser) -> None:
+    """A06：过了 15:00 无实际到店 → 已到可入住时间 · 到店待确认。"""
+    page = browser.new_page()
+    page.set_content(_countdown_fixture(
+        "2026-09-09T15:30:00+08:00", "2026-09-09T15:00:00+08:00", "checkin"))
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    assert "已到可入住时间 · 到店待确认" in page.inner_text(".countdown")
+    page.close()
+
+
+def test_countdown_verified_checkout_stops(browser: Browser) -> None:
+    """A07：已核验退房 → 显示已退房，不再倒计时。"""
+    page = browser.new_page()
+    page.set_content(_countdown_fixture(
+        "2026-09-09T11:00:00+08:00", "2026-09-09T12:00:00+08:00", "checkout",
+        verified="1"))
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    assert page.inner_text(".countdown").strip() == "已退房"
     page.close()

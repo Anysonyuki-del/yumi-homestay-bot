@@ -80,6 +80,9 @@ class StayRecord:
     customer_id: int | None = None
     guest_name: str | None = None
     checkout_observed_on: date | None = None
+    # 内部订单主键：住宿条与倒计时以订单为最小单位、共享同一投影的稳定标识；
+    # 同名不同客是不同订单，绝不用姓名匹配。默认 0 仅为兼容既有无参构造。
+    order_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +287,7 @@ class SQLAlchemyAdminOperationsRepository:
                 # 客人未关联时保持 None，页面回落到中性称呼，不编造姓名。
                 Customer.display_name,
                 StayOrder.checkout_observed_on,
+                StayOrder.id,
             )
             .join(PropertyProfile, PropertyProfile.id == StayOrder.property_id)
             # 左连接：订单未关联客户时仍要出现在时间轴里。
@@ -304,6 +308,7 @@ class SQLAlchemyAdminOperationsRepository:
                 customer_id=customer_id,
                 guest_name=guest_name,
                 checkout_observed_on=checkout_observed_on,
+                order_id=order_id,
             )
             for (
                 property_id,
@@ -312,6 +317,7 @@ class SQLAlchemyAdminOperationsRepository:
                 customer_id,
                 guest_name,
                 checkout_observed_on,
+                order_id,
             ) in rows
         )
 

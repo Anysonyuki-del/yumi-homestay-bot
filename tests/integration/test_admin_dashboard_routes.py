@@ -614,21 +614,23 @@ def test_stale_timeline_does_not_call_a_missing_record_vacant() -> None:
 
     assert response.status_code == 200
     assert "入住信息待核实" in response.text
-    assert "以下为上次同步记录，入住信息待确认。" in response.text
-    assert "day-mark--unknown" in response.text
-    assert "day-mark--vacant" not in response.text
+    assert "以下为上次同步记录，入住安排待核实。" in response.text
+    # 住宿条时间轴不再逐日写「空闲」，也不断言可售。
+    assert "空闲" not in response.text
+    assert "可售" not in response.text
 
 
-def test_synced_timeline_still_states_vacancy_as_a_fact() -> None:
-    """同步可信时，空闲就是事实，不该被降级成「无记录」。"""
+def test_synced_timeline_states_no_order_not_vacancy() -> None:
+    """同步可信但范围内无订单：只说「暂无订单」，不冒充空房、可售或无记录。"""
     client = build_client()
     client.app.state.admin_operations_service = StableRoomOperationsStub()
     login_admin(client, next_path="/employee/admin")
 
     response = client.get("/employee/admin/operations")
 
-    assert "day-mark--vacant" in response.text
-    assert "day-mark--unknown" not in response.text
+    assert "当前同步范围内暂无订单" in response.text
+    assert "空闲" not in response.text
+    assert "可售" not in response.text
     assert "以下为上次同步记录" not in response.text
 
 
@@ -646,11 +648,11 @@ def test_expanded_stable_rooms_show_the_future_they_promise() -> None:
 
     # 东湖小院现在直接在统一列表的卡片里；取它那张卡片的片段。
     block = response.text.split("东湖小院", 1)[1].split("</article>", 1)[0]
-    assert "下次入住" in block
     assert "开放任务" in block
     assert 'href="/employee/tasks?property_id=202"' in block
-    assert "查看近期安排" in block
-    assert 'class="clean-list room-timeline"' in block
+    # 时间轴默认展开（不再藏进「查看近期安排」折叠），住宿条网格直接可见。
+    assert 'class="room-timeline stay-grid"' in block
+    assert "调整本系统记录" in block
 
 
 def test_scrollable_timelines_can_be_reached_by_keyboard() -> None:
@@ -660,7 +662,7 @@ def test_scrollable_timelines_can_be_reached_by_keyboard() -> None:
 
     response = client.get("/employee/admin/operations")
 
-    timelines = re.findall(r'<ol class="clean-list room-timeline"[^>]*>', response.text)
+    timelines = re.findall(r'<div class="room-timeline stay-grid"[^>]*>', response.text)
     assert timelines
     assert all('tabindex="0"' in tag for tag in timelines)
     assert all("aria-label=" in tag for tag in timelines)

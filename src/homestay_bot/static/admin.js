@@ -399,3 +399,112 @@ document.querySelectorAll("button[data-typed-confirm]").forEach((button) => {
     if (field) field.value = String(selected.size);
   });
 });
+
+// 入住安排倒计时与跨节点刷新（Spec §6/§9）。
+// 只建立一个页面级分钟定时器；倒计时按「服务器观察时刻 + 页面加载后经过的时间」
+// 推进，不依赖设备时钟正确。跨过计划节点／当地午夜／隐藏超过一分钟后恢复时，若无
+// 未保存或提交中的内容，则对本只读页执行一次 GET 刷新；有未保存内容则只提示不导航。
+(function initOperationsCountdown() {
+  const root = document.querySelector("[data-operations-refresh][data-server-now]");
+  const cells = Array.from(document.querySelectorAll(".countdown"));
+  if (!root || cells.length === 0) return;
+
+  const serverNowMs = Date.parse(root.getAttribute("data-server-now"));
+  if (Number.isNaN(serverNowMs)) return;
+  const perfStart = performance.now();
+  // 以「加载时已越过的节点数 + 当地日期」为签名，签名变化即说明跨过了节点或午夜。
+  let baselineSignature = null;
+  let refreshing = false;
+
+  function serverNow() {
+    return serverNowMs + (performance.now() - perfStart);
+  }
+
+  function formatDuration(totalMinutes) {
+    if (totalMinutes < 1) return "不足 1 分钟";
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const minutes = totalMinutes % 60;
+    if (totalMinutes >= 1440) {
+      return hours ? `${days} 天 ${hours} 小时` : `${days} 天`;
+    }
+    if (!hours) return `${minutes} 分钟`;
+    return minutes ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`;
+  }
+
+  function renderCell(cell, now) {
+    const kind = cell.getAttribute("data-kind");
+    const verified = cell.getAttribute("data-verified") === "1";
+    const ambiguous = cell.getAttribute("data-ambiguous") === "1";
+    const targetMs = Date.parse(cell.getAttribute("data-target"));
+    if (ambiguous || Number.isNaN(targetMs)) return; // 服务端静态文案已足够
+    const diffMs = targetMs - now;
+    // 用原始差值判正负，避免四舍五入提前跨节点。
+    const mins = Math.floor(Math.abs(diffMs) / 60000);
+    if (kind === "checkout") {
+      if (verified) { cell.textContent = "已退房"; return; }
+      if (diffMs > 0) {
+        cell.textContent = `距计划退房还有 ${formatDuration(mins)}`;
+      } else if (diffMs > -60000) {
+        cell.textContent = "已到计划退房时间 · 退房待确认";
+      } else {
+        cell.textContent = `计划退房时间已过 ${formatDuration(mins)} · 退房待确认`;
+      }
+      return;
+    }
+    if (diffMs > 0) {
+      cell.textContent = `距可入住时间还有 ${formatDuration(mins)}`;
+    } else {
+      cell.textContent = "已到可入住时间 · 到店待确认";
+    }
+  }
+
+  function crossedSignature(now) {
+    // 越过的节点数：所有目标里 now 已达到或超过的个数；再拼当地日期。
+    let passed = 0;
+    cells.forEach((cell) => {
+      const t = Date.parse(cell.getAttribute("data-target"));
+      if (!Number.isNaN(t) && now >= t) passed += 1;
+    });
+    return new Date(now).toDateString() + "#" + passed;
+  }
+
+  function hasUnsavedWork() {
+    // 复用未保存表单集合；提交中的按钮也算进行中，不打断。
+    if (typeof dirtyForms !== "undefined" && dirtyForms.size > 0) return true;
+    return document.querySelector("button[aria-busy='true']") !== null;
+  }
+
+  function showStaleHint() {
+    if (document.querySelector("[data-schedule-stale-hint]")) return;
+    const hint = document.createElement("div");
+    hint.className = "alert alert--warning";
+    hint.setAttribute("role", "status");
+    hint.setAttribute("data-schedule-stale-hint", "");
+    hint.innerHTML =
+      '安排可能已变化，保存后刷新。<a href="">刷新入住安排</a>';
+    root.appendChild(hint);
+  }
+
+  function tick() {
+    const now = serverNow();
+    cells.forEach((cell) => renderCell(cell, now));
+    const signature = crossedSignature(now);
+    if (baselineSignature === null) { baselineSignature = signature; return; }
+    if (signature === baselineSignature || refreshing) return;
+    // 跨过节点或午夜：无未保存内容则单次 GET 刷新，否则只提示不导航。
+    if (hasUnsavedWork()) { showStaleHint(); return; }
+    refreshing = true;
+    window.location.reload();
+  }
+
+  tick();
+  window.setInterval(tick, 60000);
+  let hiddenAt = null;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
+    // 恢复可见且隐藏超过一分钟：立即重算一次（tick 内部再决定是否刷新）。
+    if (hiddenAt !== null && Date.now() - hiddenAt > 60000) tick();
+    hiddenAt = null;
+  });
+})();

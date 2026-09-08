@@ -1,7 +1,7 @@
 """管理员待关注事项与房间近期运营的安全页面投影。"""
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -105,6 +105,59 @@ class RoomDayOperation:
 
 
 @dataclass(frozen=True, slots=True)
+class RoomStayInterval:
+    """住宿条最小单位：一笔订单的区间与身份，供时间轴与倒计时同源。
+
+    同名不同客是不同订单；相邻订单即使同一客户也保留订单边界，不在此改写连住数据。
+    """
+
+    order_id: int
+    customer_id: int | None
+    guest_name: str | None
+    check_in: date
+    check_out: date
+    checkout_verified: bool = False
+
+    @property
+    def nights(self) -> int:
+        """晚数=退房日−入住日，占两个日期格不代表两晚。"""
+        return (self.check_out - self.check_in).days
+
+
+@dataclass(frozen=True, slots=True)
+class RoomEvent:
+    """一次退房或入住事件，绑定同一订单的身份与计划绝对时刻。
+
+    target 为服务端按 Asia/Shanghai 构造的计划绝对时刻（退房日 12:00 或入住日
+    15:00）；倒计时文本由前端按经过时间计算。ambiguous 为真时无法唯一确定订单，
+    不暴露具体姓名，页面显示「有多笔安排」。
+    """
+
+    kind: str
+    order_id: int | None
+    customer_id: int | None
+    guest_name: str | None
+    target: datetime
+    verified: bool = False
+    ambiguous: bool = False
+    # 服务端构造的绝对时间文案与初始状态词：模板不解析中文日期；无 JS 时也要有
+    # 「绝对时间 + 状态」，不至于只剩空倒计时。实时的「还有 X」由前端按经过时间算。
+    target_label: str = ""
+    status_word: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RoomEvents:
+    """一间房当前的退房／入住事件、计划周转间隔与住宿条集合。"""
+
+    checkout: RoomEvent | None
+    checkin: RoomEvent | None
+    turnover_gap_minutes: int | None
+    is_consecutive: bool
+    intervals: tuple[RoomStayInterval, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RoomPrimaryStatus:
     """房间主状态的展示结论：无 PII 的状态词 + 单独的客人名字段。
 
@@ -151,6 +204,11 @@ class RoomOperationItem:
     schedule_line: str = ""
     schedule_phase: str = ""
     is_consecutive: bool = False
+    # 住宿条与双事件（Spec §4/§5）：时间轴按订单区间画，退房/入住倒计时绑定同一订单。
+    stay_intervals: tuple["RoomStayInterval", ...] = ()
+    checkout_event: "RoomEvent | None" = None
+    checkin_event: "RoomEvent | None" = None
+    turnover_gap_minutes: int | None = None
 
     @property
     def today_arrival(self) -> bool:
@@ -175,6 +233,25 @@ class RoomOperationItem:
 
 
 @dataclass(frozen=True, slots=True)
+class TimelineBar:
+    """住宿条在日期网格上的位置与身份（Spec §7）。
+
+    start_col 为 1 起的 CSS Grid 起始列，span 为跨列数；left/right_continues 表示
+    住宿真实起止超出当前窗口、需要前／后延续标记。身份随订单，姓名只出现一次。
+    """
+
+    order_id: int
+    customer_id: int | None
+    guest_name: str | None
+    nights: int
+    start_col: int
+    span: int
+    left_continues: bool
+    right_continues: bool
+    checkout_verified: bool
+
+
+@dataclass(frozen=True, slots=True)
 class SevenDayRoomItem:
     """表示一个房间近期运营时间轴；保留类名以兼容既有调用方。"""
 
@@ -182,6 +259,8 @@ class SevenDayRoomItem:
     room_number: str | None
     room_title: str
     days: tuple[RoomDayOperation, ...]
+    bars: tuple[TimelineBar, ...] = ()
+    total_columns: int = 0
 
 
 def _room_risk_sort_key(item: RoomOperationItem) -> tuple[int, int, int, int, int, str, int]:
@@ -450,6 +529,9 @@ class AdminOperationsService:
                 source_stale=source_stale,
                 room_stays=room_stays,
             )
+            events = AdminOperationsService._room_events(
+                local_now=local_now, room_stays=room_stays
+            )
             # 下一位客人名：取今日之后最早一笔到店对应的客人。
             future_arrival_stays = sorted(
                 (s for s in room_stays if s.check_in_date > local_date),
@@ -492,13 +574,42 @@ class AdminOperationsService:
                     schedule_line=primary.schedule_line,
                     schedule_phase=primary.schedule_phase,
                     is_consecutive=primary.is_consecutive,
+                    stay_intervals=events.intervals,
+                    checkout_event=events.checkout,
+                    checkin_event=events.checkin,
+                    turnover_gap_minutes=events.turnover_gap_minutes,
                 )
             )
+            # 住宿条网格：窗口首日为 days[0]，每笔订单按日期偏移落到网格列；超出窗口
+            # 的住宿裁切并标延续。checkout 日一列也纳入（当天 12:00 前仍占用）。
+            window_start = days[0]
+            total_columns = len(days)
+            bars: list[TimelineBar] = []
+            for interval in events.intervals:
+                ci_off = (interval.check_in - window_start).days
+                co_off = (interval.check_out - window_start).days
+                start_col = max(ci_off, 0) + 1
+                end_line = min(co_off, total_columns - 1) + 2
+                bars.append(
+                    TimelineBar(
+                        order_id=interval.order_id,
+                        customer_id=interval.customer_id,
+                        guest_name=interval.guest_name,
+                        nights=interval.nights,
+                        start_col=start_col,
+                        span=max(1, end_line - start_col),
+                        left_continues=ci_off < 0,
+                        right_continues=co_off > total_columns - 1,
+                        checkout_verified=interval.checkout_verified,
+                    )
+                )
             matrix_items.append(
                 SevenDayRoomItem(
                     property_id=room.property_id,
                     room_number=room.room_number,
                     room_title=room.room_title,
+                    bars=tuple(bars),
+                    total_columns=total_columns,
                     days=tuple(
                         RoomDayOperation(
                             local_date=day,
@@ -565,6 +676,171 @@ class AdminOperationsService:
             next_arrival=next_arrival,
             property_id=0,
         )[0]
+
+    @staticmethod
+    def _room_events(
+        *,
+        local_now: datetime,
+        room_stays: list[StayRecord],
+    ) -> "RoomEvents":
+        """按订单事实与当地时刻选出退房／入住事件、计划周转间隔与住宿条。
+
+        规则见 Spec §5：退房取当前或今日离店的那笔订单（不含今日才到店的），入住
+        取今日及以后最早一笔；候选多于一笔且无法唯一确定时标记 ambiguous；相邻订单
+        同一客户为续住、不计算周转。姓名与日期一律取自同一订单对象，绝不跨订单拼接。
+        """
+        today = local_now.date()
+        intervals = tuple(
+            RoomStayInterval(
+                order_id=s.order_id,
+                customer_id=s.customer_id,
+                guest_name=s.guest_name,
+                check_in=s.check_in_date,
+                check_out=s.check_out_date,
+                checkout_verified=s.checkout_observed_on == s.check_out_date,
+            )
+            for s in sorted(room_stays, key=lambda s: (s.check_in_date, s.order_id))
+        )
+
+        def _noon(day: date) -> datetime:
+            return datetime.combine(day, CHECK_OUT_TIME.replace(tzinfo=None), tzinfo=WUHAN_TIMEZONE)
+
+        def _afternoon(day: date) -> datetime:
+            return datetime.combine(day, CHECK_IN_TIME.replace(tzinfo=None), tzinfo=WUHAN_TIMEZONE)
+
+        def _abs_label(kind: str, target: datetime) -> str:
+            """服务端构造绝对时间文案；模板只渲染，不解析中文日期。"""
+            delta_days = (target.date() - today).days
+            if delta_days == 0:
+                day_word = "今天"
+            elif delta_days == 1:
+                day_word = "明天"
+            elif delta_days == -1:
+                day_word = "昨天"
+            else:
+                day_word = f"{target.month}月{target.day}日"
+            clock = f"{target.hour:02d}:{target.minute:02d}"
+            if kind == "checkin":
+                return f"{day_word} {clock} 起入住"
+            return f"{day_word} {clock}（计划）"
+
+        def _status_word(
+            kind: str, target: datetime, *, verified: bool, ambiguous: bool
+        ) -> str:
+            """渲染时刻的初始状态词；实时「还有 X」由前端补足。"""
+            if ambiguous:
+                return "有多笔退房安排" if kind == "checkout" else "有多笔入住安排"
+            if kind == "checkout":
+                if verified:
+                    return "已退房"
+                if local_now < target:
+                    return "距计划退房"
+                return "退房待确认"
+            if local_now < target:
+                return "距可入住时间"
+            return "到店待确认"
+
+        def _fill(event: RoomEvent) -> RoomEvent:
+            """补齐事件的绝对文案与初始状态词。"""
+            return replace(
+                event,
+                target_label=_abs_label(event.kind, event.target),
+                status_word=_status_word(
+                    event.kind,
+                    event.target,
+                    verified=event.verified,
+                    ambiguous=event.ambiguous,
+                ),
+            )
+
+        # 退房候选：今日离店的订单，或在今日之前就开始、跨过今天的订单（不含今日才
+        # 到店的，那属于入住而非退房）。
+        checkout_candidates = [
+            s for s in room_stays
+            if s.check_out_date == today
+            or (s.check_in_date < today < s.check_out_date)
+        ]
+        # 入住候选：今日及以后到店，取最早一笔；同一最早日期多笔即为歧义。
+        arriving = sorted(
+            (s for s in room_stays if s.check_in_date >= today),
+            key=lambda s: (s.check_in_date, s.order_id),
+        )
+
+        checkout: RoomEvent | None = None
+        if len(checkout_candidates) > 1:
+            checkout = RoomEvent(
+                kind="checkout",
+                order_id=None,
+                customer_id=None,
+                guest_name=None,
+                target=_noon(today),
+                ambiguous=True,
+            )
+        elif checkout_candidates:
+            c = checkout_candidates[0]
+            checkout = RoomEvent(
+                kind="checkout",
+                order_id=c.order_id,
+                customer_id=c.customer_id,
+                guest_name=c.guest_name,
+                target=_noon(c.check_out_date),
+                verified=c.checkout_observed_on == c.check_out_date,
+            )
+
+        checkin: RoomEvent | None = None
+        if arriving:
+            earliest = arriving[0].check_in_date
+            same_day = [s for s in arriving if s.check_in_date == earliest]
+            if len(same_day) > 1:
+                checkin = RoomEvent(
+                    kind="checkin",
+                    order_id=None,
+                    customer_id=None,
+                    guest_name=None,
+                    target=_afternoon(earliest),
+                    ambiguous=True,
+                )
+            else:
+                a = same_day[0]
+                checkin = RoomEvent(
+                    kind="checkin",
+                    order_id=a.order_id,
+                    customer_id=a.customer_id,
+                    guest_name=a.guest_name,
+                    target=_afternoon(a.check_in_date),
+                )
+
+        # 续住：退房订单与入住订单相邻且同一非空客户；不计算周转间隔。
+        is_consecutive = bool(
+            checkout is not None
+            and checkin is not None
+            and not checkout.ambiguous
+            and not checkin.ambiguous
+            and checkout.customer_id is not None
+            and checkout.customer_id == checkin.customer_id
+        )
+
+        turnover_gap_minutes: int | None = None
+        if (
+            checkout is not None
+            and checkin is not None
+            and not checkout.ambiguous
+            and not checkin.ambiguous
+            and not is_consecutive
+            and checkout.target.date() == today
+            and checkin.target.date() == today
+        ):
+            turnover_gap_minutes = int(
+                (checkin.target - checkout.target).total_seconds() // 60
+            )
+
+        return RoomEvents(
+            checkout=_fill(checkout) if checkout is not None else None,
+            checkin=_fill(checkin) if checkin is not None else None,
+            turnover_gap_minutes=turnover_gap_minutes,
+            is_consecutive=is_consecutive,
+            intervals=intervals,
+        )
 
     @staticmethod
     def _primary_status(

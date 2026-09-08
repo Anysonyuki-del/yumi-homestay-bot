@@ -55,14 +55,26 @@
 
 {# 近期房态时间轴：同步过期时如实说明这是上次同步记录，不把「本地没有记录」
    直接写成确定的「空闲」。时间轴可横向滚动，因此本身要能被键盘聚焦。 #}
+{# 住宿条时间轴（Spec §7）：日期表头一行，每笔订单一条 bar 独占一轨，按日期列
+   定位；姓名只出现一次并链接客户档案；超窗裁切并标前／后延续。空白不表示可售。 #}
+{% macro stay_guest(guest_name, customer_id) -%}
+{%- if customer_id is not none and guest_name %}<a href="/employee/customers/{{ customer_id }}">{{ guest_name }}</a>
+{%- elif customer_id is not none %}<a href="/employee/customers/{{ customer_id }}">查看客人</a>
+{%- else %}<span class="stay-bar__unlinked">未关联客人</span>{% endif %}
+{%- endmacro %}
+
 {% macro room_timeline(timeline, today, stale, label) -%}
 {% if timeline %}<div class="room-timeline-block">
-  {% if stale %}<p class="timeline-note">以下为上次同步记录，入住信息待确认。</p>{% endif %}
-  <ol class="clean-list room-timeline" tabindex="0" aria-label="{{ label }}{% if stale %}（上次同步记录，待确认）{% endif %}">
-    {% for day in timeline.days %}<li class="room-day{% if day.local_date == today %} room-day--today{% endif %}{% if day.occupied %} room-day--occupied{% endif %}">
-      <strong>{{ day.local_date.month }}/{{ day.local_date.day }}</strong>
-      <span class="day-marks">{% if day.local_date == today %}<span class="day-mark day-mark--today">今天</span>{% endif %}{% if day.arrival_count %}<span class="day-mark day-mark--arrival">入住 {{ day.arrival_count }}</span>{% endif %}{% if day.departure_count %}<span class="day-mark day-mark--departure">退房 {{ day.departure_count }}</span>{% endif %}{% if day.occupied %}<span class="day-mark day-mark--occupied">在住</span>{% elif not day.arrival_count and not day.departure_count %}{% if stale %}<span class="day-mark day-mark--unknown">无记录</span>{% else %}<span class="day-mark day-mark--vacant">空闲</span>{% endif %}{% endif %}</span>
-    </li>{% endfor %}
-  </ol>
+  {% if stale %}<p class="timeline-note">以下为上次同步记录，入住安排待核实。</p>{% endif %}
+  <div class="room-timeline stay-grid" tabindex="0" aria-label="{{ label }}{% if stale %}（上次同步记录，待核实）{% endif %}" role="group">
+    <div class="stay-grid__dates" style="grid-template-columns: repeat({{ timeline.total_columns }}, minmax(48px, 1fr));">
+      {% for day in timeline.days %}<span class="stay-date{% if day.local_date == today %} stay-date--today{% endif %}">{{ day.local_date.month }}/{{ day.local_date.day }}{% if day.local_date == today %} <span class="stay-date__today">今天</span>{% endif %}</span>{% endfor %}
+    </div>
+    {% if timeline.bars %}
+    <div class="stay-grid__bars" style="grid-template-columns: repeat({{ timeline.total_columns }}, minmax(48px, 1fr));">
+      {% for bar in timeline.bars %}<span class="stay-bar{% if bar.checkout_verified %} stay-bar--verified{% endif %}" style="grid-column: {{ bar.start_col }} / span {{ bar.span }};">{% if bar.left_continues %}<span class="stay-bar__cont" aria-label="住宿在更早日期开始">‹</span>{% endif %}<span class="stay-bar__label">{{ stay_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</span>{% if bar.right_continues %}<span class="stay-bar__cont" aria-label="住宿延续到更晚日期">›</span>{% endif %}</span>{% endfor %}
+    </div>
+    {% else %}<p class="stay-grid__empty">当前同步范围内暂无订单。</p>{% endif %}
+  </div>
 </div>{% endif %}
 {%- endmacro %}
