@@ -13,7 +13,7 @@ from homestay_bot.routes.admin_form_csrf import (
     issue_form_csrf,
 )
 from homestay_bot.routes.employee_auth import require_employee_session
-from homestay_bot.routes.page_errors import raise_page_error
+from homestay_bot.routes.page_errors import raise_page_error, safe_return_path
 from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.property_admin_service import PropertyFields
 from homestay_bot.web import templates
@@ -243,6 +243,7 @@ async def set_room_operational_status(
     property_id: int,
     room_status: Annotated[RoomOperationalStatus, Form()],
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """允许管理员直接设定房态，不要求清单与现场照片证据。"""
     administrator = await _current_admin(request)
@@ -258,8 +259,11 @@ async def set_room_operational_status(
         raise HTTPException(status_code=404, detail="房间不存在") from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    # 运营页与房间详情共用这一个提交口，回哪去由来源决定：跨房间调度时留在
+    # 原来的 3/7/14 天视图和房间锚点上，房间内提交则留在该房间。兜底是这个
+    # 房间而不是任务中心——把改房态的人甩去任务列表毫无道理。
     return RedirectResponse(
-        f"/employee/properties/{property_id}",
+        safe_return_path(return_to, fallback=f"/employee/properties/{property_id}"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

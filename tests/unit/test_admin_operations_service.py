@@ -706,24 +706,67 @@ def test_every_next_action_carries_a_destination_or_none_at_all() -> None:
         return AdminOperationsService._next_step(**fields)
 
     # 同步不可信：没有能真正解决它的入口，不给按钮。
-    reason, url = step(source_stale=True)
+    reason, url, _ = step(source_stale=True)
     assert "百居易" in reason and url is None
 
     # 逾期是首要原因，去向就带上房间与逾期条件，而不是该房间全部任务。
-    reason, url = step(task_count=RoomTaskCountRecord(101, 3, 2))
+    reason, url, _ = step(task_count=RoomTaskCountRecord(101, 3, 2))
     assert "2 项逾期" in reason
     assert url == "/employee/tasks?property_id=101&overdue=true"
 
     # 维修是房间本身的问题，去房源页而不是任务列表。
-    reason, url = step(operational_status=RoomOperationalStatus.MAINTENANCE)
+    reason, url, _ = step(operational_status=RoomOperationalStatus.MAINTENANCE)
     assert "维修" in reason
     assert url == "/employee/properties/101"
 
     # 有开放任务但不逾期：进该房间的任务列表。
-    reason, url = step(task_count=RoomTaskCountRecord(101, 3, 0))
+    reason, url, _ = step(task_count=RoomTaskCountRecord(101, 3, 0))
     assert "3 项开放任务" in reason
     assert url == "/employee/tasks?property_id=101"
 
     # 无事可做时同样不渲染空按钮。
-    reason, url = step()
+    reason, url, _ = step()
     assert reason == "暂无近期运营动作" and url is None
+
+
+def test_next_step_does_not_send_you_to_an_empty_task_list() -> None:
+    """今日到店/离店但一项开放任务都没有时，不能把人送进空列表。
+
+    生产上出现过：房间显示「优先完成房间准备并接待入住」，开放任务 0 项，点
+    「去处理」进入按该房间筛选的任务页，只看到「当前没有符合筛选条件的任务」。
+    文案要求立即行动，目标页却没有可操作对象。
+
+    零任务时改去房间运营详情，并把按钮文案换成与去向相符的说法；不因点击自动
+    补造生产任务——若业务上本应有任务，那是任务生成链的问题，另查。
+    """
+    from homestay_bot.repositories.admin_operations import RoomTaskCountRecord
+    from homestay_bot.services.admin_operations_service import AdminOperationsService
+
+    def step(**overrides):
+        fields = {
+            "source_stale": False,
+            "operational_status": RoomOperationalStatus.READY,
+            "arrivals": 0,
+            "departures": 0,
+            "occupied": False,
+            "task_count": RoomTaskCountRecord(101, 0, 0),
+            "next_arrival": None,
+            "property_id": 101,
+        }
+        fields.update(overrides)
+        return AdminOperationsService._next_step(**fields)
+
+    tasks_url = "/employee/tasks?property_id=101"
+    room_url = "/employee/properties/101"
+
+    for scenario in ({"arrivals": 1}, {"departures": 1}, {"arrivals": 1, "departures": 1}):
+        # 有任务：照旧进任务列表，按钮仍是「去处理」。
+        reason, url, label = step(task_count=RoomTaskCountRecord(101, 2, 0), **scenario)
+        assert url == tasks_url, scenario
+        assert label == "去处理", scenario
+
+        # 零任务：进房间详情，且文案说明任务尚未生成。
+        reason, url, label = step(**scenario)
+        assert url == room_url, scenario
+        assert label == "查看房间准备情况", scenario
+        assert "尚未生成相关任务" in reason, scenario

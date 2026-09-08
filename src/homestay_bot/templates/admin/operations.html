@@ -27,13 +27,14 @@
     </header>
     {# 「下一步」此前只是一句文字，管家读完还得回列表重新筛选才能动手。
        去向与文字出自服务里同一组分支；没有可靠入口时不渲染空按钮。 #}
-    <div class="room-next-action{% if room.overdue_task_count %} room-next-action--urgent{% endif %}"><span>下一步</span><strong>{{ room.next_action }}</strong>{% if room.next_action_url %}<a class="button button--secondary" href="{{ room.next_action_url }}">去处理</a>{% endif %}</div>
+    <div class="room-next-action{% if room.overdue_task_count %} room-next-action--urgent{% endif %}"><span>下一步</span><strong>{{ room.next_action }}</strong>{% if room.next_action_url %}<a class="button button--secondary" href="{{ room.next_action_url }}">{{ room.next_action_label }}</a>{% endif %}</div>
     <dl class="room-operation-facts">
       <div><dt>开放任务</dt><dd><a href="/employee/tasks?property_id={{ room.property_id }}">{{ room.open_task_count }} 项{% if room.overdue_task_count %}，其中 {{ room.overdue_task_count }} 项逾期{% endif %}</a></dd></div>
       <div><dt>下次入住</dt><dd>{{ room.next_arrival | date_zh if room.next_arrival else "暂无" }}</dd></div>
       <div><dt>下次退房</dt><dd>{{ room.next_departure | date_zh if room.next_departure else "暂无" }}</dd></div>
     </dl>
     <form class="room-status-form" method="post" action="/employee/properties/{{ room.property_id }}/room-status" data-confirm="确定直接设定该房间房态吗？该操作不经过检查清单与现场照片证据。">
+      <input type="hidden" name="return_to" value="/employee/admin/operations?days={{ snapshot.horizon_days }}#room-{{ room.property_id }}">
       <input type="hidden" name="csrf_token" value="{{ room_csrf_tokens[room.property_id] }}">
       <label for="room-status-{{ room.property_id }}">房态</label>
       <select id="room-status-{{ room.property_id }}" name="room_status" required>{% for state in room_statuses %}<option value="{{ state.value }}" {% if room.status == state %}selected{% endif %}>{{ state | status_zh }}</option>{% endfor %}</select>
@@ -46,7 +47,7 @@
 {% if snapshot.stable_rooms %}<details class="operations-stable"><summary>稳定房间 · {{ snapshot.stable_rooms | length }} 间</summary>
   <ul class="clean-list stable-room-list">
     {% for room in snapshot.stable_rooms %}{% set timeline = snapshot.timeline_for(room.property_id) %}<li>
-      <div class="stable-room-head"><a href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_number or room.room_title }}</strong><span>{{ room.room_title }}</span></a>{{ ui.readiness_badge(room) }}<form class="room-status-form" method="post" action="/employee/properties/{{ room.property_id }}/room-status" data-confirm="确定直接设定该房间房态吗？该操作不经过检查清单与现场照片证据。"><input type="hidden" name="csrf_token" value="{{ room_csrf_tokens[room.property_id] }}"><label class="visually-hidden" for="stable-room-status-{{ room.property_id }}">{{ room.room_title }} 房态</label><select id="stable-room-status-{{ room.property_id }}" name="room_status" required>{% for state in room_statuses %}<option value="{{ state.value }}" {% if room.status == state %}selected{% endif %}>{{ state | status_zh }}</option>{% endfor %}</select><button class="button--secondary" type="submit">保存</button></form></div>
+      <div class="stable-room-head"><a href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_number or room.room_title }}</strong><span>{{ room.room_title }}</span></a>{{ ui.readiness_badge(room) }}<form class="room-status-form" method="post" action="/employee/properties/{{ room.property_id }}/room-status" data-confirm="确定直接设定该房间房态吗？该操作不经过检查清单与现场照片证据。"><input type="hidden" name="csrf_token" value="{{ room_csrf_tokens[room.property_id] }}"><input type="hidden" name="return_to" value="/employee/admin/operations?days={{ snapshot.horizon_days }}#room-{{ room.property_id }}"><label class="visually-hidden" for="stable-room-status-{{ room.property_id }}">{{ room.room_title }} 房态</label><select id="stable-room-status-{{ room.property_id }}" name="room_status" required>{% for state in room_statuses %}<option value="{{ state.value }}" {% if room.status == state %}selected{% endif %}>{{ state | status_zh }}</option>{% endfor %}</select><button class="button--secondary" type="submit">保存</button></form></div>
       <dl class="room-operation-facts stable-room-facts">
         <div><dt>开放任务</dt><dd><a href="/employee/tasks?property_id={{ room.property_id }}">{{ room.open_task_count }} 项</a></dd></div>
         <div><dt>下次入住</dt><dd>{{ room.next_arrival | date_zh if room.next_arrival else "暂无" }}</dd></div>

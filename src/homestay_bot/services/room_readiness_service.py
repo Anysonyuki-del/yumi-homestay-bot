@@ -7,6 +7,7 @@ from homestay_bot.domain.enums import (
     EmployeeRole,
     RoomOperationalStatus,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     BusinessTask,
     Employee,
@@ -23,8 +24,15 @@ REQUIRED_READINESS_CHECKS: tuple[tuple[str, str], ...] = (
 )
 
 
-class ReadinessRuleError(ValueError):
-    """表示房间可入住所需证据或任务状态不完整。"""
+class ReadinessRuleError(OperationRefused):
+    """表示房间可入住所需证据或任务状态不完整。
+
+    继承 OperationRefused 而不是 ValueError：这些消息（「至少需要一张有效现场
+    照片」「保洁检查清单尚未全部完成」）本来就是写给执行员工看的，且不含任何
+    内部细节。此前作为 ValueError 会落进 page_errors.raise_page_error 的通用
+    分支，页面只剩追踪号和一句「任务操作未完成」——手机上的员工被拒之后，
+    根本不知道要去补哪一项。
+    """
 
 
 class TaskEvidenceRepository(Protocol):

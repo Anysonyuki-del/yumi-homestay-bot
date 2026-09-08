@@ -491,3 +491,82 @@ def test_property_detail_reuses_the_same_readiness_badge(tmp_path) -> None:
     response = client.get("/employee/properties/101")
 
     assert '<span class="badge badge--danger">运营：维修中</span>' in response.text
+
+
+class RoomReadinessStub:
+    """记录管理员直接设定房态的调用。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.calls: list[tuple[int, str]] = []
+
+    async def set_status_by_admin(self, property_id, administrator, room_status):
+        """接受任意状态并记录。"""
+        self.calls.append((property_id, room_status.value))
+        return None
+
+
+OPERATIONS_SOURCE = "/employee/admin/operations?days=7#room-101"
+
+
+def test_room_status_from_operations_page_returns_to_that_view(tmp_path) -> None:
+    """在运营页改房态后要留在原调度视图，而不是被甩进房间详情。
+
+    老板跨房间调度时，此前更新一间就丢掉运营页和 3/7/14 天范围，得一路返回
+    重新选。锚点也要保留：一屏几十间房，回到页首等于再找一遍。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
+    client.app.state.room_readiness_service = RoomReadinessStub()
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/properties/101/room-status",
+        data={
+            "csrf_token": token,
+            "room_status": "ready",
+            "return_to": OPERATIONS_SOURCE,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == OPERATIONS_SOURCE
+
+
+def test_room_status_without_a_source_still_lands_on_the_room(tmp_path) -> None:
+    """房间详情内提交没有来源，兜底必须是该房间而不是任务中心。"""
+    client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
+    client.app.state.room_readiness_service = RoomReadinessStub()
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/properties/101/room-status",
+        data={"csrf_token": token, "room_status": "ready"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/properties/101"
+
+
+def test_room_status_refuses_a_foreign_source(tmp_path) -> None:
+    """站外 return_to 必须回落到该房间，不得成为开放重定向。"""
+    client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
+    client.app.state.room_readiness_service = RoomReadinessStub()
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/properties/101/room-status",
+        data={
+            "csrf_token": token,
+            "room_status": "ready",
+            "return_to": "https://evil.example.com/steal",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/properties/101"

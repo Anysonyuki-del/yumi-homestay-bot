@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Annotated, Any, Protocol, cast
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import (
     APIRouter,
@@ -173,6 +173,19 @@ def _missing_readiness_evidence(
     if not attachments:
         missing.append("至少一张现场照片")
     return missing
+
+
+def _detail_redirect(task_id: int, return_to: str) -> RedirectResponse:
+    """回到详情页并把来源一起带回去。
+
+    详情 GET 早就接受 return_to，但操作表单不透传它，于是每提交一次就把管家
+    丢回裸列表，房间、状态、日期和页码全部重来。这里在 PRG 的重定向上补回
+    来源；路径仍经 safe_return_path 校验，不接受站外目标。
+    """
+    target = f"/employee/tasks/{task_id}"
+    if return_to:
+        target = f"{target}?return_to={quote(safe_return_path(return_to), safe='')}"
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
 
 def _raise_page_error(error: Exception) -> None:
@@ -701,6 +714,7 @@ async def archive_task(
     request: Request,
     task_id: int,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """管理员把单条终态任务移入归档。"""
     employee = await _current_employee(request)
@@ -709,10 +723,7 @@ async def archive_task(
         await _get_service(request).archive(task_id, employee)
     except Exception as error:
         _raise_page_error(error)
-    return RedirectResponse(
-        f"/employee/tasks/{task_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    return _detail_redirect(task_id, return_to)
 
 
 @router.post("/{task_id}/purge")
@@ -720,6 +731,7 @@ async def purge_task(
     request: Request,
     task_id: int,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """永久删除一条已归档任务；不可恢复。"""
     employee = await _current_employee(request)
@@ -728,9 +740,9 @@ async def purge_task(
         await _get_service(request).purge(task_id, employee)
     except Exception as error:
         _raise_page_error(error)
-    # 任务已不存在，回列表而不是回详情页。
+    # 任务已不存在，回来源列表而不是回详情页；没有来源时才落到归档视图。
     return RedirectResponse(
-        "/employee/tasks?archived=true",
+        safe_return_path(return_to) if return_to else "/employee/tasks?archived=true",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -740,6 +752,7 @@ async def restore_task(
     request: Request,
     task_id: int,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """管理员把任务移出归档，状态本身不变。"""
     employee = await _current_employee(request)
@@ -748,10 +761,7 @@ async def restore_task(
         await _get_service(request).restore(task_id, employee)
     except Exception as error:
         _raise_page_error(error)
-    return RedirectResponse(
-        f"/employee/tasks/{task_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    return _detail_redirect(task_id, return_to)
 
 
 @router.post("/{task_id}/transition")
@@ -760,6 +770,7 @@ async def transition_task(
     task_id: int,
     target: str = Form(min_length=1, max_length=32),
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """校验一次性令牌并推进当前员工可操作的任务。"""
     employee = await _current_employee(request)
@@ -768,10 +779,7 @@ async def transition_task(
         await _get_service(request).transition(task_id, employee, target)
     except Exception as error:
         _raise_page_error(error)
-    return RedirectResponse(
-        f"/employee/tasks/{task_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    return _detail_redirect(task_id, return_to)
 
 
 @router.post("/{task_id}/assign")
@@ -786,6 +794,7 @@ async def assign_task(
         alias="service_date",
     ),
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """只允许管理员补齐执行信息并分派任务。"""
     employee = await _current_employee(request)
@@ -800,10 +809,7 @@ async def assign_task(
         )
     except Exception as error:
         _raise_page_error(error)
-    return RedirectResponse(
-        f"/employee/tasks/{task_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    return _detail_redirect(task_id, return_to)
 
 
 @router.post("/{task_id}/checklist")
@@ -814,6 +820,7 @@ async def update_task_checklist(
     supplies: bool = Form(False),
     damage: bool = Form(False),
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """校验执行权限后保存三项房间检查结果。"""
     employee = await _current_employee(request)
@@ -830,10 +837,7 @@ async def update_task_checklist(
         )
     except Exception as error:
         _raise_page_error(error)
-    return RedirectResponse(
-        f"/employee/tasks/{task_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    return _detail_redirect(task_id, return_to)
 
 
 @router.post("/{task_id}/photos")
@@ -842,6 +846,7 @@ async def upload_task_photo(
     task_id: int,
     photo: Annotated[UploadFile, File()],
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """校验执行权限后把现场照片存入私有目录。"""
     employee = await _current_employee(request)
@@ -857,10 +862,7 @@ async def upload_task_photo(
         _raise_page_error(error)
     finally:
         await photo.close()
-    return RedirectResponse(
-        f"/employee/tasks/{task_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    return _detail_redirect(task_id, return_to)
 
 
 @router.post("/{task_id}/ready")
@@ -868,6 +870,7 @@ async def mark_room_ready(
     request: Request,
     task_id: int,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """允许任务执行员工在证据完整后标记房间可入住。"""
     employee = await _current_employee(request)
@@ -876,10 +879,7 @@ async def mark_room_ready(
         await _get_service(request).mark_ready(task_id, employee)
     except Exception as error:
         _raise_page_error(error)
-    return RedirectResponse(
-        f"/employee/tasks/{task_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    return _detail_redirect(task_id, return_to)
 
 
 @router.post("/{task_id}/revoke-ready")
@@ -887,6 +887,7 @@ async def revoke_room_ready(
     request: Request,
     task_id: int,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """允许管理员把任务关联房间撤回待检查。"""
     employee = await _current_employee(request)
@@ -895,7 +896,4 @@ async def revoke_room_ready(
         await _get_service(request).revoke_ready(task_id, employee)
     except Exception as error:
         _raise_page_error(error)
-    return RedirectResponse(
-        f"/employee/tasks/{task_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    return _detail_redirect(task_id, return_to)

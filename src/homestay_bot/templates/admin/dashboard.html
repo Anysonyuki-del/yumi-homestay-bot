@@ -14,7 +14,7 @@
     {% for room in attention_rooms %}<li>
       <a class="first-list__room" href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_number or room.room_title }}</strong><span>{{ room.room_title }}</span></a>
       <span class="first-list__why{% if room.overdue_task_count %} first-list__why--urgent{% endif %}">{{ room.next_action }}</span>
-      {% if room.next_action_url %}<a class="button button--secondary" href="{{ room.next_action_url }}">去处理</a>{% else %}<span class="muted">暂无可直接进入的入口</span>{% endif %}
+      {% if room.next_action_url %}<a class="button button--secondary" href="{{ room.next_action_url }}">{{ room.next_action_label }}</a>{% else %}<span class="muted">暂无可直接进入的入口</span>{% endif %}
     </li>{% endfor %}
   </ul>
 </section>

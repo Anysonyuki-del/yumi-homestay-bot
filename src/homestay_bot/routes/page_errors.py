@@ -64,20 +64,29 @@ def _wants_html(request: Request) -> bool:
 _FALLBACK_RETURN_PATH = "/employee/tasks"
 
 
-def safe_return_path(candidate: str | None) -> str:
+def safe_return_path(candidate: str | None, *, fallback: str | None = None) -> str:
     """校验回跳路径；只接受本站 /employee/ 下的相对路径，避免开放重定向。
 
     不使用 Referer：本应用发送 `referrer-policy: no-referrer`，该请求头在真实
     浏览器里恒为空，靠它推断来源会让每次失败都落到兜底地址、丢掉当前筛选。
+
+    保留锚点：运营页一屏几十间房，回到页首等于让人再找一遍。锚点是纯客户端的，
+    浏览器不会发给服务器，且 scheme 与 netloc 已在上面被拒，因此保留它不会打开
+    重定向缺口——`/employee/x#//evil.com` 的落点仍是 `/employee/x`。
+
+    fallback 让不同页面各自兜底：房源页的失败不该把人甩进任务中心。它同样只在
+    通过校验后才会被用作结果，调用方给的是站内常量。
     """
+    default = fallback or _FALLBACK_RETURN_PATH
     if not candidate:
-        return _FALLBACK_RETURN_PATH
+        return default
     parsed = urlparse(candidate)
     if parsed.scheme or parsed.netloc:
-        return _FALLBACK_RETURN_PATH
+        return default
     if not parsed.path.startswith("/employee/"):
-        return _FALLBACK_RETURN_PATH
-    return f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
+        return default
+    path = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
+    return f"{path}#{parsed.fragment}" if parsed.fragment else path
 
 
 async def handle_operation_refused(

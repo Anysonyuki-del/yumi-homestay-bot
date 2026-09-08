@@ -24,6 +24,7 @@
 {% if is_admin and task.status.value in ["pending_confirmation", "pending_assignment"] %}
 <section class="detail-section panel panel--padded"><h2>确认并分派</h2><p>请核对房间、日期和执行员工后再提交；任务已有的房间与员工已回填，缺失项需要主动选择。</p>
   <form method="post" action="/employee/tasks/{{ task.id }}/assign" data-unsaved-warning>
+    <input type="hidden" name="return_to" value="{{ return_to }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>房间<select name="property_id" required><option value="">请选择房间…</option>{% for property in properties %}<option value="{{ property.id }}"{% if task.property_id == property.id %} selected{% endif %}>{{ property.title }}</option>{% endfor %}</select></label>
     <label>服务日期<input type="date" name="service_date" value="{{ task.service_date or '' }}" required></label>
@@ -42,30 +43,42 @@
   <div class="section-heading"><h2>还差这些才能标记可入住</h2>{{ ui.badge(missing_evidence | length ~ " 项", "warning") }}</div>
   <ul class="plain-list">{% for item in missing_evidence %}<li>{{ item }}</li>{% endfor %}</ul>
   <p class="field-help">补齐后「确认房间可入住」才会被接受；服务端仍会独立复核，页面提示不替代校验。</p>
+  <p><a class="button button--secondary" href="#execution-evidence">去补齐检查清单／上传照片</a></p>
 </section>
 {% endif %}
 
 <section class="detail-section panel panel--padded"><h2>任务操作</h2><div class="action-stack">
-  {% if task.status.value == "assigned" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="in_progress"><button type="submit">开始处理</button></form>
-  {% elif task.status.value == "in_progress" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="pending_inspection"><button type="submit">提交检查</button></form>{% endif %}
+  {% if task.status.value == "assigned" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="in_progress"><button type="submit">开始处理</button></form>
+  {% elif task.status.value == "in_progress" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="pending_inspection"><button type="submit">提交检查</button></form>{% endif %}
 
   {% if is_assignee and task.status.value in ["assigned", "in_progress", "pending_inspection"] %}
+  <div id="execution-evidence" class="action-stack">
   <form method="post" action="/employee/tasks/{{ task.id }}/checklist" data-unsaved-warning>
+    <input type="hidden" name="return_to" value="{{ return_to }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <fieldset><legend>房间检查</legend><label class="checkbox"><input type="checkbox" name="clean" value="true" {% if task.checklist.get("clean") %}checked{% endif %}>清洁已完成</label><label class="checkbox"><input type="checkbox" name="supplies" value="true" {% if task.checklist.get("supplies") %}checked{% endif %}>耗材已补齐</label><label class="checkbox"><input type="checkbox" name="damage" value="true" {% if task.checklist.get("damage") %}checked{% endif %}>设施检查完成</label></fieldset>
     <button type="submit">保存检查清单</button>
   </form>
-  <form method="post" enctype="multipart/form-data" action="/employee/tasks/{{ task.id }}/photos" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>现场照片<input type="file" name="photo" accept="image/png,image/jpeg,image/webp" required></label><button type="submit">上传现场照片</button></form>
+  <form method="post" enctype="multipart/form-data" action="/employee/tasks/{{ task.id }}/photos" data-unsaved-warning><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>现场照片<input type="file" name="photo" accept="image/png,image/jpeg,image/webp" required></label><button type="submit">上传现场照片</button></form>
+  </div>
   {% endif %}
 
-  {% if is_assignee and task.status.value == "pending_inspection" %}<form method="post" action="/employee/tasks/{{ task.id }}/ready" data-confirm="确认检查证据完整，并把房间标记为可入住吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">确认房间可入住</button></form>{% endif %}
-  {% if (is_assignee or is_admin) and task.status.value == "pending_inspection" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确认这项任务已经完成吗？完成后不再计入待办。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="completed"><button class="button button--secondary" type="submit">标记任务完成</button></form>{% endif %}
-  {% if is_admin and room_state and room_state.status.value == "ready" %}<form method="post" action="/employee/tasks/{{ task.id }}/revoke-ready" data-confirm="确定撤回可入住状态并要求重新检查吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">撤回可入住状态</button></form>{% endif %}
-  {% if is_admin and task.status in archivable_statuses %}
-    {% if task.archived_at %}<form method="post" action="/employee/tasks/{{ task.id }}/restore"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">从归档恢复</button></form>
-    <form method="post" action="/employee/tasks/{{ task.id }}/purge" data-danger-confirm="确定永久删除这项任务吗？任务记录与现场照片将一并删除，此操作不可恢复。审计记录会保留。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">永久删除</button></form>
-    {% else %}<form method="post" action="/employee/tasks/{{ task.id }}/archive" data-confirm="确定把这项任务移入归档吗？归档后不再出现在默认列表，可随时恢复。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">移入归档</button></form>{% endif %}
+  {% if is_assignee and task.status.value == "pending_inspection" %}
+    {% if missing_evidence %}
+    {# 缺证据时不渲染可提交的表单：页面已经列出缺哪几项，再摆一个必然被拒的
+       按钮，只会让员工先挨一次拒绝才知道要补什么。服务端守卫不受影响。 #}
+    <p class="field-help">补齐后才能确认可入住，还差 {{ missing_evidence | length }} 项。<a href="#execution-evidence">去补齐</a></p>
+    {% else %}
+    <form method="post" action="/employee/tasks/{{ task.id }}/ready" data-confirm="确认检查证据完整，并把房间标记为可入住吗？"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">确认房间可入住</button></form>
+    {% endif %}
   {% endif %}
-  {% if is_admin and task.status not in archivable_statuses %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？此操作会中止当前处理流程。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
+  {% if (is_assignee or is_admin) and task.status.value == "pending_inspection" %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确认这项任务已经完成吗？完成后不再计入待办。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="completed"><button class="button button--secondary" type="submit">标记任务完成</button></form>{% endif %}
+  {% if is_admin and room_state and room_state.status.value == "ready" %}<form method="post" action="/employee/tasks/{{ task.id }}/revoke-ready" data-confirm="确定撤回可入住状态并要求重新检查吗？"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">撤回可入住状态</button></form>{% endif %}
+  {% if is_admin and task.status in archivable_statuses %}
+    {% if task.archived_at %}<form method="post" action="/employee/tasks/{{ task.id }}/restore"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">从归档恢复</button></form>
+    <form method="post" action="/employee/tasks/{{ task.id }}/purge" data-danger-confirm="确定永久删除这项任务吗？任务记录与现场照片将一并删除，此操作不可恢复。审计记录会保留。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">永久删除</button></form>
+    {% else %}<form method="post" action="/employee/tasks/{{ task.id }}/archive" data-confirm="确定把这项任务移入归档吗？归档后不再出现在默认列表，可随时恢复。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">移入归档</button></form>{% endif %}
+  {% endif %}
+  {% if is_admin and task.status not in archivable_statuses %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？此操作会中止当前处理流程。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
 </div></section>
 {% endblock %}

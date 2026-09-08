@@ -24,6 +24,7 @@ from homestay_bot.routes.page_errors import handle_operation_refused
 from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.tasks import router as tasks_router
 from homestay_bot.services.private_file_storage import StoredPrivateFile
+from homestay_bot.services.room_readiness_service import ReadinessRuleError
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n"
@@ -67,6 +68,8 @@ class TaskPageStub:
         self.cancel_many_calls: list[list[int]] = []
         self.private_file = None
         self.detail_error: Exception | None = None
+        self.ready_error: Exception | None = None
+        self.attachments: list[object] = []
         self.list_error: Exception | None = None
         self.assignment_error: Exception | None = None
         self.list_calls: list[tuple[int, int]] = []
@@ -91,6 +94,7 @@ class TaskPageStub:
         return {
             "task": self.item,
             "safe_description": self.item.description,
+            "attachments": self.attachments,
         }
 
     async def transition(self, task_id, employee, target):
@@ -209,7 +213,9 @@ class TaskPageStub:
         return SimpleNamespace(private_file_id="a" * 32 + ".png")
 
     async def mark_ready(self, task_id, employee):
-        """记录执行员工标记可入住。"""
+        """记录执行员工标记可入住；可注入领域拒绝以复现证据不足。"""
+        if self.ready_error is not None:
+            raise self.ready_error
         self.ready_calls.append((task_id, employee.id))
         return SimpleNamespace(status="ready")
 
@@ -794,6 +800,10 @@ def test_admin_assignee_can_confirm_room_ready() -> None:
     client, tasks = build_client(EmployeeRole.ADMIN)
     tasks.item.assigned_employee_id = 1
     tasks.item.status = BusinessTaskStatus.PENDING_INSPECTION
+    # 这条测的是角色（管理员作为执行人同样有入口），不是证据门。补齐证据把
+    # 那个正交前置条件排除掉，否则断言会被「缺照片」挡住而测不到角色分支。
+    tasks.item.checklist = {"clean": True, "supplies": True, "damage": True}
+    tasks.attachments = [SimpleNamespace(kind="photo")]
     login(client)
 
     page = client.get("/employee/tasks/1")
@@ -1635,3 +1645,157 @@ def test_missing_evidence_uses_the_same_definition_as_the_server_guard() -> None
     complete = SimpleNamespace(checklist={key: True for key, _ in REQUIRED_READINESS_CHECKS})
     assert _missing_readiness_evidence(complete, [object()]) == []
     assert _missing_readiness_evidence(complete, []) == ["至少一张现场照片"]
+
+
+def test_missing_readiness_evidence_tells_the_staff_what_is_missing() -> None:
+    """证据不足被拒时，员工必须看到缺哪一项，而不是一句通用文案。
+
+    ReadinessRuleError 的消息是刻意写给使用者看的（「至少需要一张有效现场照片」），
+    但它此前继承 ValueError，在 page_errors.raise_page_error 里落到通用分支，
+    页面只拿得到追踪号和「任务操作未完成」。手机上的员工因此不知道要补什么。
+    """
+    client, tasks = build_client(EmployeeRole.STAFF)
+    tasks.ready_error = ReadinessRuleError("至少需要一张有效现场照片")
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/tasks/1/ready",
+        data={"csrf_token": token},
+        # 真实浏览器的表单提交带 text/html；TestClient 默认是 */*，
+        # 不模拟这一点就走不到页面分支。
+        headers={"Accept": "text/html,application/xhtml+xml"},
+        follow_redirects=False,
+    )
+
+    # 表单提交走 PRG 回原页面，而不是把 JSON 甩给浏览器。
+    assert response.status_code == 303
+    follow = client.get(response.headers["location"])
+    assert "至少需要一张有效现场照片" in follow.text
+    assert "任务操作未完成" not in follow.text
+
+
+def test_readiness_refusal_still_returns_json_to_api_clients() -> None:
+    """接口调用方仍要拿到明确的 JSON 错误，不能被 PRG 改成重定向。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    tasks.ready_error = ReadinessRuleError("保洁检查清单尚未全部完成")
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/tasks/1/ready",
+        data={"csrf_token": token},
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "保洁检查清单尚未全部完成"
+
+
+def test_ready_button_is_not_offered_while_evidence_is_missing() -> None:
+    """证据不齐时不摆出「确认房间可入住」，而是指向去补齐的地方。
+
+    页面已经列出缺哪几项，却仍把主动作摆在旁边，等于请员工去点一个必然被拒的
+    按钮。服务端守卫照旧独立复核，这里只是不再制造无效提交。
+    """
+    client, tasks = build_client(EmployeeRole.STAFF)
+    tasks.item.status = BusinessTaskStatus.PENDING_INSPECTION
+    login(client)
+
+    html = client.get("/employee/tasks/1").text
+
+    assert "还差这些才能标记可入住" in html
+    # 可提交的表单不得存在；取而代之的是禁用态与去补齐的入口。
+    assert 'action="/employee/tasks/1/ready"' not in html
+    assert "补齐后才能确认可入住" in html
+    assert 'href="#execution-evidence"' in html
+    assert 'id="execution-evidence"' in html
+
+
+def test_ready_button_returns_once_evidence_is_complete() -> None:
+    """证据齐了就必须能提交，禁用逻辑不能把正常路径也堵死。"""
+    client, tasks = build_client(EmployeeRole.STAFF)
+    tasks.item.status = BusinessTaskStatus.PENDING_INSPECTION
+    tasks.item.checklist = {"clean": True, "supplies": True, "damage": True}
+    tasks.attachments = [SimpleNamespace(kind="photo", private_file_id="c" * 32 + ".png")]
+    login(client)
+
+    html = client.get("/employee/tasks/1").text
+
+    assert "还差这些才能标记可入住" not in html
+    assert 'action="/employee/tasks/1/ready"' in html
+
+
+SOURCE_LIST = "/employee/tasks?status_filter=pending_confirmation&page=2"
+
+
+def test_detail_actions_keep_the_list_filters_and_page() -> None:
+    """详情页提交后必须还能回到原来的筛选与页码。
+
+    管家逐条分派时，此前每处理一条就被丢回裸列表，要重新找房间、状态和页码。
+    详情 GET 早就支持 return_to，但所有操作表单都不透传它。
+    """
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    detail = client.get(f"/employee/tasks/1?return_to={quote(SOURCE_LIST, safe='')}")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', detail.text).group(1)
+    # 表单必须把来源带上，否则 POST 之后服务端无从得知从哪来。
+    assert 'name="return_to"' in detail.text
+
+    response = client.post(
+        "/employee/tasks/1/assign",
+        data={
+            "csrf_token": token,
+            "assigned_employee_id": "2",
+            "property_id": "101",
+            "service_date": "2026-08-02",
+            "return_to": SOURCE_LIST,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    after = client.get(response.headers["location"])
+    assert escape(SOURCE_LIST) in after.text
+
+
+def test_detail_actions_refuse_a_foreign_return_target() -> None:
+    """恶意 return_to 必须回落安全默认，不能变成开放重定向。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/tasks/1/assign",
+        data={
+            "csrf_token": token,
+            "assigned_employee_id": "2",
+            "property_id": "101",
+            "service_date": "2026-08-02",
+            "return_to": "https://evil.example.com/steal",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "evil.example.com" not in response.headers["location"]
+
+
+def test_purging_a_task_returns_to_the_list_it_came_from() -> None:
+    """任务已不存在，应回到来源列表而不是写死的归档视图。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    tasks.item.status = BusinessTaskStatus.COMPLETED
+    tasks.item.archived_at = date(2026, 9, 1)
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/tasks/1/purge",
+        data={"csrf_token": token, "return_to": SOURCE_LIST},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == SOURCE_LIST

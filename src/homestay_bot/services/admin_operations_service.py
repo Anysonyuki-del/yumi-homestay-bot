@@ -116,6 +116,8 @@ class RoomOperationItem:
     next_action: str = "暂无近期运营动作"
     # 与 next_action 同源的去向；确实没有可靠入口时为 None，页面不渲染空按钮。
     next_action_url: str | None = None
+    # 按钮文案与去向同源：去任务列表说「去处理」，去房间详情说「查看房间准备情况」。
+    next_action_label: str = "去处理"
     source_stale: bool = True
 
     @property
@@ -435,6 +437,7 @@ class AdminOperationsService:
                     next_departure=next_departure,
                     next_action=next_step[0],
                     next_action_url=next_step[1],
+                    next_action_label=next_step[2],
                     source_stale=source_stale,
                 )
             )
@@ -521,48 +524,63 @@ class AdminOperationsService:
         task_count: RoomTaskCountRecord,
         next_arrival: date | None,
         property_id: int,
-    ) -> tuple[str, str | None]:
-        """同时给出「下一步是什么」和「去哪做」，两者出自同一组分支。
+    ) -> tuple[str, str | None, str]:
+        """同时给出「下一步是什么」「去哪做」和「按钮怎么说」，三者出自同一组分支。
 
         原先只产出一句文字，管家读完还得自己回到列表重新筛选才能动手。文字与
         去向分开算就会各说各话，因此放在同一个函数里；确实没有可靠去向时返回
         None，页面不渲染空按钮，而不是编一个看起来能点的链接。
+
+        按钮文案也一并算出来：到店/离店当天却一项开放任务都没有时，去向是房间
+        详情而不是任务列表，此时还写「去处理」就又成了一句兑现不了的话。
         """
         tasks_url = f"/employee/tasks?property_id={property_id}"
         room_url = f"/employee/properties/{property_id}"
+        handle = "去处理"
+        inspect = "查看房间准备情况"
+        # 今日有到店或离店，却没有任何开放任务：进任务列表只会看到空结果。
+        # 改去房间详情并说明任务尚未生成——不在这里替业务补造任务。
+        no_open_tasks = task_count.count == 0
         if source_stale:
             # 同步不可信时没有能真正解决它的页面入口，不给按钮。
-            return "先确认百居易实时房态", None
+            return "先确认百居易实时房态", None, handle
         if task_count.overdue_count:
             return (
                 f"优先处理 {task_count.overdue_count} 项逾期任务",
                 f"{tasks_url}&overdue=true",
+                handle,
             )
-        if arrivals and departures:
-            return "安排退房周转并核对今日入住", tasks_url
-        if departures:
-            return "安排退房检查与周转", tasks_url
-        if arrivals:
-            return (
-                (
-                    "核对入住资料并接待"
-                    if operational_status is RoomOperationalStatus.READY
-                    else "优先完成房间准备并接待入住"
-                ),
-                tasks_url,
-            )
+        if arrivals or departures:
+            if arrivals and departures:
+                reason = "安排退房周转并核对今日入住"
+            elif departures:
+                reason = "安排退房检查与周转"
+            elif operational_status is RoomOperationalStatus.READY:
+                reason = "核对入住资料并接待"
+            else:
+                reason = "优先完成房间准备并接待入住"
+            if no_open_tasks:
+                return f"尚未生成相关任务，先{reason}", room_url, inspect
+            return reason, tasks_url, handle
         if operational_status is RoomOperationalStatus.MAINTENANCE:
-            return "跟进维修并确认房间可用性", room_url
+            return "跟进维修并确认房间可用性", room_url, inspect
         if task_count.count:
-            return f"推进 {task_count.count} 项开放任务", tasks_url
+            return f"推进 {task_count.count} 项开放任务", tasks_url, handle
         if occupied:
-            return "关注在住服务", room_url
+            return "关注在住服务", room_url, inspect
         if next_arrival is not None:
+            if no_open_tasks:
+                return (
+                    f"尚未生成相关任务，{next_arrival.month}月{next_arrival.day}日前完成房间准备",
+                    room_url,
+                    inspect,
+                )
             return (
                 f"{next_arrival.month}月{next_arrival.day}日前完成房间准备",
                 tasks_url,
+                handle,
             )
-        return "暂无近期运营动作", None
+        return "暂无近期运营动作", None, handle
 
     @staticmethod
     def _source_is_stale(

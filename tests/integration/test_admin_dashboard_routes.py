@@ -3,6 +3,7 @@ import re
 from concurrent.futures import CancelledError as FutureCancelledError
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from html import escape
 from html.parser import HTMLParser
 from types import SimpleNamespace
 
@@ -845,3 +846,19 @@ def test_diagnostics_never_silently_drops_unlabeled_health_key() -> None:
     assert "这一项没有预置的处理说明" in response.text
     # 旧的错误键不应再出现在任何标签里。
     assert "hostex_webhook_sync" not in response.text
+
+
+def test_operations_status_form_carries_the_current_range_back() -> None:
+    """运营页的房态表单必须带上当前范围与房间锚点。
+
+    路由已经会按 return_to 回跳，但页面不发这个字段就等于没修：老板改一间房
+    仍会被甩去房间详情，丢掉 3/7/14 天视图和滚动位置。
+    """
+    client = build_client()
+    login_admin(client, next_path="/employee/admin")
+
+    page = client.get("/employee/admin/operations?days=7")
+
+    assert page.status_code == 200
+    assert 'name="return_to"' in page.text
+    assert escape("/employee/admin/operations?days=7#room-") in page.text
