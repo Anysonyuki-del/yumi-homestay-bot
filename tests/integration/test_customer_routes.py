@@ -348,6 +348,9 @@ def test_admin_sees_masked_customer_and_multi_select_tags() -> None:
 
     index = client.get("/employee/customers")
     detail = client.get("/employee/customers/7")
+    # 合并与记忆自 UX-05 起分属治理页与记忆页，默认详情只呈现概览。
+    governance = client.get("/employee/customers/7?tab=governance")
+    memory = client.get("/employee/customers/7?tab=memory")
 
     assert index.status_code == 200
     assert "测试客户" in index.text
@@ -355,9 +358,9 @@ def test_admin_sees_masked_customer_and_multi_select_tags() -> None:
     assert "13800138000" not in detail.text
     assert "phone_ciphertext" not in detail.text
     assert detail.text.count('name="tag_ids"') == 2
-    assert "/employee/customers/merge/9" in detail.text
-    assert "客户的狗叫查理" in detail.text
-    assert "/employee/customers/7/memories/12/approve" in detail.text
+    assert "/employee/customers/merge/9" in governance.text
+    assert "客户的狗叫查理" in memory.text
+    assert "/employee/customers/7/memories/12/approve" in memory.text
 
 
 def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
@@ -367,6 +370,7 @@ def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
 
     index = client.get("/employee/customers")
     detail = client.get("/employee/customers/7")
+    memory = client.get("/employee/customers/7?tab=memory")
     merge = client.get("/employee/customers/merge/9")
 
     assert '/static/admin.js' in index.text
@@ -376,7 +380,7 @@ def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
     assert 'data-unsaved-warning' in detail.text
     assert (
         'action="/employee/customers/7/summary/delete" data-danger-confirm='
-        in detail.text
+        in memory.text
     )
     assert (
         'action="/employee/customers/merge/9/confirm" data-confirm='
@@ -533,11 +537,10 @@ def test_admin_searches_masked_manual_merge_targets_from_detail() -> None:
 
     detail = client.get(
         "/employee/customers/7",
-        params={"merge_query": "订单"},
+        params={"merge_query": "订单", "tab": "governance"},
     )
 
     assert detail.status_code == 200
-    assert "AI 客户摘要" in detail.text
     assert "合并客户档案" in detail.text
     assert "来源档案：测试客户（客户 #7）" in detail.text
     assert "目标档案：订单客户（客户 #8）" in detail.text
@@ -825,3 +828,58 @@ def test_customer_merge_csrf_is_not_interchangeable_with_detail_token() -> None:
 
     assert response.status_code == 409
     assert customers.merge_calls == []
+
+
+def test_customer_detail_without_tab_shows_only_the_overview() -> None:
+    """列表进入的默认详情只显示概览，不再摊开全部管理区。
+
+    五个标签页早就存在，但日常入口和所有写操作都落回旧的长页面：基础资料、
+    标签、备注、AI 摘要、结构化记忆和合并区一次性铺开，手机上要反复滚动。
+    旧 URL 仍然可用，只是内容按 overview 呈现。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    page = client.get("/employee/customers/7")
+
+    assert page.status_code == 200
+    assert "客户标签" in page.text
+    # 记忆与治理区不该在默认视图里展开。
+    assert "结构化客户记忆" not in page.text
+    assert "AI 客户摘要" not in page.text
+
+
+def test_customer_writes_return_to_the_tab_they_came_from() -> None:
+    """写操作回到对应标签页，而不是把人扔回长页面顶部。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    cases = {
+        "/employee/customers/7/tags": ("tab=overview", {"tag_ids": []}),
+        "/employee/customers/7/note": ("tab=overview", {"note": "备注"}),
+    }
+    for url, (expected_tab, extra) in cases.items():
+        token = detail_csrf(client)
+        response = client.post(
+            url,
+            data={"csrf_token": token, **extra},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303, url
+        assert expected_tab in response.headers["location"], url
+
+
+def test_memory_review_returns_to_the_memory_tab() -> None:
+    """记忆审核后留在记忆页，便于连续处理下一条。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+    token = detail_csrf(client)
+
+    response = client.post(
+        "/employee/customers/7/memories/3/approve",
+        data={"csrf_token": token, "expected_version": "1"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "tab=memory" in response.headers["location"]

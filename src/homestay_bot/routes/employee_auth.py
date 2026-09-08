@@ -17,7 +17,7 @@ from homestay_bot.services.admin_auth_service import (
     AuthenticationError,
 )
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
-from homestay_bot.web import templates
+from homestay_bot.web import pop_page_notice, set_page_notice, templates
 
 router = APIRouter(prefix="/employee")
 SESSION_IDLE_TIMEOUT = timedelta(hours=8)
@@ -563,6 +563,7 @@ async def employee_account(request: Request) -> Response:
     return await _account_page(
         request,
         must_change_password=state.must_change_password,
+        notice=pop_page_notice(request) or None,
     )
 
 
@@ -620,6 +621,8 @@ async def employee_change_password(
 
     state = await _current_admin_state(request)
     request.session["admin_session_version"] = state.session_version
+    # 成功后回到同一个空表单，看不出改没改成。留一条读取即清除的提示。
+    set_page_notice(request, "密码已更新，其他设备上的会话已失效。")
     return RedirectResponse("/employee/account", status_code=status.HTTP_303_SEE_OTHER)
 
 

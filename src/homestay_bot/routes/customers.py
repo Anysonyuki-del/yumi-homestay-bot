@@ -341,8 +341,11 @@ async def customer_detail(
     administrator = await _current_admin(request)
     service = _get_service(request)
     try:
+        # 无 tab 一律按概览处理。此前 tab is None 会走 legacy 长页面，把基础
+        # 资料、标签、备注、AI 摘要、结构化记忆和合并区一次铺开，而日常入口和
+        # 所有写操作都落在这个 URL 上，五个标签页形同虚设。旧 URL 仍可访问。
         detail = await service.get_detail(
-            CustomerDetailRequest(customer_id, tab) if tab else customer_id,
+            CustomerDetailRequest(customer_id, tab or "overview"),
             administrator,
         )
         merge_targets = (
@@ -368,7 +371,6 @@ async def customer_detail(
             **detail,
             "merge_query": merge_query or "",
             "merge_targets": merge_targets,
-            "legacy_full": tab is None,
             "csrf_token": await _issue_csrf(
                 request,
                 family=CUSTOMER_CSRF_FAMILY,
@@ -396,10 +398,17 @@ async def _customer_form_context(
     return administrator, _get_service(request)
 
 
-def _customer_redirect(customer_id: int) -> RedirectResponse:
-    """返回客户详情页的统一 303 跳转。"""
+def _customer_redirect(
+    customer_id: int,
+    tab: str = "overview",
+) -> RedirectResponse:
+    """返回客户详情页对应标签页的统一 303 跳转。
+
+    写操作原先一律回到无 tab 的详情，保存完又是一整页长内容；连续审几条记忆
+    时每次都要重新滚到记忆区。回跳带上标签页，人就留在刚才做事的地方。
+    """
     return RedirectResponse(
-        f"/employee/customers/{customer_id}",
+        f"/employee/customers/{customer_id}?tab={tab}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -452,7 +461,7 @@ async def update_customer_tags(
         )
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id)
+    return _customer_redirect(customer_id, "overview")
 
 
 @router.post("/{customer_id}/note")
@@ -472,7 +481,7 @@ async def update_customer_note(
         await service.update_note(customer_id, note, administrator)
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id)
+    return _customer_redirect(customer_id, "overview")
 
 
 @router.post("/{customer_id}/summary")
@@ -500,7 +509,7 @@ async def update_customer_summary(
         )
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id)
+    return _customer_redirect(customer_id, "memory")
 
 
 @router.post("/{customer_id}/summary/delete")
@@ -519,7 +528,7 @@ async def delete_customer_summary(
         await service.delete_summary(customer_id, administrator)
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id)
+    return _customer_redirect(customer_id, "memory")
 
 
 @router.post("/{customer_id}/memories/{memory_id}/{decision}")
@@ -547,4 +556,4 @@ async def review_customer_memory(
         )
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id)
+    return _customer_redirect(customer_id, "memory")

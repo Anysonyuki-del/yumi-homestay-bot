@@ -2,6 +2,8 @@
 {% block title %}账号安全 · YuMi{% endblock %}
 {% block heading %}账号安全{% endblock %}
 {% block content %}
+{# 该页继承登录布局，本身没有后台导航；正常已登录时给一个明确的出口，否则只能靠浏览器后退键离开。强制改密走的是 auth/change_password.html，不经过这里，门禁不受影响。 #}
+<p><a href="/employee/admin">返回工作台</a></p>
 <h2>修改密码</h2>
 <form method="post" action="/employee/account/password">
   <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}">

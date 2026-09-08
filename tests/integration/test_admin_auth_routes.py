@@ -669,3 +669,55 @@ def test_logout_and_revoke_sessions_require_csrf_and_revoke_keeps_current_sessio
     assert logged_out.status_code == 303
     assert logged_out.headers["location"] == "/employee/login"
     assert after_logout.status_code == 401
+
+
+def test_account_page_offers_a_way_back_to_the_console() -> None:
+    """正常已登录的账号页必须有回后台的入口。
+
+    该页继承的是登录布局，没有任何导航；用户只能靠浏览器后退键离开。
+    """
+    client, _ = build_client()
+    login(client, next_path="/employee/account")
+
+    page = client.get("/employee/account")
+
+    assert page.status_code == 200
+    assert "返回工作台" in page.text
+    assert 'href="/employee/admin"' in page.text
+
+
+def test_password_change_confirms_success_on_the_next_page() -> None:
+    """改密成功后要说一声，而不是回到一模一样的空表单。"""
+    client, _ = build_client()
+    login(client, next_path="/employee/account")
+    account = client.get("/employee/account")
+
+    changed = client.post(
+        "/employee/account/password",
+        data={
+            "current_password": "correct-password",
+            "new_password": "new-secure-password",
+            "csrf_token": csrf_for_action(
+                account.text,
+                "/employee/account/password",
+            ),
+        },
+        follow_redirects=False,
+    )
+    after = client.get(changed.headers["location"])
+
+    assert changed.status_code == 303
+    assert "密码已更新" in after.text
+    # 一次性提示：刷新之后不再出现，避免让人误以为又改了一次。
+    assert "密码已更新" not in client.get("/employee/account").text
+
+
+def test_forced_password_change_page_gets_no_escape_hatch() -> None:
+    """必须改密的账号不得借返回入口绕过门禁。"""
+    client, _ = build_client(must_change_password=True)
+    login(client, next_path="/employee/account")
+
+    page = client.get("/employee/account")
+
+    assert "修改初始密码" in page.text
+    assert "返回工作台" not in page.text

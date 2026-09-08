@@ -14,6 +14,7 @@ from homestay_bot.domain.models import AuditLog, KnowledgeCandidate, KnowledgeEn
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
 from homestay_bot.routes.admin_form_csrf import AdminCsrfServicePort
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.routes.page_errors import safe_return_path
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 from homestay_bot.web import templates
@@ -442,6 +443,13 @@ async def knowledge_index(
         request=request,
         name="knowledge/index.html",
         context={
+            # 当前视图原样带给每个写操作表单：回来时筛选、两个分页都还在。
+            # 回跳时仍由 safe_return_path 复核，不接受站外目标。
+            "current_view": (
+                f"{request.url.path}?{request.url.query}"
+                if request.url.query
+                else request.url.path
+            ),
             "entries": entries[:50],
             "candidates": candidates[:50],
             "can_edit": role is EmployeeRole.ADMIN,
@@ -516,6 +524,7 @@ async def create_knowledge(
     answer_en: str = Form(min_length=1, max_length=10_000),
     keywords: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """管理员新增一条同时包含中英文内容的审核知识。"""
     employee_id = await _require_admin(request)
@@ -532,7 +541,8 @@ async def create_knowledge(
         ),
     )
     return RedirectResponse(
-        "/employee/knowledge", status_code=status.HTTP_303_SEE_OTHER
+        safe_return_path(return_to, fallback="/employee/knowledge"),
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
@@ -547,6 +557,7 @@ async def convert_candidate(
     answer_en: str = Form(min_length=1, max_length=10_000),
     keywords: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """管理员修改候选草稿后创建并启用正式双语知识。"""
     employee_id = await _require_admin(request)
@@ -564,7 +575,8 @@ async def convert_candidate(
         ),
     )
     return RedirectResponse(
-        "/employee/knowledge", status_code=status.HTTP_303_SEE_OTHER
+        safe_return_path(return_to, fallback="/employee/knowledge"),
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
@@ -573,13 +585,15 @@ async def snooze_candidate(
     request: Request,
     candidate_id: int,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """管理员暂不收录候选，并关闭该主题三十天。"""
     employee_id = await _require_admin(request)
     await _consume_csrf(request, csrf_token)
     await _get_service(request).snooze_candidate(candidate_id, employee_id)
     return RedirectResponse(
-        "/employee/knowledge", status_code=status.HTTP_303_SEE_OTHER
+        safe_return_path(return_to, fallback="/employee/knowledge"),
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
@@ -594,6 +608,7 @@ async def update_knowledge(
     answer_en: str = Form(min_length=1, max_length=10_000),
     keywords: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """管理员编辑指定双语知识。"""
     employee_id = await _require_admin(request)
@@ -611,7 +626,8 @@ async def update_knowledge(
         ),
     )
     return RedirectResponse(
-        "/employee/knowledge", status_code=status.HTTP_303_SEE_OTHER
+        safe_return_path(return_to, fallback="/employee/knowledge"),
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
@@ -621,6 +637,7 @@ async def toggle_knowledge(
     entry_id: int,
     action: str,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
     """管理员启用或停用知识，成功后返回可见的列表页面。"""
     if action not in {"enable", "disable"}:
@@ -630,7 +647,8 @@ async def toggle_knowledge(
     await _get_service(request).set_enabled(
         entry_id, employee_id, enabled=action == "enable"
     )
-    return RedirectResponse(
-        "/employee/knowledge#knowledge-entries",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    # 回到来源视图；来源里没带锚点时才补上条目区锚点。
+    target = safe_return_path(return_to, fallback="/employee/knowledge")
+    if "#" not in target:
+        target = f"{target}#knowledge-entries"
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)

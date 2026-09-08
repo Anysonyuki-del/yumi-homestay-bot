@@ -778,3 +778,46 @@ async def test_employee_repository_lists_only_active_admin_userids() -> None:
         assert userids == ["admin-active"]
 
     await engine.dispose()
+
+
+KNOWLEDGE_SOURCE = "/employee/knowledge?query=退房&enabled=disabled&page=3&candidate_page=2"
+
+
+def test_knowledge_actions_return_to_the_view_they_came_from() -> None:
+    """整理知识时每操作一条就被丢回第一页，两个列表的位置都会丢。
+
+    列表支持 query、enabled、category、page、candidate_page 五个参数，但四个
+    写操作全部返回裸列表，表单也不带来源。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN)
+    page = client.get(KNOWLEDGE_SOURCE)
+    assert 'name="return_to"' in page.text
+
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    response = client.post(
+        "/employee/knowledge/1/disable",
+        data={"csrf_token": token, "return_to": KNOWLEDGE_SOURCE},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/employee/knowledge?")
+    assert "page=3" in response.headers["location"]
+    assert "candidate_page=2" in response.headers["location"]
+
+
+def test_knowledge_actions_refuse_a_foreign_source() -> None:
+    """站外 return_to 必须回落到知识列表。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    page = client.get("/employee/knowledge")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    response = client.post(
+        "/employee/knowledge/1/disable",
+        data={"csrf_token": token, "return_to": "https://evil.example.com"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "evil.example.com" not in response.headers["location"]
+    assert response.headers["location"].startswith("/employee/knowledge")
