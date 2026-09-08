@@ -1,50 +1,65 @@
-# 当前任务：前端审查修复（v1.10.1 + v1.11.0）已发布，等待剩余登录后验收
+# 当前任务：代码审查九项发现的修复（F-01 至 F-09）
 
-上一张工作单（后台表单 CSRF 令牌迁移，方案 B）已全部完成并随 v1.4.0 上线，归档在提交 `9577dc6`。
+上一张工作单（前端审查修复 v1.10.1 + v1.11.0）已全部完成并上线，归档在提交 `40561ed`。
 
-## 目标
+来源：[2026-09-08 代码审查交接报告](../docs/reviews/2026-09-08_code-review-handoff-report.md)。
 
-修复一轮前端审查发现的四项误操作风险和五项表达不一致，分两个版本发布：误操作风险与表达一致性风险等级不同、可分别交付，因此不合并成一次提交。
+## 基线复核（报告基线已过时）
 
-## 缺陷证据
+报告基线为 `1be527d` / 版本 1.11.0；复核时 HEAD 为 `74136c9` / 1.12.0，相差 22 个文件。
+用报告自带的离线复现脚本在当前代码上重跑：**九项全部仍然复现**，v1.11.1 与 v1.12.0
+的改动集中在关注页与任务列表，未触及订单同步、凭证、worker 与删除路径。
 
-四项 P1 均在代码中复核属实，不是观感问题：
+## 已确认的四项决策（用户 2026-09-08 一次性确认）
 
-- 任务列表的桌面表格与手机卡片各渲染一份 `name="task_ids"`，两份始终都在 DOM 里。`data-select-all` 用 `form.querySelectorAll` 无差别勾选两份，提交编号翻倍；取消可见那份时隐藏副本仍带着该任务进入归档或永久删除。`data-typed-confirm` 的条数同样按两套布局统计。
-- 永久删除按钮借用归档表单提交，表单级 `data-confirm` 写的是「可在「已归档」中恢复」，且在专属确认之后弹出。
-- `archive-filtered` 表单只提交 `status_filter / task_type / property_id`，路由签名也只接这三项，`service_date` 与 `assigned_employee_id` 被丢弃；`archive_matching` 表达不了 `overdue`。
-- `tasks/detail.html` 的分派表单 `<option>` 无 `selected`，浏览器默认选中第一项。
-- `.responsive-table` 手机端整体隐藏，而 `customers/detail.html` 的住宿记录与 `admin/operations.html` 的紧凑总览没有 `.mobile-card-list` 兄弟节点。
+1. **删除来源身份**：墓碑按「房间 + 服务日期」，即直接沿用现有去重键
+   `turnover:{property_id}:{service_date}`，配 180 天保留期。不引入新的身份概念，
+   与现有去重语义一致；过期后允许重建，避免永久封禁某房间的某一天。
+   现有审计日志不满足：`business_task_purged` 只记 `task_ids`，任务行删除后无法
+   反查房间与服务日期，且用 JSON details 做业务判据不适合建索引。
+2. **凭证目标**：房间就绪后按「同房间 + 业务当日入住」重新选订单，再走全部现有
+   安全门。0 个候选正常结束不报错；≥2 个候选或会话未验证转人工。房间仍可标 READY，
+   凭证单独挂起。
+3. **分段失败**：已成功部件不重放；失败部件与整组标 `MANUAL_FOLLOWUP`；尚未开始的
+   同组部件暂停；建一条去重的人工任务。现有 `CredentialDeliveryStatus` 枚举够用，
+   不新增状态体系。
+4. **Hostex 契约**：只用退房日区间查询覆盖仍在住的长住单，不与入住日组合。
+   `ReservationQuery` 已有 `start/end_check_out_date`。分页未全部成功则不刷新心跳。
+   不调用真实接口。
 
-## 已实施
+## 实施单元与状态
 
-### v1.10.1 · 批量操作按用户看见的范围执行
+### A. 删除一致性与防复活
 
-- `admin.js` 新增 `syncMirroredSelection()`：按任务编号分组同名勾选框，只保留当前可见的那一份可提交，其余同步状态并 `disabled`。禁用控件不进入 `FormData`，脚本不可用时同样只提交可见的选择。全选、`indeterminate` 判定与条数统计一律只看 `:not(:disabled)`，条数再按 value 去重。
-- 表单级 `data-confirm` 在 `event.submitter` 带 `data-typed-confirm` 时跳过。
-- `archive-filtered` 表单补 `service_date` 与 `assigned_employee_id` 隐藏字段，路由补对应参数；`overdue` 生效时不渲染入口，服务端收到该条件直接 `OperationRefused`。按钮上方新增服务端渲染的归档范围说明。
-- 分派表单按 `task.property_id` / `task.assigned_employee_id` 回填 `selected`，并加 `<option value="">` 占位项。
-- 两处表格改用 `.table-scroll`，`app.css` 补注释说明 `.responsive-table` 的前提条件。
+- [x] **F-01**（P1）照片清理改为与删库同事务登记、提交后由 worker 幂等执行。
+      三个入口（单条、批量、保留期）统一。不需要迁移：jobs 表本就是通用
+      `job_type` + JSON payload + dedupe_key。提交在 `bdcefd6`。
+- [x] **F-07** 删除任务时留墓碑（`purged_task_marks`，迁移 `0025`，180 天保留期），
+      `create_turnover` 创建前检查，命中则返回 None 而不是报错。
 
-### v1.11.0 · 队列与附加筛选分层、房态时间轴
+### B. 订单、房态与凭证闭环
 
-- 队列判定收敛到 `routes/tasks.py::_current_queue`（归档 > 逾期 > 状态 > 开放）与 `_extra_filters`，高亮、标题、清除入口都从同一个答案出发；队列元数据收进 `_TaskQueue` 数据类，管理员与员工两套称呼各自成立。
-- 高级筛选的展开条件由 `filters.active` 改为 `extra_filters`；状态占位项由「全部开放状态」改为「不限状态」。
-- `.room-timeline` 基础规则改为 `grid-auto-columns: minmax(76px, 1fr)`，此前只有 `max-width: 520px` 断点设了下限，桌面档漏在外面；跨度超过 7 天时房间卡片改整行；时间轴加 `tabindex="0"`。
-- 新增 `ui.html::room_timeline` 宏，同步过期时空日子写「无记录」并在时间轴上方标注是上次同步记录；同步可信时「空闲」仍是事实陈述，不降级。
-- 稳定房间展开后展示开放任务、下次入住退房与时间轴，所需数据本就在快照里。
-- `operational_status` 的三套颜色映射收敛到 `ui.html::readiness_status_badge`；宏内用 `status | string` 取键，对枚举与裸字符串都成立。
+- [ ] **F-08** 凭证安全门默认日期改用 `wuhan_today`
+- [ ] **F-06** 订单改期后作废无执行证据的旧保洁任务
+- [ ] **F-02** 房间就绪后按当日入住重新选订单
+- [ ] **F-03** 凭证异步失败回写投递状态并建人工任务
+- [ ] **F-09** stale job 恢复前完成凭证状态与人工任务补偿
+- [ ] **F-05** 对账覆盖仍在住订单，分页未全成功不刷新心跳
 
-## 验收门禁
+### C. 排队 final 的时效校验
 
-- [x] 25 条新增测试逐条先在未修复代码上确认变红
-- [x] 两个提交各自独立跑通全量测试，中间状态自洽（1391 / 1406）
-- [x] `ruff` 与 `mypy` 120 文件通过
-- [x] 拆分后的两个提交合起来与拆分前的工作区逐行一致（`diff` 结果 IDENTICAL）
-- [x] 时间轴宽度用 Playwright 量真实渲染尺寸，不断言 CSS 字符串
-- [x] 生产实测 11 项，见下
+- [ ] **F-04** 实际出站前复用 `has_newer_conversation_activity` 判定过时
 
-## 发布 v1.10.1 与 v1.11.0
+## 边界
+
+- 不调用真实 DeepSeek、Hostex、企业微信，不做生产写入。
+- 历史数据处置（缺照片的任务、改期旧任务、SENT 但收到失败回执的部件等）
+  不混入本次代码修复，需要独立方案与授权。
+- 不建立通用跨资源事务框架；复用既有 jobs 表与状态枚举。
+
+## 上一版发布记录（v1.10.1 / v1.11.0）
+
+### 发布清单
 
 - [x] 合并前确认 CI 不含部署步骤（唯一工作流 `validate`，权限 `contents: read`）
 - [x] rebase 合并保留两个提交，两个版本号不被压成一个

@@ -696,6 +696,25 @@ class ExternalRequest(Base):
     )
 
 
+class PurgedTaskMark(Base):
+    """记录已永久删除的系统任务来源，供同步创建前查重。
+
+    永久删除会把去重依据一并删掉，下一次同步因此查不到现存任务而重新创建，
+    历史工作回流到运营待办。这里只保留最小信息：去重键与删除时间，不含正文、
+    照片或客户身份。保留期到期后允许重建，避免永久封禁某房间的某一天。
+    """
+
+    __tablename__ = "purged_task_marks"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_purged_task_marks_dedupe_key"),
+        Index("ix_purged_task_marks_purged_at", "purged_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dedupe_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    purged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Job(TimestampMixin, Base):
     """保存可恢复的后台任务及其重试状态。"""
 

@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select, text
@@ -23,12 +23,16 @@ from homestay_bot.domain.models import (
     HostexWebhookEvent,
     Job,
     PropertyProfile,
+    PurgedTaskMark,
     RoomOperationalState,
     StayOrder,
     TaskAttachment,
 )
 from homestay_bot.integrations.hostex_client import Reservation
-from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
+from homestay_bot.repositories.operations import (
+    PURGED_MARK_RETENTION_DAYS,
+    SQLAlchemyOperationsRepository,
+)
 from homestay_bot.services.business_task_service import BusinessTaskService
 from homestay_bot.services.task_lifecycle_service import TaskLifecycleService
 from homestay_bot.services.task_page_service import TaskPageService
@@ -1245,3 +1249,86 @@ async def test_bulk_assign_validation_rejects_incomplete_or_wrong_status() -> No
             (ready_a.id, 101, date(2026, 8, 1)),
             (ready_b.id, 102, date(2026, 8, 5)),
         ]
+
+
+@pytest.mark.asyncio
+async def test_purged_turnover_is_not_recreated_by_the_next_sync() -> None:
+    """永久删除的周转任务不会被下一次订单同步造回来。
+
+    删除会把去重依据一并删掉，而 create_turnover 只查现存任务行，于是同一订单
+    再同步一次就重新生成待分派任务，已经处理完并被清理的历史工作回流到运营待办。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=101, title="测试房间"))
+        session.add(
+            Employee(id=1, wecom_userid="admin", name="管理员", role=EmployeeRole.ADMIN)
+        )
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+
+        created = await repository.create_turnover(
+            property_id=101,
+            service_date=date(2026, 8, 1),
+        )
+        assert created is not None
+        created.status = BusinessTaskStatus.COMPLETED
+        created.archived_at = datetime(2026, 8, 5, tzinfo=UTC)
+        await session.flush()
+
+        await repository.purge_task(created.id, 1)
+        await session.commit()
+
+        # 同一来源再同步一次：不重建，也不报错。
+        again = await repository.create_turnover(
+            property_id=101,
+            service_date=date(2026, 8, 1),
+        )
+        assert again is None
+
+        # 真正不同的服务日仍然照常创建。
+        other = await repository.create_turnover(
+            property_id=101,
+            service_date=date(2026, 8, 2),
+        )
+        assert other is not None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_purge_mark_expires_and_stops_blocking() -> None:
+    """墓碑只在保留期内挡住重建，过期后同一房间同一天可以重新排活。
+
+    否则删过一次就等于永久封禁某个房间的某一天，一年后真的需要清扫也不会生成。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=101, title="测试房间"))
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+        session.add(
+            PurgedTaskMark(
+                dedupe_key="turnover:101:2026-08-01",
+                purged_at=datetime.now(UTC)
+                - timedelta(days=PURGED_MARK_RETENTION_DAYS + 1),
+            )
+        )
+        await session.flush()
+
+        recreated = await repository.create_turnover(
+            property_id=101,
+            service_date=date(2026, 8, 1),
+        )
+
+        assert recreated is not None
+
+    await engine.dispose()
