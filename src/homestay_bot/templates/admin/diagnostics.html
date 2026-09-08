@@ -15,11 +15,20 @@
   {% if not health_available %}
   <div class="alert alert--warning" role="alert">基础组件状态暂时无法读取，请检查服务日志后重试。</div>
   {% elif attention_checks %}
-  <dl class="diagnostics-list">
+  <ul class="check-list">
     {% for item in attention_checks %}
-    <div><dt>{{ item.label }}</dt><dd>{{ ui.badge(item.status_label, item.tone) }}</dd></div>
+    <li class="check-item">
+      <div class="check-item__head"><span class="check-item__label">{{ item.label }}</span>{{ ui.badge(item.status_label, item.tone) }}</div>
+      {% if item.benign %}<p class="check-item__benign">不影响整体状态</p>{% elif health_degraded %}<p class="check-item__cause">整体状态显示为「降级」，由这一项引起</p>{% endif %}
+      {% if item.meaning %}<p class="check-item__meaning">{{ item.meaning }}</p>{% endif %}
+      {% if item.action %}
+      <p class="check-item__action"><span class="check-item__action-tag">怎么处理</span>{{ item.action }}</p>
+      {% endif %}
+      {% if item.action_url %}<a class="check-item__link" href="{{ item.action_url }}">前往处理</a>{% endif %}
+      {% if not item.meaning %}<p class="check-item__meaning">这一项没有预置的处理说明，请结合服务日志判断。</p>{% endif %}
+    </li>
     {% endfor %}
-  </dl>
+  </ul>
   {% else %}
   <p class="empty-state">没有需要处理的组件异常。</p>
   {% endif %}

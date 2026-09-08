@@ -8,6 +8,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.main import app
+from homestay_bot.routes.admin import _BENIGN_CHECK_STATES
 from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.health import router as health_router
 from homestay_bot.services.runtime_clients import RuntimeClientStatus
@@ -455,3 +456,85 @@ async def test_webhook_health_never_borrows_the_reconcile_heartbeat() -> None:
     live = await build(webhook_heartbeat=fresh, configured=True).check()
     assert live["hostex_webhook"] == "ok"
     assert live["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_benign_check_states_do_not_degrade() -> None:
+    """诊断页标注为「不影响整体状态」的组合，必须真的不拉低整体健康。
+
+    这份表在 routes/admin.py 里是 health.py 判定的副本，副本会漂移，
+    所以由这条测试把两边钉在一起。
+    """
+
+    async def database_probe() -> bool:
+        """模拟可用数据库。"""
+        return True
+
+    now = datetime.now(UTC)
+
+    for key, state in sorted(_BENIGN_CHECK_STATES):
+        web_search = "unknown" if key == "web_search" else "ok"
+        service = OperationalHealthService(
+            database_probe=database_probe,
+            heartbeat_getter=lambda: now,
+            poll_heartbeat_getter=lambda: now,
+            hostex_heartbeat_getter=lambda: now,
+            context_heartbeat_getter=lambda: now,
+            lifecycle_heartbeat_getter=lambda: now,
+            configuration_ok=True,
+            web_search_status_getter=lambda value=web_search: value,
+            contact_sync_configured=state == "ok",
+        )
+
+        result = await service.check()
+
+        assert result[key] == state, f"{key} 未落在预期状态 {state}"
+        assert result["status"] == "ok", f"{key}={state} 不应导致整体降级"
+
+
+@pytest.mark.asyncio
+async def test_configured_webhook_without_delivery_degrades_health() -> None:
+    """配了回调密钥却从未收到推送，属于必须暴露的降级，不是良性状态。"""
+
+    async def database_probe() -> bool:
+        """模拟可用数据库。"""
+        return True
+
+    status = RuntimeClientStatus(
+        revision=3,
+        has_duty=True,
+        contact_configured=True,
+        wecom_poll_interval_seconds=60.0,
+        hostex_reconcile_interval_seconds=200.0,
+        resources_healthy=True,
+        hostex_webhook_configured=True,
+    )
+
+    async def runtime_status_provider() -> RuntimeClientStatus:
+        """提供已配置回调密钥的运行状态。"""
+        return status
+
+    async def runtime_revision_provider() -> int:
+        """与运行配置 revision 保持一致，避免配置项误报。"""
+        return 3
+
+    now = datetime.now(UTC)
+    service = OperationalHealthService(
+        database_probe=database_probe,
+        heartbeat_getter=lambda: now,
+        poll_heartbeat_getter=lambda: now,
+        hostex_heartbeat_getter=lambda: now,
+        context_heartbeat_getter=lambda: now,
+        lifecycle_heartbeat_getter=lambda: now,
+        configuration_ok=True,
+        web_search_status_getter=lambda: "ok",
+        hostex_webhook_heartbeat_getter=lambda: None,
+        runtime_status_provider=runtime_status_provider,
+        runtime_revision_provider=runtime_revision_provider,
+    )
+
+    result = await service.check()
+
+    assert result["hostex_webhook"] == "never_received"
+    assert result["status"] == "degraded"
+    assert ("hostex_webhook", "never_received") not in _BENIGN_CHECK_STATES

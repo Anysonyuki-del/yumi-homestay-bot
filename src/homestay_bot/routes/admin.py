@@ -72,7 +72,8 @@ _CHECK_LABELS = {
     "database": "数据库连接",
     "worker_heartbeat": "后台任务处理",
     "wecom_polling": "企业微信消息同步",
-    "hostex_webhook_sync": "订单与房态同步",
+    "hostex_reconcile": "订单对账轮询",
+    "hostex_webhook": "百居易回调接收",
     "context_maintenance": "对话上下文维护",
     "lifecycle_scheduler": "入住提醒调度",
     "task_lifecycle": "任务生命周期巡检",
@@ -87,7 +88,80 @@ _STATUS_PRESENTATION = {
     "error": ("异常", "danger"),
     "incomplete": ("未完整配置", "warning"),
     "not_configured": ("未配置", "neutral"),
+    "never_received": ("从未收到", "warning"),
     "degraded": ("降级", "warning"),
+}
+# 并非每一项「非正常」都会拉低整体状态：这些组合在 routes/health.py 里被显式
+# 视为可接受，列出来是为了让人知道它们不是降级原因。这份表与 health.py 的判定
+# 由 tests/unit/test_health.py::test_benign_check_states_do_not_degrade 校验一致。
+_BENIGN_CHECK_STATES = frozenset(
+    {
+        ("hostex_webhook", "not_configured"),
+        ("task_lifecycle", "not_configured"),
+        ("web_search", "unknown"),
+        ("wecom_contact_sync", "ok"),
+        ("wecom_contact_sync", "not_configured"),
+    }
+)
+# 每一项非正常状态都要给出「这是什么意思、现在该做什么」。只显示一个状态词，
+# 等于把判断成本原样丢给看页面的人；而这些判断依据都在代码里，本来就能写清楚。
+# 没有可靠去处时如实说明要去哪里核对，不编造看起来能点的入口。
+_CHECK_GUIDANCE: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("hostex_webhook", "never_received"): (
+        "回调密钥已配置，但从未收到过任何一次百居易推送。订单目前全部依靠"
+        "每 15 分钟一次的对账轮询补回，实时性受影响。",
+        "到百居易后台核对回调地址是否填写为 https://akros.icu/webhooks/hostex，"
+        "以及密钥是否与本系统一致；若确定不使用回调，清空本系统的回调密钥即可，"
+        "该项会转为「未配置」且不再降级。",
+        "",
+    ),
+    ("hostex_webhook", "stale"): (
+        "曾经收到过回调，但最近一个对账周期内没有新的推送。",
+        "先看订单对账轮询是否正常；若轮询正常而回调长期无推送，到百居易后台核对回调配置。",
+        "",
+    ),
+    ("hostex_reconcile", "stale"): (
+        "订单对账轮询超过预期周期没有成功。房态与订单可能不是最新的。",
+        "检查百居易访问令牌是否有效、接口是否可达；系统诊断的审计记录里可以看到最近的调用结果。",
+        "/employee/admin/diagnostics/audits",
+    ),
+    ("web_search", "unknown"): (
+        "本次启动后还没有发生过真实联网查询，因此系统不声称这项能力可用——"
+        "这是「尚未验证」，不是故障。",
+        "发生一次需要联网的客人问题后会自动转为正常；"
+        "也可以在 AI 调试台发起一次含实时信息的提问来验证。",
+        "/employee/admin/debug",
+    ),
+    ("web_search", "error"): (
+        "最近一次联网查询失败。涉及天气、交通等实时信息的问题会退回安全回复。",
+        "在接口设置中确认联网检索相关配置与配额。",
+        "/employee/admin/settings",
+    ),
+    ("wecom_contact_sync", "not_configured"): (
+        "未配置客户联系功能，因此不做客户标签同步。这是配置选择，不是故障。",
+        "如果需要客户标签同步，在接口设置中补齐企业微信客户联系相关配置。",
+        "/employee/admin/settings",
+    ),
+    ("database", "error"): (
+        "数据库连接探测失败，后台大部分功能会不可用。",
+        "这是最高优先级故障，需要检查数据库服务与连接配置。",
+        "",
+    ),
+    ("worker_heartbeat", "stale"): (
+        "后台任务处理器超过预期时间没有心跳，排队中的发送与同步可能已经停滞。",
+        "查看待处理与失败任务数量；持续停滞需要重启应用进程。",
+        "/employee/admin/diagnostics/audits",
+    ),
+    ("wecom_polling", "stale"): (
+        "企业微信消息拉取超时，新的客人消息可能没有进入系统。",
+        "确认企业微信相关配置与网络可达性。",
+        "/employee/admin/settings",
+    ),
+    ("configuration", "incomplete"): (
+        "必要配置尚未填写完整，部分能力不会启用。",
+        "到接口设置逐项补齐标记为必填的配置。",
+        "/employee/admin/settings",
+    ),
 }
 _TASK_STATUS_PRESENTATION = {
     "failed": ("失败任务", "danger"),
@@ -332,17 +406,28 @@ async def admin_diagnostics(request: Request) -> Response:
         health = await _safe_health(request)
     attention_checks: list[dict[str, str]] = []
     healthy_check_count = 0
-    for key, label in _CHECK_LABELS.items():
-        if key not in health:
+    # 遍历健康检查本身而不是标签表：健康检查新增字段时，缺标签只会显示成原始键，
+    # 不会像 v1.15.0 那样被整项静默丢掉，让降级原因在页面上无处可见。
+    for key, value in health.items():
+        if key == "status":
             continue
-        if health[key] == "ok":
+        if value == "ok":
             healthy_check_count += 1
             continue
-        status_label, tone = _STATUS_PRESENTATION.get(
-            health[key], ("需检查", "warning")
+        status_label, tone = _STATUS_PRESENTATION.get(value, ("需检查", "warning"))
+        meaning, action, action_url = _CHECK_GUIDANCE.get(
+            (key, value), ("", "", "")
         )
         attention_checks.append(
-            {"label": label, "status_label": status_label, "tone": tone}
+            {
+                "label": _CHECK_LABELS.get(key, key),
+                "status_label": status_label,
+                "tone": tone,
+                "meaning": meaning,
+                "action": action,
+                "action_url": action_url,
+                "benign": "1" if (key, value) in _BENIGN_CHECK_STATES else "",
+            }
         )
 
     attention_tasks: list[dict[str, str | int]] = []

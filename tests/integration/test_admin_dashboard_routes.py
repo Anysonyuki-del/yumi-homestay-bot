@@ -792,3 +792,53 @@ def test_workbench_and_rooms_view_agree_on_how_fresh_the_source_is() -> None:
     # 真正的判据：两个视图都必须把同一个同步时间交给快照。桩自己的 source_stale
     # 是硬编码的，只断言渲染结果不会暴露「其中一个忘了传参」。
     assert stub.received_sync_times == [synced, synced]
+
+
+class UnlabeledHealthStub:
+    """返回一个标签表里没有的健康项，用来检验它不会被静默丢弃。"""
+
+    async def check(self) -> dict[str, str]:
+        """含未知键、降级项和良性项各一。"""
+        return {
+            "status": "degraded",
+            "database": "ok",
+            "hostex_webhook": "never_received",
+            "wecom_contact_sync": "not_configured",
+            "brand_new_probe": "stale",
+        }
+
+
+def test_diagnostics_shows_degrading_check_with_meaning_and_action() -> None:
+    """降级项必须出现在页面上，并给出含义、处理方法和可点去处。"""
+    client = build_client()
+    client.app.state.health_service = UnlabeledHealthStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    response = client.get("/employee/admin/diagnostics")
+
+    assert response.status_code == 200
+    # 降级项本身必须可见——v1.15.0 改名后它一度完全不渲染。
+    assert "百居易回调接收" in response.text
+    assert "从未收到" in response.text
+    assert "整体状态显示为「降级」，由这一项引起" in response.text
+    assert "从未收到过任何一次百居易推送" in response.text
+    assert "怎么处理" in response.text
+    assert "https://akros.icu/webhooks/hostex" in response.text
+    # 良性项要明确说明不是降级原因，避免看的人误判。
+    assert "客户联系同步" in response.text
+    assert "不影响整体状态" in response.text
+    assert "/employee/admin/settings" in response.text
+
+
+def test_diagnostics_never_silently_drops_unlabeled_health_key() -> None:
+    """健康检查新增字段而未配标签时，应退化为显示原始键而不是消失。"""
+    client = build_client()
+    client.app.state.health_service = UnlabeledHealthStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    response = client.get("/employee/admin/diagnostics")
+
+    assert "brand_new_probe" in response.text
+    assert "这一项没有预置的处理说明" in response.text
+    # 旧的错误键不应再出现在任何标签里。
+    assert "hostex_webhook_sync" not in response.text

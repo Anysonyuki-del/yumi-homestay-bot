@@ -515,3 +515,21 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .assign-inline { margin: 0; color: var(--muted); font-size: var(--t-xs); font-weight: 650; }
 .selection-actions { flex-wrap: wrap; align-items: center; gap: 8px; }
 .selection-actions select { max-width: 12rem; }
+
+/* 系统诊断的异常项从「一行一个状态词」改成可读的处置卡片：状态、含义、
+   下一步动作各占一行，有可靠去处时才给链接。只显示状态词等于把判断成本
+   原样丢给看页面的人，而判断依据本来就写在代码里。 */
+.check-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.check-item { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.check-item:first-child { padding-top: 0; }
+.check-item:last-child { padding-bottom: 0; border-bottom: 0; }
+.check-item__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
+.check-item__label { font-weight: 700; }
+.check-item__meaning { margin: 8px 0 0; color: var(--muted); font-size: var(--t-sm); }
+.check-item__action { margin: 6px 0 0; color: var(--ink-soft); font-size: var(--t-sm); }
+.check-item__action-tag { margin-right: 6px; padding: 1px 6px; border-radius: var(--r-sm); background: var(--line); color: var(--ink-soft); font-size: var(--t-xs); font-weight: 700; white-space: nowrap; }
+.check-item__link { display: inline-block; margin-top: 8px; font-size: var(--t-sm); font-weight: 700; }
+.check-item__cause { margin: 6px 0 0; color: var(--danger); font-size: var(--t-xs); font-weight: 700; }
+.check-item__benign { margin: 6px 0 0; color: var(--muted); font-size: var(--t-xs); }
+/* 最后一项的分隔线被去掉了，收起提示需要自己撑开与它的距离。 */
+.check-list + .diagnostics-note { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
