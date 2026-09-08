@@ -765,8 +765,8 @@ def test_next_step_does_not_send_you_to_an_empty_task_list() -> None:
         assert url == tasks_url, scenario
         assert label == "去处理", scenario
 
-        # 零任务：进房间详情，且文案说明任务尚未生成。
+        # 零任务：进房间详情，按钮改为查看准备情况；不再说「尚未生成」催重复处理。
         reason, url, label = step(**scenario)
         assert url == room_url, scenario
         assert label == "查看房间准备情况", scenario
-        assert "尚未生成相关任务" in reason, scenario
+        assert "尚未生成" not in reason, scenario

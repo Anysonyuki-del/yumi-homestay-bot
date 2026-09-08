@@ -477,8 +477,10 @@ def test_room_readiness_looks_the_same_on_desktop_and_phone(tmp_path) -> None:
     properties.property.operational_status = RoomOperationalStatus.MAINTENANCE
     maintenance = client.get("/employee/properties")
 
-    assert ready.text.count('<span class="badge badge--success">运营：可入住</span>') == 2
-    assert maintenance.text.count('<span class="badge badge--danger">运营：维修中</span>') == 2
+    ready_badge = '<span class="badge badge--success">本系统记录：可入住</span>'
+    maint_badge = '<span class="badge badge--danger">本系统记录：维修中</span>'
+    assert ready.text.count(ready_badge) == 2
+    assert maintenance.text.count(maint_badge) == 2
     assert "badge--info" not in maintenance.text
 
 
@@ -490,7 +492,7 @@ def test_property_detail_reuses_the_same_readiness_badge(tmp_path) -> None:
 
     response = client.get("/employee/properties/101")
 
-    assert '<span class="badge badge--danger">运营：维修中</span>' in response.text
+    assert '<span class="badge badge--danger">本系统记录：维修中</span>' in response.text
 
 
 class RoomReadinessStub:

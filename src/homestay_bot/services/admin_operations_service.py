@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -29,6 +29,12 @@ from homestay_bot.repositories.admin_operations import (
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 TIMELINE_PAST_DAYS = 2
+# 民宿营业节奏：12:00 计划退房，12:00–15:00 周转清洁，15:00 起入住。全部按武汉本地时间。
+CHECK_OUT_TIME = time(12, 0, tzinfo=WUHAN_TIMEZONE)
+CHECK_IN_TIME = time(15, 0, tzinfo=WUHAN_TIMEZONE)
+_TURNOVER_SCHEDULE = "12:00 计划退房 → 12:00–15:00 计划清洁 → 15:00 起入住"
+_CHECK_OUT_SCHEDULE = "12:00 计划退房 → 12:00–15:00 计划清洁"
+_CHECK_IN_SCHEDULE = "15:00 起入住"
 # 今日周转优先级：同日进出最紧急，空置和房态未知最不紧急。
 _OCCUPANCY_TURNOVER_RANK: dict[RoomOccupancyStatus, int] = {
     RoomOccupancyStatus.TURNOVER_TODAY: 0,
@@ -99,6 +105,24 @@ class RoomDayOperation:
 
 
 @dataclass(frozen=True, slots=True)
+class RoomPrimaryStatus:
+    """房间主状态的展示结论：无 PII 的状态词 + 单独的客人名字段。
+
+    状态词本身不含姓名，客人名单列在 guest_name，由模板拼「状态 · 客人」；这样
+    状态词可复用、可断言，姓名只在需要时出现在页面上。
+    """
+
+    label: str
+    tone: str = "neutral"
+    guest_name: str | None = None
+    next_guest_name: str | None = None
+    schedule_line: str = ""
+    schedule_phase: str = ""
+    is_consecutive: bool = False
+    checkout_verified: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class RoomOperationItem:
     """表示房间今日运营状态与下一步概览。"""
 
@@ -119,6 +143,14 @@ class RoomOperationItem:
     # 按钮文案与去向同源：去任务列表说「去处理」，去房间详情说「查看房间准备情况」。
     next_action_label: str = "去处理"
     source_stale: bool = True
+    # 主状态展示结论（无 PII）与客人名分列；模板拼「状态 · 客人」。
+    primary_status: str = "今日无订单占用"
+    primary_tone: str = "neutral"
+    guest_name: str | None = None
+    next_guest_name: str | None = None
+    schedule_line: str = ""
+    schedule_phase: str = ""
+    is_consecutive: bool = False
 
     @property
     def today_arrival(self) -> bool:
@@ -373,6 +405,7 @@ class AdminOperationsService:
         *,
         horizon_days: int,
         source_stale: bool,
+        local_now: datetime,
     ) -> tuple[tuple[RoomOperationItem, ...], tuple[SevenDayRoomItem, ...]]:
         """在内存中一次构造房间行动摘要及近期时间轴。"""
         stays_by_room: dict[int, list[StayRecord]] = defaultdict(list)
@@ -412,6 +445,19 @@ class AdminOperationsService:
             )
             next_arrival = min(future_arrivals, default=None)
             next_departure = min(future_departures, default=None)
+            primary = AdminOperationsService._primary_status(
+                local_now=local_now,
+                source_stale=source_stale,
+                room_stays=room_stays,
+            )
+            # 下一位客人名：取今日之后最早一笔到店对应的客人。
+            future_arrival_stays = sorted(
+                (s for s in room_stays if s.check_in_date > local_date),
+                key=lambda s: s.check_in_date,
+            )
+            next_guest_name = (
+                future_arrival_stays[0].guest_name if future_arrival_stays else None
+            )
             next_step = AdminOperationsService._next_step(
                 source_stale=source_stale,
                 operational_status=room.status,
@@ -439,6 +485,13 @@ class AdminOperationsService:
                     next_action_url=next_step[1],
                     next_action_label=next_step[2],
                     source_stale=source_stale,
+                    primary_status=primary.label,
+                    primary_tone=primary.tone,
+                    guest_name=primary.guest_name,
+                    next_guest_name=next_guest_name,
+                    schedule_line=primary.schedule_line,
+                    schedule_phase=primary.schedule_phase,
+                    is_consecutive=primary.is_consecutive,
                 )
             )
             matrix_items.append(
@@ -514,6 +567,96 @@ class AdminOperationsService:
         )[0]
 
     @staticmethod
+    def _primary_status(
+        *,
+        local_now: datetime,
+        source_stale: bool,
+        room_stays: list[StayRecord],
+    ) -> "RoomPrimaryStatus":
+        """按订单事实与当地时刻推导「一眼看懂」的主状态。
+
+        规则由用户明确：下一位到店即视为上一位已退房；今日仅退房时过 15:00 默认
+        按已退房进入下一轮；同一客人连续订单为续住而非周转；只有实际退房日期
+        （checkout_observed_on）等于退房日才算已核验退房，否则一律「按计划」。
+        同步过期时不做任何推断。
+        """
+        today = local_now.date()
+        after_checkin_time = local_now.timetz() >= CHECK_IN_TIME
+        if source_stale:
+            return RoomPrimaryStatus(label="入住信息待核实", tone="warning")
+
+        arrivals = [s for s in room_stays if s.check_in_date == today]
+        departures = [s for s in room_stays if s.check_out_date == today]
+        mid_stay = [
+            s for s in room_stays if s.check_in_date < today < s.check_out_date
+        ]
+
+        def _verified(dep: StayRecord) -> bool:
+            """实际退房日期等于退房日才算已核验。"""
+            return dep.checkout_observed_on == dep.check_out_date
+
+        if arrivals and departures:
+            arr, dep = arrivals[0], departures[0]
+            # 连住：同一位客人前后相接，不是不同客人的周转。
+            if arr.customer_id is not None and arr.customer_id == dep.customer_id:
+                return RoomPrimaryStatus(
+                    label="续住",
+                    tone="neutral",
+                    guest_name=arr.guest_name,
+                    is_consecutive=True,
+                )
+            # 不同客人：到店即视为上一位已退房，主行是到店客人。
+            return RoomPrimaryStatus(
+                label="今日到店",
+                tone="info",
+                guest_name=arr.guest_name,
+                schedule_line=_TURNOVER_SCHEDULE,
+                schedule_phase=AdminOperationsService._schedule_phase(local_now),
+                checkout_verified=_verified(dep),
+            )
+        if arrivals:
+            arr = arrivals[0]
+            return RoomPrimaryStatus(
+                label="今日到店",
+                tone="info",
+                guest_name=arr.guest_name,
+                schedule_line=_CHECK_IN_SCHEDULE,
+                schedule_phase=AdminOperationsService._schedule_phase(local_now),
+            )
+        if departures:
+            dep = departures[0]
+            verified = _verified(dep)
+            if verified:
+                return RoomPrimaryStatus(
+                    label="已退房", tone="neutral", checkout_verified=True
+                )
+            if after_checkin_time:
+                # 15:00 后未核验：默认按计划已退房进入下一轮。
+                return RoomPrimaryStatus(label="按计划已退房", tone="neutral")
+            return RoomPrimaryStatus(
+                label="今日离店",
+                tone="info",
+                guest_name=dep.guest_name,
+                schedule_line=_CHECK_OUT_SCHEDULE,
+                schedule_phase=AdminOperationsService._schedule_phase(local_now),
+            )
+        if mid_stay:
+            return RoomPrimaryStatus(
+                label="住宿期内", tone="neutral", guest_name=mid_stay[0].guest_name
+            )
+        return RoomPrimaryStatus(label="今日无订单占用", tone="neutral")
+
+    @staticmethod
+    def _schedule_phase(local_now: datetime) -> str:
+        """按当地时刻标出当前处于计划节奏的哪一段，供页面高亮。"""
+        current = local_now.timetz()
+        if current < CHECK_OUT_TIME:
+            return "before_checkout"
+        if current < CHECK_IN_TIME:
+            return "cleaning"
+        return "checkin"
+
+    @staticmethod
     def _next_step(
         *,
         source_stale: bool,
@@ -560,7 +703,7 @@ class AdminOperationsService:
             else:
                 reason = "优先完成房间准备并接待入住"
             if no_open_tasks:
-                return f"尚未生成相关任务，先{reason}", room_url, inspect
+                return reason, room_url, inspect
             return reason, tasks_url, handle
         if operational_status is RoomOperationalStatus.MAINTENANCE:
             return "跟进维修并确认房间可用性", room_url, inspect
@@ -571,7 +714,7 @@ class AdminOperationsService:
         if next_arrival is not None:
             if no_open_tasks:
                 return (
-                    f"尚未生成相关任务，{next_arrival.month}月{next_arrival.day}日前完成房间准备",
+                    f"{next_arrival.month}月{next_arrival.day}日前完成房间准备",
                     room_url,
                     inspect,
                 )
@@ -628,6 +771,7 @@ class AdminOperationsService:
             task_counts,
             horizon_days=horizon_days,
             source_stale=source_stale,
+            local_now=observed_at.astimezone(WUHAN_TIMEZONE),
         )
         return OperationsSnapshot(
             local_date=local_date,

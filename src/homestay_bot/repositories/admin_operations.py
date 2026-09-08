@@ -20,6 +20,7 @@ from homestay_bot.domain.models import (
     BusinessTask,
     ComplaintReview,
     CredentialDelivery,
+    Customer,
     CustomerMergeSuggestion,
     LifecycleReminder,
     PropertyProfile,
@@ -66,11 +67,19 @@ class ActiveRoomRecord:
 
 @dataclass(frozen=True, slots=True)
 class StayRecord:
-    """保存近期运营时间轴与下一笔行动所需的订单日期事实。"""
+    """保存近期运营时间轴与下一笔行动所需的订单日期事实。
+
+    customer_id 与 guest_name 用于把客人名标在日期旁，并按同一客人识别连住；
+    checkout_observed_on 是百居易同步到的实际退房日期（可空），用于区分「按计划
+    已退房」与「已核验退房」——只有它等于退房日才算核验事实。
+    """
 
     property_id: int
     check_in_date: date
     check_out_date: date
+    customer_id: int | None = None
+    guest_name: str | None = None
+    checkout_observed_on: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,8 +280,14 @@ class SQLAlchemyAdminOperationsRepository:
                 StayOrder.property_id,
                 StayOrder.check_in_date,
                 StayOrder.check_out_date,
+                StayOrder.customer_id,
+                # 客人未关联时保持 None，页面回落到中性称呼，不编造姓名。
+                Customer.display_name,
+                StayOrder.checkout_observed_on,
             )
             .join(PropertyProfile, PropertyProfile.id == StayOrder.property_id)
+            # 左连接：订单未关联客户时仍要出现在时间轴里。
+            .outerjoin(Customer, Customer.id == StayOrder.customer_id)
             .where(
                 PropertyProfile.is_active.is_(True),
                 StayOrder.check_out_date > start_date,
@@ -286,8 +301,18 @@ class SQLAlchemyAdminOperationsRepository:
                 property_id=property_id,
                 check_in_date=check_in_date,
                 check_out_date=check_out_date,
+                customer_id=customer_id,
+                guest_name=guest_name,
+                checkout_observed_on=checkout_observed_on,
             )
-            for property_id, check_in_date, check_out_date in rows
+            for (
+                property_id,
+                check_in_date,
+                check_out_date,
+                customer_id,
+                guest_name,
+                checkout_observed_on,
+            ) in rows
         )
 
     async def list_open_task_counts(

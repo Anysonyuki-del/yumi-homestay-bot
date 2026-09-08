@@ -30,11 +30,11 @@
 {%- endmacro %}
 
 {# 房态事实徽标：同步不可信时先声明可信度，其余按今日周转和在住语义取色。 #}
+{# 主状态徽标：直接用状态引擎的结论（primary_status/primary_tone），姓名不进
+   徽标而由卡片另行拼在日期旁。info→gold 与既有周转配色一致。 #}
 {% macro occupancy_badge(room) -%}
-{% if room.source_stale %}{{ badge("房态待确认", "warning") }}
-{%- elif room.occupancy_status.value in ("turnover_today", "arriving_today", "departing_today") %}{{ badge(room.occupancy_status | status_zh, "gold") }}
-{%- elif room.occupancy_status.value == "occupied" %}{{ badge(room.occupancy_status | status_zh, "info") }}
-{%- else %}{{ badge(room.occupancy_status | status_zh, "neutral") }}{% endif %}
+{%- set tone = {"info": "gold", "success": "success", "warning": "warning", "danger": "danger"}.get(room.primary_tone, "neutral") -%}
+{{ badge(room.primary_status, tone) }}
 {%- endmacro %}
 
 {# 运营准备语义只有这一处定义：只有维修是风险，可入住是达标，其余是中性事实；
@@ -42,9 +42,11 @@
    否则同一个房间在桌面是绿、在手机是蓝，颜色就不再有含义。 #}
 {% macro readiness_status_badge(status) -%}
 {% set key = status | string %}
-{%- if key == "maintenance" %}{{ badge("运营：" ~ (status | status_zh), "danger") }}
-{%- elif key == "ready" %}{{ badge("运营：" ~ (status | status_zh), "success") }}
-{%- else %}{{ badge("运营：" ~ (status | status_zh), "neutral") }}{% endif %}
+{%- if key == "maintenance" %}{{ badge("本系统记录：维修中", "danger") }}
+{%- elif key == "ready" %}{{ badge("本系统记录：可入住", "success") }}
+{%- elif key == "not_started" %}{{ badge("本系统准备情况：未确认", "neutral") }}
+{%- elif key == "occupied" %}{{ badge("本系统记录：已入住", "neutral") }}
+{%- else %}{{ badge("本系统记录：" ~ (status | status_zh), "neutral") }}{% endif %}
 {%- endmacro %}
 
 {% macro readiness_badge(room) -%}

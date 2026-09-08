@@ -16,7 +16,7 @@ def test_templates_register_safe_chinese_helpers() -> None:
     assert environment.filters["status_zh"](ApprovalStatus.PENDING) == "待审批"
     assert environment.filters["enum_zh"](ApprovalStatus.PENDING) == "待审批"
     assert environment.filters["status_zh"](RoomOperationalStatus.READY) == "可入住"
-    assert environment.filters["status_zh"](RoomOccupancyStatus.UNKNOWN) == "房态待确认"
+    assert environment.filters["status_zh"](RoomOccupancyStatus.UNKNOWN) == "入住信息待核实"
     assert (
         environment.filters["status_zh"](TaskClosureReason.ORDER_CANCELLED)
         == "关联订单已取消"

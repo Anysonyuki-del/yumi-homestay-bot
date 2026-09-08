@@ -256,8 +256,8 @@ def test_attention_and_operations_pages_form_actionable_workflow() -> None:
     assert 'href="/employee/tasks/7"' in attention.text
     assert "任务 #7：等待管理员确认" in attention.text
     assert operations.status_code == 200
-    assert "房态待确认" in operations.text
-    assert "房间近期运营" in operations.text
+    assert "入住信息待核实" in operations.text
+    assert "入住安排" in operations.text
     assert "先确认百居易实时房态" in operations.text
     assert "未来 3 天" in operations.text
     assert 'href="/employee/properties/101"' in operations.text
@@ -537,8 +537,8 @@ def test_dashboard_shows_manual_risk_before_daily_turnover() -> None:
     assert "逾期任务" in response.text
 
 
-def test_operations_demotes_stable_rooms_and_states_timeline_span() -> None:
-    """稳定房间必须降为可折叠次级信息，时间轴范围文案必须与真实天数一致。"""
+def test_operations_shows_every_room_with_attention_first() -> None:
+    """所有房间在一屏可扫读，需要关注的排前面，不再把在住房藏进折叠。"""
     client = build_client()
     client.app.state.admin_operations_service = StableRoomOperationsStub()
     login_admin(client, next_path="/employee/admin")
@@ -546,13 +546,13 @@ def test_operations_demotes_stable_rooms_and_states_timeline_span() -> None:
     response = client.get("/employee/admin/operations")
 
     assert response.status_code == 200
-    assert "8月9日" in response.text
-    assert "8月14日" in response.text
-    assert "含已过去的 2 天与今天" in response.text
-    assert "稳定房间" in response.text
-    assert response.text.index("长江中心") < response.text.index("稳定房间")
-    assert response.text.index("稳定房间") < response.text.index("东湖小院")
-    assert 'class="operations-stable"' in response.text
+    # 两间房都在页面上，且需要关注的长江中心排在平稳的东湖小院之前。
+    assert "长江中心" in response.text
+    assert "东湖小院" in response.text
+    assert response.text.index("长江中心") < response.text.index("东湖小院")
+    # 不再有「稳定房间」折叠区。
+    assert "稳定房间" not in response.text
+    assert 'class="operations-stable"' not in response.text
 
 
 def test_operations_page_offers_inline_room_status_control() -> None:
@@ -613,7 +613,7 @@ def test_stale_timeline_does_not_call_a_missing_record_vacant() -> None:
     response = client.get("/employee/admin/operations")
 
     assert response.status_code == 200
-    assert "房态待确认" in response.text
+    assert "入住信息待核实" in response.text
     assert "以下为上次同步记录，入住信息待确认。" in response.text
     assert "day-mark--unknown" in response.text
     assert "day-mark--vacant" not in response.text
@@ -633,10 +633,10 @@ def test_synced_timeline_still_states_vacancy_as_a_fact() -> None:
 
 
 def test_expanded_stable_rooms_show_the_future_they_promise() -> None:
-    """稳定房间展开后必须能看到未来安排，而不只是房名和房态控件。
+    """每张房间卡片都能看到未来安排，而不只是房名和房态控件。
 
-    页面顶部提供「未来 3／7／14 天」入口，稳定房间却只有房名、准备状态和一个
-    下拉框，展开等于什么也没多看到。
+    页面顶部提供「未来 3／7／14 天」入口，房间卡片必须至少给出下次入住、开放
+    任务与可展开的近期时间轴，展开才有意义。
     """
     client = build_client()
     client.app.state.admin_operations_service = StableRoomOperationsStub()
@@ -644,11 +644,12 @@ def test_expanded_stable_rooms_show_the_future_they_promise() -> None:
 
     response = client.get("/employee/admin/operations")
 
-    block = response.text.split('<details class="operations-stable"')[1]
-    assert "东湖小院" in block
+    # 东湖小院现在直接在统一列表的卡片里；取它那张卡片的片段。
+    block = response.text.split("东湖小院", 1)[1].split("</article>", 1)[0]
     assert "下次入住" in block
     assert "开放任务" in block
     assert 'href="/employee/tasks?property_id=202"' in block
+    assert "查看近期安排" in block
     assert 'class="clean-list room-timeline"' in block
 
 

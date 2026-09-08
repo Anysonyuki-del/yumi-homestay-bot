@@ -533,3 +533,15 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .check-item__benign { margin: 6px 0 0; color: var(--muted); font-size: var(--t-xs); }
 /* 最后一项的分隔线被去掉了，收起提示需要自己撑开与它的距离。 */
 .check-list + .diagnostics-note { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+
+/* 入住安排卡片：主状态旁的客人名、计划节奏条、辅助记录行、低频展开区。 */
+.room-guest { font-weight: 700; color: var(--text); }
+.room-schedule { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--r-sm); background: var(--line); color: var(--ink-soft); font-size: var(--t-sm); }
+.room-schedule--before_checkout { box-shadow: inset 3px 0 0 var(--line-soft); }
+.room-schedule--cleaning { box-shadow: inset 3px 0 0 #f59e0b; }
+.room-schedule--checkin { box-shadow: inset 3px 0 0 var(--primary); }
+.room-operation-card__aux { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.room-operation-card__aux .field-help { margin: 0; }
+.room-adjust { margin-top: 10px; }
+.room-adjust > summary { cursor: pointer; font-size: var(--t-sm); font-weight: 700; color: var(--ink-soft); }
+.room-adjust[open] > summary { margin-bottom: 8px; }

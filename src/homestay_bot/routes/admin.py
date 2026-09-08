@@ -381,7 +381,7 @@ async def admin_operations(
         request=request,
         name="admin/operations.html",
         context={
-            "page_title": "房态与运营",
+            "page_title": "入住安排",
             "active_nav": "operations",
             "snapshot": snapshot,
             "room_csrf_tokens": room_csrf_tokens,
