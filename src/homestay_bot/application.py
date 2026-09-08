@@ -183,7 +183,11 @@ from homestay_bot.services.task_lifecycle_service import (
     TaskLifecycleService,
     TaskLifecycleSweepResult,
 )
-from homestay_bot.services.task_page_service import TaskFilters, TaskPageService
+from homestay_bot.services.task_page_service import (
+    ATTACHMENT_CLEANUP_JOB_TYPE,
+    TaskFilters,
+    TaskPageService,
+)
 from homestay_bot.version import get_app_version
 from homestay_bot.worker import (
     JobHandler,
@@ -1430,6 +1434,7 @@ class SessionTaskPageService:
         return TaskPageService(
             repository,
             BusinessTaskService(repository),
+            SQLAlchemyJobRepository(session),
         )
 
     async def list_for(
@@ -1592,18 +1597,13 @@ class SessionTaskPageService:
             await session.commit()
 
     async def purge(self, task_id: int, employee: Employee) -> None:
-        """永久删除一条已归档任务，先删磁盘照片再删数据库行。
+        """永久删除一条已归档任务；照片清理登记进同一事务，提交后才执行。
 
-        顺序是刻意的：先删库成功而删文件失败，照片就永远没人认领；反过来失败
-        只留下一条指向缺失文件的记录，可以修复。
+        此前是先删磁盘照片再删数据库行，理由是「反过来失败只留下一条指向缺失
+        文件的记录，可以修复」。但那句话对记录成立，对照片不成立：提交失败时
+        数据库回滚、照片却已经没了，没有备份就无法重建原图。现在删库与清理
+        登记一起提交，照片由 worker 在提交之后幂等删除，失败保留重试依据。
         """
-        async with self._factory() as session:
-            file_ids = await self._service(session).purge_attachment_ids(
-                task_id,
-                employee,
-            )
-        for file_id in file_ids:
-            self._storage.delete(file_id)
         async with self._factory() as session:
             await self._service(session).purge(task_id, employee)
             await session.commit()
@@ -1640,14 +1640,7 @@ class SessionTaskPageService:
         task_ids: list[int],
         employee: Employee,
     ) -> int:
-        """永久删除勾选的已归档任务，先删磁盘照片再删数据库行。"""
-        async with self._factory() as session:
-            file_ids = await self._service(session).purge_many_file_ids(
-                task_ids,
-                employee,
-            )
-        for file_id in file_ids:
-            self._storage.delete(file_id)
+        """永久删除勾选的已归档任务；照片清理与删库同事务，提交后才执行。"""
         async with self._factory() as session:
             purged = await self._service(session).purge_many(task_ids, employee)
             await session.commit()
@@ -2191,6 +2184,23 @@ def _register_credential_part_handler(
         handlers["credential_send_part"] = factory(session)
 
 
+def _build_attachment_cleanup_handler(
+    storage: PrivateFileStorage,
+) -> JobHandler:
+    """返回删除任务照片的幂等处理器。
+
+    只在数据库删除提交之后执行，因此文件不存在本身就是正确结果——存储的
+    delete 用的是 unlink(missing_ok=True)。任一编号删除失败都让整条任务重试，
+    保留可观测的待清理记录，而不是让照片变成无人认领的孤儿文件。
+    """
+
+    async def handle(payload: dict[str, Any]) -> None:
+        for file_id in payload.get("file_ids", []):
+            storage.delete(str(file_id))
+
+    return handle
+
+
 def _register_customer_tag_handler(
     handlers: dict[str, JobHandler],
     session: AsyncSession,
@@ -2240,6 +2250,8 @@ async def _run_worker_loop(
     hostex_event_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
     credential_part_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
     customer_tag_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
+    # 照片清理不需要数据库会话，注入成品 handler 而不是工厂。
+    attachment_cleanup_handler: JobHandler | None = None,
     lifecycle_handler_factory: (Callable[[AsyncSession], JobHandler] | None) = None,
     deferred_message_handler: JobHandler | None = None,
     included_job_types: set[str] | None = None,
@@ -2423,6 +2435,8 @@ async def _run_worker_loop(
                     session,
                     lifecycle_handler_factory,
                 )
+                if attachment_cleanup_handler is not None:
+                    handlers[ATTACHMENT_CLEANUP_JOB_TYPE] = attachment_cleanup_handler
 
                 async def enqueue_terminal_delivery_compensation(
                     job: Any,
@@ -2956,6 +2970,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 私有附件和数据库引用必须同时可靠；目录不可写时在任何业务资源启动前失败。
     private_file_storage = PrivateFileStorage(bootstrap.private_upload_dir)
     private_file_storage.verify_writable()
+    attachment_cleanup_handler = _build_attachment_cleanup_handler(private_file_storage)
 
     try:
         runtime_environment = RuntimeEnvironmentSettings()  # type: ignore[call-arg]
@@ -3566,6 +3581,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                             factory=factory,
                             registry=candidate_registry,
                             runtime_handler_factory=build_worker_bindings,
+                            attachment_cleanup_handler=attachment_cleanup_handler,
                             excluded_job_types=_MODEL_JOB_TYPES,
                             recover_stale=True,
                         )

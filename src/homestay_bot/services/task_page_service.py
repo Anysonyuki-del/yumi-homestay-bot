@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from homestay_bot.domain.enums import (
@@ -193,6 +193,22 @@ class TaskListItem:
     is_overdue: bool
 
 
+ATTACHMENT_CLEANUP_JOB_TYPE = "task_attachment_cleanup"
+
+
+class AttachmentCleanupQueue(Protocol):
+    """删除任务时登记照片清理所需的最小队列能力。"""
+
+    async def enqueue(
+        self,
+        job_type: str,
+        payload: dict[str, Any],
+        *,
+        dedupe_key: str | None = None,
+    ) -> object:
+        """在当前事务内登记一条可重试的后台任务。"""
+
+
 class TaskPageService:
     """执行两级员工任务可见性和操作权限。"""
 
@@ -206,10 +222,12 @@ class TaskPageService:
         self,
         tasks: TaskPageRepository,
         task_state: BusinessTaskService,
+        jobs: AttachmentCleanupQueue | None = None,
     ) -> None:
-        """注入任务仓储和状态机。"""
+        """注入任务仓储、状态机与照片清理队列。"""
         self._tasks = tasks
         self._task_state = task_state
+        self._jobs = jobs
 
     async def list_for(
         self,
@@ -443,9 +461,16 @@ class TaskPageService:
         return await self._tasks.attachment_file_ids(task_id)
 
     async def purge(self, task_id: int, employee: Employee) -> None:
-        """永久删除一条已归档任务。"""
+        """永久删除一条已归档任务，并在同一事务内登记照片清理。
+
+        照片删除必须晚于提交：先删文件再删库时，一旦提交失败，数据库回滚而
+        照片已经没了，而没有备份就无法重建原图——注释里那句「可以修复」只对
+        指向缺失文件的记录成立，对照片本身不成立。
+        """
         self._require_admin(employee)
+        file_ids = await self._tasks.attachment_file_ids(task_id)
         await self._tasks.purge_task(task_id, employee.id)
+        await self._schedule_attachment_cleanup(file_ids, f"task-purge:{task_id}")
 
     async def assign_many(
         self,
@@ -519,14 +544,43 @@ class TaskPageService:
         self._require_admin(employee)
         return await self._tasks.require_purgeable(task_ids)
 
+    async def _schedule_attachment_cleanup(
+        self,
+        file_ids: list[str],
+        dedupe_key: str,
+    ) -> None:
+        """把照片清理登记为可重试的后台任务，与删除同事务提交。
+
+        提交成功后由既有 worker 幂等执行；存储的 delete 本身就是
+        `unlink(missing_ok=True)`，文件不存在即视为完成。失败时保留 job 行，
+        重启后仍可重试，不会留下无人认领的照片。
+        """
+        if not file_ids or self._jobs is None:
+            return
+        await self._jobs.enqueue(
+            ATTACHMENT_CLEANUP_JOB_TYPE,
+            {"file_ids": list(file_ids)},
+            dedupe_key=dedupe_key,
+        )
+
     async def purge_many(
         self,
         task_ids: list[int],
         employee: Employee,
     ) -> int:
-        """永久删除勾选的已归档任务，返回删除数量。"""
+        """永久删除勾选的已归档任务，并在同一事务内登记照片清理。
+
+        批量入口与单条同一套约束：删库与清理登记一起提交，提交失败则照片一张
+        不少。此前批量删除还可能只删掉一部分文件就中断。
+        """
         self._require_admin(employee)
-        return await self._tasks.purge_selected(task_ids, employee.id)
+        file_ids = await self._tasks.require_purgeable(task_ids)
+        purged = await self._tasks.purge_selected(task_ids, employee.id)
+        await self._schedule_attachment_cleanup(
+            file_ids,
+            "task-purge-batch:" + ",".join(str(value) for value in sorted(set(task_ids))),
+        )
+        return purged
 
     async def archive_many(
         self,
