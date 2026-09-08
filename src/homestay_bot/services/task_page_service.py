@@ -5,10 +5,12 @@ from typing import Protocol, cast
 from zoneinfo import ZoneInfo
 
 from homestay_bot.domain.enums import (
+    ARCHIVABLE_TASK_STATUSES,
     BusinessTaskStatus,
     BusinessTaskType,
     EmployeeRole,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     BusinessTask,
     Employee,
@@ -467,6 +469,46 @@ class TaskPageService:
                 service_date=service_date,
             )
         return len(targets)
+
+    async def cancel_many(
+        self,
+        task_ids: list[int],
+        employee: Employee,
+    ) -> int:
+        """把勾选的开放态任务批量取消，返回取消数量。
+
+        状态机里「取消」是唯一一条从每个开放态都通向终点的路径，而且只有管理员
+        走得通。批量取消因此不需要放宽任何规则：逐条复用既有 transition，权限、
+        状态校验和审计一律照旧。这补上的是「无论任务停在哪一格，管理员都有一个
+        真能落下去的处置动作」，此前只有终态能归档、只有待分派能分派，中间三档
+        一个都动不了。
+
+        取消不可逆：状态机里 CANCELLED 没有出路，因此调用方必须要求手输条数确认。
+        """
+        self._require_admin(employee)
+        unique_ids = list(dict.fromkeys(task_ids))
+        if not unique_ids:
+            raise OperationRefused("请先勾选要取消的任务")
+        tasks = [await self._require_visible(task_id, employee) for task_id in unique_ids]
+        # 「可取消」正是「非终态」：状态机里 CANCELLED 从每个开放态都可达，
+        # 而终态没有任何出路。因此复用既有的终态定义，不新造第二份状态清单。
+        blocked = [
+            str(task.id)
+            for task in tasks
+            if task.status in ARCHIVABLE_TASK_STATUSES
+        ]
+        if blocked:
+            # 与批量归档、批量删除一致：混入不合格的条目就整批拒绝，不做一半。
+            raise OperationRefused(
+                "以下任务已处于终态，无法取消：" + "、".join(blocked)
+            )
+        for task in tasks:
+            await self._task_state.transition(
+                task.id,
+                employee,
+                BusinessTaskStatus.CANCELLED,
+            )
+        return len(tasks)
 
     async def purge_many_file_ids(
         self,

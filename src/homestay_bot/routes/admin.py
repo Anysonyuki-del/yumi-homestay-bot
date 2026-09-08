@@ -3,14 +3,18 @@
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Literal, Protocol, cast
+from typing import Annotated, Literal, Protocol, cast
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, Form, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from homestay_bot.domain.enums import EmployeeRole, RoomOperationalStatus
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.routes.admin_form_csrf import (
     PROPERTY_CSRF_FAMILY,
+    REMINDER_CSRF_FAMILY,
+    consume_form_csrf,
+    drop_legacy_session_key,
     issue_form_csrf,
 )
 from homestay_bot.routes.employee_auth import require_employee_session
@@ -21,6 +25,7 @@ from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/admin")
 logger = logging.getLogger(__name__)
+_BULK_CSRF_ENTITY = 0
 
 
 class AdminDashboardServicePort(Protocol):
@@ -182,6 +187,7 @@ async def admin_attention(request: Request) -> Response:
     """展示所有需要管理员采取行动的本地安全投影。"""
     await _require_admin(request)
     snapshot = await _operations_service(request).snapshot(_clock(request))
+    drop_legacy_session_key(request, "attention_csrf")
     return templates.TemplateResponse(
         request=request,
         name="admin/attention.html",
@@ -189,7 +195,61 @@ async def admin_attention(request: Request) -> Response:
             "page_title": "待我关注",
             "active_nav": "attention",
             "snapshot": snapshot,
+            "csrf_token": await issue_form_csrf(
+                request,
+                family=REMINDER_CSRF_FAMILY,
+                entity_id=_BULK_CSRF_ENTITY,
+            ),
         },
+    )
+
+
+@router.post("/attention/resolve-reminders")
+async def resolve_reminders(
+    request: Request,
+    csrf_token: str = Form(min_length=1, max_length=128),
+    reminder_ids: Annotated[list[str] | None, Form()] = None,
+) -> RedirectResponse:
+    """把管理员确认过的人工跟进提醒批量标记为已处理。
+
+    提醒原本没有出口状态：一旦转入人工跟进就只能停在「待我关注」里，即使它
+    移交出去的那条任务早已处理完或被删除。这个入口是那条出路。
+    """
+    employee_id, role = await require_employee_session(request)
+    if role is not EmployeeRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅管理员可访问")
+    await consume_form_csrf(
+        request,
+        family=REMINDER_CSRF_FAMILY,
+        entity_id=_BULK_CSRF_ENTITY,
+        token=csrf_token,
+    )
+    service = getattr(request.app.state, "lifecycle_reminder_admin", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="提醒服务未就绪")
+    # 每个勾选框携带它那一组的全部提醒编号，页面上显示的集合与提交的集合因此
+    # 逐一对应，不需要服务端「按同样的条件再查一次」——那会让两次查询之间的
+    # 变化悄悄改变处置范围。
+    selected: list[int] = []
+    for group in reminder_ids or []:
+        for raw in group.split(","):
+            value = raw.strip()
+            if not value.isdigit():
+                raise OperationRefused(
+                    "提醒编号无法识别，请刷新页面后重试",
+                    return_to="/employee/admin/attention",
+                )
+            selected.append(int(value))
+    try:
+        await service.resolve_many(selected, employee_id)
+    except OperationRefused as refused:
+        refused.return_to = "/employee/admin/attention"
+        raise
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="提醒不存在") from error
+    return RedirectResponse(
+        "/employee/admin/attention",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

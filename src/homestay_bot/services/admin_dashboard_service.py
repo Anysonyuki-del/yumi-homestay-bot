@@ -11,24 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from homestay_bot.domain.enums import (
     ApprovalStatus,
     BusinessTaskStatus,
-    ComplaintReviewStatus,
-    CredentialDeliveryStatus,
-    CustomerMergeStatus,
-    ReminderStatus,
     RoomOperationalStatus,
 )
 from homestay_bot.domain.models import (
     BookingApproval,
     BusinessTask,
-    ComplaintReview,
-    CredentialDelivery,
-    CustomerMergeSuggestion,
-    LifecycleReminder,
     PropertyProfile,
     RoomOperationalState,
     StayOrder,
 )
 from homestay_bot.repositories.admin_dashboard import SQLAlchemyAdminDashboardRepository
+from homestay_bot.repositories.admin_operations import (
+    SQLAlchemyAdminOperationsRepository,
+)
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 TERMINAL_STAY_STATUSES = ("canceled", "cancelled", "declined", "expired", "deleted")
@@ -91,6 +86,13 @@ class ConsistentReadPort(Protocol):
         """在第一项业务查询前固定数据库读快照。"""
 
 
+class AttentionCountPort(Protocol):
+    """总览只需要人工事项的总数，不需要整套运营查询。"""
+
+    async def count_attention(self) -> int:
+        """返回与关注页同源的人工事项总数。"""
+
+
 class AdminDashboardService:
     """通过单个只读数据库会话聚合小型民宿关键运营事实。"""
 
@@ -99,10 +101,13 @@ class AdminDashboardService:
         session: AsyncSession,
         *,
         consistent_read: ConsistentReadPort | None = None,
+        attention: AttentionCountPort | None = None,
     ) -> None:
-        """保存请求期数据库会话与一致读准备器。"""
+        """保存请求期数据库会话、一致读准备器与人工事项计数来源。"""
         self._session = session
         self._consistent_read = consistent_read or SQLAlchemyAdminDashboardRepository(session)
+        # 人工事项的数只有一处实现，总览借用关注页的仓储而不是自己再查一遍。
+        self._attention = attention or SQLAlchemyAdminOperationsRepository(session)
 
     async def _stays_for(self, local_date: date, *, arrival: bool) -> tuple[StaySummary, ...]:
         """读取今日入住或退房，仅投影房源标题。"""
@@ -188,43 +193,14 @@ class AdminDashboardService:
         return int(result or 0)
 
     async def _count_manual_attention(self) -> int:
-        """合计客诉、凭证、提醒及客户合并中明确需要人工判断的事项。"""
-        complaint_count = await self._session.scalar(
-            select(func.count(ComplaintReview.id)).where(
-                ComplaintReview.status.in_(
-                    (
-                        ComplaintReviewStatus.READY_FOR_REVIEW,
-                        ComplaintReviewStatus.EDITING,
-                        ComplaintReviewStatus.DELIVERY_FAILED,
-                        ComplaintReviewStatus.ANALYSIS_FAILED,
-                    )
-                )
-            )
-        )
-        credential_count = await self._session.scalar(
-            select(func.count(CredentialDelivery.id)).where(
-                CredentialDelivery.status.in_(
-                    (
-                        CredentialDeliveryStatus.NEEDS_REVIEW,
-                        CredentialDeliveryStatus.MANUAL_FOLLOWUP,
-                    )
-                )
-            )
-        )
-        reminder_count = await self._session.scalar(
-            select(func.count(LifecycleReminder.id)).where(
-                LifecycleReminder.status == ReminderStatus.MANUAL_FOLLOWUP
-            )
-        )
-        merge_count = await self._session.scalar(
-            select(func.count(CustomerMergeSuggestion.id)).where(
-                CustomerMergeSuggestion.status == CustomerMergeStatus.PENDING
-            )
-        )
-        return sum(
-            int(value or 0)
-            for value in (complaint_count, credential_count, reminder_count, merge_count)
-        )
+        """返回与「待我关注」页面严格一致的人工事项总数。
+
+        这里曾经是自己写的一组 COUNT，与关注页的谓词有三处分歧：不计待确认的
+        业务任务、不排除已移交给任务的提醒、漏掉客诉的退回状态。于是同一件事
+        在总览和关注页上是两个数字，处理掉一条任务总览纹丝不动。同一个数字只
+        能有一处实现，因此改为直接复用关注页的查询。
+        """
+        return await self._attention.count_attention()
 
     async def snapshot(self, now: datetime | None = None) -> Snapshot:
         """按 Asia/Shanghai 当日边界生成只读快照。"""
