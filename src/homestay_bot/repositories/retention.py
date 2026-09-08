@@ -16,6 +16,10 @@ from homestay_bot.domain.models import (
     Job,
     TaskAttachment,
 )
+from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
+from homestay_bot.services.task_page_service import (
+    ATTACHMENT_CLEANUP_JOB_TYPE,
+)
 
 
 class SQLAlchemyRetentionRepository:
@@ -103,7 +107,7 @@ class SQLAlchemyRetentionRepository:
     async def purge_archived_tasks(
         self,
         *,
-        delete_file: Callable[[str], None],
+        delete_file: Callable[[str], None] | None = None,
         now: datetime | None = None,
     ) -> int:
         """删除归档超过保留期的任务及其现场照片，返回删除数量。
@@ -134,11 +138,15 @@ class SQLAlchemyRetentionRepository:
                 )
             )
         )
-        # 先删磁盘文件：删库成功而删文件失败会留下无人认领的照片，反过来只留
-        # 一条指向缺失文件的记录，可以修复。
-        for file_id in file_ids:
-            delete_file(file_id)
         await self._session.execute(
             delete(BusinessTask).where(BusinessTask.id.in_(task_ids))
         )
+        # 照片清理登记进同一事务，提交之后才由 worker 幂等执行。先删文件再删库
+        # 时提交一旦失败，数据库回滚而照片已经没了，没有备份就无法重建原图。
+        if file_ids:
+            await SQLAlchemyJobRepository(self._session).enqueue(
+                ATTACHMENT_CLEANUP_JOB_TYPE,
+                {"file_ids": list(file_ids)},
+                dedupe_key="task-retention:" + ",".join(str(v) for v in sorted(task_ids)),
+            )
         return len(task_ids)

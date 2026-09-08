@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import (
@@ -23,6 +23,7 @@ from homestay_bot.domain.models import (
     TaskAttachment,
 )
 from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
+from homestay_bot.services.task_page_service import ATTACHMENT_CLEANUP_JOB_TYPE
 
 
 @pytest.mark.asyncio
@@ -249,9 +250,7 @@ async def test_archived_task_cleanup_respects_every_boundary() -> None:
         )
         await session.flush()
 
-        removed_files: list[str] = []
         deleted = await SQLAlchemyRetentionRepository(session).purge_archived_tasks(
-            delete_file=removed_files.append,
             now=now,
         )
         await session.commit()
@@ -261,5 +260,68 @@ async def test_archived_task_cleanup_respects_every_boundary() -> None:
         # 未满保留期与从未归档的都必须完好
         assert await session.get(BusinessTask, fresh_archived.id) is not None
         assert await session.get(BusinessTask, never_archived.id) is not None
-        # 磁盘照片必须一并删除，否则留下无人认领的孤儿文件
-        assert removed_files == ["0123456789abcdef"]
+        # 照片清理改为与删库同事务登记、提交之后由 worker 幂等执行。此前是先删
+        # 文件再删库，一旦提交失败数据库回滚而照片已经没了，没有备份就无法重建。
+        # 这里断言的是「清理有据可查且不会丢」，比原来的「已经删掉了」更强。
+        cleanup = await session.scalar(
+            select(Job).where(Job.job_type == ATTACHMENT_CLEANUP_JOB_TYPE)
+        )
+        assert cleanup is not None
+        assert cleanup.payload["file_ids"] == ["0123456789abcdef"]
+        assert cleanup.status is JobStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_photo_survives_a_failed_commit() -> None:
+    """提交失败时照片必须一张不少。
+
+    此前三个删除入口都是先删磁盘照片、再另开事务删数据库行，理由是「反过来
+    失败只留下一条指向缺失文件的记录，可以修复」。那句话对记录成立，对照片
+    不成立：提交一旦失败，数据库回滚而照片已经没了，没有备份就无法重建原图。
+    现在删库与清理登记同事务提交，照片由 worker 在提交之后才删。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 9, 8, tzinfo=UTC)
+
+    async with factory() as session:
+        session.add(PropertyProfile(id=101, title="测试房间"))
+        await session.flush()
+        task = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            # COMPLETED 属于可执行状态，按 ck_business_task_execution_fields
+            # 必须带房间与服务日期。
+            status=BusinessTaskStatus.COMPLETED,
+            property_id=101,
+            service_date=date(2026, 8, 1),
+            description="很久以前归档",
+            archived_at=now - timedelta(days=400),
+        )
+        session.add(task)
+        await session.flush()
+        session.add(
+            TaskAttachment(
+                task_id=task.id,
+                private_file_id="0123456789abcdef",
+                kind="photo",
+            )
+        )
+        await session.commit()
+
+    deleted_files: list[str] = []
+
+    async with factory() as session:
+        await SQLAlchemyRetentionRepository(session).purge_archived_tasks(now=now)
+        # 模拟提交失败：回滚后数据库回到原状，而这一路上没有任何文件被删过。
+        await session.rollback()
+
+    assert deleted_files == []
+    async with factory() as session:
+        assert await session.get(BusinessTask, task.id) is not None
+        assert await session.scalar(
+            select(Job).where(Job.job_type == ATTACHMENT_CLEANUP_JOB_TYPE)
+        ) is None
+
+    await engine.dispose()
