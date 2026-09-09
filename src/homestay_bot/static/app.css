@@ -570,7 +570,7 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 /* 不隐藏滚动条来掩盖溢出：短日期段真正自适应卡片宽度。 */
 .cal__scroll { margin-top: 6px; }
 .cal__layout--compact { display: none; }
-.cal__segment { --track-height: 54px; --bar-offset: 5px; }
+.cal__segment { --track-height: 54px; --bar-offset: 5px; --preview-rows: 3; }
 .cal__identity { display: none; }
 .cal__segment + .cal__segment { margin-top: 16px; }
 .cal__content { min-width: 0; border-bottom: 1px solid var(--line); }

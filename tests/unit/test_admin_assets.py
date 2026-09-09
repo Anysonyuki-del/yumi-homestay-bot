@@ -423,10 +423,11 @@ def test_room_card_colors_all_go_through_design_tokens() -> None:
     # 引用到的令牌必须真存在；var(--typo) 只会静默变成透明或继承。
     declared = set(re.findall(r"(--[\w-]+):", _root_block(css)))
     declared |= set(re.findall(r"(--[\w-]+):", block))  # .cal 与 .cal__segment 作用域
-    # 这三个由模板按每段的天数与行数写在 style 属性里，CSS 侧不声明。
-    declared |= {"--days", "--rows", "--preview-rows"}
+    # 这两个由模板按每段的天数与条数写在 style 属性里，CSS 侧不声明。
+    # --preview-rows 是设计常量（固定三条），已回到 .cal__segment 里声明。
+    declared |= {"--days", "--rows"}
     ui = (ASSET_ROOT / "templates/components/ui.html").read_text()
-    for name in {"--days", "--rows", "--preview-rows"}:
+    for name in {"--days", "--rows"}:
         assert f"{name}:" in ui, f"{name} 已不再由模板写入，CSS 里的 var() 会失效"
     for name in set(re.findall(r"var\((--[\w-]+)", block)):
         assert name in declared, f"{name} 既不在 :root 也不在这段的作用域里"

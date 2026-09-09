@@ -535,12 +535,18 @@ def test_permanent_delete_never_shows_the_archive_recoverable_wording(
     page.close()
 
 
-def _timeline_fixture(day_count: int, *, crossing: bool = False) -> str:
+def _timeline_fixture(
+    day_count: int, *, crossing: bool = False, sparse_tail: bool = False
+) -> str:
     """用真实宏与合成订单验证分段、独立分轨及无脚本展开。"""
     from datetime import date, timedelta
     from types import SimpleNamespace
 
     from jinja2 import Environment, FileSystemLoader
+
+    def replace_span(bar: SimpleNamespace, left: float, width: float) -> SimpleNamespace:
+        bar.left_pct, bar.width_pct = left, width
+        return bar
 
     env = Environment(loader=FileSystemLoader(PROJECT_ROOT / "src/homestay_bot/templates"))
     env.filters["status_zh"] = str
@@ -552,6 +558,13 @@ def _timeline_fixture(day_count: int, *, crossing: bool = False) -> str:
         left_continues=False, right_continues=False, checkout_verified=False,
         semantic="future", overlaps=False,
     ) for i in range(5)]
+    if sparse_tail:
+        # 首段三笔、中段空、末段一笔：手机 3 天分段后各段笔数必然不同。
+        span = 100 / day_count
+        bars = [
+            replace_span(bar, day * span, span)
+            for bar, day in zip(bars[:4], (0, 1, 2, day_count - 1), strict=True)
+        ]
     if crossing:
         # 第三天 15:00 到第四天 12:00，在三日段边界两侧分别保留 9 与 12 小时。
         bars = bars[:1]
@@ -585,14 +598,36 @@ def test_timeline_fits_without_horizontal_scrolling(browser: Browser, width: int
     assert cells.evaluate_all(
         "els => els.every(el => el.clientWidth >= 70 && el.clientHeight == 44)")
     segment = page.locator(".cal__segment:visible").first
-    assert segment.locator(".cal__bar:visible").count() == 4
+    assert segment.locator(".cal__bar:visible").count() == 3
     if width == 390:
-        assert segment.locator(".cal__identity:visible").count() == 4
+        assert segment.locator(".cal__identity:visible").count() == 3
     segment.locator("summary").press("Enter")
     assert segment.locator(".cal__bar:visible").count() == 5
     assert segment.locator(".cal__bar:visible").evaluate_all(
         "els => new Set(els.map(el => el.getBoundingClientRect().top)).size == 5")
     assert segment.locator('.cal__bar[href="/employee/customers/5"]').is_visible()
+    page.close()
+
+
+def test_every_date_segment_is_the_same_height(browser: Browser) -> None:
+    """各段高度必须一致，不能随该段恰好有几笔订单而缩水。
+
+    段高原本等于该段可见条数，7 天在手机上切成 3+3+1，末段只有一笔就矮一截，
+    整块日历看上去参差不齐。现在固定预览三条：不足三笔留空行，超过三笔折叠。
+    """
+    page = browser.new_page(viewport={"width": 390, "height": 900})
+    page.set_content(_timeline_fixture(7, sparse_tail=True))
+
+    tracks = page.locator(".cal__segment:visible .cal__tracks")
+    heights = tracks.evaluate_all(
+        "els => els.map(el => Math.round(el.getBoundingClientRect().height))"
+    )
+    counts = page.locator(".cal__segment:visible").evaluate_all(
+        """els => els.map(el => [...el.querySelectorAll('.cal__bar')]
+             .filter(bar => bar.offsetParent).length)"""
+    )
+    assert len(set(counts)) > 1, "这个夹具本身要造出各段笔数不同，否则守不住任何东西"
+    assert len(set(heights)) == 1, f"各段轨道高不一致：{heights}（各段笔数 {counts}）"
     page.close()
 
 
