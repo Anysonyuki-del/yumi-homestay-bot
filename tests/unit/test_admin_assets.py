@@ -146,8 +146,9 @@ def test_timeline_day_cells_keep_a_minimum_width_at_every_breakpoint() -> None:
 
     scroll = re.findall(r"\.cal__scroll \{([^}]*)\}", css)
     assert scroll and "overflow-x: auto" in scroll[0]
-    # 长跨度时卡片改为整行，滚动才是兜底而不是常态。
-    assert ".room-operations-list--wide" in css
+    # 房间卡片始终单栏，日历总能拿到整卡宽度；不再依赖半宽卡片的 --wide 兜底。
+    list_rules = re.findall(r"\.room-operations-list \{([^}]*)\}", css)
+    assert list_rules and "repeat(2" not in "".join(list_rules)
 
 
 def test_admin_shell_uses_grouped_lightweight_navigation() -> None:

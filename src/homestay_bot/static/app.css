@@ -451,9 +451,9 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   .topbar { grid-template-columns: 1fr auto; }
   .topbar__brand { visibility: hidden; }
   .dashboard-grid { grid-template-columns: minmax(0, 1.7fr) minmax(270px, .7fr); }
-  .room-operations-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  /* 14 天时间轴塞进半宽卡片必然要滚动才看得全；长跨度时卡片改为整行。 */
-  .room-operations-list--wide { grid-template-columns: minmax(0, 1fr); }
+  /* 房间卡片始终单栏：日历默认 3/7 天视图需要 6–10 个 104px 日期列，双栏卡片
+     （断点内每栏 < 624px）会把日期挤到要横向滚动、切掉末日。单栏让日历拿到整卡
+     宽度，3/7 天无需滚动即可看全；14 天等长跨度仍在模块内横向滚动。 */
   .property-grid { display: block; }
   .filter-toolbar { grid-template-columns: repeat(5, minmax(120px, 1fr)) auto; }
 }
