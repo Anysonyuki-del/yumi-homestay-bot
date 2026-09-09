@@ -551,30 +551,35 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 
 /* 房间日期日历（Spec §5/§6）：白底、细边框、准确网格；不用满圆胶囊、不加装饰。 */
 /* 日历以留白和细日期线分组，去掉嵌套卡片和大面积灰底。 */
-.cal { margin: 22px 0 16px; border: 0; border-radius: 0; background: #fff; overflow: hidden; }
+/* 日历局部变量：网格线与轴线各一档，避免此前表头用 #F1F5F9、轨道用 #E2E8F0
+   的两套值——前者在白底上几乎不可见，网格结构因此读不出来。 */
+.cal { --cal-rule: #E2E8F0; --cal-axis: #CBD5E1; margin: 22px 0 16px; border: 0; border-radius: 0; background: #fff; overflow: hidden; }
 .cal__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 0 0 10px; }
 .cal__title { font-weight: 700; font-size: var(--t-sm); }
 .cal__range { color: var(--muted); font-size: var(--t-sm); font-variant-numeric: tabular-nums; }
-.cal__note { margin: 6px 12px 0; font-size: var(--t-xs); color: var(--muted); }
+.cal__note { margin: 6px 0 0; font-size: var(--t-xs); color: var(--muted); }
 .cal__note--warn { color: #B45309; }
 .cal__scroll { overflow-x: auto; margin-top: 10px; }
 .cal__scroll:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
-.cal__content { display: grid; grid-template-columns: repeat(var(--days), minmax(104px, 1fr)); background: #fff; }
-.cal__dates { grid-row: 1; grid-column: 1 / -1; display: grid; grid-template-columns: repeat(var(--days), minmax(104px, 1fr)); }
-.cal__date { height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border-right: 1px solid #F1F5F9; border-bottom: 1px solid #E2E8F0; }
+.cal__content { display: grid; grid-template-columns: repeat(var(--days), minmax(104px, 1fr)); background: #fff; border-bottom: 1px solid var(--cal-rule); }
+/* 日期栏是这张图的坐标带：自己有底色与一条实的轴线，才不会和白色轨道糊在一起。
+   竖线与轨道共用同一个 --cal-rule，列才会从表头一路连到轨道底部。 */
+.cal__dates { grid-row: 1; grid-column: 1 / -1; display: grid; grid-template-columns: repeat(var(--days), minmax(104px, 1fr)); background: #F8FAFC; border-bottom: 1px solid var(--cal-axis); }
+.cal__date { height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border-right: 1px solid var(--cal-rule); }
 .cal__date:last-child { border-right: 0; }
-.cal__date--weekend .cal__dow { color: #64748B; }
-.cal__date--today { background: #EFF6FF; border-radius: 8px 8px 0 0; }
-.cal__dow { font-size: 11px; color: #64748B; }
-.cal__dnum { font-size: 13px; font-weight: 600; color: #334155; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 4px; }
+.cal__date--weekend .cal__dow { color: #94A3B8; }
+.cal__date--today { background: #EFF6FF; border-radius: 10px 10px 0 0; }
+.cal__dow { font-size: 12px; line-height: 1; color: #64748B; }
+/* 日期号是日历里最该被一眼读到的数字：与星期拉开明确的字号与字重台阶。 */
+.cal__dnum { font-size: 20px; line-height: 1; font-weight: 600; color: #0F172A; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 5px; }
 .cal__date--today .cal__dnum { color: var(--primary); }
-.cal__todaytag { padding: 0 4px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; }
+.cal__todaytag { align-self: center; padding: 1px 6px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 11px; font-weight: 600; line-height: 1.4; }
 /* 竖线用重复渐变，每个日期列右侧一条，避免叠加成 2px 粗边。 */
 .cal__tracks { grid-row: 2; grid-column: 1 / -1; position: relative; background:
   repeating-linear-gradient(to right, transparent 0,
     transparent calc(100% / var(--days) - 1px),
-    #E2E8F0 calc(100% / var(--days) - 1px),
-    #E2E8F0 calc(100% / var(--days))); }
+    var(--cal-rule) calc(100% / var(--days) - 1px),
+    var(--cal-rule) calc(100% / var(--days))); }
 .cal__today { position: absolute; top: 0; bottom: 0; background: #EFF6FF; z-index: 0; }
 .cal__bar { position: absolute; height: 44px; box-sizing: border-box; display: flex;
   align-items: center; gap: 2px; padding: 0 8px; border: 1px solid transparent;
@@ -589,7 +594,7 @@ a.cal__bar:hover .cal__bar-label,
 a.cal__bar:focus-visible .cal__bar-label { text-decoration: underline; }
 a.cal__bar:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .cal__empty { position: absolute; left: 8px; top: 12px; margin: 0; color: var(--muted); font-size: var(--t-sm); }
-.cal__trips { padding: 10px 0 0; border-top: 1px solid #F1F5F9; }
+.cal__trips { padding: 10px 0 0; }
 .cal__trips > summary { cursor: pointer; font-size: 12px; font-weight: 500; color: var(--muted); min-height: 44px; display: list-item; align-content: center; }
 .cal__trip-list { margin: 8px 0 0; }
 

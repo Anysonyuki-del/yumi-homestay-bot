@@ -300,3 +300,35 @@ def test_room_card_column_threshold_can_hold_the_default_calendar() -> None:
         )
     # 长跨度（7 天及以上）固定单栏：10–17 个日期列并排必然滚动。
     assert ".room-operations-list--wide" in css
+
+
+def _relative_luminance(hex_color: str) -> float:
+    """按 WCAG 公式计算相对亮度，用于判断线条能否从背景里分辨出来。"""
+    channels = [int(hex_color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [
+        value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+        for value in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def test_calendar_grid_lines_stay_visible_against_the_white_track() -> None:
+    """日历网格线必须能从白色轨道背景里分辨出来。
+
+    这个问题出现过两次：表头竖线与行程分隔线都用过 #F1F5F9，在白底上对比度只有
+    约 1.10:1，肉眼等同于没有线，网格结构因此读不出来（用户原话「边框和背景融在
+    一起了」）。这里对日历自己的线条变量设下限：相对白色至少 1.2:1。
+    """
+    css = (ASSET_ROOT / "static/app.css").read_text()
+
+    tokens = dict(re.findall(r"(--cal-(?:rule|axis)):\s*(#[0-9A-Fa-f]{6})", css))
+    assert set(tokens) == {"--cal-rule", "--cal-axis"}, f"日历线条变量缺失：{tokens}"
+
+    white = _relative_luminance("#FFFFFF")
+    for name, value in tokens.items():
+        ratio = (white + 0.05) / (_relative_luminance(value) + 0.05)
+        assert ratio >= 1.2, f"{name}={value} 相对白底仅 {ratio:.2f}:1，线条会融进背景"
+
+    # 日历内部不得再出现绕过变量、直接写死的近白线条色。
+    calendar_block = css[css.index(".cal {"):css.index(".cal__trip-list")]
+    assert "#F1F5F9" not in calendar_block, "日历内仍有近白硬编码线条色"
