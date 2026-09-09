@@ -432,6 +432,14 @@ document.querySelectorAll("button[data-typed-confirm]").forEach((button) => {
     return minutes ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`;
   }
 
+  // 倒计时数字单独强调，保留完整的计划／待确认语义，不新增计时器。
+  function renderDuration(cell, prefix, minutes, suffix = "") {
+    const duration = document.createElement("strong");
+    duration.textContent = formatDuration(minutes);
+    cell.replaceChildren(prefix + " ", duration, suffix);
+  }
+
+  // 只根据服务器观察时间渲染文案，不把到达计划节点推断为已入住或已退房。
   function renderCell(cell, now) {
     const kind = cell.getAttribute("data-kind");
     const verified = cell.getAttribute("data-verified") === "1";
@@ -444,16 +452,16 @@ document.querySelectorAll("button[data-typed-confirm]").forEach((button) => {
     if (kind === "checkout") {
       if (verified) { cell.textContent = "已退房"; return; }
       if (diffMs > 0) {
-        cell.textContent = `距计划退房还有 ${formatDuration(mins)}`;
+        renderDuration(cell, "距计划退房还有", mins);
       } else if (diffMs > -60000) {
         cell.textContent = "已到计划退房时间 · 退房待确认";
       } else {
-        cell.textContent = `计划退房时间已过 ${formatDuration(mins)} · 退房待确认`;
+        renderDuration(cell, "计划退房时间已过", mins, " · 退房待确认");
       }
       return;
     }
     if (diffMs > 0) {
-      cell.textContent = `距可入住时间还有 ${formatDuration(mins)}`;
+      renderDuration(cell, "距可入住时间还有", mins);
     } else {
       cell.textContent = "已到可入住时间 · 到店待确认";
     }

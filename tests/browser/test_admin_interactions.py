@@ -535,75 +535,82 @@ def test_permanent_delete_never_shows_the_archive_recoverable_wording(
     page.close()
 
 
-def _timeline_fixture(day_count: int) -> str:
-    """返回两张并排房间卡片，各带一条 day_count 天的日期日历模块。"""
-    dates = "".join(
-        '<div class="cal__date"><span class="cal__dow">周一</span>'
-        f'<span class="cal__dnum">8/{index + 1}</span></div>'
-        for index in range(day_count)
-    )
-    bar = (
-        '<a class="cal__bar cal__bar--future" style="left: 0%; width: 14%; top: 8px;" '
-        'href="/employee/customers/1"><span class="cal__bar-label">客人示例 · 1 晚'
-        "</span></a>"
-    )
-    card = (
-        '<article class="room-operation-card"><div class="cal">'
-        f'<div class="cal__scroll" tabindex="0" role="group" aria-label="近期安排">'
-        f'<div class="cal__content" style="--days: {day_count};">'
-        f'<div class="cal__dates">{dates}</div>'
-        f'<div class="cal__tracks" style="height: 60px;">{bar}</div>'
-        "</div></div></div></article>"
-    )
-    return f"""<!doctype html>
-    <html lang="zh-CN"><head></head><body class="admin-body">
-      <main class="page-content">
-        <div class="room-operations-list">{card}{card}</div>
-      </main>
-    </body></html>"""
+def _timeline_fixture(day_count: int, *, crossing: bool = False) -> str:
+    """用真实宏与合成订单验证分段、独立分轨及无脚本展开。"""
+    from datetime import date, timedelta
+    from types import SimpleNamespace
 
+    from jinja2 import Environment, FileSystemLoader
 
-def test_timeline_day_cells_stay_wide_enough_to_read(browser: Browser) -> None:
-    """半宽卡片里的 14 天时间轴不得把日期格压到标签放不下。
-
-    这条量的是真实渲染宽度：`minmax(0, 1fr)` 会让 18 天等分半宽卡片，每格只剩
-    二十几像素，而「退房 1」本身就要四十多像素，相邻信息直接叠在一起。
-    """
-    page = browser.new_page(viewport={"width": 1280, "height": 900})
-    page.set_content(_timeline_fixture(18))
-    page.add_style_tag(content=ADMIN_CSS)
-
-    narrowest = page.evaluate(
-        """() => Math.min(...Array.from(document.querySelectorAll(".cal__date"))
-             .map((cell) => cell.getBoundingClientRect().width))"""
+    env = Environment(loader=FileSystemLoader(PROJECT_ROOT / "src/homestay_bot/templates"))
+    env.filters["status_zh"] = str
+    start = date(2026, 9, 8)
+    days = [SimpleNamespace(local_date=start + timedelta(days=i)) for i in range(day_count)]
+    bars = [SimpleNamespace(
+        order_id=str(i), customer_id=i + 1, guest_name=f"示例客人{i + 1}",
+        nights=day_count, left_pct=0, width_pct=100, lane=0,
+        left_continues=False, right_continues=False, checkout_verified=False,
+        semantic="future", overlaps=False,
+    ) for i in range(5)]
+    if crossing:
+        # 第三天 15:00 到第四天 12:00，在三日段边界两侧分别保留 9 与 12 小时。
+        bars = bars[:1]
+        bars[0].left_pct = 2.625 / day_count * 100
+        bars[0].width_pct = 0.875 / day_count * 100
+    timeline = SimpleNamespace(days=days, bars=bars, total_columns=day_count,
+                               lane_count=1, has_overlap=False, has_anomaly=False)
+    calendar = env.get_template("components/ui.html").module.room_timeline(
+        timeline, start, False, "示例房间近期安排", "0")
+    return (
+        f'<!doctype html><html><head><meta charset="utf-8"><style>{ADMIN_CSS}</style>'
+        '</head><body class="admin-body">'
+        '<div class="room-operations-list"><article class="room-operation-card">'
+        f'{calendar}</article></div></body></html>'
     )
 
-    # 日期列至少 104px（与 minmax 下限一致），装不下时应横向滚动而非继续压缩。
-    assert narrowest >= 104
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_timeline_fits_without_horizontal_scrolling(browser: Browser, width: int) -> None:
+    """18 天完整分段显示；日期可读且没有隐藏横向内容。"""
+    page = browser.new_page(viewport={"width": width, "height": 900}, java_script_enabled=False)
+    # 禁用脚本时通过本地拦截响应装载，不依赖 document.write 注入页面。
+    page.route("http://room-preview.test/", lambda route: route.fulfill(
+        content_type="text/html", body=_timeline_fixture(18)))
+    page.goto("http://room-preview.test/")
+    cells = page.locator(".cal__date:visible")
+    assert cells.count() == 18
+    assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
+    assert page.locator(".cal__scroll:visible").evaluate_all(
+        "els => els.every(el => el.scrollWidth <= el.clientWidth)")
+    assert cells.evaluate_all(
+        "els => els.every(el => el.clientWidth >= 70 && el.clientHeight == 44)")
+    segment = page.locator(".cal__segment:visible").first
+    assert segment.locator(".cal__bar:visible").count() == 4
+    if width == 390:
+        assert segment.locator(".cal__identity:visible").count() == 4
+    segment.locator("summary").press("Enter")
+    assert segment.locator(".cal__bar:visible").count() == 5
+    assert segment.locator(".cal__bar:visible").evaluate_all(
+        "els => new Set(els.map(el => el.getBoundingClientRect().top)).size == 5")
+    assert segment.locator('.cal__bar[href="/employee/customers/5"]').is_visible()
     page.close()
 
 
-def test_a_timeline_too_long_for_its_card_scrolls_instead_of_shrinking(
-    browser: Browser,
-) -> None:
-    """装不下时时间轴自己横向滚动，而不是把每一天压得更窄。
-
-    只看 `scrollWidth > clientWidth` 不够：日期格被压窄时，超出的标签同样会把
-    滚动宽度撑大。这里要求滚动宽度真的等于「每格都拿到最小宽度」之后的总和。
-    """
-    page = browser.new_page(viewport={"width": 1280, "height": 900})
-    page.set_content(_timeline_fixture(18))
-    page.add_style_tag(content=ADMIN_CSS)
-
-    measured = page.evaluate(
-        """() => {
-             const list = document.querySelector(".cal__scroll");
-             return {scroll: list.scrollWidth, visible: list.clientWidth};
-           }"""
-    )
-
-    assert measured["scroll"] > measured["visible"]
-    assert measured["scroll"] >= 18 * 104
+def test_timeline_segment_clipping_keeps_exact_endpoints(browser: Browser) -> None:
+    """换行只裁切展示，两个片段合计仍为 21 小时，客户链接不改变。"""
+    page = browser.new_page(viewport={"width": 390, "height": 844})
+    page.set_content(_timeline_fixture(6, crossing=True))
+    pieces = page.locator(".cal__bar:visible")
+    assert pieces.count() == 2
+    positions = pieces.evaluate_all("""els => els.map(el => ({
+        left: parseFloat(el.style.left), width: parseFloat(el.style.width),
+        href: el.getAttribute('href')
+    }))""")
+    assert positions[0]["left"] == pytest.approx(87.5)
+    assert positions[0]["width"] == pytest.approx(12.5)
+    assert positions[1]["left"] == pytest.approx(0)
+    assert positions[1]["width"] == pytest.approx(100 / 6, abs=0.0001)
+    assert {p["href"] for p in positions} == {"/employee/customers/1"}
     page.close()
 
 

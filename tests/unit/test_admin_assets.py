@@ -128,25 +128,46 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     )
 
 
-def test_timeline_day_cells_keep_a_minimum_width_at_every_breakpoint() -> None:
-    """日历日期列必须始终有最小宽度，装不下就在模块内横向滚动。
+def test_narrow_room_cards_switch_to_the_short_date_segment() -> None:
+    """窄卡片必须换成短日期段，否则日期列会被压到读不了。
 
-    日期列用 `minmax(104px, 1fr)`：内容放得下时等分拉伸，放不下时保持 104px
-    下限并由 `.cal__scroll` 横向滚动，而不是把日期压到读不了。日期头与轨道共用
-    同一 grid-template-columns，保证对齐。
+    「格子完全不可读」出现过两次，根因都是宽日期段落进了放不下它的卡片。v1.23.0
+    改用纵向分段（宽 7 天／窄 3 天）取代横向滚动，代价是可读性完全依赖容器查询：
+    一旦 `.room-operation-card` 掉了 `container-type`，查询永不命中，7 列会静默
+    挤进窄卡片，正是老故障重现。这里守住这条链路的三个环节；真实像素宽度由
+    tests/browser 在 390/1280 两档实测。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
+    ui = (ASSET_ROOT / "templates/components/ui.html").read_text()
 
-    rules = re.findall(r"\.cal__(?:content|dates) \{([^}]*)\}", css)
-    assert rules, "找不到 .cal__content / .cal__dates 规则"
-    for rule in rules:
-        widths = re.findall(r"minmax\((\d+)px", rule)
-        assert widths, f"日期列没有最小宽度：{rule.strip()}"
-        assert all(int(width) >= 104 for width in widths), rule.strip()
+    card = re.findall(r"\.room-operation-card \{([^}]*)\}", css)
+    assert card and "container-type: inline-size" in card[0], (
+        "房间卡片缺少 container-type，容器查询不会命中，窄卡片会用宽日期段"
+    )
 
+    container_query = re.search(
+        r"@container \(max-width: (\d+)px\) \{(.*?)\n\}", css, re.S
+    )
+    assert container_query, "找不到切换到短日期段的容器查询"
+    assert ".cal__layout--wide { display: none; }" in container_query.group(2)
+    assert ".cal__layout--compact { display: block; }" in container_query.group(2)
+
+    # 段长必须小到能在对应宽度里读出日期：阈值 / 段长 = 每列可用宽度下限。
+    threshold = int(container_query.group(1))
+    sizes = [
+        int(size)
+        for size in re.findall(
+            r"_calendar_segments\(timeline, today, (\d+), featured_order_id\)", ui
+        )
+    ]
+    assert len(sizes) == 2, f"应有宽／窄两套日期段，实际 {sizes}"
+    wide, compact = sizes
+    assert threshold / wide >= 70, f"{wide} 天段在 {threshold}px 卡片里每列不足 70px"
+    assert compact < wide, "窄卡片的日期段必须比宽卡片短"
+
+    # 日期段自适应卡片宽度，不靠横向滚动兜底，也就不能再隐藏溢出内容。
     scroll = re.findall(r"\.cal__scroll \{([^}]*)\}", css)
-    assert scroll and "overflow-x: auto" in scroll[0]
-    # 房间卡片始终单栏，日历总能拿到整卡宽度；不再依赖半宽卡片的 --wide 兜底。
+    assert scroll and "overflow-x" not in scroll[0]
     list_rules = re.findall(r"\.room-operations-list \{([^}]*)\}", css)
     assert list_rules and "repeat(2" not in "".join(list_rules)
 
@@ -321,8 +342,11 @@ def test_calendar_grid_lines_stay_visible_against_the_white_track() -> None:
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
 
-    tokens = dict(re.findall(r"(--cal-(?:rule|axis)):\s*(#[0-9A-Fa-f]{6})", css))
-    assert set(tokens) == {"--cal-rule", "--cal-axis"}, f"日历线条变量缺失：{tokens}"
+    # 不锁定具体变量名：线条分几档是设计决定，「每一档都要看得见」才是要守的。
+    tokens = dict(re.findall(
+        r"(--cal-(?:rule|axis|line|grid|border)[\w-]*):\s*(#[0-9A-Fa-f]{6})", css
+    ))
+    assert tokens, "日历没有自己的线条变量，颜色一旦写死就无处校验"
 
     white = _relative_luminance("#FFFFFF")
     for name, value in tokens.items():

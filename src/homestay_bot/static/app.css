@@ -239,7 +239,7 @@ tbody tr:hover { background: var(--surface-sunk); }
 .room-operations-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 700px), 1fr)); align-items: start; gap: 20px; max-width: 1520px; margin-inline: auto; }
 /* 7 天及以上跨度需要 10–17 个日期列，并排必然滚动；长跨度固定单栏。 */
 .room-operations-list--wide { grid-template-columns: minmax(0, 1fr); }
-.room-operation-card { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.room-operation-card { container-type: inline-size; min-width: 0; padding: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
 .room-operation-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .room-operation-card__header a, .entry-card h3 a, .candidate-card h3 a { color: var(--ink-strong); text-decoration: none; }
 .entry-card h3 a:hover, .candidate-card h3 a:hover { text-decoration: underline; }
@@ -257,7 +257,7 @@ tbody tr:hover { background: var(--surface-sunk); }
 .operations-rooms { margin-top: 24px; }
 .operations-rooms__title { margin: 0 0 12px; color: var(--ink-strong); font-size: var(--t-lg); font-weight: 650; }
 .room-next-action--urgent { border-color: #f4c7c3; background: var(--danger-soft); }
-.room-operation-card__title { margin: 0; font-size: var(--t-md); }
+.room-operation-card__title { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .room-operation-card__title a { color: var(--ink-strong); text-decoration: none; }
 .operations-stable { margin-top: 12px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .operations-stable > summary { padding: 14px 0; font-weight: 700; cursor: pointer; }
@@ -532,82 +532,89 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .room-adjust > summary { cursor: pointer; font-size: var(--t-sm); font-weight: 700; color: var(--ink-soft); }
 .room-adjust[open] > summary { margin-bottom: 8px; }
 
-/* 入住安排：双事件行、周转间隔、住宿条时间轴（Spec §4/§6/§7）。 */
-/* 客人与计划时间形成两个紧凑信息组，倒计时不再串成一条长句。 */
-.room-events { margin: 20px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 16px 24px; }
-.room-event { min-width: 0; margin: 0; }
-.room-event > dt { color: var(--muted); font-size: var(--t-sm); }
-.room-event > dd { margin: 3px 0 0; display: grid; gap: 2px; min-width: 0; }
-.room-event__guest { font-weight: 700; font-size: 17px; }
-.room-event__guest a { min-height: 0; }
-.countdown { font-variant-numeric: tabular-nums; color: var(--ink-soft); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.room-event__abs { grid-row: 2; color: var(--ink-mid); font-size: 13px; }
-.room-turnover-gap { margin: 8px 0 0; padding: 6px 10px; border-radius: var(--r-sm); background: var(--line); color: var(--ink-soft); font-size: var(--t-sm); }
-
-.room-timeline-block { margin: 10px 0 0; }
-/* 事件行内的客户链接至少 44px 命中高度。 */
-.room-event__guest a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 2px; text-decoration: none; }
+/* 房间摘要与日期轴：事件优先，日期轻量；颜色只表达计划关系。 */
+.room-events { margin: 20px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+.room-event { min-width: 0; margin: 0; padding: 14px 16px; background: #f5f6fa; border-radius: 10px; }
+.room-event > dt { color: #596579; font-size: 12px; }
+.room-event > dd { margin: 2px 0 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px 16px; align-items: center; }
+.room-event__guest { font-weight: 700; font-size: 18px; overflow-wrap: anywhere; }
+.room-event__guest a { display: inline-flex; align-items: center; min-height: 44px; color: #3448a5; text-decoration: none; }
 .room-event__guest a:hover { text-decoration: underline; }
-
-/* 房间日期日历（Spec §5/§6）：白底、细边框、准确网格；不用满圆胶囊、不加装饰。 */
-/* 日历以留白和细日期线分组，去掉嵌套卡片和大面积灰底。 */
-/* 日历局部变量：网格线与轴线各一档，避免此前表头用 #F1F5F9、轨道用 #E2E8F0
-   的两套值——前者在白底上几乎不可见，网格结构因此读不出来。 */
-.cal { --cal-rule: #E2E8F0; --cal-axis: #CBD5E1; margin: 22px 0 16px; border: 0; border-radius: 0; background: #fff; overflow: hidden; }
-.cal__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 0 0 10px; }
-.cal__title { font-weight: 700; font-size: var(--t-sm); }
-.cal__range { color: var(--muted); font-size: var(--t-sm); font-variant-numeric: tabular-nums; }
-.cal__note { margin: 6px 0 0; font-size: var(--t-xs); color: var(--muted); }
-.cal__note--warn { color: #B45309; }
-.cal__scroll { overflow-x: auto; margin-top: 10px; }
-.cal__scroll:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
-.cal__content { display: grid; grid-template-columns: repeat(var(--days), minmax(104px, 1fr)); background: #fff; border-bottom: 1px solid var(--cal-rule); }
-/* 日期栏是这张图的坐标带：自己有底色与一条实的轴线，才不会和白色轨道糊在一起。
-   竖线与轨道共用同一个 --cal-rule，列才会从表头一路连到轨道底部。 */
-.cal__dates { grid-row: 1; grid-column: 1 / -1; display: grid; grid-template-columns: repeat(var(--days), minmax(104px, 1fr)); background: #F8FAFC; border-bottom: 1px solid var(--cal-axis); }
-.cal__date { height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border-right: 1px solid var(--cal-rule); }
-.cal__date:last-child { border-right: 0; }
-.cal__date--weekend .cal__dow { color: #94A3B8; }
-.cal__date--today { background: #EFF6FF; border-radius: 10px 10px 0 0; }
-.cal__dow { font-size: 12px; line-height: 1; color: #64748B; }
-/* 日期号是日历里最该被一眼读到的数字：与星期拉开明确的字号与字重台阶。 */
-.cal__dnum { font-size: 20px; line-height: 1; font-weight: 600; color: #0F172A; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 5px; }
-.cal__date--today .cal__dnum { color: var(--primary); }
-.cal__todaytag { align-self: center; padding: 1px 6px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 11px; font-weight: 600; line-height: 1.4; }
-/* 竖线用重复渐变，每个日期列右侧一条，避免叠加成 2px 粗边。 */
-.cal__tracks { grid-row: 2; grid-column: 1 / -1; position: relative; background:
-  repeating-linear-gradient(to right, transparent 0,
-    transparent calc(100% / var(--days) - 1px),
-    var(--cal-rule) calc(100% / var(--days) - 1px),
-    var(--cal-rule) calc(100% / var(--days))); }
-.cal__today { position: absolute; top: 0; bottom: 0; background: #EFF6FF; z-index: 0; }
-.cal__bar { position: absolute; height: 44px; box-sizing: border-box; display: flex;
-  align-items: center; gap: 2px; padding: 0 8px; border: 1px solid transparent;
-  border-radius: 6px; overflow: hidden; text-decoration: none; z-index: 1; }
+.countdown { font-variant-numeric: tabular-nums; color: #3b465c; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.room-event .countdown { grid-column: 2; grid-row: 1 / 3; text-align: right; }
+.countdown strong { display: block; font-size: 22px; font-weight: 600; color: #202c46; }
+.room-event__abs { grid-row: 2; grid-column: 1; color: #596579; font-size: 12px; }
+.room-turnover-gap { margin: 8px 0 0; color: var(--ink-soft); font-size: var(--t-sm); }
+.room-timeline-block { margin: 10px 0 0; }
+.cal { --cal-rule: #e1e5ed; margin: 24px 0 16px; background: #fff; }
+.cal__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 10px; }
+.cal__title { font-weight: 700; font-size: 14px; }
+.cal__range { color: #596579; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cal__note { margin: 6px 0; font-size: 12px; color: #596579; }
+.cal__note--warn { color: #9b4a08; }
+/* 不隐藏滚动条来掩盖溢出：短日期段真正自适应卡片宽度。 */
+.cal__scroll { margin-top: 6px; }
+.cal__scroll:focus-visible { outline: 2px solid #3448a5; outline-offset: 2px; }
+.cal__layout--compact { display: none; }
+.cal__segment { --track-height: 54px; --bar-offset: 5px; }
+.cal__identity { display: none; }
+.cal__segment + .cal__segment { margin-top: 16px; }
+.cal__content { min-width: 0; border-bottom: 1px solid var(--cal-rule); }
+.cal__dates { display: grid; grid-template-columns: repeat(var(--days), minmax(0, 1fr)); background: #f5f6fa; border-bottom: 1px solid var(--cal-rule); }
+.cal__date { box-sizing: border-box; height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.cal__date--today { box-shadow: inset 0 -3px #3448a5; }
+.cal__dow { font-size: 11px; color: #596579; }
+.cal__dnum { font-size: 14px; font-weight: 600; color: #202c46; font-variant-numeric: tabular-nums; }
+.cal__date--today .cal__dnum { color: #3448a5; }
+/* 每笔独立一行；服务端的冲突轨道与精确时间区间保持不变。 */
+.cal__tracks { height: calc(var(--rows) * var(--track-height)); position: relative; background: repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--days) - 1px), var(--cal-rule) calc(100% / var(--days) - 1px), var(--cal-rule) calc(100% / var(--days))); }
+.cal__bar { position: absolute; height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 2px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; overflow: hidden; text-decoration: none; }
 .cal__bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
-.cal__cont { flex: none; opacity: .6; font-weight: 700; }
-.cal__bar--future { background: #EEF4FF; border-color: #D6E4FF; color: #234FA0; }
-.cal__bar--current { background: #DBEAFE; border-color: #93B4EF; color: #1E3A8A; }
-.cal__bar--past { background: #F6F7F9; border-color: #E2E8F0; color: #475569; }
-.cal__bar--overlap { border-color: #B45309; }
-a.cal__bar:hover .cal__bar-label,
-a.cal__bar:focus-visible .cal__bar-label { text-decoration: underline; }
-a.cal__bar:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-.cal__empty { position: absolute; left: 8px; top: 12px; margin: 0; color: var(--muted); font-size: var(--t-sm); }
-.cal__trips { padding: 10px 0 0; }
-.cal__trips > summary { cursor: pointer; font-size: 12px; font-weight: 500; color: var(--muted); min-height: 44px; display: list-item; align-content: center; }
+.cal__cont { flex: none; font-weight: 700; }
+.cal__bar--future { background: #e9ecfa; border-color: #c9d1ee; color: #344583; }
+.cal__bar--current { background: #dce2f6; border-color: #b9c4e6; color: #293c7c; }
+.cal__bar--past { background: #eceef2; border-color: #d5dbe5; color: #4e596b; }
+.cal__bar--featured { background: #3448a5; border-color: #3448a5; color: #fff; }
+.cal__bar--overlap { border: 2px solid #a45512; }
+a.cal__bar:hover .cal__bar-label, a.cal__bar:focus-visible .cal__bar-label { text-decoration: underline; }
+a.cal__bar:focus-visible { outline: 2px solid #3448a5; outline-offset: 2px; }
+.cal__empty { margin: 0; padding: 16px 8px; color: #596579; font-size: 12px; }
+.cal__more > summary, .cal__trips > summary { cursor: pointer; font-size: 12px; color: #596579; min-height: 44px; align-content: center; }
+.cal__collapse, .cal__more { display: none; }
+/* 不支持 :has 时直接展示所有订单，防止出现无法展开的数据。 */
+@supports selector(:has(*)) {
+  .cal__more { display: block; }
+  .cal__tracks { height: calc(var(--preview-rows) * var(--track-height)); }
+  .cal__bar--extra, .cal__identity--extra { display: none; }
+  .cal__segment:has(> .cal__more[open]) .cal__tracks { height: calc(var(--rows) * var(--track-height)); }
+  .cal__segment:has(> .cal__more[open]) .cal__bar--extra { display: flex; }
+  .cal__more[open] .cal__expand { display: none; }
+  .cal__more[open] .cal__collapse { display: inline; }
+}
 .cal__trip-list { margin: 8px 0 0; }
-
-/* 操作区回归轻量工具行；真正逾期仍保留原有警示色。 */
-.room-operation-card .room-next-action:not(.room-next-action--urgent) { background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 14px 0 0; }
+.cal__trip-list a { display: inline-flex; align-items: center; min-height: 44px; }
+.room-operation-card .room-next-action:not(.room-next-action--urgent) { background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 16px 0 0; }
 .room-operation-card .room-next-action strong { font-size: 13px; line-height: 1.6; }
+.room-operation-card .room-next-action .button { background: #3448a5; border-color: #3448a5; color: white; font-size: 13px; }
 .room-operation-card__aux .field-help { font-size: 12px; }
+@container (max-width: 620px) {
+  .cal__layout--wide { display: none; }
+  .cal__layout--compact { display: block; }
+  .cal__segment { --track-height: 88px; --bar-offset: 44px; }
+  .cal__identity { display: flex; align-items: center; position: absolute; left: 0; max-width: 100%; height: 44px; gap: 4px; font-size: 12px; color: #596579; }
+  .cal__identity a { display: inline-flex; align-items: center; min-height: 44px; color: #3448a5; overflow-wrap: anywhere; }
+  @supports selector(:has(*)) {
+    .cal__identity--extra { display: none; }
+    .cal__segment:has(> .cal__more[open]) .cal__identity--extra { display: flex; }
+  }
+}
 @media (max-width: 520px) {
-  .room-operation-card { padding: 16px; }
-  .room-events { grid-template-columns: 1fr; gap: 12px; }
-  .room-event > dd { grid-template-columns: auto 1fr; gap: 2px 12px; align-items: center; }
-  .room-event__abs { grid-row: 1; grid-column: 2; }
-  .room-event .countdown { grid-column: 1 / -1; }
-  .room-operation-card .room-next-action { grid-template-columns: minmax(0, 1fr) auto; }
+  .room-operation-card { padding: 18px; }
+  .room-operation-card__title { font-size: 20px; }
+  .room-events { grid-template-columns: 1fr; }
+  .room-event { padding: 12px; }
+  .room-event > dd { gap: 2px 10px; }
+  .countdown strong { font-size: 18px; }
+  .room-operation-card .room-next-action { grid-template-columns: minmax(0, 1fr); }
   .room-operation-card .room-next-action > span { grid-column: 1 / -1; }
 }

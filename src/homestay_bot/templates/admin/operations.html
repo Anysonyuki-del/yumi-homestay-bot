@@ -49,14 +49,14 @@
     {% if room.turnover_gap_minutes is not none %}
     <p class="room-turnover-gap">计划周转间隔 {{ (room.turnover_gap_minutes // 60) }} 小时{% if room.turnover_gap_minutes % 60 %} {{ room.turnover_gap_minutes % 60 }} 分钟{% endif %}</p>
     {% endif %}
-    {{ ui.room_timeline(timeline, snapshot.local_date, snapshot.source_stale, room.room_title ~ "近期入住安排") }}
+    {{ ui.room_timeline(timeline, snapshot.local_date, snapshot.source_stale, room.room_title ~ "近期入住安排", room.checkin_event.order_id if room.checkin_event and not room.checkin_event.ambiguous else none) }}
     <div class="room-next-action{% if room.overdue_task_count %} room-next-action--urgent{% endif %}"><span>下一步</span><strong>{{ room.next_action }}</strong>{% if room.next_action_url %}<a class="button button--secondary" href="{{ room.next_action_url }}">{{ room.next_action_label }}</a>{% endif %}</div>
     <dl class="room-operation-facts">
       <div><dt>开放任务</dt><dd><a href="/employee/tasks?property_id={{ room.property_id }}">{{ room.open_task_count }} 项{% if room.overdue_task_count %}，其中 {{ room.overdue_task_count }} 项逾期{% endif %}</a></dd></div>
     </dl>
-    <div class="room-operation-card__aux">{{ ui.readiness_badge(room) }}<span class="field-help">未确认不代表未入住或准备未完成。</span></div>
     <details class="room-adjust">
       <summary>调整本系统记录</summary>
+      <div class="room-operation-card__aux">{{ ui.readiness_badge(room) }}<span class="field-help">未确认不代表未入住或准备未完成。</span></div>
       <p class="field-help">仅更新本系统的准备记录，不办理百居易入住／退房，也不发送凭证。</p>
       <form class="room-status-form" method="post" action="/employee/properties/{{ room.property_id }}/room-status" data-confirm="确定直接设定本系统房态记录吗？该操作不经过检查清单与现场照片证据。">
         <input type="hidden" name="return_to" value="/employee/admin/operations?days={{ snapshot.horizon_days }}#room-{{ room.property_id }}">
