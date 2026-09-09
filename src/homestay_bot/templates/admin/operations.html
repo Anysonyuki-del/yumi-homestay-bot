@@ -18,7 +18,7 @@
 {# 所有房间一屏可扫读，需要关注的已在服务端排前；不再把在住房藏进折叠。
    时间轴与「调整本系统记录」都是低频动作，各自收进展开区，保持列表清爽。 #}
 <section class="operations-rooms" aria-label="全部房间入住安排">
-  <div class="room-operations-list{% if snapshot.horizon_days > 7 %} room-operations-list--wide{% endif %}">
+  <div class="room-operations-list{% if snapshot.horizon_days >= 7 %} room-operations-list--wide{% endif %}">
   {% for room in snapshot.rooms %}{% set timeline = snapshot.timeline_for(room.property_id) %}
   <article class="room-operation-card" aria-labelledby="room-{{ room.property_id }}" id="room-{{ room.property_id }}">
     <header class="room-operation-card__header">

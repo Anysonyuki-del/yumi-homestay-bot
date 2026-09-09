@@ -231,8 +231,14 @@ tbody tr:hover { background: var(--surface-sunk); }
 .operations-heading .section-heading p { margin: 5px 0 0; }
 .operations-source { margin: 0 0 10px; color: var(--muted); font-size: var(--t-sm); }
 .operations-range { margin: 0; }
-/* 房间卡片限制阅读宽度；宽屏并排，避免日历被拉成整屏横幅。 */
-.room-operations-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); align-items: start; gap: 20px; max-width: 1240px; margin-inline: auto; }
+/* 房间卡片限制阅读宽度；宽屏并排，避免日历被拉成整屏横幅。
+   分栏阈值必须容得下日历本身：默认 3 天视图有 6 个日期列、每列最小 104px＝624px，
+   加卡片左右内边距 44px 需要 668px。此前阈值 520px、上限 1240px，两栏各仅约 582px，
+   于是每张卡的日历都被压到最小列宽后仍溢出、横向滚动切掉末日。阈值提到 700px、
+   上限放宽到 1520px：宽屏仍并排（每栏约 750px 装得下日历），不够宽时自然回落单栏。 */
+.room-operations-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 700px), 1fr)); align-items: start; gap: 20px; max-width: 1520px; margin-inline: auto; }
+/* 7 天及以上跨度需要 10–17 个日期列，并排必然滚动；长跨度固定单栏。 */
+.room-operations-list--wide { grid-template-columns: minmax(0, 1fr); }
 .room-operation-card { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
 .room-operation-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .room-operation-card__header a, .entry-card h3 a, .candidate-card h3 a { color: var(--ink-strong); text-decoration: none; }
@@ -323,6 +329,9 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .no-script-nav a { display: block; min-height: 44px; padding: 10px 4px; }
 .js-enabled .no-script-nav { display: none; }
 .page-content { width: min(100%, var(--measure-page)); margin: 0 auto; padding: 16px 12px 36px; }
+/* 入住安排的日历比正文宽：默认 3 天要 6 个日期列（最小 624px），两栏并排需要
+   约 1420px 内容宽。只给这一页放宽阅读宽度，其余页面维持全站 1240px。 */
+.page-content--wide { --measure-page: 1560px; }
 .js-enabled .page-content { animation: page-enter var(--motion-panel) var(--ease-out) both; }
 .content-header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 14px; }
 .alert { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px; padding: 11px 13px; border: 1px solid; border-radius: var(--r-sm); }

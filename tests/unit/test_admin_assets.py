@@ -278,3 +278,25 @@ def test_archivable_statuses_have_one_definition_only() -> None:
             f"{relative_path} 又硬编码了可归档状态副本"
         )
         assert "archivable_statuses" in source
+
+
+def test_room_card_column_threshold_can_hold_the_default_calendar() -> None:
+    """房间卡片并排的最小列宽必须装得下默认日历，否则日期会被滚动切断。
+
+    这个问题复发过两次：卡片并排阈值定得比日历还窄时，日历被压到最小列宽仍溢出，
+    只能横向滚动、切掉末尾日期，默认视图就「格子不可读」。算式固定：默认 3 天视图
+    有 6 个日期列、每列最小 104px = 624px，加卡片左右内边距（各 22px）= 668px。
+    并排阈值低于这个数就必然重现，因此在这里钉住。
+    """
+    css = (ASSET_ROOT / "static/app.css").read_text()
+
+    rules = re.findall(r"\.room-operations-list \{([^}]*)\}", css)
+    assert rules, "找不到 .room-operations-list 规则"
+    body = "".join(rules)
+    thresholds = [int(value) for value in re.findall(r"minmax\(min\(100%,\s*(\d+)px", body)]
+    if thresholds:
+        assert all(value >= 668 for value in thresholds), (
+            f"并排阈值 {thresholds} 小于日历所需的 668px，日期会被横向滚动切断"
+        )
+    # 长跨度（7 天及以上）固定单栏：10–17 个日期列并排必然滚动。
+    assert ".room-operations-list--wide" in css
