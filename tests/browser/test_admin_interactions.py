@@ -596,6 +596,58 @@ def test_timeline_fits_without_horizontal_scrolling(browser: Browser, width: int
     page.close()
 
 
+def test_a_stay_split_across_segments_says_it_is_the_same_booking(
+    browser: Browser,
+) -> None:
+    """被段边界切开的同一笔订单，两段都必须写明是延续，不能读成两单。
+
+    手机端每段只放 3 天，一笔跨段住宿会在相邻两段各出现一行同名同晚数的条目。
+    没有延续标注时，这与「一笔连住被拆成两单」的错误数据长得一模一样——那正是
+    上一轮用户报的缺陷，不能靠版面再制造一次同样的观感。
+    """
+    page = browser.new_page(viewport={"width": 390, "height": 844})
+    page.set_content(_timeline_fixture(6, crossing=True))
+
+    identities = page.locator(".cal__identity:visible")
+    assert identities.count() == 2, "跨段住宿应在两段各出现一行"
+    texts = identities.all_inner_texts()
+    assert all("示例客人1" in text and "6 晚" in text for text in texts)
+    # 前一段说「续下段」，后一段说「接上段」，两行都点明是同一笔。
+    assert "续下段" in texts[0] and "接上段" in texts[1], texts
+    assert all("同一笔" in text for text in texts), texts
+
+    # 条本体的悬停说明与延续箭头的读屏文案同样点明跨段，不各写一套措辞。
+    titles = page.locator(".cal__bar:visible").evaluate_all(
+        "els => els.map(el => el.getAttribute('title'))"
+    )
+    assert "续下段" in titles[0] and "接上段" in titles[1], titles
+    labels = page.locator(".cal__cont").evaluate_all(
+        "els => els.map(el => el.getAttribute('aria-label'))"
+    )
+    assert {"同一笔，续下段", "同一笔，接上段"} <= set(labels), labels
+    page.close()
+
+
+def test_the_date_module_is_not_a_dead_keyboard_stop(browser: Browser) -> None:
+    """日期段不再横向滚动，就不该占着一个什么都做不了的 Tab 停留点。
+
+    tabindex 原本是为了让键盘用户能滚动看后面的日子；改成纵向分段后所有日期都
+    已经在页面上，停在这里既不能滚也不能操作。区域名对读屏仍有用，因此 role 与
+    aria-label 保留，只去掉焦点位。
+    """
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.set_content(_timeline_fixture(18))
+
+    scroll = page.locator(".cal__scroll").first
+    assert scroll.get_attribute("tabindex") is None, "不滚动的容器不应可聚焦"
+    assert scroll.get_attribute("role") == "group"
+    assert scroll.get_attribute("aria-label"), "区域仍需有名字供读屏定位"
+    assert scroll.evaluate("el => el.scrollWidth <= el.clientWidth"), (
+        "如果又滚动起来，就必须把 tabindex 加回来"
+    )
+    page.close()
+
+
 def test_timeline_segment_clipping_keeps_exact_endpoints(browser: Browser) -> None:
     """换行只裁切展示，两个片段合计仍为 21 小时，客户链接不改变。"""
     page = browser.new_page(viewport={"width": 390, "height": 844})

@@ -656,8 +656,12 @@ def test_expanded_stable_rooms_show_the_future_they_promise() -> None:
     assert "调整本系统记录" in block
 
 
-def test_scrollable_timelines_can_be_reached_by_keyboard() -> None:
-    """时间轴会横向滚动，因此必须自己可聚焦，否则键盘用户看不到后面的日子。"""
+def test_date_modules_are_named_regions_without_a_dead_focus_stop() -> None:
+    """日期段是有名字的区域，但不再横向滚动，因此不占键盘停留点。
+
+    tabindex 原是为让键盘用户滚动看后面的日子；v1.23.0 改成纵向分段后所有日期都
+    已经在页面上，停在这里既不能滚也不能操作。区域名对读屏仍有用，予以保留。
+    """
     client = build_client()
     login_admin(client, next_path="/employee/admin")
 
@@ -665,8 +669,9 @@ def test_scrollable_timelines_can_be_reached_by_keyboard() -> None:
 
     timelines = re.findall(r'<div class="cal__scroll"[^>]*>', response.text)
     assert timelines
-    assert all('tabindex="0"' in tag for tag in timelines)
+    assert not any("tabindex" in tag for tag in timelines)
     assert all("aria-label=" in tag for tag in timelines)
+    assert all('role="group"' in tag for tag in timelines)
 
 
 def test_long_horizon_gives_room_cards_a_full_row() -> None:

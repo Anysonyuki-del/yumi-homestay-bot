@@ -90,9 +90,15 @@
         {% for bar in visible.bars %}
           {% set left = [bar.left_pct, begin] | max %}
           {% set right = [bar.left_pct + bar.width_pct, end] | min %}
+          {# 同一笔订单被段边界切开时，两段各出现一行；不写明延续就会被读成两单。
+             「更早开始／延续更晚」指超出整个窗口，与跨段是两回事，措辞分开。 #}
+          {% set spans_before = bar.left_pct < begin %}
+          {% set spans_after = bar.left_pct + bar.width_pct > end %}
+          {% set carry %}{% if spans_before and spans_after %}（同一笔，跨上下段）{% elif spans_before %}（同一笔，接上段）{% elif spans_after %}（同一笔，续下段）{% endif %}{% endset %}
+          {% set summary = _cal_guest(bar.guest_name, bar.customer_id) ~ " · " ~ bar.nights ~ " 晚" ~ (" · 已退房" if bar.checkout_verified else "") ~ carry %}
           {# 手机跨段条可能很短，姓名独立显示并复用客户链接，不拉长住宿区间。 #}
-          <div class="cal__identity{% if loop.index > 4 %} cal__identity--extra{% endif %}" style="top: calc({{ loop.index0 }} * var(--track-height));">{{ stay_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</div>
-          <{% if bar.customer_id is not none %}a href="/employee/customers/{{ bar.customer_id }}"{% else %}span{% endif %} class="cal__bar cal__bar--{{ bar.semantic }}{% if bar.order_id == featured %} cal__bar--featured{% endif %}{% if loop.index > 4 %} cal__bar--extra{% endif %}{% if bar.overlaps %} cal__bar--overlap{% endif %}{% if bar.checkout_verified %} cal__bar--verified{% endif %}" style="left: {{ (left - begin) / (end - begin) * 100 }}%; width: {{ (right - left) / (end - begin) * 100 }}%; top: calc({{ loop.index0 }} * var(--track-height) + var(--bar-offset));" title="{{ _cal_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}">{% if bar.left_continues or bar.left_pct < begin %}<span class="cal__cont" aria-label="更早开始">‹</span>{% endif %}<span class="cal__bar-label">{{ _cal_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</span>{% if bar.right_continues or bar.left_pct + bar.width_pct > end %}<span class="cal__cont" aria-label="延续更晚">›</span>{% endif %}</{% if bar.customer_id is not none %}a{% else %}span{% endif %}>
+          <div class="cal__identity{% if loop.index > 4 %} cal__identity--extra{% endif %}" style="top: calc({{ loop.index0 }} * var(--track-height));">{{ stay_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}{% if carry %}<span class="cal__carry">{{ carry }}</span>{% endif %}</div>
+          <{% if bar.customer_id is not none %}a href="/employee/customers/{{ bar.customer_id }}"{% else %}span{% endif %} class="cal__bar cal__bar--{{ bar.semantic }}{% if bar.order_id == featured %} cal__bar--featured{% endif %}{% if loop.index > 4 %} cal__bar--extra{% endif %}{% if bar.overlaps %} cal__bar--overlap{% endif %}{% if bar.checkout_verified %} cal__bar--verified{% endif %}" style="left: {{ (left - begin) / (end - begin) * 100 }}%; width: {{ (right - left) / (end - begin) * 100 }}%; top: calc({{ loop.index0 }} * var(--track-height) + var(--bar-offset));" title="{{ summary }}">{% if bar.left_continues or spans_before %}<span class="cal__cont" aria-label="{% if spans_before %}同一笔，接上段{% else %}更早开始{% endif %}">‹</span>{% endif %}<span class="cal__bar-label">{{ _cal_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</span>{% if bar.right_continues or spans_after %}<span class="cal__cont" aria-label="{% if spans_after %}同一笔，续下段{% else %}延续更晚{% endif %}">›</span>{% endif %}</{% if bar.customer_id is not none %}a{% else %}span{% endif %}>
         {% else %}<p class="cal__empty">当前日期范围内暂无订单</p>{% endfor %}
       </div>
     </div>
@@ -109,7 +115,7 @@
   {% if timeline.has_overlap %}<p class="cal__note cal__note--warn">存在订单时间重叠，需核对。</p>{% endif %}
   {% if timeline.has_anomaly %}<p class="cal__note cal__note--warn">有一条日期异常（退房不晚于入住），待核对。</p>{% endif %}
   {# 下一单强调色绑定事件订单 ID，不按当前时钟重新猜测客人。 #}
-  <div class="cal__scroll" tabindex="0" role="group" aria-label="{{ label }}{% if stale %}（上次同步计划，待核实）{% endif %}">
+  <div class="cal__scroll" role="group" aria-label="{{ label }}{% if stale %}（上次同步计划，待核实）{% endif %}">
     <div class="cal__layout--wide">{{ _calendar_segments(timeline, today, 7, featured_order_id) }}</div>
     <div class="cal__layout--compact">{{ _calendar_segments(timeline, today, 3, featured_order_id) }}</div>
   </div>

@@ -304,3 +304,16 @@ Codex 只跑了 4 个相关测试文件，全量套件里 `test_admin_assets.py`
 - [x] 全量 1534 passed、15 skipped；Ruff、mypy 干净。
 - [x] 合成数据实测 1440 与 390 两档：`scrollWidth == innerWidth`，日期列最窄
       190px / 107px，无横向溢出。
+
+## v1.23.1 三项收尾（2026-09-10，用户授权解开设计令牌）
+
+- [x] ① 令牌：房间卡片段内 27 处字面色归位。#596579→--muted、#e1e5ed→--line、
+      #f5f6fa→--surface-sunk 等属邻近漂移，直接替换；#3448a5 是另起的第二套强调
+      色，统一收回 --primary。日历四档条色改用 color-mix 挂主色，仅保留 4 个
+      回退值作为唯一声明缝。日期头与轨道之间恢复 --line-strong 一档轴线。
+- [x] ② 跨段延续：段边界切开的同一笔订单，两段标注「同一笔，接上段／续下段」；
+      title 与 aria-label 共用同一句，超窗（更早开始／延续更晚）措辞与跨段分开。
+- [x] ③ 去掉 .cal__scroll 的 tabindex 与随之失效的 :focus-visible；role 与
+      aria-label 保留。集成测试里那条「时间轴会横向滚动」的断言同步改绑新事实。
+- [x] 六条回归逐一先红后绿；全量 1538 passed，ruff、mypy 干净。
+- [x] 桌面 1440 与手机 390 重新实测：无横向溢出，日期列最窄 190px / 107px。

@@ -534,52 +534,67 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 
 /* 房间摘要与日期轴：事件优先，日期轻量；颜色只表达计划关系。 */
 .room-events { margin: 20px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
-.room-event { min-width: 0; margin: 0; padding: 14px 16px; background: #f5f6fa; border-radius: 10px; }
-.room-event > dt { color: #596579; font-size: 12px; }
+.room-event { min-width: 0; margin: 0; padding: 14px 16px; background: var(--surface-sunk); border-radius: 10px; }
+.room-event > dt { color: var(--muted); font-size: 12px; }
 .room-event > dd { margin: 2px 0 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px 16px; align-items: center; }
 .room-event__guest { font-weight: 700; font-size: 18px; overflow-wrap: anywhere; }
-.room-event__guest a { display: inline-flex; align-items: center; min-height: 44px; color: #3448a5; text-decoration: none; }
+.room-event__guest a { display: inline-flex; align-items: center; min-height: 44px; color: var(--primary); text-decoration: none; }
 .room-event__guest a:hover { text-decoration: underline; }
-.countdown { font-variant-numeric: tabular-nums; color: #3b465c; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.countdown { font-variant-numeric: tabular-nums; color: var(--ink-mid); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .room-event .countdown { grid-column: 2; grid-row: 1 / 3; text-align: right; }
-.countdown strong { display: block; font-size: 22px; font-weight: 600; color: #202c46; }
-.room-event__abs { grid-row: 2; grid-column: 1; color: #596579; font-size: 12px; }
+.countdown strong { display: block; font-size: 22px; font-weight: 600; color: var(--ink-strong); }
+.room-event__abs { grid-row: 2; grid-column: 1; color: var(--muted); font-size: 12px; }
 .room-turnover-gap { margin: 8px 0 0; color: var(--ink-soft); font-size: var(--t-sm); }
 .room-timeline-block { margin: 10px 0 0; }
-.cal { --cal-rule: #e1e5ed; margin: 24px 0 16px; background: #fff; }
+/* 日历四档条色整体挂在 --primary 上：换主色时四档一起跟着走，不用逐条改字面值。
+   每对声明的前一行是不支持 color-mix 时的等价回退（srgb 线性插值，与浏览器一致）；
+   回退值与 color-mix 的一致性由 test_admin_assets 守着，改一处漏一处会被抓住。 */
+.cal {
+  --cal-future-bg: var(--primary-soft);
+  --cal-future-line: #c8d8fa;
+  --cal-future-line: color-mix(in srgb, var(--primary) 25%, var(--surface));
+  --cal-future-ink: var(--primary-hover);
+  --cal-current-bg: #dee8fc;
+  --cal-current-bg: color-mix(in srgb, var(--primary) 15%, var(--surface));
+  --cal-current-line: #a3bdf7;
+  --cal-current-line: color-mix(in srgb, var(--primary) 42%, var(--surface));
+  --cal-current-ink: #1a3d8a;
+  --cal-current-ink: color-mix(in srgb, var(--primary) 50%, var(--ink-strong));
+  margin: 24px 0 16px; background: var(--surface);
+}
 .cal__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 10px; }
 .cal__title { font-weight: 700; font-size: 14px; }
-.cal__range { color: #596579; font-size: 12px; font-variant-numeric: tabular-nums; }
-.cal__note { margin: 6px 0; font-size: 12px; color: #596579; }
-.cal__note--warn { color: #9b4a08; }
+.cal__range { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cal__note { margin: 6px 0; font-size: 12px; color: var(--muted); }
+.cal__note--warn { color: var(--warning); }
 /* 不隐藏滚动条来掩盖溢出：短日期段真正自适应卡片宽度。 */
 .cal__scroll { margin-top: 6px; }
-.cal__scroll:focus-visible { outline: 2px solid #3448a5; outline-offset: 2px; }
 .cal__layout--compact { display: none; }
 .cal__segment { --track-height: 54px; --bar-offset: 5px; }
 .cal__identity { display: none; }
 .cal__segment + .cal__segment { margin-top: 16px; }
-.cal__content { min-width: 0; border-bottom: 1px solid var(--cal-rule); }
-.cal__dates { display: grid; grid-template-columns: repeat(var(--days), minmax(0, 1fr)); background: #f5f6fa; border-bottom: 1px solid var(--cal-rule); }
+.cal__content { min-width: 0; border-bottom: 1px solid var(--line); }
+.cal__dates { display: grid; grid-template-columns: repeat(var(--days), minmax(0, 1fr)); background: var(--surface-sunk); border-bottom: 1px solid var(--line-strong); }
 .cal__date { box-sizing: border-box; height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; }
-.cal__date--today { box-shadow: inset 0 -3px #3448a5; }
-.cal__dow { font-size: 11px; color: #596579; }
-.cal__dnum { font-size: 14px; font-weight: 600; color: #202c46; font-variant-numeric: tabular-nums; }
-.cal__date--today .cal__dnum { color: #3448a5; }
+.cal__date--today { box-shadow: inset 0 -3px var(--primary); }
+.cal__dow { font-size: 11px; color: var(--muted); }
+.cal__dnum { font-size: 14px; font-weight: 600; color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+.cal__date--today .cal__dnum { color: var(--primary); }
 /* 每笔独立一行；服务端的冲突轨道与精确时间区间保持不变。 */
-.cal__tracks { height: calc(var(--rows) * var(--track-height)); position: relative; background: repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--days) - 1px), var(--cal-rule) calc(100% / var(--days) - 1px), var(--cal-rule) calc(100% / var(--days))); }
+.cal__tracks { height: calc(var(--rows) * var(--track-height)); position: relative; background: repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--days) - 1px), var(--line) calc(100% / var(--days) - 1px), var(--line) calc(100% / var(--days))); }
 .cal__bar { position: absolute; height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 2px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; overflow: hidden; text-decoration: none; }
 .cal__bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
 .cal__cont { flex: none; font-weight: 700; }
-.cal__bar--future { background: #e9ecfa; border-color: #c9d1ee; color: #344583; }
-.cal__bar--current { background: #dce2f6; border-color: #b9c4e6; color: #293c7c; }
-.cal__bar--past { background: #eceef2; border-color: #d5dbe5; color: #4e596b; }
-.cal__bar--featured { background: #3448a5; border-color: #3448a5; color: #fff; }
-.cal__bar--overlap { border: 2px solid #a45512; }
+.cal__carry { color: var(--muted); }
+.cal__bar--future { background: var(--cal-future-bg); border-color: var(--cal-future-line); color: var(--cal-future-ink); }
+.cal__bar--current { background: var(--cal-current-bg); border-color: var(--cal-current-line); color: var(--cal-current-ink); }
+.cal__bar--past { background: var(--surface-sunk); border-color: var(--line); color: var(--ink-soft); }
+.cal__bar--featured { background: var(--primary); border-color: var(--primary); color: var(--surface); }
+.cal__bar--overlap { border: 2px solid var(--warning); }
 a.cal__bar:hover .cal__bar-label, a.cal__bar:focus-visible .cal__bar-label { text-decoration: underline; }
-a.cal__bar:focus-visible { outline: 2px solid #3448a5; outline-offset: 2px; }
-.cal__empty { margin: 0; padding: 16px 8px; color: #596579; font-size: 12px; }
-.cal__more > summary, .cal__trips > summary { cursor: pointer; font-size: 12px; color: #596579; min-height: 44px; align-content: center; }
+a.cal__bar:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.cal__empty { margin: 0; padding: 16px 8px; color: var(--muted); font-size: 12px; }
+.cal__more > summary, .cal__trips > summary { cursor: pointer; font-size: 12px; color: var(--muted); min-height: 44px; align-content: center; }
 .cal__collapse, .cal__more { display: none; }
 /* 不支持 :has 时直接展示所有订单，防止出现无法展开的数据。 */
 @supports selector(:has(*)) {
@@ -595,14 +610,14 @@ a.cal__bar:focus-visible { outline: 2px solid #3448a5; outline-offset: 2px; }
 .cal__trip-list a { display: inline-flex; align-items: center; min-height: 44px; }
 .room-operation-card .room-next-action:not(.room-next-action--urgent) { background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 16px 0 0; }
 .room-operation-card .room-next-action strong { font-size: 13px; line-height: 1.6; }
-.room-operation-card .room-next-action .button { background: #3448a5; border-color: #3448a5; color: white; font-size: 13px; }
+.room-operation-card .room-next-action .button { background: var(--primary); border-color: var(--primary); color: var(--surface); font-size: 13px; }
 .room-operation-card__aux .field-help { font-size: 12px; }
 @container (max-width: 620px) {
   .cal__layout--wide { display: none; }
   .cal__layout--compact { display: block; }
   .cal__segment { --track-height: 88px; --bar-offset: 44px; }
-  .cal__identity { display: flex; align-items: center; position: absolute; left: 0; max-width: 100%; height: 44px; gap: 4px; font-size: 12px; color: #596579; }
-  .cal__identity a { display: inline-flex; align-items: center; min-height: 44px; color: #3448a5; overflow-wrap: anywhere; }
+  .cal__identity { display: flex; align-items: center; position: absolute; left: 0; max-width: 100%; height: 44px; gap: 4px; font-size: 12px; color: var(--muted); }
+  .cal__identity a { display: inline-flex; align-items: center; min-height: 44px; color: var(--primary); overflow-wrap: anywhere; }
   @supports selector(:has(*)) {
     .cal__identity--extra { display: none; }
     .cal__segment:has(> .cal__more[open]) .cal__identity--extra { display: flex; }

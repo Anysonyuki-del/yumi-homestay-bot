@@ -342,17 +342,114 @@ def test_calendar_grid_lines_stay_visible_against_the_white_track() -> None:
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
 
-    # 不锁定具体变量名：线条分几档是设计决定，「每一档都要看得见」才是要守的。
-    tokens = dict(re.findall(
-        r"(--cal-(?:rule|axis|line|grid|border)[\w-]*):\s*(#[0-9A-Fa-f]{6})", css
-    ))
-    assert tokens, "日历没有自己的线条变量，颜色一旦写死就无处校验"
+    root = _root_tokens(css)
+    block = _room_card_block(css)
+
+    # 线条现在直接引用全局中性令牌，因此连令牌本身一起校验：--line 调浅，
+    # 日历网格同样会消失，这个下限必须扎在被真正使用的那个值上。
+    grid_rules = re.findall(r"\.cal__(?:content|dates|tracks) \{([^}]*)\}", block)
+    assert grid_rules, "找不到日历网格规则"
+    used = set()
+    for rule in grid_rules:
+        # 只取线条属性：同一条规则里的 background 是面，参照系不同，混进来会误判。
+        used |= set(re.findall(r"border[\w-]*:[^;]*?var\((--[\w-]+)\)", rule))
+        for gradient in re.findall(r"repeating-linear-gradient\(([^;]*)\)", rule):
+            used |= set(re.findall(r"var\((--[\w-]+)\)", gradient))
+    # 竖线渐变里同时有 --days 这类几何变量，按「能解析成颜色」筛掉；令牌是否存在
+    # 由 test_room_card_colors_all_go_through_design_tokens 单独守。
+    used = {name for name in used if name in root}
+    assert used, "日历网格线没有走令牌，改一次要翻遍全表"
 
     white = _relative_luminance("#FFFFFF")
-    for name, value in tokens.items():
-        ratio = (white + 0.05) / (_relative_luminance(value) + 0.05)
+    for name in sorted(used):
+        value = root.get(name)
+        assert value, f"{name} 不在 :root 里，var() 会静默失效"
+        ratio = (white + 0.05) / (_relative_luminance(_expand_hex(value)) + 0.05)
         assert ratio >= 1.2, f"{name}={value} 相对白底仅 {ratio:.2f}:1，线条会融进背景"
 
-    # 日历内部不得再出现绕过变量、直接写死的近白线条色。
-    calendar_block = css[css.index(".cal {"):css.index(".cal__trip-list")]
-    assert "#F1F5F9" not in calendar_block, "日历内仍有近白硬编码线条色"
+
+def _root_tokens(css: str) -> dict[str, str]:
+    """取出 :root 里的字面色令牌，用于解析日历规则里的 var() 引用。"""
+    return dict(re.findall(r"(--[\w-]+):\s*(#[0-9A-Fa-f]{3,6})", _root_block(css)))
+
+
+def _root_block(css: str) -> str:
+    return css[css.index(":root {"):css.index("\n}", css.index(":root {"))]
+
+
+def _room_card_block(css: str) -> str:
+    """房间卡片与日历那段 CSS：本次令牌化的范围，也是字面色的禁区。"""
+    start = css.index("/* 房间摘要与日期轴")
+    end = css.index("@media (max-width: 520px) {\n  .room-operation-card { padding")
+    return css[start:end]
+
+
+def _expand_hex(value: str) -> str:
+    """把 #fff 这类缩写补成六位，令牌两种写法都要能参与计算。"""
+    digits = value.lstrip("#")
+    if len(digits) == 3:
+        digits = "".join(digit * 2 for digit in digits)
+    return f"#{digits}"
+
+
+def _srgb_mix(top: str, bottom: str, percent: float) -> str:
+    """按 color-mix(in srgb, top P%, bottom) 的线性插值算出等价字面色。"""
+    top, bottom = _expand_hex(top), _expand_hex(bottom)
+    parts = [
+        (int(top[index:index + 2], 16) * percent / 100
+         + int(bottom[index:index + 2], 16) * (100 - percent) / 100)
+        for index in (1, 3, 5)
+    ]
+    return "#" + "".join(f"{round(value):02x}" for value in parts)
+
+
+def test_room_card_colors_all_go_through_design_tokens() -> None:
+    """房间卡片不得自带一套写死的配色，颜色必须经过令牌。
+
+    v1.23.0 重设计时这一段把 --primary、--muted 等换成了邻近的字面色，页面因此
+    长出了第二套强调色：控制台其它页面按 --primary 走，这一页按 #3448a5 走，换主
+    色要逐处翻。唯一允许出现字面色的地方是 `.cal` 里的 color-mix 回退声明——那是
+    一个可枚举的声明缝，不是散落的用法。
+    """
+    css = (ASSET_ROOT / "static/app.css").read_text()
+    block = _room_card_block(css)
+
+    # 先摘掉 --cal-* 声明行，剩下的任何字面色都是绕过令牌的用法。
+    without_seam = re.sub(r"\s*--cal-[\w-]+:[^;]*;", "", block)
+    leaked = re.findall(r"#[0-9A-Fa-f]{3,6}|\brgba?\(", without_seam)
+    assert not leaked, f"房间卡片里仍有绕过令牌的字面色：{leaked}"
+    assert "color: white" not in without_seam, "白色也要走 --surface，否则暗色方案无从下手"
+
+    # 引用到的令牌必须真存在；var(--typo) 只会静默变成透明或继承。
+    declared = set(re.findall(r"(--[\w-]+):", _root_block(css)))
+    declared |= set(re.findall(r"(--[\w-]+):", block))  # .cal 与 .cal__segment 作用域
+    # 这三个由模板按每段的天数与行数写在 style 属性里，CSS 侧不声明。
+    declared |= {"--days", "--rows", "--preview-rows"}
+    ui = (ASSET_ROOT / "templates/components/ui.html").read_text()
+    for name in {"--days", "--rows", "--preview-rows"}:
+        assert f"{name}:" in ui, f"{name} 已不再由模板写入，CSS 里的 var() 会失效"
+    for name in set(re.findall(r"var\((--[\w-]+)", block)):
+        assert name in declared, f"{name} 既不在 :root 也不在这段的作用域里"
+
+
+def test_calendar_bar_palette_stays_derived_from_the_primary_token() -> None:
+    """日历条配色必须跟着 --primary 走，回退值不得与 color-mix 脱钩。
+
+    回退声明是给不支持 color-mix 的浏览器兜底的，两行写的必须是同一个颜色；只改
+    其中一行，两类浏览器就会看到两套配色，而且没有任何地方会报错。
+    """
+    css = (ASSET_ROOT / "static/app.css").read_text()
+    root = _root_tokens(css)
+
+    pairs = re.findall(
+        r"(--cal-[\w-]+):\s*(#[0-9A-Fa-f]{6});\s*\1:\s*"
+        r"color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\);",
+        css,
+    )
+    assert len(pairs) >= 4, f"color-mix 与回退值没有成对声明：{pairs}"
+    for name, fallback, top, percent, bottom in pairs:
+        assert top == "--primary", f"{name} 没有挂在主色上，换主色时不会跟着走"
+        expected = _srgb_mix(root[top], root[bottom], float(percent))
+        assert fallback.lower() == expected, (
+            f"{name} 回退值 {fallback} 与 color-mix 结果 {expected} 不一致"
+        )
