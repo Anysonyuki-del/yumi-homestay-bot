@@ -234,21 +234,27 @@ class RoomOperationItem:
 
 @dataclass(frozen=True, slots=True)
 class TimelineBar:
-    """住宿条在日期网格上的位置与身份（Spec §7）。
+    """住宿条在日期网格上的几何位置与身份（Spec §6）。
 
-    start_col 为 1 起的 CSS Grid 起始列，span 为跨列数；left/right_continues 表示
-    住宿真实起止超出当前窗口、需要前／后延续标记。身份随订单，姓名只出现一次。
+    以「计划开始 = 入住日 15:00、计划结束 = 退房日 12:00」映射到日历内容宽度：
+    left_pct/width_pct 是相对整块内容宽度（D 个等宽日期列）的百分比，日期头与
+    住宿条共用同一坐标系。lane 是分配到的轨道序号（0 起）：非重叠订单复用同一
+    轨道，不按列表下标分行。left/right_continues 标记住宿真实起止超出当前窗口。
+    semantic 区分计划态（future/current/past），仅用于配色，不断言实际到店退房。
     """
 
     order_id: int
     customer_id: int | None
     guest_name: str | None
     nights: int
-    start_col: int
-    span: int
+    left_pct: float
+    width_pct: float
+    lane: int
     left_continues: bool
     right_continues: bool
     checkout_verified: bool
+    semantic: str = "future"
+    overlaps: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +267,9 @@ class SevenDayRoomItem:
     days: tuple[RoomDayOperation, ...]
     bars: tuple[TimelineBar, ...] = ()
     total_columns: int = 0
+    lane_count: int = 1
+    has_overlap: bool = False
+    has_anomaly: bool = False
 
 
 def _room_risk_sort_key(item: RoomOperationItem) -> tuple[int, int, int, int, int, str, int]:
@@ -583,29 +592,27 @@ class AdminOperationsService:
                     turnover_gap_minutes=events.turnover_gap_minutes,
                 )
             )
-            # 住宿条网格：窗口首日为 days[0]，每笔订单按日期偏移落到网格列；超出窗口
-            # 的住宿裁切并标延续。checkout 日一列也纳入（当天 12:00 前仍占用）。
+            # 住宿条几何（Spec §6）：窗口 [W0, W1) 共 D 个等宽日期列；每笔订单按
+            # 计划开始 15:00、计划结束 12:00 映射到相对内容宽度的百分比，日期头与
+            # 住宿条共用同一坐标系。非重叠订单复用轨道，只有真实重叠才新增行。
             window_start = days[0]
             total_columns = len(days)
-            bars: list[TimelineBar] = []
-            for interval in events.intervals:
-                ci_off = (interval.check_in - window_start).days
-                co_off = (interval.check_out - window_start).days
-                start_col = max(ci_off, 0) + 1
-                end_line = min(co_off, total_columns - 1) + 2
-                bars.append(
-                    TimelineBar(
-                        order_id=interval.order_id,
-                        customer_id=interval.customer_id,
-                        guest_name=interval.guest_name,
-                        nights=interval.nights,
-                        start_col=start_col,
-                        span=max(1, end_line - start_col),
-                        left_continues=ci_off < 0,
-                        right_continues=co_off > total_columns - 1,
-                        checkout_verified=interval.checkout_verified,
-                    )
-                )
+            span_hours = 24.0 * total_columns
+            w0 = datetime.combine(
+                window_start, time(0, 0, tzinfo=None), tzinfo=WUHAN_TIMEZONE
+            )
+            (
+                bars,
+                lane_count,
+                has_overlap,
+                has_anomaly,
+            ) = AdminOperationsService._timeline_bars(
+                intervals=events.intervals,
+                w0=w0,
+                total_columns=total_columns,
+                span_hours=span_hours,
+                local_now=local_now,
+            )
             matrix_items.append(
                 SevenDayRoomItem(
                     property_id=room.property_id,
@@ -613,6 +620,9 @@ class AdminOperationsService:
                     room_title=room.room_title,
                     bars=tuple(bars),
                     total_columns=total_columns,
+                    lane_count=lane_count,
+                    has_overlap=has_overlap,
+                    has_anomaly=has_anomaly,
                     days=tuple(
                         RoomDayOperation(
                             local_date=day,
@@ -681,6 +691,96 @@ class AdminOperationsService:
             next_arrival=next_arrival,
             property_id=0,
         )[0]
+
+    @staticmethod
+    def _timeline_bars(
+        *,
+        intervals: "tuple[RoomStayInterval, ...]",
+        w0: datetime,
+        total_columns: int,
+        span_hours: float,
+        local_now: datetime,
+    ) -> "tuple[list[TimelineBar], int, bool, bool]":
+        """按计划半天边界计算住宿条几何，并把非重叠订单分配到最少轨道。
+
+        计划开始 S = 入住日 15:00，计划结束 E = 退房日 12:00；裁切到窗口
+        [w0, w0 + span_hours) 后按小时占比换算成相对内容宽度的百分比。轨道分配用
+        简单扫描：按 (S, E, order_id) 稳定排序，放入首个「上一笔结束 <= 本笔开始」
+        的轨道，否则新建轨道并标记重叠。区间取 [S, E)，同日 12:00 退房与 15:00
+        入住不算重叠、可同轨。退房不晚于入住的异常区间不伪造几何，仅标记待核对。
+        """
+        w1 = w0 + timedelta(hours=span_hours)
+        checkin_time = time(15, 0, tzinfo=None)
+        checkout_time = time(12, 0, tzinfo=None)
+
+        prepared: list[tuple[datetime, datetime, RoomStayInterval, bool, bool]] = []
+        has_anomaly = False
+        for interval in intervals:
+            start = datetime.combine(
+                interval.check_in, checkin_time, tzinfo=WUHAN_TIMEZONE
+            )
+            end = datetime.combine(
+                interval.check_out, checkout_time, tzinfo=WUHAN_TIMEZONE
+            )
+            if end <= start:
+                # 退房不晚于入住：异常数据，不画伪造区间，交由行程列表与提示处理。
+                has_anomaly = True
+                continue
+            clipped_start = max(start, w0)
+            clipped_end = min(end, w1)
+            if clipped_end <= clipped_start:
+                continue  # 完全落在窗口外
+            prepared.append(
+                (start, end, interval, start < w0, end > w1)
+            )
+
+        prepared.sort(key=lambda row: (row[0], row[1], row[2].order_id))
+        lane_ends: list[datetime] = []
+        has_overlap = False
+        bars: list[TimelineBar] = []
+        for start, end, interval, left_cont, right_cont in prepared:
+            lane = next(
+                (idx for idx, last in enumerate(lane_ends) if last <= start),
+                None,
+            )
+            overlaps = False
+            if lane is None:
+                lane = len(lane_ends)
+                lane_ends.append(end)
+                if lane > 0:
+                    # 新开轨道说明与已有区间真实重叠。
+                    overlaps = True
+                    has_overlap = True
+            else:
+                lane_ends[lane] = end
+            clipped_start = max(start, w0)
+            clipped_end = min(end, w1)
+            left_pct = (clipped_start - w0).total_seconds() / 3600 / span_hours * 100
+            width_pct = (clipped_end - clipped_start).total_seconds() / 3600 / span_hours * 100
+            if end <= local_now:
+                semantic = "past"
+            elif start <= local_now < end:
+                semantic = "current"
+            else:
+                semantic = "future"
+            bars.append(
+                TimelineBar(
+                    order_id=interval.order_id,
+                    customer_id=interval.customer_id,
+                    guest_name=interval.guest_name,
+                    nights=interval.nights,
+                    left_pct=round(left_pct, 4),
+                    width_pct=round(width_pct, 4),
+                    lane=lane,
+                    left_continues=left_cont,
+                    right_continues=right_cont,
+                    checkout_verified=interval.checkout_verified,
+                    semantic=semantic,
+                    overlaps=overlaps,
+                )
+            )
+        lane_count = max(1, len(lane_ends))
+        return bars, lane_count, has_overlap, has_anomaly
 
     @staticmethod
     def _merge_consecutive_stays(

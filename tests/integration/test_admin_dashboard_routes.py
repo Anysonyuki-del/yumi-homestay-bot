@@ -614,7 +614,7 @@ def test_stale_timeline_does_not_call_a_missing_record_vacant() -> None:
 
     assert response.status_code == 200
     assert "入住信息待核实" in response.text
-    assert "以下为上次同步记录，入住安排待核实。" in response.text
+    assert "上次同步计划，待核实。" in response.text
     # 住宿条时间轴不再逐日写「空闲」，也不断言可售。
     assert "空闲" not in response.text
     assert "可售" not in response.text
@@ -628,7 +628,7 @@ def test_synced_timeline_states_no_order_not_vacancy() -> None:
 
     response = client.get("/employee/admin/operations")
 
-    assert "当前同步范围内暂无订单" in response.text
+    assert "当前日期范围内暂无订单" in response.text
     assert "空闲" not in response.text
     assert "可售" not in response.text
     assert "以下为上次同步记录" not in response.text
@@ -650,8 +650,9 @@ def test_expanded_stable_rooms_show_the_future_they_promise() -> None:
     block = response.text.split("东湖小院", 1)[1].split("</article>", 1)[0]
     assert "开放任务" in block
     assert 'href="/employee/tasks?property_id=202"' in block
-    # 时间轴默认展开（不再藏进「查看近期安排」折叠），住宿条网格直接可见。
-    assert 'class="room-timeline stay-grid"' in block
+    # 日历模块默认展开，日期轨道与行程折叠直接可见。
+    assert 'class="cal"' in block
+    assert 'class="cal__scroll"' in block
     assert "调整本系统记录" in block
 
 
@@ -662,7 +663,7 @@ def test_scrollable_timelines_can_be_reached_by_keyboard() -> None:
 
     response = client.get("/employee/admin/operations")
 
-    timelines = re.findall(r'<div class="room-timeline stay-grid"[^>]*>', response.text)
+    timelines = re.findall(r'<div class="cal__scroll"[^>]*>', response.text)
     assert timelines
     assert all('tabindex="0"' in tag for tag in timelines)
     assert all("aria-label=" in tag for tag in timelines)

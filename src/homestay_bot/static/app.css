@@ -247,23 +247,6 @@ tbody tr:hover { background: var(--surface-sunk); }
 .room-operation-facts > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
 .room-operation-facts dt { color: var(--muted); font-size: var(--t-sm); }
 .room-operation-facts dd { margin: 0; font-size: var(--t-sm); }
-/* 日期格给足最小宽度：装不下就横向滚动，绝不把 14 天等分压进半宽卡片。
-   76px 是「退房 1」这类最长标签加内边距后的实测下限。 */
-.room-timeline-block { display: grid; gap: 6px; }
-.timeline-note { margin: 0; color: var(--muted); font-size: var(--t-xs); }
-.room-timeline { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(76px, 1fr); gap: 6px; padding-bottom: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: thin; }
-.room-day { display: grid; min-height: 72px; align-content: start; gap: 6px; padding: 8px; scroll-snap-align: start; border: 1px solid var(--line); border-radius: var(--r-xs); background: var(--surface); }
-.room-day strong { color: var(--ink-mid); font-size: var(--t-sm); font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.day-marks { display: grid; justify-items: start; gap: 3px; }
-.day-mark { display: inline-flex; padding: 1px 6px; border: 1px solid; border-radius: var(--r-xs); font-size: var(--t-xs); font-weight: 600; white-space: nowrap; }
-.day-mark--today { border-color: var(--primary); color: var(--surface); background: var(--primary); }
-.day-mark--vacant { border-color: var(--line); color: var(--muted); background: var(--surface-sunk); }
-.day-mark--unknown { border-style: dashed; border-color: var(--line-strong); color: var(--muted); background: var(--surface); }
-.day-mark--occupied { border-color: #bfdbfe; color: var(--primary-hover); background: var(--primary-soft); }
-.day-mark--arrival { border-color: #bbf7d0; color: var(--success); background: var(--success-soft); }
-.day-mark--departure { border-color: #fde68a; color: var(--warning); background: var(--warning-soft); }
-.room-day--occupied { border-color: #bfdbfe; background: #f5faff; }
-.room-day--today { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
 .operations-rooms { margin-top: 24px; }
 .operations-rooms__title { margin: 0 0 12px; color: var(--ink-strong); font-size: var(--t-lg); font-weight: 650; }
 .room-next-action--urgent { border-color: #f4c7c3; background: var(--danger-soft); }
@@ -481,8 +464,6 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 
 @media (max-width: 520px) {
   .detail-grid, .search-form, .tag-grid, .compare-grid, .decision-grid, .compact-detail { grid-template-columns: 1fr; }
-  .room-timeline { gap: 4px; grid-auto-columns: minmax(72px, 1fr); }
-  .room-day { min-height: 64px; padding: 6px; }
   .operations-heading .button { white-space: nowrap; }
   .stable-room-list .muted { width: 100%; margin-left: 0; }
   .content-header { align-items: flex-start; flex-direction: column; }
@@ -535,11 +516,6 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .check-list + .diagnostics-note { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 
 /* 入住安排卡片：主状态旁的客人名、计划节奏条、辅助记录行、低频展开区。 */
-.room-guest { font-weight: 700; color: var(--text); }
-.room-schedule { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--r-sm); background: var(--line); color: var(--ink-soft); font-size: var(--t-sm); }
-.room-schedule--before_checkout { box-shadow: inset 3px 0 0 var(--line-soft); }
-.room-schedule--cleaning { box-shadow: inset 3px 0 0 #f59e0b; }
-.room-schedule--checkin { box-shadow: inset 3px 0 0 var(--primary); }
 .room-operation-card__aux { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
 .room-operation-card__aux .field-help { margin: 0; }
 .room-adjust { margin-top: 10px; }
@@ -558,19 +534,48 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .room-turnover-gap { margin: 8px 0 0; padding: 6px 10px; border-radius: var(--r-sm); background: var(--line); color: var(--ink-soft); font-size: var(--t-sm); }
 
 .room-timeline-block { margin: 10px 0 0; }
-.timeline-note { margin: 0 0 6px; color: var(--muted); font-size: var(--t-xs); }
-/* 时间轴自身可横向滚动，整页不横向溢出；键盘可聚焦。 */
-.stay-grid { display: grid; overflow-x: auto; padding-bottom: 4px; gap: 4px 0; align-content: start; }
-.stay-grid:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-.stay-date { padding: 2px 4px; font-size: var(--t-xs); color: var(--muted); white-space: nowrap; text-align: center; border-bottom: 1px solid var(--line); }
-.stay-date--today { color: var(--text); font-weight: 700; }
-.stay-date__today { display: inline-block; padding: 0 4px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 10px; }
-.stay-bar { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 4px 8px; border-radius: 999px; background: var(--primary-soft, #eef2ff); color: var(--text); font-size: var(--t-sm); white-space: nowrap; overflow: hidden; }
-.stay-bar--verified { background: var(--line); color: var(--ink-soft); }
-.stay-bar__label { overflow: hidden; text-overflow: ellipsis; }
-.stay-bar__label a { min-height: 0; }
-.stay-bar__unlinked { color: var(--muted); }
-.stay-bar__cont { color: var(--line-soft); font-weight: 700; }
-.stay-grid__empty { margin: 8px 0 0; padding: 6px 10px; color: var(--muted); font-size: var(--t-sm); }
-/* 触控可达：时间轴与事件行内的客户链接至少 44px 命中高度。 */
-.stay-bar__label a, .room-event__guest a { display: inline-block; padding: 6px 2px; }
+/* 事件行内的客户链接至少 44px 命中高度。 */
+.room-event__guest a { display: inline-block; padding: 6px 2px; }
+
+/* 房间日期日历（Spec §5/§6）：白底、细边框、准确网格；不用满圆胶囊、不加装饰。 */
+.cal { margin: 12px 0; border: 1px solid #E2E8F0; border-radius: 10px; background: #fff; overflow: hidden; }
+.cal__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 12px 0; }
+.cal__title { font-weight: 700; font-size: var(--t-sm); }
+.cal__range { color: var(--muted); font-size: var(--t-sm); font-variant-numeric: tabular-nums; }
+.cal__note { margin: 6px 12px 0; font-size: var(--t-xs); color: var(--muted); }
+.cal__note--warn { color: #B45309; }
+.cal__scroll { overflow-x: auto; margin-top: 10px; }
+.cal__scroll:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.cal__content { display: grid; grid-template-columns: repeat(var(--days), minmax(104px, 1fr)); background: #F8FAFC; }
+.cal__dates { grid-row: 1; grid-column: 1 / -1; display: grid; grid-template-columns: repeat(var(--days), minmax(104px, 1fr)); }
+.cal__date { height: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border-right: 1px solid #E2E8F0; }
+.cal__date:last-child { border-right: 0; }
+.cal__date--weekend .cal__dow { color: #94A3B8; }
+.cal__date--today { background: #EFF6FF; }
+.cal__dow { font-size: 11px; color: #64748B; }
+.cal__dnum { font-size: 13px; font-weight: 600; color: #334155; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 4px; }
+.cal__date--today .cal__dnum { color: var(--primary); }
+.cal__todaytag { padding: 0 4px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; }
+/* 竖线用重复渐变，每个日期列右侧一条，避免叠加成 2px 粗边。 */
+.cal__tracks { grid-row: 2; grid-column: 1 / -1; position: relative; background:
+  repeating-linear-gradient(to right, transparent 0,
+    transparent calc(100% / var(--days) - 1px),
+    #E2E8F0 calc(100% / var(--days) - 1px),
+    #E2E8F0 calc(100% / var(--days))); }
+.cal__today { position: absolute; top: 0; bottom: 0; background: #EFF6FF; z-index: 0; }
+.cal__bar { position: absolute; height: 44px; box-sizing: border-box; display: flex;
+  align-items: center; gap: 2px; padding: 0 8px; border: 1px solid transparent;
+  border-radius: 6px; overflow: hidden; text-decoration: none; z-index: 1; }
+.cal__bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.cal__cont { flex: none; opacity: .6; font-weight: 700; }
+.cal__bar--future { background: #EFF6FF; border-color: #BFDBFE; color: #1E40AF; }
+.cal__bar--current { background: #DBEAFE; border-color: #60A5FA; color: #1E3A8A; }
+.cal__bar--past { background: #F1F5F9; border-color: #CBD5E1; color: #475569; }
+.cal__bar--overlap { border-color: #B45309; }
+a.cal__bar:hover .cal__bar-label,
+a.cal__bar:focus-visible .cal__bar-label { text-decoration: underline; }
+a.cal__bar:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.cal__empty { position: absolute; left: 8px; top: 12px; margin: 0; color: var(--muted); font-size: var(--t-sm); }
+.cal__trips { padding: 8px 12px; border-top: 1px solid #E2E8F0; }
+.cal__trips > summary { cursor: pointer; font-size: var(--t-sm); font-weight: 700; color: var(--ink-soft); }
+.cal__trip-list { margin: 8px 0 0; }

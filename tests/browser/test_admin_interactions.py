@@ -536,23 +536,24 @@ def test_permanent_delete_never_shows_the_archive_recoverable_wording(
 
 
 def _timeline_fixture(day_count: int) -> str:
-    """返回两张并排房间卡片，各带一条 day_count 天的住宿条时间轴。"""
-    cols = f"grid-template-columns: repeat({day_count}, minmax(64px, 1fr));"
+    """返回两张并排房间卡片，各带一条 day_count 天的日期日历模块。"""
     dates = "".join(
-        f'<span class="stay-date" style="grid-row: 1; grid-column: {index + 1};">'
-        f'8/{index + 1}</span>'
+        '<div class="cal__date"><span class="cal__dow">周一</span>'
+        f'<span class="cal__dnum">8/{index + 1}</span></div>'
         for index in range(day_count)
     )
     bar = (
-        '<span class="stay-bar" style="grid-row: 2; grid-column: 1 / span 2;">'
-        '<span class="stay-bar__label">客人示例 · 1 晚</span></span>'
+        '<a class="cal__bar cal__bar--future" style="left: 0%; width: 14%; top: 8px;" '
+        'href="/employee/customers/1"><span class="cal__bar-label">客人示例 · 1 晚'
+        "</span></a>"
     )
     card = (
-        '<article class="room-operation-card">'
-        '<div class="room-timeline-block">'
-        f'<div class="room-timeline stay-grid" tabindex="0" aria-label="近期房态" '
-        f'role="group" style="{cols}">{dates}{bar}</div>'
-        "</div></article>"
+        '<article class="room-operation-card"><div class="cal">'
+        f'<div class="cal__scroll" tabindex="0" role="group" aria-label="近期安排">'
+        f'<div class="cal__content" style="--days: {day_count};">'
+        f'<div class="cal__dates">{dates}</div>'
+        f'<div class="cal__tracks" style="height: 60px;">{bar}</div>'
+        "</div></div></div></article>"
     )
     return f"""<!doctype html>
     <html lang="zh-CN"><head></head><body class="admin-body">
@@ -573,12 +574,12 @@ def test_timeline_day_cells_stay_wide_enough_to_read(browser: Browser) -> None:
     page.add_style_tag(content=ADMIN_CSS)
 
     narrowest = page.evaluate(
-        """() => Math.min(...Array.from(document.querySelectorAll(".stay-date"))
+        """() => Math.min(...Array.from(document.querySelectorAll(".cal__date"))
              .map((cell) => cell.getBoundingClientRect().width))"""
     )
 
-    # 日期列至少 64px（与 minmax 下限一致），装不下时应横向滚动而非继续压缩。
-    assert narrowest >= 64
+    # 日期列至少 104px（与 minmax 下限一致），装不下时应横向滚动而非继续压缩。
+    assert narrowest >= 104
     page.close()
 
 
@@ -596,13 +597,13 @@ def test_a_timeline_too_long_for_its_card_scrolls_instead_of_shrinking(
 
     measured = page.evaluate(
         """() => {
-             const list = document.querySelector(".room-timeline");
+             const list = document.querySelector(".cal__scroll");
              return {scroll: list.scrollWidth, visible: list.clientWidth};
            }"""
     )
 
     assert measured["scroll"] > measured["visible"]
-    assert measured["scroll"] >= 18 * 64
+    assert measured["scroll"] >= 18 * 104
     page.close()
 
 

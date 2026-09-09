@@ -129,22 +129,23 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
 
 
 def test_timeline_day_cells_keep_a_minimum_width_at_every_breakpoint() -> None:
-    """日期格必须始终有最小宽度，装不下就横向滚动。
+    """日历日期列必须始终有最小宽度，装不下就在模块内横向滚动。
 
-    `minmax(0, 1fr)` 允许日期格被压到任意窄：14 天塞进半宽卡片时，每格只剩
-    二十几像素，而「退房 1」这类标签本身就需要四十多像素，相邻信息直接重叠。
-    此前只有最窄断点设了下限，恰好把桌面这一档漏在外面。
+    日期列用 `minmax(104px, 1fr)`：内容放得下时等分拉伸，放不下时保持 104px
+    下限并由 `.cal__scroll` 横向滚动，而不是把日期压到读不了。日期头与轨道共用
+    同一 grid-template-columns，保证对齐。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
 
-    rules = re.findall(r"\.room-timeline \{([^}]*)\}", css)
-    assert rules, "找不到 .room-timeline 规则"
+    rules = re.findall(r"\.cal__(?:content|dates) \{([^}]*)\}", css)
+    assert rules, "找不到 .cal__content / .cal__dates 规则"
     for rule in rules:
-        widths = re.findall(r"grid-auto-columns:\s*minmax\((\d+)px", rule)
-        assert widths, f"日期格没有最小宽度：{rule.strip()}"
-        assert all(int(width) >= 60 for width in widths), rule.strip()
+        widths = re.findall(r"minmax\((\d+)px", rule)
+        assert widths, f"日期列没有最小宽度：{rule.strip()}"
+        assert all(int(width) >= 104 for width in widths), rule.strip()
 
-    assert "overflow-x: auto" in rules[0]
+    scroll = re.findall(r"\.cal__scroll \{([^}]*)\}", css)
+    assert scroll and "overflow-x: auto" in scroll[0]
     # 长跨度时卡片改为整行，滚动才是兜底而不是常态。
     assert ".room-operations-list--wide" in css
 
