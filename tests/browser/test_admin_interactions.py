@@ -537,21 +537,22 @@ def test_permanent_delete_never_shows_the_archive_recoverable_wording(
 
 def _timeline_fixture(day_count: int) -> str:
     """返回两张并排房间卡片，各带一条 day_count 天的住宿条时间轴。"""
-    cols = f"grid-template-columns: repeat({day_count}, minmax(48px, 1fr));"
+    cols = f"grid-template-columns: repeat({day_count}, minmax(64px, 1fr));"
     dates = "".join(
-        f'<span class="stay-date">8/{index + 1}</span>' for index in range(day_count)
+        f'<span class="stay-date" style="grid-row: 1; grid-column: {index + 1};">'
+        f'8/{index + 1}</span>'
+        for index in range(day_count)
     )
-    bars = (
-        '<span class="stay-bar" style="grid-column: 1 / span 2;">'
+    bar = (
+        '<span class="stay-bar" style="grid-row: 2; grid-column: 1 / span 2;">'
         '<span class="stay-bar__label">客人示例 · 1 晚</span></span>'
     )
     card = (
         '<article class="room-operation-card">'
         '<div class="room-timeline-block">'
-        f'<div class="room-timeline stay-grid" tabindex="0" aria-label="近期房态" role="group">'
-        f'<div class="stay-grid__dates" style="{cols}">{dates}</div>'
-        f'<div class="stay-grid__bars" style="{cols}">{bars}</div>'
-        "</div></div></article>"
+        f'<div class="room-timeline stay-grid" tabindex="0" aria-label="近期房态" '
+        f'role="group" style="{cols}">{dates}{bar}</div>'
+        "</div></article>"
     )
     return f"""<!doctype html>
     <html lang="zh-CN"><head></head><body class="admin-body">
@@ -576,8 +577,8 @@ def test_timeline_day_cells_stay_wide_enough_to_read(browser: Browser) -> None:
              .map((cell) => cell.getBoundingClientRect().width))"""
     )
 
-    # 日期列至少 48px（与 minmax 下限一致），装不下时应横向滚动而非继续压缩。
-    assert narrowest >= 48
+    # 日期列至少 64px（与 minmax 下限一致），装不下时应横向滚动而非继续压缩。
+    assert narrowest >= 64
     page.close()
 
 
@@ -601,7 +602,7 @@ def test_a_timeline_too_long_for_its_card_scrolls_instead_of_shrinking(
     )
 
     assert measured["scroll"] > measured["visible"]
-    assert measured["scroll"] >= 18 * 48
+    assert measured["scroll"] >= 18 * 64
     page.close()
 
 

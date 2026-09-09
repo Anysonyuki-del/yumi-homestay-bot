@@ -136,3 +136,39 @@ def test_event_labels_and_status_words_are_server_built() -> None:
     stays_future = [_stay(12, "2026-09-10", "2026-09-11", cid=3, name="客人C")]
     r4 = ev(_now(4), stays_future)
     assert r4.checkin.target_label == "明天 15:00 起入住"
+
+
+def _items_for(now, stays):
+    """跑 _merge + events，返回合并后的事件（模拟 _room_items 的合并步骤）。"""
+    merged = AdminOperationsService._merge_consecutive_stays(list(stays))
+    return AdminOperationsService._room_events(local_now=now, room_stays=merged), merged
+
+
+def test_adjacent_same_name_orders_merge_into_one_stay() -> None:
+    """同名相邻订单（客户号不同）合并为一段连续住宿，不显示换客周转。"""
+    stays = [
+        _stay(156, "2026-09-08", "2026-09-09", cid=156, name="续住客人"),
+        _stay(157, "2026-09-09", "2026-09-10", cid=157, name="续住客人"),
+    ]
+    r, merged = _items_for(_now(11, 58), stays)
+    # 合并成一段 9/8–9/10。
+    assert len(merged) == 1
+    assert merged[0].check_in_date.isoformat() == "2026-09-08"
+    assert merged[0].check_out_date.isoformat() == "2026-09-10"
+    # 今天 9/9 落在中间：住宿期内，无今日到店/离店、无周转间隔。
+    assert r.turnover_gap_minutes is None
+    assert r.is_consecutive is False  # 已合并为一段，不再是两单相接
+    assert len(r.intervals) == 1 and r.intervals[0].nights == 2
+    # 退房事件指向合并后的未来退房日 9/10 12:00。
+    assert r.checkout is not None
+    assert r.checkout.target == datetime(2026, 9, 10, 12, 0, tzinfo=TZ)
+
+
+def test_different_guests_back_to_back_are_not_merged() -> None:
+    """不同客人的背靠背订单仍是周转，不被误合并。"""
+    stays = [
+        _stay(10, "2026-09-08", "2026-09-09", cid=1, name="客人甲"),
+        _stay(11, "2026-09-09", "2026-09-10", cid=2, name="客人乙"),
+    ]
+    _, merged = _items_for(_now(4), stays)
+    assert len(merged) == 2

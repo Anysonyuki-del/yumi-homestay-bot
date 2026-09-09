@@ -499,7 +499,10 @@ class AdminOperationsService:
         )
 
         for room in rooms:
-            room_stays = stays_by_room.get(room.property_id, [])
+            raw_stays = stays_by_room.get(room.property_id, [])
+            # 先合并同一客人的相邻续住订单：主状态、事件、住宿条、下一步与到离店计数
+            # 全部基于合并结果，避免同一位客人的连续入住被显示成换客周转。
+            room_stays = AdminOperationsService._merge_consecutive_stays(raw_stays)
             today_arrivals = sum(stay.check_in_date == local_date for stay in room_stays)
             today_departures = sum(stay.check_out_date == local_date for stay in room_stays)
             occupied_today = any(
@@ -614,7 +617,9 @@ class AdminOperationsService:
                         RoomDayOperation(
                             local_date=day,
                             arrival_count=sum(stay.check_in_date == day for stay in room_stays),
-                            departure_count=sum(stay.check_out_date == day for stay in room_stays),
+                            departure_count=sum(
+                                stay.check_out_date == day for stay in room_stays
+                            ),
                             occupied=any(
                                 stay.check_in_date <= day < stay.check_out_date
                                 for stay in room_stays
@@ -676,6 +681,36 @@ class AdminOperationsService:
             next_arrival=next_arrival,
             property_id=0,
         )[0]
+
+    @staticmethod
+    def _merge_consecutive_stays(
+        room_stays: list[StayRecord],
+    ) -> list[StayRecord]:
+        """把相邻的同一客人订单合并成一段连续住宿。
+
+        百居易会把同一客人的续住拆成多笔订单，甚至各自一个客户号（去重漏合）。
+        用户明确：连续入住不拆成两单。判据是「前一笔退房日 == 后一笔入住日」且
+        「同一非空客户号，或同一非空姓名」——同房、日期相接、同名，视为同一客人
+        续住。仍保留首笔订单号作为客户档案链接，不改写底层订单数据。
+        """
+        ordered = sorted(room_stays, key=lambda s: (s.check_in_date, s.order_id))
+        merged: list[StayRecord] = []
+        for stay in ordered:
+            if merged:
+                prev = merged[-1]
+                same_guest = (
+                    (prev.customer_id is not None and prev.customer_id == stay.customer_id)
+                    or (bool(prev.guest_name) and prev.guest_name == stay.guest_name)
+                )
+                if same_guest and prev.check_out_date == stay.check_in_date:
+                    merged[-1] = replace(
+                        prev,
+                        check_out_date=stay.check_out_date,
+                        checkout_observed_on=stay.checkout_observed_on,
+                    )
+                    continue
+            merged.append(stay)
+        return merged
 
     @staticmethod
     def _room_events(
