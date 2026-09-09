@@ -3,13 +3,18 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from homestay_bot.application import (
     TransactionalOutboxWeCom,
     _compensate_guest_delivery_failure,
     _handle_guest_delivery_failure,
     _notify_guest_delivery_failure,
+    _settle_retry_origin,
 )
 from homestay_bot.domain.enums import (
     BusinessTaskStatus,
@@ -1101,5 +1106,120 @@ async def test_new_non_bot_activity_invalidates_older_debounce_boundary(
             )
             is True
         )
+
+    await engine.dispose()
+
+
+async def _retry_pair(session: AsyncSession) -> None:
+    """造一条失败原消息和它的重试消息，原消息带「重试在途」闩锁。"""
+    conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+    session.add(conversation)
+    await session.flush()
+    messages = MessageService(SQLAlchemyMessageRepository(session))
+    await messages.record_bot(
+        conversation.id,
+        "bot-origin",
+        "首次未送达的回复",
+        metadata={
+            "delivery_status": "failed",
+            "delivery_retry_pending": True,
+            "delivery_rewrite_pending": False,
+            "delivery_retry_count": 1,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_retry_clears_the_origin_pending_latch() -> None:
+    """重试被受理后，原消息不应继续标着「重试在途」。
+
+    这个闩锁压制失败通知，等的是重试的结果。此前只有终态失败补偿会清它，重试
+    成功这条正常出口没清，闩锁于是永久留存——生产上三条历史失败消息都卡在这里。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        await _retry_pair(session)
+
+        await _settle_retry_origin(
+            session,
+            {"delivery_status": "accepted", "retry_of_message_id": "1"},
+        )
+
+        origin = await session.get(Message, 1)
+        assert origin is not None
+        assert origin.message_metadata["delivery_retry_pending"] is False
+        assert origin.message_metadata["delivery_rewrite_pending"] is False
+        # 受理不等于送达：收敛的只是「重试在途」，投递状态不得被改写成成功。
+        assert origin.message_metadata["delivery_status"] == "failed"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_notifying_a_failed_retry_also_clears_the_origin_latch() -> None:
+    """重试自己失败但已就地通知员工时，原消息的闩锁同样该结束。
+
+    生产上消息 52 正是这条路径：改写发出后异步失败，失败通知记在改写消息上，
+    原消息却一直标着「重试在途」。这条链早已了结，不该继续显示成待重试。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        await _retry_pair(session)
+        messages = MessageService(SQLAlchemyMessageRepository(session))
+        await messages.record_bot(
+            1,
+            "bot-retry",
+            "改写后仍未送达的回复",
+            metadata={
+                "delivery_status": "failed",
+                "retry_of_message_id": "1",
+                "delivery_retry_count": 1,
+            },
+        )
+
+        assert await _notify_guest_delivery_failure(
+            session,
+            "bot-retry",
+            agent_id=1000002,
+            employee_userids=["staff-1"],
+        ) is True
+
+        origin = await session.get(Message, 1)
+        retry = await session.get(Message, 2)
+        assert retry is not None and retry.message_metadata["delivery_failure_notified"]
+        assert origin is not None
+        assert origin.message_metadata["delivery_retry_pending"] is False
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_retry_still_in_flight_keeps_the_origin_latch() -> None:
+    """重试还没有任何结果时，闩锁必须留着，否则会提前惊动员工。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        await _retry_pair(session)
+
+        # 没有 retry_of_message_id，或指向不存在的消息，都不得动任何闩锁。
+        await _settle_retry_origin(session, {"delivery_status": "accepted"})
+        await _settle_retry_origin(
+            session, {"delivery_status": "accepted", "retry_of_message_id": "999"}
+        )
+
+        origin = await session.get(Message, 1)
+        assert origin is not None
+        assert origin.message_metadata["delivery_retry_pending"] is True
 
     await engine.dispose()

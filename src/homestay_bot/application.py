@@ -591,6 +591,41 @@ async def _notify_guest_delivery_failure(
     )
 
 
+async def _settle_retry_origin(
+    session: AsyncSession,
+    retry_metadata: dict[str, Any] | None,
+) -> None:
+    """重试到达终态后，清掉原消息上的「重试在途」闩锁。
+
+    `delivery_retry_pending` 的含义是「这条消息的重试还在途中，先别惊动员工」，
+    它压制的是 `_notify_failed_bot_message`。此前只有终态失败补偿（force=True）
+    会清它，而两条正常出口——重试被受理、重试失败且已就地通知——都没清，闩锁于是
+    永远留在原消息上。生产里三条历史失败消息因此长期显示「待重试」，实际早已了结。
+
+    不改 `delivery_status`：受理不等于客人已收到，这里结束的只是「重试在途」这个
+    状态，不是对送达下结论。
+    """
+    raw_origin = (retry_metadata or {}).get("retry_of_message_id")
+    if not raw_origin:
+        return
+    try:
+        origin_id = int(raw_origin)
+    except (TypeError, ValueError):
+        return
+    origin = await session.get(Message, origin_id)
+    if origin is None:
+        return
+    metadata = dict(origin.message_metadata or {})
+    if not metadata.get("delivery_retry_pending") and not metadata.get(
+        "delivery_rewrite_pending"
+    ):
+        return
+    metadata["delivery_retry_pending"] = False
+    metadata["delivery_rewrite_pending"] = False
+    origin.message_metadata = metadata
+    await session.flush()
+
+
 async def _notify_failed_bot_message(
     session: AsyncSession,
     message: Message | None,
@@ -627,6 +662,8 @@ async def _notify_failed_bot_message(
     metadata["delivery_failure_notified"] = True
     message.message_metadata = metadata
     await session.flush()
+    # 被通知的可能正是某条重试；通知一发出，原消息的「重试在途」就结束了。
+    await _settle_retry_origin(session, metadata)
     return True
 
 
@@ -2455,6 +2492,8 @@ async def _run_worker_loop(
                             message_type=str(payload.get("message_type", "text")),
                             metadata=metadata,
                         )
+                        # 这一条若是重试，原消息的「重试在途」到此为止。
+                        await _settle_retry_origin(session, metadata)
 
                 async def send_internal(
                     payload: dict[str, Any],
