@@ -122,10 +122,19 @@ _ZH_HIGH_RISK_SAFETY_SENTENCE = re.compile(
     r"拨打\s*(?:119|110|120)|远离明火|开窗通风|切断燃气|切断电源|"
     r"不要触碰|保持距离|呼叫急救)"
 )
+# 英文侧原本只认 do not touch，于是燃气文案的第二句「Do not switch any electrical
+# device on or off and do not use an open flame」被整句丢掉，客人只收到一半指令，
+# 而且不会有任何报错。祈使句的否定形式基本都是安全动作，按动词列举放开；刻意不写成
+# do not \w+，避免「do not worry」这类安抚被当成安全句留下。
 _EN_HIGH_RISK_SAFETY_SENTENCE = re.compile(
-    r"(?:please\s+(?:leave|move|call|unplug|disconnect|turn off|stop|avoid)|"
+    r"(?:please\s+(?:leave|move|call|unplug|disconnect|turn off|stop|avoid|open)|"
     r"call\s+(?:the\s+)?(?:police|fire department|emergency services)|"
-    r"stay away|do not touch)",
+    # 既有缺陷：英文火警文案的「Call 119 if there is fire or smoke.」不匹配上面
+    # 那条按机构名列举的规则，一直被整句丢掉——英文客人遇到火灾从没收到过报警号码。
+    r"call\s+(?:119|110|120|911|999|112)\b|"
+    r"stay away|"
+    r"do not\s+(?:touch|switch|use|move|enter|open|light|handle|attempt)|"
+    r"open the windows?|turn off the main power)",
     re.IGNORECASE,
 )
 
@@ -432,7 +441,9 @@ def _high_risk_reply(content: str, language: Language) -> str:
             )
         if sentence.strip():
             safety_sentences.append(sentence.strip())
-    safety_text = "".join(safety_sentences).strip()
+    # 用语言分隔符而非空串连接：中文句间不留空格，英文句号后必须有空格，否则会
+    # 拼成「immediately.Call 119」这种粘连，影响所有英文高危回复。
+    safety_text = separator.join(safety_sentences).strip()
     prefix = f"{safety_text}{separator}" if safety_text else ""
     return f"{prefix}{acknowledgement}{separator}{handoff}"
 
