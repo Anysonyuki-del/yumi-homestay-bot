@@ -296,3 +296,63 @@ def test_web_search_state_starts_unknown_and_can_change() -> None:
     assert state.get() == "unknown"
     state.set("ok")
     assert state.get() == "ok"
+
+
+def test_a_search_result_title_never_becomes_a_source_name() -> None:
+    """搜索结果标题不得被当作来源机构名念给客人。
+
+    生产 2026-09-10 的天气回复拼出了「主要参考了武汉天气预报15天天气、最低气温
+    17℃，今早出门加件外套等公开信息」——两个都是原始网页标题。念起来像内容搬运，
+    也是那条回复被企业微信以安全限制拦下时的形态之一。拿不到可读来源名时整条
+    联网回答降级，这与既有「不拿域名或模型常识冒充依据」的取舍一致。
+    """
+    with pytest.raises(ValueError, match="没有可读来源名称"):
+        format_tourism_reply(
+            "武汉今天多云，最高25℃。",
+            [
+                ("武汉天气预报15天天气", "https://unknown.example/a"),
+                ("最低气温17℃，今早出门加件外套", "https://unknown.example/b"),
+            ],
+            date(2026, 9, 10),
+            language="zh",
+            category="weather",
+        )
+
+
+def test_a_known_hostname_wins_over_whatever_the_title_says() -> None:
+    """域名命中已知机构时按机构名念，不受当次搜索标题影响。
+
+    域名是稳定事实，标题是搜索结果的一次性产物。此前顺序反了——只有标题为空时
+    才查机构名表，于是命中已知政务域名也仍然念网页标题。
+    """
+    formatted = format_tourism_reply(
+        "武汉明天有阵雨。",
+        [("武汉市文化和旅游局2026年8月演出清单大全", "https://wlj.wuhan.gov.cn/x")],
+        date(2026, 8, 21),
+        language="zh",
+        category="weather",
+    )
+
+    assert "武汉市文化和旅游局" in formatted
+    assert "2026年8月演出清单大全" not in formatted
+
+
+def test_real_source_names_still_pass_in_both_languages() -> None:
+    """判据不能误杀正当来源名：中文紧凑、拉丁文逐词展开，长度上限要分开。"""
+    zh = format_tourism_reply(
+        "武汉明天有阵雨。",
+        [("中国天气网", "https://unknown.example/a")],
+        date(2026, 8, 21),
+        language="zh",
+        category="weather",
+    )
+    en = format_tourism_reply(
+        "Showers are likely tomorrow.",
+        [("Wuhan Meteorological Service", "https://unknown.example/a")],
+        date(2026, 8, 21),
+        language="en",
+        category="weather",
+    )
+
+    assert "中国天气网" in zh
+    assert "Wuhan Meteorological Service" in en

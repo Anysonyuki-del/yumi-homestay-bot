@@ -1,7 +1,10 @@
+import logging
 import re
 from datetime import date
 from typing import Literal
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
 TourismQueryMode = Literal["none", "stable", "live"]
@@ -149,21 +152,55 @@ def is_tourism_query(messages: list[dict[str, str]]) -> bool:
     return classify_tourism_query(messages) != "none"
 
 
+# 来源名要能当作「机构」念出来：出现句读、数字量值或过长，说明拿到的是网页标题
+# 而不是站点名。生产上「主要参考了武汉天气预报15天天气、最低气温17℃，今早出门加件
+# 外套等公开信息」正是这样拼出来的——搜索结果标题被原样念给了客人。
+# 句读和数字量值是「这是一句话/一条标题」的标志；英文缩写点不算，机构名里很常见
+# （U.S. Embassy、Wuhan Gov. Portal）。
+_TITLE_LIKE_PATTERN = re.compile(r"[。，、；：！？,;:!?]|\d")
+_LATIN_NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z .&'’-]*")
+# 长度上限按语种分开：中文机构名紧凑，拉丁文机构名逐词展开，用同一个字符数会误杀
+# 「Wuhan Meteorological Service」这类完全正当的来源名。
+_SOURCE_NAME_MAX_CHARS = 12
+_SOURCE_NAME_MAX_WORDS = 5
+
+
+def _looks_like_a_source_name(value: str) -> bool:
+    """判断这串文字能不能当作来源机构名念给客人听。"""
+    if not value or _TITLE_LIKE_PATTERN.search(value):
+        return False
+    if _LATIN_NAME_PATTERN.fullmatch(value):
+        return len(value.split()) <= _SOURCE_NAME_MAX_WORDS
+    return len(value) <= _SOURCE_NAME_MAX_CHARS
+
+
 def _source_display_name(
     title: str,
     url: str,
     *,
     language: TourismReplyLanguage,
 ) -> str | None:
-    """返回客人可读的来源名称；未知域名不直接暴露给客人。"""
+    """返回客人可读的来源名称；未知域名与网页标题都不直接暴露给客人。
+
+    优先查已知机构名：域名是稳定事实，标题是搜索结果的一次性产物。此前顺序反了
+    ——只有标题为空时才查表，于是即便命中已知政务域名，念给客人的仍是网页标题。
+    """
     hostname = urlparse(url).netloc.lower()
+    official = _OFFICIAL_SOURCE_NAMES.get(hostname, "")
+    if official:
+        return _EN_SOURCE_NAMES.get(official, official) if language == "en" else official
+
     normalized_title = title.strip()
-    if not normalized_title or normalized_title in {url, hostname}:
-        normalized_title = _OFFICIAL_SOURCE_NAMES.get(hostname, "")
-    else:
-        normalized_title = _BARE_URL_PATTERN.sub("", normalized_title).strip()
-        normalized_title = _DOMAIN_PATTERN.sub("", normalized_title).strip(" -|·")
-    if not normalized_title or normalized_title.casefold() == hostname.casefold():
+    if normalized_title in {url, hostname}:
+        return None
+    normalized_title = _BARE_URL_PATTERN.sub("", normalized_title).strip()
+    normalized_title = _DOMAIN_PATTERN.sub("", normalized_title).strip(" -|·")
+    if normalized_title.casefold() == hostname.casefold():
+        return None
+    if not _looks_like_a_source_name(normalized_title):
+        # 宁可整条联网回答降级，也不把搜索结果标题当成来源念给客人：调用方在拿不到
+        # 可读来源时会走 degraded，这与既有「不拿域名或模型常识冒充依据」一致。
+        logger.info("联网来源标题不可用作来源名：hostname=%s", hostname)
         return None
     if language == "en":
         return _EN_SOURCE_NAMES.get(normalized_title, normalized_title)

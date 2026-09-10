@@ -437,7 +437,10 @@ async def test_recent_events_remove_explicitly_stale_sources() -> None:
     )
 
     assert "2025武汉七夕节剧场演出活动" not in result
-    assert "武汉市文化和旅游局2026年8月演出清单" in result
+    # 保留的是来源「机构名」而不是网页标题：域名命中已知政务站点时按机构名念，
+    # 搜索结果标题不再原样进入客人可见正文。
+    assert "武汉市文化和旅游局" in result
+    assert "2026年8月演出清单" not in result
 
 
 @pytest.mark.asyncio
