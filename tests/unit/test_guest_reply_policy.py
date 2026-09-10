@@ -4,8 +4,8 @@ from homestay_bot.domain.enums import Language
 from homestay_bot.services.guest_reply_policy import (
     human_contact_reply,
     prepare_facility_issue_reply,
-    remove_ungrounded_property_claims,
     prepare_guest_reply,
+    remove_ungrounded_property_claims,
     sanitize_guest_reply,
 )
 
