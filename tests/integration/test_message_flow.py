@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 
 from homestay_bot.application import (
     TransactionalOutboxWeCom,
+    _blocked_reply_shape,
     _compensate_guest_delivery_failure,
     _handle_guest_delivery_failure,
     _notify_guest_delivery_failure,
@@ -1221,5 +1223,81 @@ async def test_a_retry_still_in_flight_keeps_the_origin_latch() -> None:
         origin = await session.get(Message, 1)
         assert origin is not None
         assert origin.message_metadata["delivery_retry_pending"] is True
+
+    await engine.dispose()
+
+
+def test_the_blocked_reply_shape_records_form_not_content() -> None:
+    """被拦正文的快照只记形态，不得混进正文片段。
+
+    生产 6 次投递失败全是 wecom_async_13，其中 5 次的正文已被 7 天保留期清空，
+    只剩一个错误码——系统最主要的故障模式，事后无法回答「被拦的是什么样的内容」。
+    形态特征在失败当时固化，既能跨多次失败找共性，又不给保留期开后门。
+    """
+    content = "武汉今天多云。\n• 气温 25℃\n• 降水 0 毫米\n详见 https://example.com 订单 12703547"
+    shape = _blocked_reply_shape(content)
+
+    assert shape["has_newline"] is True
+    assert shape["has_bullet"] is True
+    assert shape["has_url"] is True
+    assert shape["has_digit_run"] is True
+    assert shape["lines"] == 4
+    assert shape["chars"] == len(content)
+
+    # 关键边界：快照里不得出现正文的任何片段，否则等于绕开保留期存客人内容。
+    serialized = json.dumps(shape, ensure_ascii=False)
+    for fragment in ("武汉", "多云", "example.com", "12703547", "25"):
+        assert fragment not in serialized, f"快照泄漏了正文片段：{fragment}"
+
+
+def test_a_plain_short_reply_is_recorded_as_plain() -> None:
+    """对照组：普通短回复的形态特征应当全部为假，否则判据没有区分力。"""
+    shape = _blocked_reply_shape("好的，已经为您安排。")
+
+    assert shape["has_newline"] is False
+    assert shape["has_bullet"] is False
+    assert shape["has_markdown"] is False
+    assert shape["has_url"] is False
+    assert shape["has_digit_run"] is False
+    assert shape["lines"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_blocked_shape_is_actually_persisted_with_the_rest() -> None:
+    """快照必须真的落库，而且不能挤掉同一函数里后写的元数据。
+
+    这条同时守住一个陷阱：metadata 是 message_metadata 的副本，若在函数中途把它
+    赋回属性，两者就是同一个对象；JSON 列不跟踪原地修改，之后每次赋值都会被判定
+    为无变化，重试计数与改写任务号会静默丢失——实现时确实踩过一次。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        conversation = Conversation(open_kfid="wk-1", external_userid="wm-1")
+        session.add(conversation)
+        await session.flush()
+        await MessageService(SQLAlchemyMessageRepository(session)).record_bot(
+            conversation.id,
+            "wecom-shape",
+            "武汉今天多云。\n• 气温 25℃\n• 降水 0 毫米",
+            metadata={"delivery_status": "accepted"},
+        )
+
+        assert await _handle_guest_delivery_failure(
+            session, "wecom-shape", fail_type=13
+        ) is True
+
+        message = await session.get(Message, 1)
+        assert message is not None
+        stored = message.message_metadata
+        shape = stored["blocked_reply_shape"]
+        assert shape["has_bullet"] is True and shape["has_newline"] is True
+        # 同一次调用里后写的字段一个都不能少。
+        assert stored["delivery_rewrite_pending"] is True
+        assert stored["delivery_retry_pending"] is True
+        assert stored["delivery_rewrite_job_id"]
 
     await engine.dispose()

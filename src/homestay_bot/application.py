@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -500,6 +501,28 @@ async def _record_complaint_delivery(
         )
 
 
+def _blocked_reply_shape(content: str) -> dict[str, object]:
+    """给被拦截的回复留一份结构快照，只记形态不记正文。
+
+    客人消息正文 7 天后进保留期被清空（context_retention），于是投递失败这个
+    系统最主要的故障模式，事后只剩一个错误码：既查不出被拦的是什么形态的内容，
+    也无法在多次失败之间找共性。生产 6 次失败全是 wecom_async_13，其中 5 次的
+    正文已经永久消失，只有最新一次还能分析——这条路必须堵上。
+
+    刻意只存可计算的形态特征，不存正文片段：留正文等于给保留期开后门，而排查
+    「什么样的内容会被拦」需要的本来就是形态而不是内容。
+    """
+    return {
+        "chars": len(content),
+        "lines": content.count("\n") + 1,
+        "has_newline": "\n" in content,
+        "has_bullet": any(mark in content for mark in ("•", "· ", "- ", "* ")),
+        "has_markdown": "**" in content or "##" in content,
+        "has_url": "http://" in content or "https://" in content,
+        "has_digit_run": bool(re.search(r"\d{4,}", content)),
+    }
+
+
 async def _handle_guest_delivery_failure(
     session: AsyncSession,
     external_message_id: str,
@@ -515,6 +538,12 @@ async def _handle_guest_delivery_failure(
     if message is None or message.origin is not MessageOrigin.BOT or not message.content:
         return False
     metadata = dict(message.message_metadata or {})
+    # 正文会被保留期清掉，形态特征必须在失败当时就固化下来。只写进本地字典，
+    # 由下面已有的落库点带出去——metadata 是 message.message_metadata 的副本，
+    # 一旦在这里把它赋回属性，两者就成了同一个对象；JSON 列没有 MutableDict
+    # 跟踪原地修改，后续每次「赋同一个对象」都会被判定为无变化，本函数余下的
+    # 元数据（重试计数、改写任务号、pending 闩锁）会全部静默丢失。
+    metadata.setdefault("blocked_reply_shape", _blocked_reply_shape(message.content))
     try:
         retry_count = int(metadata.get("delivery_retry_count", 0))
     except (TypeError, ValueError):

@@ -589,3 +589,56 @@ async def test_missing_rewrite_context_triggers_terminal_compensation() -> None:
     assert compensated == [11]
     assert rewriter.calls == 0
     assert outbox.guest_sends == []
+
+
+@pytest.mark.asyncio
+async def test_the_fallback_records_why_the_rewrite_was_rejected() -> None:
+    """兜底必须留下拒绝理由，只留一个布尔值等于没留。
+
+    改写器有二十多种拒绝理由（事实被改写、含链接、含联系方式……），过去 except
+    把异常整个吞掉。生产 2026-09-10 那次兜底就是这样：数据库里只有
+    `delivery_rewrite_fallback_used: true`，没有任何线索说明为什么没改写成功。
+    """
+    context = rewrite_context()
+    repository = RepositoryStub(context)
+    rewriter = RewriterStub(DeliveryRewriteUnavailableError("改写天气事实发生变化"))
+    outbox = OutboxStub()
+    service = GuestDeliveryRewriteJobService(
+        repository=repository,
+        rewriter=rewriter,
+        outbox_factory=lambda _message_id, _guest_message_id: outbox,
+        before_model=no_op_checkpoint,
+        on_unavailable=lambda _message_id: no_op_checkpoint(),
+        agent_id=1000002,
+        duty_employee_userids=["staff-1"],
+    )
+
+    await service.handle({"message_id": 11})
+
+    assert repository.saved is not None
+    assert repository.saved["delivery_rewrite_fallback_used"] is True
+    assert repository.saved["delivery_rewrite_fallback_reason"] == "改写天气事实发生变化"
+
+
+@pytest.mark.asyncio
+async def test_a_successful_rewrite_records_no_fallback_reason() -> None:
+    """改写成功时理由必须为空，不能留下一个会被误读成失败的字符串。"""
+    context = rewrite_context()
+    repository = RepositoryStub(context)
+    rewriter = RewriterStub("武汉8月22日多云，25～31℃，湿度约70%。")
+    outbox = OutboxStub()
+    service = GuestDeliveryRewriteJobService(
+        repository=repository,
+        rewriter=rewriter,
+        outbox_factory=lambda _message_id, _guest_message_id: outbox,
+        before_model=no_op_checkpoint,
+        on_unavailable=lambda _message_id: no_op_checkpoint(),
+        agent_id=1000002,
+        duty_employee_userids=["staff-1"],
+    )
+
+    await service.handle({"message_id": 11})
+
+    assert repository.saved is not None
+    assert repository.saved["delivery_rewrite_fallback_used"] is False
+    assert repository.saved["delivery_rewrite_fallback_reason"] == ""

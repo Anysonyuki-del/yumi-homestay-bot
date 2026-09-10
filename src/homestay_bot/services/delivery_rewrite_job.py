@@ -274,6 +274,10 @@ class GuestDeliveryRewriteJobService:
             return
 
         fallback_used = bool(metadata.get("delivery_rewrite_started"))
+        # 兜底原因必须留下来。改写器有二十多种拒绝理由（事实被改写、含链接、
+        # 含联系方式……），过去 except 把异常整个吞掉，页面和数据库里只剩一个
+        # 布尔值「用了兜底」，事后完全无法回答「为什么这条没能改写成功」。
+        fallback_reason = "重放：改写机会已用过" if fallback_used else ""
         if not fallback_used:
             # 在调用模型前持久化“一次机会已使用”；进程中断后的重放只走本地兜底。
             metadata["delivery_rewrite_started"] = True
@@ -288,8 +292,9 @@ class GuestDeliveryRewriteJobService:
                     blocked_reply=context.failed_bot.content or "",
                     language=context.conversation.language,
                 )
-            except DeliveryRewriteUnavailableError:
+            except DeliveryRewriteUnavailableError as error:
                 fallback_used = True
+                fallback_reason = str(error)
         if fallback_used:
             reply = _deterministic_fact_fallback(
                 context.source_guest.content or "",
@@ -314,6 +319,7 @@ class GuestDeliveryRewriteJobService:
                 "delivery_retry_pending": True,
                 "delivery_rewrite_pending": False,
                 "delivery_rewrite_fallback_used": fallback_used,
+                "delivery_rewrite_fallback_reason": fallback_reason,
             }
         )
         if outbox_id is not None:

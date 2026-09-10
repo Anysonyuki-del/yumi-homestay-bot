@@ -375,6 +375,8 @@ async def build_runtime_client_bundle(
         openai_http = build_public_https_client(
             policy,
             timeout_seconds=45.0,
+            record=external_call_recorder,
+            provider="deepseek",
         )
         owned.append(openai_http)
         deepseek_chat = AsyncOpenAI(
@@ -388,6 +390,8 @@ async def build_runtime_client_bundle(
         anthropic_http = build_public_https_client(
             policy,
             timeout_seconds=45.0,
+            record=external_call_recorder,
+            provider="deepseek",
         )
         owned.append(anthropic_http)
         deepseek_anthropic = AsyncAnthropic(

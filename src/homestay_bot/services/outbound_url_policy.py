@@ -2,13 +2,18 @@
 
 import asyncio
 import ipaddress
+import logging
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
+
+from homestay_bot.integrations.hostex_client import ExternalCallRecord
+
+logger = logging.getLogger(__name__)
 
 AddressInfo = tuple[object, ...]
 Resolver = Callable[[str, int], Awaitable[Sequence[AddressInfo]]]
@@ -283,13 +288,83 @@ class _LimitedAsyncByteStream(httpx.AsyncByteStream):
         await self._stream.aclose()
 
 
+class RecordingTransport(httpx.AsyncBaseTransport):
+    """把一次外联调用的结果记进外部调用台账，只记机器码不记正文。
+
+    DeepSeek 是这套系统最贵、最容易出问题的外部依赖，此前却完全不上账：
+    external_requests 里只有 hostex，排障时想确认「模型到底调没调、成没成」
+    只能靠猜。在传输层记账，六个 DeepSeek 服务（问答、客诉、摘要、改写、FAQ、
+    旅游）一次全覆盖，不必逐个改造。
+
+    记账失败绝不影响业务调用；抛出的异常也要记一条，因为超时和连接失败恰恰是
+    最需要看见的那一类——只挂在响应回调上会把它们整类漏掉。
+    """
+
+    def __init__(
+        self,
+        inner: httpx.AsyncBaseTransport,
+        *,
+        provider: str,
+        record: Callable[[Any], Awaitable[None]],
+    ) -> None:
+        """包裹既有传输层，不改变任何请求语义。"""
+        self._inner = inner
+        self._provider = provider
+        self._record = record
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """透传请求，无论成败都记一条台账。"""
+        try:
+            response = await self._inner.handle_async_request(request)
+        except Exception:
+            await self._note(request, status_code=None, succeeded=False)
+            raise
+        await self._note(
+            request,
+            status_code=response.status_code,
+            succeeded=response.status_code < 400,
+        )
+        return response
+
+    async def aclose(self) -> None:
+        """连接池归包裹的传输层所有。"""
+        await self._inner.aclose()
+
+    async def _note(
+        self, request: httpx.Request, *, status_code: int | None, succeeded: bool
+    ) -> None:
+        """只取方法与路径：查询串可能带参数，不进台账。"""
+        try:
+            await self._record(
+                ExternalCallRecord(
+                    provider=self._provider,
+                    method=request.method,
+                    path=request.url.path[:255],
+                    request_id="",
+                    business_code=status_code,
+                    succeeded=succeeded,
+                )
+            )
+        except Exception:
+            logger.warning(
+                "外部调用记录写入失败：provider=%s path=%s",
+                self._provider,
+                request.url.path,
+            )
+
+
 def build_public_https_client(
     policy: OutboundUrlPolicy,
     *,
     timeout_seconds: float = 5.0,
     max_response_bytes: int = 1024 * 1024,
+    record: Callable[[Any], Awaitable[None]] | None = None,
+    provider: str = "",
 ) -> httpx.AsyncClient:
-    """构造可供候选探针和后续生产 SDK 复用的受控 HTTP 客户端。"""
+    """构造可供候选探针和后续生产 SDK 复用的受控 HTTP 客户端。
+
+    传入 record 时在传输层加一层台账；候选配置探针不传，避免把配置测试也计入。
+    """
     if not 1.0 <= timeout_seconds <= 60.0:
         raise ValueError("外联超时时间无效")
     timeout = httpx.Timeout(
@@ -299,11 +374,14 @@ def build_public_https_client(
         write=min(timeout_seconds, 3.0),
         pool=1.0,
     )
+    transport: httpx.AsyncBaseTransport = PublicHttpsTransport(
+        policy,
+        max_response_bytes=max_response_bytes,
+    )
+    if record is not None and provider:
+        transport = RecordingTransport(transport, provider=provider, record=record)
     return httpx.AsyncClient(
-        transport=PublicHttpsTransport(
-            policy,
-            max_response_bytes=max_response_bytes,
-        ),
+        transport=transport,
         timeout=timeout,
         follow_redirects=False,
         trust_env=False,

@@ -547,6 +547,9 @@ async def test_production_bundle_uses_controlled_http_clients_for_both_sdks(
     sdk_kwargs: list[dict[str, object]] = []
     http_client_kwargs: list[dict[str, object]] = []
 
+    async def recorder(_record: object) -> None:
+        """台账写入桩：这里只验证它有没有被接上去。"""
+
     def build_http_client(policy, **kwargs):
         """依次返回两个可识别客户端，并记录生产超时配置。"""
         http_client_kwargs.append(kwargs)
@@ -572,6 +575,7 @@ async def test_production_bundle_uses_controlled_http_clients_for_both_sdks(
         faq_candidate_context=object(),
         safety_hmac_key=b"safety-key",
         web_search_status_setter=lambda value: None,
+        external_call_recorder=recorder,
     )
 
     assert bundle.revision == 7
@@ -583,9 +587,11 @@ async def test_production_bundle_uses_controlled_http_clients_for_both_sdks(
     assert all("http_client" in kwargs for kwargs in sdk_kwargs)
     assert sdk_kwargs[0]["http_client"] is not sdk_kwargs[1]["http_client"]
     assert all(kwargs["max_retries"] == 0 for kwargs in sdk_kwargs)
+    # 两个 SDK 都必须挂上台账：DeepSeek 是最贵也最易出问题的外部依赖，此前
+    # external_requests 里只有 hostex，排障时无从确认模型到底调没调、成没成。
     assert http_client_kwargs == [
-        {"timeout_seconds": 45.0},
-        {"timeout_seconds": 45.0},
+        {"timeout_seconds": 45.0, "record": recorder, "provider": "deepseek"},
+        {"timeout_seconds": 45.0, "record": recorder, "provider": "deepseek"},
     ]
 
     await bundle.aclose()
