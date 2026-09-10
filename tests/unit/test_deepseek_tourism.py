@@ -264,7 +264,10 @@ async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
     assert "优先选出最值得推荐的3项" in request["system"]
     assert "700至900字" in request["system"]
     assert request["max_tokens"] == 3000
-    assert "主要参考了武汉市文化和旅游局等公开信息" in result
+    assert "帮您查到的" in result
+    # v1.28.0 起页脚不再列举来源：拿到的只是搜索结果标题，且带这句的回复
+    # 会被企业微信以安全限制拦下，反而让客人连时效提醒都收不到。
+    assert "主要参考了" not in result
     assert "查询日期：" not in result
     assert "参考来源：" not in result
     assert "https://" not in result
@@ -363,8 +366,13 @@ async def test_deepseek_tourism_rejects_answer_without_search_evidence() -> None
 
 
 @pytest.mark.asyncio
-async def test_deepseek_tourism_rejects_evidence_without_readable_source() -> None:
-    """有搜索块但没有可读来源名称时仍应进入既有联网失败路径。"""
+async def test_a_search_result_never_exposes_its_domain_to_the_guest() -> None:
+    """来源只有裸网址时照常作答，但客人侧不得出现域名或链接。
+
+    v1.28.0 前这种情况会整条降级——因为页脚必须点名来源，点不出来就没法生成。
+    现在页脚不列举来源，「我今天帮您查到的」依然为真（搜索确实返回了结果），所以
+    正确行为是照常回答；真正要守住的是域名不外泄这一条。
+    """
     statuses: list[str] = []
     searcher = DeepSeekTourismSearcher(
         client=UnreadableSourceClientStub(),
@@ -372,15 +380,17 @@ async def test_deepseek_tourism_rejects_evidence_without_readable_source() -> No
         status_setter=statuses.append,
     )
 
-    with pytest.raises(TourismSearchError) as error:
-        await searcher.search(
-            question="明天天气如何？",
-            language=Language.ZH,
-            queried_on=date(2026, 8, 21),
-        )
+    result = await searcher.search(
+        question="明天天气如何？",
+        language=Language.ZH,
+        queried_on=date(2026, 8, 21),
+    )
 
-    assert error.value.status == "degraded"
-    assert statuses == ["degraded"]
+    assert "武汉明天局地有阵雨" in result
+    assert "帮您查到的" in result
+    assert "unknown.example" not in result
+    assert "http" not in result
+    assert statuses == ["ok"]
 
 
 @pytest.mark.asyncio
@@ -406,7 +416,10 @@ async def test_deepseek_tourism_retries_evidence_without_final_text() -> None:
         "结束前必须输出一段客人可见的最终正文" in item["system"]
         for item in client.messages.requests
     )
-    assert "主要参考了武汉市文化和旅游局等公开信息" in result
+    assert "帮您查到的" in result
+    # v1.28.0 起页脚不再列举来源：拿到的只是搜索结果标题，且带这句的回复
+    # 会被企业微信以安全限制拦下，反而让客人连时效提醒都收不到。
+    assert "主要参考了" not in result
     assert statuses == ["ok"]
 
 
@@ -436,11 +449,42 @@ async def test_recent_events_remove_explicitly_stale_sources() -> None:
         queried_on=date(2026, 7, 30),
     )
 
+    # 仍有当年来源存活，因此照常作答；页脚不点名来源，任何标题都不进正文。
+    assert "2026年8月5日，武汉有一场已确认的音乐会。" in result
     assert "2025武汉七夕节剧场演出活动" not in result
-    # 保留的是来源「机构名」而不是网页标题：域名命中已知政务站点时按机构名念，
-    # 搜索结果标题不再原样进入客人可见正文。
-    assert "武汉市文化和旅游局" in result
+    assert "武汉市文化和旅游局" not in result
     assert "2026年8月演出清单" not in result
+
+
+@pytest.mark.asyncio
+async def test_recent_events_degrade_when_every_source_is_stale() -> None:
+    """来源全部属于往年时必须降级，不能拿去年的信息当「今天查到的」。
+
+    页脚不再点名来源之后，陈旧来源被剔除这件事在文案上已不可见；这条从行为上
+    直接验过滤器：全部剔除后没有来源存活，联网回答整条降级。
+    """
+    statuses: list[str] = []
+    searcher = DeepSeekTourismSearcher(
+        client=EventClientStub(
+            text="2026年8月5日，武汉有一场已确认的音乐会。",
+            sources=[
+                ("2025武汉七夕节剧场演出活动", "https://example.com/2025"),
+                ("2024武汉草莓音乐节回顾", "https://example.com/2024"),
+            ],
+        ),
+        model="deepseek-v4-flash",
+        status_setter=statuses.append,
+    )
+
+    with pytest.raises(TourismSearchError) as error:
+        await searcher.search(
+            question="武汉最近有什么演出？",
+            language=Language.ZH,
+            queried_on=date(2026, 7, 30),
+        )
+
+    assert error.value.status == "degraded"
+    assert statuses == ["degraded"]
 
 
 @pytest.mark.asyncio
@@ -616,7 +660,10 @@ async def test_failed_tourism_search_is_not_cached() -> None:
         queried_on=date(2026, 7, 30),
     )
 
-    assert "主要参考了武汉市文化和旅游局等公开信息" in result
+    assert "帮您查到的" in result
+    # v1.28.0 起页脚不再列举来源：拿到的只是搜索结果标题，且带这句的回复
+    # 会被企业微信以安全限制拦下，反而让客人连时效提醒都收不到。
+    assert "主要参考了" not in result
     assert len(client.messages.requests) == 2
 
 
@@ -725,6 +772,7 @@ async def test_english_tourism_prompt_stays_below_hard_reply_limit() -> None:
     assert "warm, concise, and reliable homestay host" in system
     assert "Do not change dates, temperatures, prices, availability, or sources" in system
     assert "I checked this latest travel information for you today" in result
-    assert "Wuhan Municipal Culture and Tourism Bureau" in result
+    assert "for you today" in result
+    assert "mainly using public information" not in result
     assert "Query date:" not in result
     assert "Sources:" not in result

@@ -2,7 +2,6 @@ import logging
 import re
 from datetime import date
 from typing import Literal
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -54,37 +53,22 @@ _BARE_URL_PATTERN = re.compile(
     r"(?=(?:[。，；！？）)]|\.(?=\s|$|[A-Z])|[,;!?](?=\s|$)|\s|$))"
 )
 _DOMAIN_PATTERN = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
-_OFFICIAL_SOURCE_NAMES = {
-    "www.wuhan.gov.cn": "武汉市人民政府",
-    "3g.wuhan.gov.cn": "武汉市人民政府",
-    "wlj.wuhan.gov.cn": "武汉市文化和旅游局",
-    "ylj.wuhan.gov.cn": "武汉市园林和林业局",
-    "fgw.wuhan.gov.cn": "武汉市发展和改革委员会",
-    "hbj.wuhan.gov.cn": "武汉市生态环境局",
-    "gaj.wuhan.gov.cn": "武汉市公安局",
-    "zrzyhgh.wuhan.gov.cn": "武汉市自然资源和城乡建设局",
-}
-_EN_SOURCE_NAMES = {
-    "武汉市人民政府": "Wuhan Municipal Government",
-    "武汉市文化和旅游局": "Wuhan Municipal Culture and Tourism Bureau",
-    "武汉市园林和林业局": "Wuhan Municipal Parks and Forestry Bureau",
-    "武汉市气象台": "Wuhan Meteorological Service",
-    "武汉市气象服务": "Wuhan Meteorological Service",
-    "湖北省气象局": "Hubei Meteorological Service",
-}
 _NATURAL_FOOTER_PATTERN = re.compile(
     r"(?:"
     r"这是我今天（\d{1,2}月\d{1,2}日）帮您查到的"
-    r"(?:最新预报|最新天气信息|最新活动信息|最新票务与开放信息|最新出行信息)，"
-    r"主要参考了[^。\n]+等公开信息。"
+    r"(?:最新预报|最新天气信息|最新活动信息|最新票务与开放信息|最新出行信息)"
+    # 来源子句连同它前面的逗号一起可选：v1.28.0 起不再列举来源，句读也随之从
+    # 「最新预报，主要参考了X等公开信息。」变成「最新预报。」。库里存量正文仍是
+    # 旧格式，而改写器读的正是这些存量消息，切不出页脚会把收尾当正文送去精炼。
+    r"(?:，主要参考了[^。\n]+等公开信息)?。"
     r"(?:天气可能临时变化，出门前可以再看一眼实时情况。|"
     r"活动安排可能临时调整，出发前可以再确认一下。|"
     r"票价和开放安排可能临时调整，出发前可以再确认一下。|"
     r"出行信息可能临时变化，出发前可以再确认一下。)"
     r"|"
     r"I checked this latest (?:forecast|event information|ticket and opening information|"
-    r"travel information) for you today \([A-Z][a-z]+ \d{1,2}\), mainly using "
-    r"public information from .+?\. "
+    r"travel information) for you today \([A-Z][a-z]+ \d{1,2}\)"
+    r"(?:, mainly using public information from .+?)?\. "
     r"(?:Weather can change at short notice, so please check the live forecast once "
     r"more before heading out\.|Event schedules can change, so please confirm once "
     r"more before heading out\.|Prices and opening arrangements can change, so please "
@@ -152,61 +136,6 @@ def is_tourism_query(messages: list[dict[str, str]]) -> bool:
     return classify_tourism_query(messages) != "none"
 
 
-# 来源名要能当作「机构」念出来：出现句读、数字量值或过长，说明拿到的是网页标题
-# 而不是站点名。生产上「主要参考了武汉天气预报15天天气、最低气温17℃，今早出门加件
-# 外套等公开信息」正是这样拼出来的——搜索结果标题被原样念给了客人。
-# 句读和数字量值是「这是一句话/一条标题」的标志；英文缩写点不算，机构名里很常见
-# （U.S. Embassy、Wuhan Gov. Portal）。
-_TITLE_LIKE_PATTERN = re.compile(r"[。，、；：！？,;:!?]|\d")
-_LATIN_NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z .&'’-]*")
-# 长度上限按语种分开：中文机构名紧凑，拉丁文机构名逐词展开，用同一个字符数会误杀
-# 「Wuhan Meteorological Service」这类完全正当的来源名。
-_SOURCE_NAME_MAX_CHARS = 12
-_SOURCE_NAME_MAX_WORDS = 5
-
-
-def _looks_like_a_source_name(value: str) -> bool:
-    """判断这串文字能不能当作来源机构名念给客人听。"""
-    if not value or _TITLE_LIKE_PATTERN.search(value):
-        return False
-    if _LATIN_NAME_PATTERN.fullmatch(value):
-        return len(value.split()) <= _SOURCE_NAME_MAX_WORDS
-    return len(value) <= _SOURCE_NAME_MAX_CHARS
-
-
-def _source_display_name(
-    title: str,
-    url: str,
-    *,
-    language: TourismReplyLanguage,
-) -> str | None:
-    """返回客人可读的来源名称；未知域名与网页标题都不直接暴露给客人。
-
-    优先查已知机构名：域名是稳定事实，标题是搜索结果的一次性产物。此前顺序反了
-    ——只有标题为空时才查表，于是即便命中已知政务域名，念给客人的仍是网页标题。
-    """
-    hostname = urlparse(url).netloc.lower()
-    official = _OFFICIAL_SOURCE_NAMES.get(hostname, "")
-    if official:
-        return _EN_SOURCE_NAMES.get(official, official) if language == "en" else official
-
-    normalized_title = title.strip()
-    if normalized_title in {url, hostname}:
-        return None
-    normalized_title = _BARE_URL_PATTERN.sub("", normalized_title).strip()
-    normalized_title = _DOMAIN_PATTERN.sub("", normalized_title).strip(" -|·")
-    if normalized_title.casefold() == hostname.casefold():
-        return None
-    if not _looks_like_a_source_name(normalized_title):
-        # 宁可整条联网回答降级，也不把搜索结果标题当成来源念给客人：调用方在拿不到
-        # 可读来源时会走 degraded，这与既有「不拿域名或模型常识冒充依据」一致。
-        logger.info("联网来源标题不可用作来源名：hostname=%s", hostname)
-        return None
-    if language == "en":
-        return _EN_SOURCE_NAMES.get(normalized_title, normalized_title)
-    return normalized_title
-
-
 def _plain_text_tourism_body(content: str) -> str:
     """只移除明确 Markdown 结构，保留正文中的普通星号与下划线。"""
     cleaned = _MARKDOWN_LINK_PATTERN.sub(r"\1", content)
@@ -248,11 +177,19 @@ def split_tourism_reply(reply_text: str) -> tuple[str, str]:
 def _natural_evidence_footer(
     *,
     queried_on: date,
-    source_names: list[str],
     language: TourismReplyLanguage,
     category: TourismReplyCategory,
 ) -> str:
-    """把已校验日期和来源转换为民宿管家式自然收尾。"""
+    """把已校验的查询日期转换为民宿管家式自然收尾。
+
+    只声明「今天查到的」和「可能临时变化」，不列举来源名。列举来源本意是诚实标注
+    依据，实际拿到的却是搜索结果的网页标题；六条真实样本显示带这句的三条全部被
+    企业微信以安全限制拦下、不带的三条全部送达，而兜底重发会把「可能临时变化」这
+    句提醒一起丢掉——坚持列举来源反而让客人连时效提示都收不到。
+
+    诚实性由「我今天帮您查到的」加「可能临时变化」承担；调用方已保证确有搜索结果
+    且陈旧来源已被剔除，因此这句话本身仍然为真。
+    """
     if language == "en":
         category_name, caution = {
             "weather": (
@@ -277,10 +214,9 @@ def _natural_evidence_footer(
             ),
         }[category]
         display_date = f"{queried_on.strftime('%B')} {queried_on.day}"
-        sources = " and ".join(source_names)
         return (
-            f"I checked this latest {category_name} for you today ({display_date}), "
-            f"mainly using public information from {sources}. {caution}"
+            f"I checked this latest {category_name} for you today "
+            f"({display_date}). {caution}"
         )
 
     category_name, caution = {
@@ -292,10 +228,9 @@ def _natural_evidence_footer(
         ),
         "tourism": ("最新出行信息", "出行信息可能临时变化，出发前可以再确认一下。"),
     }[category]
-    sources = "、".join(source_names)
     return (
         f"这是我今天（{queried_on.month}月{queried_on.day}日）帮您查到的"
-        f"{category_name}，主要参考了{sources}等公开信息。{caution}"
+        f"{category_name}。{caution}"
     )
 
 
@@ -312,24 +247,11 @@ def format_tourism_reply(
     clean_reply = _plain_text_tourism_body(body)
     if not clean_reply:
         raise ValueError("联网结果没有可读回复正文")
-    source_names = list(
-        dict.fromkeys(
-            display_name
-            for title, url in citations
-            if (
-                display_name := _source_display_name(
-                    title,
-                    url,
-                    language=language,
-                )
-            )
-        )
-    )[:2]
-    if not source_names:
-        raise ValueError("联网结果没有可读来源名称")
+    # 仍然要求确有搜索结果：可以不点名来源，但不能在没查到任何东西时说「我查到的」。
+    if not citations:
+        raise ValueError("联网结果没有搜索来源")
     footer = _natural_evidence_footer(
         queried_on=queried_on,
-        source_names=source_names,
         language=language,
         category=category,
     )

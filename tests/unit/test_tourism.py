@@ -116,23 +116,27 @@ def test_split_tourism_reply_does_not_strip_ordinary_similar_text(
     assert footer == ""
 
 
-@pytest.mark.parametrize("source_name", ["Wuhan Gov. Portal", "U.S. Embassy Wuhan"])
-def test_split_tourism_reply_accepts_periods_inside_english_source_name(
-    source_name: str,
-) -> None:
-    """英文可读来源名含句点时，formatter 与 splitter 仍须完整往返。"""
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_formatter_and_splitter_still_round_trip(language: str) -> None:
+    """formatter 生成的页脚必须能被 splitter 完整拆回来。
+
+    改写器、精炼和兜底都靠 split_tourism_reply 把收尾摘出去；拆不出来就会把
+    收尾当正文送进模型。页脚文案一改就要连着验这条往返。
+    """
+    body_text = "武汉明天多云。" if language == "zh" else "Wuhan will be cloudy tomorrow."
     formatted = format_tourism_reply(
-        "Wuhan will be cloudy tomorrow.",
-        [(source_name, "https://example.org/weather")],
+        body_text,
+        [("任意来源", "https://example.org/weather")],
         date(2026, 8, 21),
-        language="en",
+        language=language,
         category="weather",
     )
 
     body, footer = split_tourism_reply(formatted)
 
-    assert body == "Wuhan will be cloudy tomorrow."
-    assert source_name in footer
+    assert body == body_text
+    assert footer
+    assert "任意来源" not in footer
 
 
 def test_weather_reply_uses_natural_evidence_footer_without_markdown() -> None:
@@ -152,8 +156,7 @@ def test_weather_reply_uses_natural_evidence_footer_without_markdown() -> None:
     )
     assert formatted == (
         "天气：武汉2026年8月22日局地有阵雨，建议您随身带把晴雨伞。\n\n"
-        "这是我今天（8月21日）帮您查到的最新预报，主要参考了"
-        "武汉市气象台、武汉市文化和旅游局等公开信息。"
+        "这是我今天（8月21日）帮您查到的最新预报。"
         "天气可能临时变化，出门前可以再看一眼实时情况。"
     )
     assert "**" not in formatted
@@ -216,26 +219,30 @@ def test_english_tourism_footer_is_natural_and_link_free() -> None:
 
     assert formatted.startswith("Weather: Showers are likely tomorrow.")
     assert "I checked this latest forecast for you today (August 21)" in formatted
-    assert "Wuhan Meteorological Service" in formatted
+    assert "mainly using public information" not in formatted
     assert "Query date:" not in formatted
     assert "Sources:" not in formatted
     assert "tomorrow.;" not in formatted
 
 
-def test_tourism_reply_rejects_sources_without_readable_names() -> None:
-    """没有官方映射或可读标题时不得把域名直接展示给客人。"""
-    with pytest.raises(ValueError, match="可读来源"):
+def test_a_reply_without_any_search_result_may_not_claim_a_lookup() -> None:
+    """没有任何搜索来源时不得声称「我今天帮您查到的」。
+
+    页脚不再点名来源，但「查过」这个断言必须仍然为真——这条守的是诚实性本身，
+    而不是来源名的可读性。
+    """
+    with pytest.raises(ValueError, match="搜索来源"):
         format_tourism_reply(
             "武汉明天有阵雨。",
-            [("unknown.example", "https://unknown.example/a")],
+            [],
             date(2026, 8, 21),
             language="zh",
             category="weather",
         )
 
 
-def test_tourism_source_title_strips_embedded_domain() -> None:
-    """来源标题中夹带的域名应删除，只保留可读机构名称。"""
+def test_tourism_source_title_never_reaches_the_guest() -> None:
+    """搜索结果标题连同其中夹带的域名一律不进客人可见正文。"""
     formatted = format_tourism_reply(
         "武汉明天有阵雨。",
         [("Wuhan Forecast - unknown.example", "https://unknown.example/a")],
@@ -244,8 +251,9 @@ def test_tourism_source_title_strips_embedded_domain() -> None:
         category="weather",
     )
 
-    assert "Wuhan Forecast" in formatted
+    assert "Wuhan Forecast" not in formatted
     assert "unknown.example" not in formatted
+    assert "for you today (August 21)" in formatted
 
 
 @pytest.mark.parametrize(
@@ -298,55 +306,43 @@ def test_web_search_state_starts_unknown_and_can_change() -> None:
     assert state.get() == "ok"
 
 
-def test_a_search_result_title_never_becomes_a_source_name() -> None:
-    """搜索结果标题不得被当作来源机构名念给客人。
+def test_the_footer_never_names_any_source() -> None:
+    """页脚不得出现任何来源名，无论搜索结果标题长什么样。
 
-    生产 2026-09-10 的天气回复拼出了「主要参考了武汉天气预报15天天气、最低气温
-    17℃，今早出门加件外套等公开信息」——两个都是原始网页标题。念起来像内容搬运，
-    也是那条回复被企业微信以安全限制拦下时的形态之一。拿不到可读来源名时整条
-    联网回答降级，这与既有「不拿域名或模型常识冒充依据」的取舍一致。
-    """
-    with pytest.raises(ValueError, match="没有可读来源名称"):
-        format_tourism_reply(
-            "武汉今天多云，最高25℃。",
-            [
-                ("武汉天气预报15天天气", "https://unknown.example/a"),
-                ("最低气温17℃，今早出门加件外套", "https://unknown.example/b"),
-            ],
-            date(2026, 9, 10),
-            language="zh",
-            category="weather",
-        )
-
-
-def test_a_known_hostname_wins_over_whatever_the_title_says() -> None:
-    """域名命中已知机构时按机构名念，不受当次搜索标题影响。
-
-    域名是稳定事实，标题是搜索结果的一次性产物。此前顺序反了——只有标题为空时
-    才查机构名表，于是命中已知政务域名也仍然念网页标题。
+    生产 2026-09-10 的天气回复拼出过「主要参考了武汉天气预报15天天气、最低气温
+    17℃，今早出门加件外套等公开信息」——都是原始网页标题。六条真实样本显示：带
+    这句的三条全被企业微信以安全限制拦下，不带的三条全部送达；而兜底重发会把
+    「天气可能临时变化」这句提醒一起丢掉，坚持列举来源反倒让客人连时效提示都收不到。
     """
     formatted = format_tourism_reply(
-        "武汉明天有阵雨。",
-        [("武汉市文化和旅游局2026年8月演出清单大全", "https://wlj.wuhan.gov.cn/x")],
-        date(2026, 8, 21),
+        "武汉今天多云，最高25℃。",
+        [
+            ("武汉天气预报15天天气", "https://unknown.example/a"),
+            ("最低气温17℃，今早出门加件外套", "https://unknown.example/b"),
+            ("武汉市文化和旅游局2026年8月演出清单", "https://wlj.wuhan.gov.cn/x"),
+        ],
+        date(2026, 9, 10),
         language="zh",
         category="weather",
     )
 
-    assert "武汉市文化和旅游局" in formatted
-    assert "2026年8月演出清单大全" not in formatted
+    assert "主要参考了" not in formatted
+    assert "公开信息" not in formatted
+    for title_fragment in (
+        "武汉天气预报15天天气",
+        "今早出门加件外套",
+        "武汉市文化和旅游局",
+        "2026年8月演出清单",
+    ):
+        assert title_fragment not in formatted, f"来源标题泄漏进正文：{title_fragment}"
+    # 时效声明仍在：这是去掉来源列举后仍要保住的东西。
+    assert "这是我今天（9月10日）帮您查到的最新预报。" in formatted
+    assert "天气可能临时变化，出门前可以再看一眼实时情况。" in formatted
 
 
-def test_real_source_names_still_pass_in_both_languages() -> None:
-    """判据不能误杀正当来源名：中文紧凑、拉丁文逐词展开，长度上限要分开。"""
-    zh = format_tourism_reply(
-        "武汉明天有阵雨。",
-        [("中国天气网", "https://unknown.example/a")],
-        date(2026, 8, 21),
-        language="zh",
-        category="weather",
-    )
-    en = format_tourism_reply(
+def test_the_english_footer_also_names_no_source() -> None:
+    """英文页脚同样只保留查询日期与时效提醒。"""
+    formatted = format_tourism_reply(
         "Showers are likely tomorrow.",
         [("Wuhan Meteorological Service", "https://unknown.example/a")],
         date(2026, 8, 21),
@@ -354,5 +350,6 @@ def test_real_source_names_still_pass_in_both_languages() -> None:
         category="weather",
     )
 
-    assert "中国天气网" in zh
-    assert "Wuhan Meteorological Service" in en
+    assert "mainly using public information" not in formatted
+    assert "Wuhan Meteorological Service" not in formatted
+    assert "I checked this latest forecast for you today (August 21)." in formatted
