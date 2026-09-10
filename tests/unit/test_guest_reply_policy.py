@@ -4,6 +4,7 @@ from homestay_bot.domain.enums import Language
 from homestay_bot.services.guest_reply_policy import (
     human_contact_reply,
     prepare_facility_issue_reply,
+    remove_ungrounded_property_claims,
     prepare_guest_reply,
     sanitize_guest_reply,
 )
@@ -397,3 +398,57 @@ def test_high_risk_reply_policy_is_idempotent() -> None:
     )
 
     assert second == first
+
+
+def test_amenity_claims_without_a_self_reference_are_still_removed() -> None:
+    """本店设施断言不含自称词时也必须删除。
+
+    生产 2026-09-10 的天气回复写了「民宿这边：大堂备有薄外套和雨伞，需要随时说；
+    房间已换秋被，觉得凉可再加一床。」——知识库里没有这些事实，客人可能据此下楼
+    索要。旧判据只认「我们民宿」这类自称词：前半句的「民宿这边」不在词表里，后半句
+    更是一个自称词都没有，两句都被放行。
+
+    联网搜索不可能返回本店信息，因此这条路径上出现的任何本店设施断言必然是模型
+    自行添加的，从严删除是安全的。
+    """
+    cleaned = remove_ungrounded_property_claims(
+        "武汉今天多云，最高25℃。"
+        "民宿这边：大堂备有薄外套和雨伞，需要随时说；"
+        "房间已换秋被，觉得凉可再加一床。"
+        "早晚偏凉，建议加一件薄外套。"
+    )
+
+    assert "大堂备有" not in cleaned
+    assert "薄外套和雨伞" not in cleaned
+    assert "房间已换秋被" not in cleaned
+    assert "可再加一床" not in cleaned
+    # 天气事实与穿衣建议必须原样保留，否则等于把有用回答一起删掉。
+    assert "武汉今天多云，最高25℃。" in cleaned
+    assert "早晚偏凉，建议加一件薄外套。" in cleaned
+
+
+def test_the_original_self_reference_rule_still_holds() -> None:
+    """既有自称词判据不得因为新增设施判据而失效。"""
+    cleaned = remove_ungrounded_property_claims(
+        "武汉明天有阵雨，气温25～31℃。我们民宿有伞可借用，您出门前招呼一声即可。"
+        "午后降雨概率较高，出门记得带伞。"
+    )
+
+    assert "我们民宿" not in cleaned
+    assert "武汉明天有阵雨，气温25～31℃。" in cleaned
+    assert "午后降雨概率较高，出门记得带伞。" in cleaned
+
+
+def test_ordinary_travel_content_is_never_mistaken_for_an_amenity_claim() -> None:
+    """判据必须有区分力：正常出行与天气内容一个字都不能删。
+
+    误删比漏删更难发现——回复会变得残缺却依然发得出去，没有任何失败信号。
+    """
+    original = (
+        "武汉今天多云到晴，最高25℃、最低17℃。"
+        "偏北风3～4级，阵风5～6级，出行注意防风。"
+        "白天阳光不烈，适合安排东湖、江汉路、汉口江滩等户外行程。"
+        "房间内不要使用大功率电器，出门请关好门窗。"
+    )
+
+    assert remove_ungrounded_property_claims(original) == original

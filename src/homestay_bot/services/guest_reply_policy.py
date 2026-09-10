@@ -28,8 +28,26 @@ _EN_UMBRELLA_PATTERN = re.compile(
 )
 _PROPERTY_SELF_REFERENCE_PATTERN = re.compile(
     r"我们民宿|本民宿|咱们民宿|我们客栈|本客栈|本店|"
+    r"民宿这边|客栈这边|民宿这儿|客栈这儿|"
     r"\bour (?:homestay|property|guesthouse|hotel)\b",
     re.IGNORECASE,
+)
+# 本店设施断言：场所词 + 供应或状态动词。自称词判据（上面那条）只认「我们民宿」
+# 这类说法，而生产 2026-09-10 的天气回复写的是「民宿这边：大堂备有薄外套和雨伞，
+# 需要随时说；房间已换秋被，觉得凉可再加一床。」——前半句的自称说法不在词表里，
+# 后半句一个自称词都没有，两句都被放行，客人可能据此下楼索要并不存在的东西。
+#
+# 用「有没有提到民宿」来识别「有没有编造民宿事实」是不可靠的代理，这里改用危害
+# 本身的形态：对本店场所里某样东西的供应或状态下断言。本函数只作用于联网／旅游
+# 正文与改写路径，而联网搜索不可能返回本店信息，因此这条路径上出现的设施断言必然
+# 是模型自行添加的，从严删除是安全的。
+#
+# 只覆盖中文：生产证据全部是中文，英文侧没有观察到同类写法，凭印象扩正则会在没有
+# 证据的地方引入误删风险。
+_PROPERTY_AMENITY_CLAIM_PATTERN = re.compile(
+    r"(?:大堂|前台|房间|客房|楼下|楼上|院子|厨房|卫生间|浴室|阳台|公区|楼道)"
+    r"[^。！？；;!?]{0,12}"
+    r"(?:备有|备了|配有|配备|提供|放了|放着|已换|已备|可借|可以借|能借|免费)"
 )
 _ROOM_SALES_CTA_PATTERN = re.compile(
     r"如果.{0,12}(?:我|我们).{0,16}(?:推荐|介绍).{0,24}房型|"
@@ -164,14 +182,20 @@ def human_contact_reply(language: Language) -> str:
     return _ZH_HUMAN_CONTACT_REPLY
 
 
+def _contains_ungrounded_property_claim(text: str) -> bool:
+    """判断一段文字是否含未经审核的民宿自述、设施断言或房型推销。"""
+    return bool(
+        _PROPERTY_SELF_REFERENCE_PATTERN.search(text)
+        or _PROPERTY_AMENITY_CLAIM_PATTERN.search(text)
+        or _ROOM_SALES_CTA_PATTERN.search(text)
+    )
+
+
 def remove_ungrounded_property_claims(content: str) -> str:
     """逐句删除未经审核的民宿自述和无关房型推销。"""
     safe_lines: list[str] = []
     for line in content.splitlines():
-        if (
-            not _PROPERTY_SELF_REFERENCE_PATTERN.search(line)
-            and not _ROOM_SALES_CTA_PATTERN.search(line)
-        ):
+        if not _contains_ungrounded_property_claim(line):
             safe_lines.append(line)
             continue
         # 保护数字列表的小数点，只按中英文句末拆分命中行。
@@ -182,9 +206,7 @@ def remove_ungrounded_property_claims(content: str) -> str:
         safe_sentences = [
             sentence
             for sentence in sentences
-            if sentence
-            and not _PROPERTY_SELF_REFERENCE_PATTERN.search(sentence)
-            and not _ROOM_SALES_CTA_PATTERN.search(sentence)
+            if sentence and not _contains_ungrounded_property_claim(sentence)
         ]
         if safe_sentences:
             safe_lines.append("".join(safe_sentences).strip())
