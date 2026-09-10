@@ -452,3 +452,84 @@ def test_ordinary_travel_content_is_never_mistaken_for_an_amenity_claim() -> Non
     )
 
     assert remove_ungrounded_property_claims(original) == original
+
+
+def test_first_person_soft_commitments_are_removed_when_nobody_will_act() -> None:
+    """没有人工介入时，第一人称软承诺必须删除——没人会去兑现它。
+
+    生产消息 127 回了「我这边先帮您确认一下安排。」，而本轮任务 0、审批 0、提醒 0、
+    无管家通知：客人在等一个确认，系统里没有任何人知道要确认什么。
+
+    现有承诺模式要求「确定性副词 + 动作动词」（马上安排、会尽快送、一定解决），
+    这类不含副词的第一人称软承诺整类漏过。
+    """
+    for sentence in (
+        "我这边先帮您确认一下安排。",
+        "我好安排钥匙或门锁信息。",
+        "我帮您看看能不能安排。",
+        "提前告诉我大概几点到，我好安排钥匙。",
+    ):
+        cleaned = sanitize_guest_reply(
+            f"好的。{sentence}",
+            language=Language.ZH,
+            requires_human=False,
+        )
+        assert "安排" not in cleaned or "我" not in cleaned, f"未删除软承诺：{sentence}"
+
+
+def test_agreeing_to_an_arrangement_nobody_recorded_is_removed() -> None:
+    """对客人安排的直接应允同样要删：系统没有记录，没人会照办。
+
+    生产消息 127 首句是「明天下午三点左右到没有问题的。」——模型手里的订单是
+    8月14至16日，与「明天」（9月11日）相差近一个月，它既没核对也先答应了。
+    """
+    cleaned = sanitize_guest_reply(
+        "明天下午三点左右到没有问题的。想问一下您预订的是哪套房源呢？",
+        language=Language.ZH,
+        requires_human=False,
+    )
+
+    assert "没有问题" not in cleaned
+    # 追问信息本身无害，必须保留，否则回复就断了。
+    assert "哪套房源" in cleaned
+
+
+def test_ordinary_replies_survive_the_stricter_commitment_rule() -> None:
+    """判据必须有区分力：正常答复与澄清一个字都不能删。"""
+    for sentence in (
+        "东湖适合骑行，江汉路适合逛街。",
+        "您这样理解没有问题。",
+        "明天多云，出门没问题。",
+        "退房时间是次日中午12点。",
+        "房间内禁止吸烟。",
+    ):
+        cleaned = sanitize_guest_reply(
+            sentence, language=Language.ZH, requires_human=False
+        )
+        assert cleaned == sentence, f"被误删：{sentence}"
+
+
+def test_the_handoff_branch_keeps_its_promise_because_a_human_will_act() -> None:
+    """需要人工时固定收尾必须保留：那句承诺有人兑现，不是空头。"""
+    cleaned = sanitize_guest_reply(
+        "我已收到您的诉求。",
+        language=Language.ZH,
+        requires_human=True,
+    )
+
+    assert cleaned.endswith(human_contact_reply(Language.ZH))
+
+
+def test_a_disclaimer_is_not_mistaken_for_a_commitment() -> None:
+    """「以后续确认为准」是在降低期待，不能当成承诺删掉。
+
+    生产消息 115 的这句曾被软承诺判据误删——它含「我给您…确认」，但整句作用恰好
+    相反：它明确告诉客人现在说的都不算数。删掉它比留着更糟。
+    """
+    sentence = "具体门锁和寄存安排以我当天给您的确认为准，您出发前再跟我对一下时间就好。"
+
+    cleaned = sanitize_guest_reply(
+        sentence, language=Language.ZH, requires_human=False
+    )
+
+    assert cleaned == sentence

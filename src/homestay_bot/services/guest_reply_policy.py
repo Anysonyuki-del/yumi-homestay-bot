@@ -248,13 +248,71 @@ def _contains_unsafe_commitment(sentence: str) -> bool:
     return any(pattern.search(sentence) for pattern in _UNSAFE_COMMITMENT_PATTERNS)
 
 
+# 无人工介入时才收紧的两类承诺。现有 _UNSAFE_COMMITMENT_PATTERNS 要求「确定性副词
+# + 动作动词」（马上安排、会尽快送、一定给您解决），下面这两类整类漏过。
+#
+# 只在 requires_human=False 分支生效：那一支意味着本轮不会产生任务、审批、提醒或
+# 管家通知，回复里任何「我会去做 X」都无人兑现。requires_human=True 分支会追加
+# 「我会立即联系管家来处理」，那时同样的话有人接手，不该删。
+#
+# 生产消息 127 同时踩中两类：「明天下午三点左右到没有问题的。我这边先帮您确认一下
+# 安排。」——本轮任务 0、审批 0、提醒 0、无管家通知，而模型手里的订单是 8 月 14 至
+# 16 日，与「明天」相差近一个月。
+_SOFT_COMMITMENT_PATTERNS = (
+    # 第一人称软承诺：不含确定性副词，但仍然把动作揽了下来。
+    re.compile(
+        r"(?:我|我们|我这边|这边)[^。！？；;!?]{0,12}"
+        r"(?:帮您|给您|替您|帮你|好|先|再)[^。！？；;!?]{0,8}"
+        r"(?:安排|确认|核实|处理|跟进|准备|留意|协调|落实|对接)"
+    ),
+    # 对客人提出的安排直接应允：系统没有任何记录，没人会照办。限定同句出现
+    # 到店、入住、寄存一类安排词，避免误删「您这样理解没有问题」这类澄清。
+    re.compile(
+        r"(?:几点到|到店|到达|入住|退房|寄存|提前|延迟|延后|加床|加一床|换房"
+        # 「三点左右到」这类时间+到达的说法同样是安排；但必须带「到」，否则
+        # 「明天多云，出门没问题」这种天气建议会被一起删掉。
+        r"|(?:今天|明天|后天|上午|下午|中午|晚上|傍晚|\d{1,2}[点时])"
+        r"[^。！？；;!?]{0,10}到)"
+        r"[^。！？；;!?]{0,16}"
+        r"(?:没有问题|没问题|都可以|完全可以|可以的|没关系)"
+    ),
+)
+
+
+# 免责表达：句子在说「以后续确认为准」，是在降低客人的期待而不是许下承诺。
+# 生产消息 115 的「具体门锁和寄存安排以我当天给您的确认为准，您出发前再跟我对一下
+# 时间就好。」曾被上面的软承诺判据误删——它含「我给您…确认」，但整句的作用恰好相反，
+# 删掉比留着更糟。
+_COMMITMENT_DISCLAIMER_PATTERN = re.compile(
+    r"为准|不一定|无法保证|视.{0,6}而定|以.{0,10}(?:确认|通知|安排)为"
+)
+
+
+def _contains_soft_commitment(sentence: str) -> bool:
+    """判断句子是否为无人兑现的软承诺或未经记录的应允。
+
+    只覆盖「响应当前请求」这一类明确有害的承诺。刻意不追「如果您早到，我看看当天
+    能不能先寄存」这类预告未来可能的说法：它们留了余地，危害有限，而其动词是开放
+    集合，靠白名单穷举只会变成打地鼠。
+    """
+    if _COMMITMENT_DISCLAIMER_PATTERN.search(sentence):
+        return False
+    return any(pattern.search(sentence) for pattern in _SOFT_COMMITMENT_PATTERNS)
+
+
 def _safe_sentences(content: str) -> list[str]:
-    """按句删除承诺，同时保留撤离提示和低风险自助建议。"""
+    """按句删除承诺，同时保留撤离提示和低风险自助建议。
+
+    本函数只在 requires_human=False 时被调用，即本轮不会有任何人接手；因此除了
+    既有的执行承诺，软承诺与未经记录的应允也一并删除。
+    """
     sentences = re.findall(r"[^。！？；;.!?]+[。！？；;.!?]*", content)
     return [
         sentence.strip()
         for sentence in sentences
-        if sentence.strip() and not _contains_unsafe_commitment(sentence)
+        if sentence.strip()
+        and not _contains_unsafe_commitment(sentence)
+        and not _contains_soft_commitment(sentence)
     ]
 
 
