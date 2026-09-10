@@ -136,6 +136,22 @@ def is_tourism_query(messages: list[dict[str, str]]) -> bool:
     return classify_tourism_query(messages) != "none"
 
 
+# 模型自己写在正文里的来源说明，例如「（以上天气信息来自武汉市气象台及中央气象台
+# 2026年9月10日发布内容，仅供出行参考。）」。正文里已有清除「参考来源：X」这类标签式
+# 写法的规则，漏的是这种自然语句形态。
+#
+# 删它有两个理由：一是与系统页脚语义重复，同一件事说两遍；二是 v1.28.0 把来源列举
+# 从页脚拿掉正是为了避开企业微信的安全限制，而模型在正文里自由发挥不受这个控制——
+# 这次措辞恰好没触发，下次真触发了改页脚也救不回来。来源声明应当只由系统生成。
+#
+# 必须以「以上／上述／本回复」这类回指词起手，避免把「东湖的水来自长江」这类正常
+# 句子当成来源说明删掉。
+_MODEL_SOURCE_NOTE_PATTERN = re.compile(
+    r"\s*[（(]?\s*(?:以上|上述|本回复)[^。！？!?\n]{0,40}"
+    r"(?:来自|来源于|引自|摘自|参考)[^。！？!?\n]*[。！？!?]?\s*[）)]?"
+)
+
+
 def _plain_text_tourism_body(content: str) -> str:
     """只移除明确 Markdown 结构，保留正文中的普通星号与下划线。"""
     cleaned = _MARKDOWN_LINK_PATTERN.sub(r"\1", content)
@@ -153,6 +169,7 @@ def _plain_text_tourism_body(content: str) -> str:
         "",
         cleaned,
     )
+    cleaned = _MODEL_SOURCE_NOTE_PATTERN.sub("", cleaned)
     cleaned = re.sub(r"[（(]\s*[）)]", "", cleaned)
     cleaned = re.sub(r"[ \t]*[,，;；]+[ \t]*(?=\n|$)", "", cleaned)
     cleaned = re.sub(r"\*{3}(?=\S)([^\n*]*?\S)\*{3}", r"\1", cleaned)

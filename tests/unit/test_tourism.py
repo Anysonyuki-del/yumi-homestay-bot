@@ -353,3 +353,52 @@ def test_the_english_footer_also_names_no_source() -> None:
     assert "mainly using public information" not in formatted
     assert "Wuhan Meteorological Service" not in formatted
     assert "I checked this latest forecast for you today (August 21)." in formatted
+
+
+def test_a_model_written_source_note_is_removed_from_the_body() -> None:
+    """模型自己写在正文里的来源说明必须删掉，来源声明由页脚统一承担。
+
+    生产消息 125 的正文末尾出现「（以上天气信息来自武汉市气象台及中央气象台
+    2026年9月10日发布内容，仅供出行参考。）」，紧接着又是系统页脚的「这是我今天
+    帮您查到的最新预报」——同一件事说两遍。
+
+    更要紧的是它绕过了措辞控制：v1.28.0 把来源列举从页脚拿掉正是为了避开企业微信
+    的安全限制，而模型在正文里自由发挥的来源声明不受这个控制。这次措辞恰好没触发，
+    下次不一定，而且真触发了改页脚也救不回来。
+
+    正文里已有清除「参考来源：X」这类标签式写法的机制，漏的是自然语句形态。
+    """
+    formatted = format_tourism_reply(
+        "武汉今天多云到晴，最高25℃。"
+        "（以上天气信息来自武汉市气象台及中央气象台2026年9月10日发布内容，"
+        "仅供出行参考。）",
+        [("任意来源", "https://example.org/a")],
+        date(2026, 9, 10),
+        language="zh",
+        category="weather",
+    )
+
+    assert "以上天气信息来自" not in formatted
+    assert "武汉市气象台" not in formatted
+    assert "仅供出行参考" not in formatted
+    # 天气事实与系统页脚都必须完好。
+    assert "武汉今天多云到晴，最高25℃。" in formatted
+    assert "这是我今天（9月10日）帮您查到的最新预报。" in formatted
+
+
+def test_ordinary_sentences_containing_a_source_word_are_kept() -> None:
+    """判据必须有区分力：正文里普通的「来自」不能被当成来源说明删掉。"""
+    body = (
+        "东湖的水来自长江水系，沿岸绿道适合骑行。"
+        "黄鹤楼的现存建筑来自1985年重建。"
+    )
+    formatted = format_tourism_reply(
+        body,
+        [("任意来源", "https://example.org/a")],
+        date(2026, 9, 10),
+        language="zh",
+        category="tourism",
+    )
+
+    assert "东湖的水来自长江水系" in formatted
+    assert "黄鹤楼的现存建筑来自1985年重建" in formatted
