@@ -104,7 +104,11 @@ class DeepSeekContextSummarizer:
                         # category、statement、confidence 一个字都没写，evidence_type
                         # 也只给了 model_inference 一个取值，模型于是漏填三个必填字段
                         # 并猜了个不在枚举里的 evidence_type，校验必然失败。
-                        f"输出结构：{json.dumps(_SummaryPayload.model_json_schema(), ensure_ascii=False)}"
+                        "输出结构："
+                        + json.dumps(
+                            _SummaryPayload.model_json_schema(),
+                            ensure_ascii=False,
+                        )
                     ),
                 },
                 {
