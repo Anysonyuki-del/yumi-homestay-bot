@@ -261,6 +261,7 @@ class Worker[JobType: WorkerJob]:
         "complaint_review_generate",
         "guest_delivery_rewrite",
         "customer_tag_sync",
+        "customer_context_refresh",
         "wecom_process_message",
     }
 

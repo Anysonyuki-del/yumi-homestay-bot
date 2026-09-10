@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlencode
 
@@ -10,12 +11,14 @@ from homestay_bot.domain.models import Employee
 from homestay_bot.routes.admin_form_csrf import (
     CUSTOMER_CSRF_FAMILY,
     CUSTOMER_MERGE_CSRF_FAMILY,
+    TASK_CSRF_FAMILY,
     consume_form_csrf,
     drop_legacy_session_key,
     issue_form_csrf,
 )
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.query_params import empty_query_to_none
+from homestay_bot.routes.tasks import BULK_TASK_CSRF_ENTITY
 from homestay_bot.services.customer_admin_service import (
     CustomerDetailRequest,
     CustomerListFilters,
@@ -83,6 +86,11 @@ class CustomerAdminServicePort(Protocol):
         expected_version: int,
     ) -> None:
         """更正客户摘要。"""
+
+    async def refresh_context(
+        self, customer_id: int, administrator: Any, *, now: datetime
+    ) -> None:
+        """把摘要与记忆重算排入后台队列。"""
 
     async def delete_summary(
         self,
@@ -376,6 +384,13 @@ async def customer_detail(
                 family=CUSTOMER_CSRF_FAMILY,
                 object_id=customer_id,
             ),
+            # 服务任务栏的批量操作直接提交到 /employee/tasks 的既有路由，因此这里
+            # 签发的是任务族的批量令牌，而不是客户族令牌。
+            "bulk_task_csrf_token": await issue_form_csrf(
+                request,
+                family=TASK_CSRF_FAMILY,
+                entity_id=BULK_TASK_CSRF_ENTITY,
+            ),
             "page_title": detail["customer"].display_name,
             "active_nav": "customers",
         },
@@ -506,6 +521,33 @@ async def update_customer_summary(
             short_summary=short_summary,
             long_summary=long_summary,
             expected_version=expected_version,
+        )
+    except Exception as error:
+        _raise_page_error(error)
+    return _customer_redirect(customer_id, "memory")
+
+
+@router.post("/{customer_id}/context-refresh")
+async def refresh_customer_context(
+    request: Request,
+    customer_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """把该客户的摘要与记忆重算排入后台队列。
+
+    不在这里同步调模型：那会把请求挂到模型超时上限，也可能和每小时的后台维护撞上
+    同一客户的事务。页面因此只能提示「已排队」，不能显示成已完成。
+    """
+    administrator, service = await _customer_form_context(
+        request,
+        customer_id,
+        csrf_token,
+    )
+    try:
+        await service.refresh_context(
+            customer_id,
+            administrator,
+            now=datetime.now(UTC),
         )
     except Exception as error:
         _raise_page_error(error)

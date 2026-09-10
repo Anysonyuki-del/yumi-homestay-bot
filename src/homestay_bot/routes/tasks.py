@@ -352,7 +352,10 @@ async def _issue_csrf(request: Request, task_id: int) -> str:
     )
 
 
-_BULK_CSRF_ENTITY = 0
+# 批量任务操作的 CSRF 实体号。客户详情页的服务任务栏也签发这一族令牌，因此提升为
+# 公开常量：两处各写一个魔数 0 时，一旦有人改动就会让另一处的表单静默失效——CSRF
+# 错配从界面上看只是「点了没反应」，没有任何提示。
+BULK_TASK_CSRF_ENTITY = 0
 # 建单表单没有任务 id，用独立 entity，与批量(0)及任何任务(正数)都不撞。
 _CREATE_CSRF_ENTITY = -1
 
@@ -454,7 +457,7 @@ async def task_index(
             "task_statuses": list(BusinessTaskStatus),
             # 批量与勾选归档是管理员能力；给员工签发只会白占令牌额度。
             "bulk_csrf_token": (
-                await _issue_csrf(request, _BULK_CSRF_ENTITY)
+                await _issue_csrf(request, BULK_TASK_CSRF_ENTITY)
                 if employee.role is EmployeeRole.ADMIN
                 else ""
             ),
@@ -562,7 +565,7 @@ async def purge_selected_tasks(
     事故，提交者必须真的看过数量。
     """
     employee = await _current_employee(request)
-    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    await _consume_csrf(request, BULK_TASK_CSRF_ENTITY, csrf_token)
     selected = task_ids or []
     if confirm_count != len(selected):
         raise OperationRefused(
@@ -588,7 +591,7 @@ async def assign_selected_tasks(
 ) -> RedirectResponse:
     """把勾选的任务批量分派给同一名执行员工。"""
     employee = await _current_employee(request)
-    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    await _consume_csrf(request, BULK_TASK_CSRF_ENTITY, csrf_token)
     if assigned_employee_id <= 0:
         raise OperationRefused("请先选择要分派给哪位员工")
     try:
@@ -619,7 +622,7 @@ async def cancel_selected_tasks(
     看过数量，直接拒绝。脚本不可用时提交的确认数为 0，同样被这里挡下。
     """
     employee = await _current_employee(request)
-    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    await _consume_csrf(request, BULK_TASK_CSRF_ENTITY, csrf_token)
     selected = task_ids or []
     if confirm_count != len(selected) or not selected:
         raise OperationRefused(
@@ -648,7 +651,7 @@ async def archive_selected_tasks(
 ) -> RedirectResponse:
     """按勾选归档任务；混入开放态任务时整批拒绝。"""
     employee = await _current_employee(request)
-    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    await _consume_csrf(request, BULK_TASK_CSRF_ENTITY, csrf_token)
     try:
         await _get_service(request).archive_many(employee, task_ids or [])
     except OperationRefused as refused:
@@ -701,7 +704,7 @@ async def archive_filtered_tasks(
     实际归档的就是比用户看到的更宽的一批任务。
     """
     employee = await _current_employee(request)
-    await _consume_csrf(request, _BULK_CSRF_ENTITY, csrf_token)
+    await _consume_csrf(request, BULK_TASK_CSRF_ENTITY, csrf_token)
     if overdue:
         # 归档查询表达不了「逾期」，与其按更宽的范围执行，不如直接拒绝。
         raise OperationRefused(

@@ -1,10 +1,10 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import ARCHIVABLE_TASK_STATUSES, EmployeeRole
 from homestay_bot.domain.models import Employee
 from homestay_bot.services.customer_errors import (
     CustomerConflictError,
@@ -196,6 +196,11 @@ class CustomerAdminJobQueue(Protocol):
         """登记本地提交后的异步标签同步任务。"""
 
 
+# 手动重算的冷却窗口。后台维护本来每小时跑一次，这个窗口只用于挡住连点造成的
+# 重复模型计费，不影响「想立刻重算一次」这个合理需求。
+_CONTEXT_REFRESH_COOLDOWN = timedelta(minutes=10)
+
+
 class CustomerAdminService:
     """执行管理员 CRM 权限、脱敏展示和本地优先写入。"""
 
@@ -212,6 +217,8 @@ class CustomerAdminService:
         self._repository = repository
         self._cipher = cipher
         self._jobs = jobs
+        # 手动重算的冷却记录：按客户存上次触发时间，进程级即可——它挡的是连点。
+        self._context_refresh_at: dict[int, datetime] = {}
         self._tag_sync_enabled = tag_sync_enabled
         self._local_date_provider = local_date_provider or _wuhan_today
 
@@ -286,6 +293,42 @@ class CustomerAdminService:
         }
         self._localize_detail(result)
         return result
+
+    async def refresh_context(
+        self,
+        customer_id: int,
+        administrator: Employee,
+        *,
+        now: datetime,
+    ) -> None:
+        """手动重算该客户的分层摘要与结构化记忆。
+
+        走入队而不是在请求里同步调模型：同步会把请求挂到模型超时上限（45 秒），
+        还可能与每小时的后台维护撞上同一客户的事务。作业交给既有 worker，失败可
+        重试，页面只需提示「已排队」——不要假装已完成。
+
+        冷却窗口按客户独立计算。这个按钮每点一次都真实产生模型费用，而后台本来
+        每小时就会跑一次；「想立刻重算一次」是合理需求，一分钟内连点五次不是。
+        超出窗口时抛 CustomerConflictError 而不是静默忽略：静默会让人以为没生效
+        而继续点，反而点得更多。
+
+        生成出的记忆仍是候选，仍需人工在页面上逐条批准——本方法不绕过审核流程。
+        """
+        self._require_admin(administrator)
+        last = self._context_refresh_at.get(customer_id)
+        if last is not None and now - last < _CONTEXT_REFRESH_COOLDOWN:
+            remaining = _CONTEXT_REFRESH_COOLDOWN - (now - last)
+            minutes = max(1, int(remaining.total_seconds() // 60) + 1)
+            raise CustomerConflictError(
+                f"刚刚已经重算过，请 {minutes} 分钟后再试。"
+                "后台每小时也会自动更新一次。"
+            )
+        self._context_refresh_at[customer_id] = now
+        await self._jobs.enqueue(
+            "customer_context_refresh",
+            {"customer_id": customer_id},
+            dedupe_key=f"customer-context-refresh:{customer_id}:{now.isoformat()}",
+        )
 
     async def set_tags(
         self,
@@ -538,6 +581,7 @@ class CustomerAdminService:
                 order.get("check_in_date"),
                 order.get("check_out_date"),
             )
+        archivable_values = {state.value for state in ARCHIVABLE_TASK_STATUSES}
         for task in detail.get("tasks", []):
             status = CustomerAdminService._value(task.get("status"))
             task_type = CustomerAdminService._value(task.get("task_type"))
@@ -546,6 +590,11 @@ class CustomerAdminService:
             task["service_date_label"] = CustomerAdminService._date_label(
                 task.get("service_date")
             )
+            # 与 routes/tasks 的批量校验共用同一条规则：可归档==终态、可取消==非终态。
+            # 判定放在这里而不是模板，页面显示的可操作性才和服务端的接受条件一致；
+            # 两处各写一份时，界面上会出现「勾得上但提交被拒」的按钮。
+            task["can_archive"] = status in archivable_values
+            task["can_cancel"] = status not in archivable_values
         for complaint in detail.get("complaints", []):
             status = CustomerAdminService._value(complaint.get("status"))
             complaint["status_label"] = complaint_statuses.get(

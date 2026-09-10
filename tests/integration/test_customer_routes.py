@@ -134,7 +134,18 @@ class CustomerAdminStub:
         if tab == "service":
             return {
                 **base,
-                "tasks": [],
+                "tasks": [
+                    {
+                        "id": 11, "type_label": "保洁", "property_title": "东湖小院",
+                        "service_date_label": "9月9日", "status_label": "已完成",
+                        "can_archive": True, "can_cancel": False,
+                    },
+                    {
+                        "id": 12, "type_label": "维修", "property_title": "江景大床房",
+                        "service_date_label": "9月12日", "status_label": "待分派",
+                        "can_archive": False, "can_cancel": True,
+                    },
+                ],
                 "complaints": [],
                 "conversations": [
                     {
@@ -883,3 +894,61 @@ def test_memory_review_returns_to_the_memory_tab() -> None:
 
     assert response.status_code == 303
     assert "tab=memory" in response.headers["location"]
+
+
+def test_service_tab_offers_bulk_archive_and_cancel_to_admins() -> None:
+    """客户页的服务任务栏要能批量归档与取消，不能只是只读列表。
+
+    这一栏此前完全没有操作入口，运营要清理某位客户的历史任务只能去任务列表页逐条
+    筛。批量能力（含 CSRF、权限与确认计数保护）在 /employee/tasks 已经具备，这里
+    只接入口，不新增后端逻辑。
+    """
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    page = client.get("/employee/customers/7?tab=service")
+
+    assert page.status_code == 200
+    assert 'action="/employee/tasks/archive-selected"' in page.text
+    assert 'formaction="/employee/tasks/cancel-selected"' in page.text
+    assert 'name="task_ids" value="11"' in page.text
+    assert 'name="task_ids" value="12"' in page.text
+    # 客户页刻意不提供永久删除：不可恢复且牵涉墓碑，留在任务列表页做。
+    assert "purge-selected" not in page.text
+
+
+def test_the_bulk_token_on_the_customer_page_is_accepted_by_the_task_routes() -> None:
+    """客户页签发的批量令牌必须与任务路由同族同实体，否则功能会静默失效。
+
+    CSRF 的 family 或 entity 对不上时，表单提交只会被拒，页面不会有任何提示说明
+    是令牌问题——这类错配从界面上看就是「点了没反应」。
+    """
+    from homestay_bot.routes import tasks as task_routes
+
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    page = client.get("/employee/customers/7?tab=service")
+    token = re.search(
+        r'name="csrf_token" value="([^"]+)"[^>]*>\s*<input[^>]*name="return_to"',
+        page.text,
+    )
+    assert token, "服务标签页没有签发批量令牌"
+    # 令牌本身由 admin_form_csrf 校验，这里锁住两处用的是同一个实体常量。
+    assert task_routes.BULK_TASK_CSRF_ENTITY == 0
+
+
+def test_a_non_admin_cannot_reach_the_customer_page_at_all() -> None:
+    """非管理员整页都进不去，权限由 _current_admin 一处保证。
+
+    模板里刻意不再判 is_admin：这个页面只有管理员到得了，那个变量永远为真，留着
+    会让人误以为这里还有一道权限分支。真要有人放松了路由权限，页面上所有写操作
+    都会一起暴露，模板挡住两个按钮毫无意义——纵深防御应该加在路由层，不是这里。
+    """
+    client, _ = build_client(EmployeeRole.STAFF)
+    login(client)
+
+    page = client.get("/employee/customers/7?tab=service")
+
+    assert page.status_code == 403
+    assert "archive-selected" not in page.text

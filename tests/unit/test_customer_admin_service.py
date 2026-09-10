@@ -1,15 +1,20 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
 
-from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.enums import (
+    ARCHIVABLE_TASK_STATUSES,
+    BusinessTaskStatus,
+    EmployeeRole,
+)
 from homestay_bot.services.customer_admin_service import (
     CustomerAdminService,
     CustomerDetailRequest,
     CustomerListFilters,
 )
+from homestay_bot.services.customer_errors import CustomerConflictError
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 
 
@@ -20,6 +25,8 @@ def employee(role=EmployeeRole.ADMIN):
 
 class CustomerAdminRepositoryStub:
     """记录 CRM 管理服务写操作。"""
+
+    tasks: list[dict] = []
 
     def __init__(self, cipher) -> None:
         """初始化一个带加密手机号的客户。"""
@@ -53,6 +60,7 @@ class CustomerAdminRepositoryStub:
             "summary": None,
             "memories": [],
             "merge_suggestions": [],
+            "tasks": list(self.tasks),
         }
 
     async def latest_stay_notes(self, customer_ids, *, today):
@@ -553,3 +561,112 @@ async def test_structured_memory_review_rejects_unknown_decision() -> None:
         )
 
     assert repository.memory_reviews == []
+
+
+@pytest.mark.asyncio
+async def test_task_actionability_follows_the_same_rule_as_task_routes() -> None:
+    """客户页给出的可归档／可取消，必须与 routes/tasks 的批量校验判定一致。
+
+    两处各写一份规则时，界面会出现「勾得上但提交被拒」的按钮：用户看到的是点了
+    没反应，服务端其实明确拒绝了。规则来自 ARCHIVABLE_TASK_STATUSES——可归档==终态，
+    可取消==非终态，两者互斥且覆盖全部状态。
+    """
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    repository.tasks = [
+        {"id": index, "status": state, "task_type": "cleaning", "service_date": None}
+        for index, state in enumerate(BusinessTaskStatus, start=1)
+    ]
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+        local_date_provider=lambda: date(2026, 8, 14),
+    )
+
+    detail = await service.get_detail(7, employee())
+
+    seen = {task["id"]: task for task in detail["tasks"]}
+    assert len(seen) == len(BusinessTaskStatus), "有状态在投影里丢失了"
+    for index, state in enumerate(BusinessTaskStatus, start=1):
+        task = seen[index]
+        expected_archive = state in ARCHIVABLE_TASK_STATUSES
+        assert task["can_archive"] is expected_archive, (
+            f"{state.value} 的可归档判定与 ARCHIVABLE_TASK_STATUSES 不一致"
+        )
+        # 互斥且穷尽：没有任何状态既不能归档也不能取消，否则那条任务在页面上
+        # 会有复选框却两个按钮都用不了。
+        assert task["can_cancel"] is not expected_archive
+
+
+@pytest.mark.asyncio
+async def test_refreshing_context_enqueues_a_job_instead_of_calling_the_model() -> None:
+    """手动重算摘要与记忆走入队，不在请求里同步调模型。
+
+    同步执行会让请求挂到模型超时上限（45 秒），还可能与每小时的后台维护撞上同一
+    客户的事务。入队与既有 worker 架构一致，失败可重试，也不阻塞页面。
+    """
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    jobs = JobQueueStub()
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        jobs,
+        tag_sync_enabled=False,
+        local_date_provider=lambda: date(2026, 8, 14),
+    )
+
+    await service.refresh_context(7, employee(), now=datetime(2026, 8, 14, 10, 0, tzinfo=UTC))
+
+    assert len(jobs.items) == 1
+    assert jobs.items[0]["job_type"] == "customer_context_refresh"
+    assert jobs.items[0]["payload"] == {"customer_id": 7}
+
+
+@pytest.mark.asyncio
+async def test_a_second_refresh_inside_the_cooldown_is_refused() -> None:
+    """冷却窗口内重复点击必须被明确拒绝，而不是静默丢弃或重复计费。
+
+    这个按钮每点一次都真实产生模型费用，而后台本来每小时就会跑一次；「想立刻重算
+    一次」是合理需求，一分钟内连点五次不是。拒绝要能被页面显示出来，静默忽略会让
+    人以为没生效而继续点。
+    """
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    service = CustomerAdminService(
+        CustomerAdminRepositoryStub(cipher),
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+        local_date_provider=lambda: date(2026, 8, 14),
+    )
+    start = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+
+    await service.refresh_context(7, employee(), now=start)
+
+    with pytest.raises(CustomerConflictError):
+        await service.refresh_context(
+            7, employee(), now=start + timedelta(minutes=9)
+        )
+    # 窗口过去后可以再次触发。
+    await service.refresh_context(7, employee(), now=start + timedelta(minutes=11))
+
+
+@pytest.mark.asyncio
+async def test_the_cooldown_is_tracked_per_customer() -> None:
+    """冷却按客户独立计算：给 A 重算不该挡住 B。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    service = CustomerAdminService(
+        repository,
+        cipher,
+        JobQueueStub(),
+        tag_sync_enabled=False,
+        local_date_provider=lambda: date(2026, 8, 14),
+    )
+    start = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+
+    await service.refresh_context(7, employee(), now=start)
+    repository.customer.id = 8
+    await service.refresh_context(8, employee(), now=start)

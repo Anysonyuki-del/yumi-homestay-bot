@@ -2089,6 +2089,22 @@ class SessionCustomerAdminService:
             )
             await session.commit()
 
+    async def refresh_context(
+        self,
+        customer_id: int,
+        administrator: Employee,
+        *,
+        now: datetime,
+    ) -> None:
+        """把该客户的摘要与记忆重算排入后台队列。"""
+        async with self._factory() as session:
+            await self._service(session).refresh_context(
+                customer_id,
+                administrator,
+                now=now,
+            )
+            await session.commit()
+
     async def delete_summary(
         self,
         customer_id: int,
@@ -3527,6 +3543,30 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return handle_faq_draft
 
+    def build_context_refresh_handler(
+        session: AsyncSession,
+        bundle: RuntimeClientBundle,
+    ) -> JobHandler:
+        """为管理员手动触发的摘要与记忆重算装配上下文维护服务。"""
+
+        async def handle(payload: dict[str, Any]) -> None:
+            """重算单个客户的分层摘要与结构化记忆。
+
+            与后台每小时的维护循环调用同一个 maintain_customer，不另立一套逻辑：
+            手动入口只是换了触发方式，生成规则、记忆审核状态都必须完全一致。
+            """
+            service = ContextRetentionService(
+                SQLAlchemyContextRepository(session),
+                bundle.context_summarizer,
+                before_external=session.commit,
+            )
+            await service.maintain_customer(
+                int(payload["customer_id"]),
+                datetime.now(UTC),
+            )
+
+        return handle
+
     def build_complaint_review_handler(
         session: AsyncSession,
         bundle: RuntimeClientBundle,
@@ -3700,6 +3740,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             ),
             "guest_delivery_failure_compensate": (
                 build_delivery_compensation_handler(session, bundle)
+            ),
+            "customer_context_refresh": build_context_refresh_handler(
+                session,
+                bundle,
             ),
             "wecom_process_message": lambda payload: handle_deferred_message(
                 payload,
