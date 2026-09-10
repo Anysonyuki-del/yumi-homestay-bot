@@ -31,6 +31,7 @@ from homestay_bot.domain.models import (
     CustomerTag,
     CustomerTagLink,
     Employee,
+    Job,
     PropertyProfile,
     StayOrder,
 )
@@ -885,6 +886,27 @@ class SQLAlchemyCustomerRepository:
             "orders": int(row.orders),
             "tasks": int(row.tasks),
         }
+
+    async def latest_context_refresh_at(self, customer_id: int) -> datetime | None:
+        """锁定客户后读取最近重算时间；调用方须在同一事务内检查冷却并入队。"""
+        locked_id = await self._session.scalar(
+            select(Customer.id)
+            .where(Customer.id == customer_id, Customer.merged_into_customer_id.is_(None))
+            .with_for_update()
+        )
+        if locked_id is None:
+            raise CustomerNotFoundError("客户不存在或已经合并")
+        last = await self._session.scalar(
+            select(Job.created_at)
+            .where(
+                Job.job_type == "customer_context_refresh",
+                Job.dedupe_key.startswith(f"customer-context-refresh:{customer_id}:"),
+            )
+            .order_by(Job.created_at.desc(), Job.id.desc())
+            .limit(1)
+        )
+        # SQLite 返回无时区时间；数据库创建时间统一按 UTC 解读。
+        return last.replace(tzinfo=UTC) if last is not None and last.tzinfo is None else last
 
     async def replace_tags(
         self,

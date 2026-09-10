@@ -109,19 +109,9 @@ class EmergencyService:
     def safety_reply(
         self, emergency: EmergencyClassification, language: Language
     ) -> str:
-        """按危险类别返回固定安全提示，不同危险的第一步动作并不相同。
+        """按危险类别返回固定安全提示，非生命危险的 access 沿用通用文案。
 
-        此前只有 fire 有专属文案，gas、electric、medical、violence 全部退回同一句
-        「请先确保自身安全，不要自行处理故障。」。生产验收时「房间里有煤气味」拿到
-        的正是这句——分类器已判成 gas 并写进审计（emergency:gas），文案却没用上这个
-        结果。对燃气泄漏而言它信息量不足，客人可能留在房间里等管家，而开关一次电灯
-        就可能引爆。
-
-        文案必须命中 guest_reply_policy 的高危安全句白名单，否则会被当成非安全句
-        过滤掉、只剩固定收尾，而且不会有任何报错。白名单里早已预留「开窗通风」
-        「切断电源」「拨打119/110/120」等词，说明按类别给指令本就是既定设计。
-
-        access（进不去、被锁在门外）不涉及人身危险，继续使用通用文案。
+        每句必须通过 guest_reply_policy 的安全过滤，避免关键处置指令被静默删除。
         """
         table = _EN_SAFETY_TEXTS if language is Language.EN else _ZH_SAFETY_TEXTS
         generic = (

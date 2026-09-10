@@ -46,12 +46,6 @@ from homestay_bot.services.customer_memory_policy import (
 logger = logging.getLogger(__name__)
 
 
-def _supersede_reason(correction_is_proven: bool) -> str:
-    """区分两种自动替代的来由，事后能从状态原因看出是哪一种。"""
-    if correction_is_proven:
-        return "客户或员工明确纠正"
-    return "同主题出现证据不弱于既有的新陈述"
-
 
 class SQLAlchemyContextRepository:
     """按客户隔离读取摘要候选并原子保存分层摘要。"""
@@ -657,6 +651,30 @@ class SQLAlchemyContextRepository:
                 candidate.confidence,
                 [(item.evidence_type, item.confidence) for item in active_conflicts],
             )
+            # 两条候选路径共用冲突处理；候选自身的激活与版本链仍由各分支维护。
+            if status is CustomerMemoryStatus.ACTIVE and active_conflicts:
+                conflict_status = (
+                    CustomerMemoryStatus.SUPERSEDED
+                    if may_supersede
+                    else CustomerMemoryStatus.DISPUTED
+                )
+                reason = (
+                    "客户或员工明确纠正" if correction_is_proven
+                    else "同主题出现证据不弱于既有的新陈述" if may_supersede
+                    else "同一主题存在冲突陈述"
+                )
+                for item in active_conflicts:
+                    previous_status = item.status
+                    item.status = conflict_status
+                    item.status_reason = reason
+                    item.version += 1
+                    self._add_memory_event(
+                        item,
+                        conflict_status.value,
+                        previous_status=previous_status,
+                        reason=reason,
+                        occurred_at=now,
+                    )
             if duplicate is not None:
                 duplicate.confidence = max(duplicate.confidence, candidate.confidence)
                 selected_evidence = stronger_evidence(duplicate.evidence_type, evidence)
@@ -689,31 +707,7 @@ class SQLAlchemyContextRepository:
                     if active_conflicts and not may_supersede:
                         duplicate.status = CustomerMemoryStatus.DISPUTED
                         duplicate.status_reason = "同一主题存在冲突陈述"
-                        for item in active_conflicts:
-                            active_previous_status = item.status
-                            item.status = CustomerMemoryStatus.DISPUTED
-                            item.status_reason = "同一主题存在冲突陈述"
-                            item.version += 1
-                            self._add_memory_event(
-                                item,
-                                "disputed",
-                                previous_status=active_previous_status,
-                                reason=item.status_reason,
-                                occurred_at=now,
-                            )
                     else:
-                        for item in active_conflicts:
-                            active_previous_status = item.status
-                            item.status = CustomerMemoryStatus.SUPERSEDED
-                            item.status_reason = _supersede_reason(correction_is_proven)
-                            item.version += 1
-                            self._add_memory_event(
-                                item,
-                                "superseded",
-                                previous_status=active_previous_status,
-                                reason=item.status_reason,
-                                occurred_at=now,
-                            )
                         duplicate.status = CustomerMemoryStatus.ACTIVE
                         duplicate.confirmed_at = now
                         duplicate.status_reason = None
@@ -736,33 +730,9 @@ class SQLAlchemyContextRepository:
             supersedes_id = None
             if status is CustomerMemoryStatus.ACTIVE and active_conflicts:
                 if may_supersede:
-                    for item in active_conflicts:
-                        previous_status = item.status
-                        item.status = CustomerMemoryStatus.SUPERSEDED
-                        item.status_reason = _supersede_reason(correction_is_proven)
-                        item.version += 1
-                        self._add_memory_event(
-                            item,
-                            "superseded",
-                            previous_status=previous_status,
-                            reason=item.status_reason,
-                            occurred_at=now,
-                        )
                     supersedes_id = active_conflicts[-1].id
                 else:
                     status = CustomerMemoryStatus.DISPUTED
-                    for item in active_conflicts:
-                        previous_status = item.status
-                        item.status = CustomerMemoryStatus.DISPUTED
-                        item.status_reason = "同一主题存在冲突陈述"
-                        item.version += 1
-                        self._add_memory_event(
-                            item,
-                            "disputed",
-                            previous_status=previous_status,
-                            reason=item.status_reason,
-                            occurred_at=now,
-                        )
 
             memory = CustomerMemoryItem(
                 customer_id=customer_id,

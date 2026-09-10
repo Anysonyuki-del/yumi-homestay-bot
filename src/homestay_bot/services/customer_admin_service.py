@@ -76,6 +76,9 @@ class MergeCustomerCard:
 class CustomerAdminRepositoryPort(Protocol):
     """定义管理员 CRM 页面所需的查询和写操作。"""
 
+    async def latest_context_refresh_at(self, customer_id: int) -> datetime | None:
+        """锁定客户并返回最近重算作业时间，锁保持到入队事务结束。"""
+
     async def list_customers(
         self,
         query: str | CustomerListFilters | None,
@@ -217,8 +220,6 @@ class CustomerAdminService:
         self._repository = repository
         self._cipher = cipher
         self._jobs = jobs
-        # 手动重算的冷却记录：按客户存上次触发时间，进程级即可——它挡的是连点。
-        self._context_refresh_at: dict[int, datetime] = {}
         self._tag_sync_enabled = tag_sync_enabled
         self._local_date_provider = local_date_provider or _wuhan_today
 
@@ -301,21 +302,13 @@ class CustomerAdminService:
         *,
         now: datetime,
     ) -> None:
-        """手动重算该客户的分层摘要与结构化记忆。
+        """按客户冷却后入队，摘要及记忆沿用后台维护与自动晋升规则。
 
-        走入队而不是在请求里同步调模型：同步会把请求挂到模型超时上限（45 秒），
-        还可能与每小时的后台维护撞上同一客户的事务。作业交给既有 worker，失败可
-        重试，页面只需提示「已排队」——不要假装已完成。
-
-        冷却窗口按客户独立计算。这个按钮每点一次都真实产生模型费用，而后台本来
-        每小时就会跑一次；「想立刻重算一次」是合理需求，一分钟内连点五次不是。
-        超出窗口时抛 CustomerConflictError 而不是静默忽略：静默会让人以为没生效
-        而继续点，反而点得更多。
-
-        生成出的记忆仍是候选，仍需人工在页面上逐条批准——本方法不绕过审核流程。
+        冷却依据已提交的作业，客户锁覆盖检查到入队，防止跨请求或进程重复触发。
+        入队失败随事务回滚，不消耗冷却窗口；本方法不在请求内调用模型。
         """
         self._require_admin(administrator)
-        last = self._context_refresh_at.get(customer_id)
+        last = await self._repository.latest_context_refresh_at(customer_id)
         if last is not None and now - last < _CONTEXT_REFRESH_COOLDOWN:
             remaining = _CONTEXT_REFRESH_COOLDOWN - (now - last)
             minutes = max(1, int(remaining.total_seconds() // 60) + 1)
@@ -323,7 +316,6 @@ class CustomerAdminService:
                 f"刚刚已经重算过，请 {minutes} 分钟后再试。"
                 "后台每小时也会自动更新一次。"
             )
-        self._context_refresh_at[customer_id] = now
         await self._jobs.enqueue(
             "customer_context_refresh",
             {"customer_id": customer_id},

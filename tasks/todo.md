@@ -456,3 +456,24 @@ Codex 只跑了 4 个相关测试文件，全量套件里 `test_admin_assets.py`
 
 发现并修复的安全缺陷见 v1.32.0。遗留痕迹：客诉记录 3 只能 cancel 不能删；
 会话 1 仍为 HUMAN_ACTIVE（单向闩锁，无回退路径）。
+
+## 2026-09-11 Codex 审查修复（用户已回复“开始修复”）
+
+实施依据：本轮审查发现请求级 CustomerAdminService 实例无法保存跨请求冷却；用户确认修复并执行列出的局部精简。
+
+- [x] 冷却回归：tests/integration/test_customer_repository.py 经 SessionCustomerAdminService 的独立事务复现重复入队；覆盖按客户隔离、十分钟边界及回滚。
+- [x] 冷却实现：repositories/customers.py 锁定未合并客户并读取最近 customer_context_refresh 作业创建时间；services/customer_admin_service.py 移除实例字典，在同一事务校验后沿既有队列入队。复用现有表，不增加迁移；生产 PostgreSQL 客户行锁串行化同客户请求。
+- [x] 等价收敛：repositories/context.py::_save_memory_candidates 合并重复冲突状态写入；customer_memory_policy.py 去除恒真条件；templates/customers/detail.html 去除恒真包装、纠正审核说明；integrations/tourism.py 删除未使用 logger；emergency_service.py 与上述函数缩短历史叙述注释，保留职责及安全约束。
+- [x] 最终验证：相关单元/集成测试、Ruff、mypy、差异自审；不调用真实模型/业务接口，不提交、不部署。SQLite 验证持久化与事务，不作为 PostgreSQL 并发行锁验收。
+
+验证结果：跨请求红测确认旧实现不会拒绝重复请求，修复后通过；记忆冲突四种组合在提交前实现及当前实现均通过。最终相关测试 357 passed（1 条既有 Starlette 弃用警告），修改文件 Ruff 通过，mypy 133 个源码文件通过，git diff --check 通过。业务源码净减少 47 行。未跑全量及 PostgreSQL 并发/生产验收：本次按受影响路径验证，SQLite 只证明跨事务持久化和入队失败后的重试行为。
+
+## v1.35.1 发布（2026-09-11，用户授权提交、推送、部署）
+
+- [x] 更新 pyproject.toml 与 CHANGELOG.md，范围为本轮修复。
+- [x] 发布验证：1600 passed、15 skipped、17 warnings；真实外部契约未启用；Ruff 与 mypy（133 个源码文件）通过。
+- [x] 在隔离 PostgreSQL 数据库中验证客户行锁串行化、重复拒绝及事务回滚后可重试；临时数据库已删除，未运行业务 worker。
+- [x] 核验生产基线：源码 dd2297a，版本 1.35.0，迁移 0026_settle_retry_latch；诊断 revision 2，百居易回调从未收到导致既有 degraded。
+- [x] 完整受限权限备份：源码、.env、私有上传及 PostgreSQL custom dump；356 个转储条目，备份文件权限 600。
+
+发布顺序：最终 Ponytail 审查 → 提交并推送 main / v1.35.1 → 仅替换 API → 核对版本、迁移、PostgreSQL 连续运行、健康与登录页面。提交后操作及验收结果记录在本轮会话与受忽略的 .stage 发布日志，避免为记录发布结果再产生一个未部署提交。

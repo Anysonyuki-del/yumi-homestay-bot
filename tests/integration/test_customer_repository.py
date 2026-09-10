@@ -1792,3 +1792,52 @@ async def test_merge_changes_are_rolled_back_when_final_flush_fails(
         assert audit_count == 0
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_context_refresh_cooldown_survives_new_request_transactions() -> None:
+    """真实装配每次新建服务；冷却应跨请求持久化、按客户隔离且恰满十分钟可重试。"""
+    from datetime import timedelta
+    from unittest.mock import patch
+
+    from homestay_bot.application import SessionCustomerAdminService
+    from homestay_bot.domain.enums import JobStatus
+    from homestay_bot.domain.models import Job
+    from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    administrator = SimpleNamespace(id=1, role=EmployeeRole.ADMIN, is_active=True)
+    try:
+        async with factory() as session:
+            session.add_all([
+                Customer(id=7, display_name="客户甲"),
+                Customer(id=8, display_name="客户乙"),
+            ])
+            await session.commit()
+        service = SessionCustomerAdminService(factory, cipher)
+        await service.refresh_context(7, administrator, now=datetime.now(UTC))
+        async with factory() as session:
+            first = await session.scalar(select(Job))
+            start = first.created_at.replace(tzinfo=UTC)
+            first.status = JobStatus.COMPLETED
+            await session.commit()
+        # 重建外层装配也不能清掉冷却，已完成的任务同样保留十分钟窗口。
+        service = SessionCustomerAdminService(factory, cipher)
+        with pytest.raises(CustomerConflictError):
+            await service.refresh_context(7, administrator, now=start + timedelta(minutes=9))
+        # 入队异常回滚后，不应留下不存在作业的冷却记录。
+        with (
+            patch.object(SQLAlchemyJobRepository, "enqueue", side_effect=RuntimeError("入队失败")),
+            pytest.raises(RuntimeError, match="入队失败"),
+        ):
+            await service.refresh_context(8, administrator, now=start + timedelta(minutes=9))
+        await service.refresh_context(8, administrator, now=start + timedelta(minutes=9))
+        await service.refresh_context(7, administrator, now=start + timedelta(minutes=10))
+        async with factory() as session:
+            assert await session.scalar(select(func.count(Job.id))) == 3
+    finally:
+        await engine.dispose()

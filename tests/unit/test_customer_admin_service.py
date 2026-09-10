@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +14,6 @@ from homestay_bot.services.customer_admin_service import (
     CustomerDetailRequest,
     CustomerListFilters,
 )
-from homestay_bot.services.customer_errors import CustomerConflictError
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 
 
@@ -27,6 +26,10 @@ class CustomerAdminRepositoryStub:
     """记录 CRM 管理服务写操作。"""
 
     tasks: list[dict] = []
+
+    async def latest_context_refresh_at(self, customer_id):
+        """入队单测默认没有历史作业；跨请求冷却由真实仓储集成测试覆盖。"""
+        return None
 
     def __init__(self, cipher) -> None:
         """初始化一个带加密手机号的客户。"""
@@ -623,50 +626,3 @@ async def test_refreshing_context_enqueues_a_job_instead_of_calling_the_model() 
     assert len(jobs.items) == 1
     assert jobs.items[0]["job_type"] == "customer_context_refresh"
     assert jobs.items[0]["payload"] == {"customer_id": 7}
-
-
-@pytest.mark.asyncio
-async def test_a_second_refresh_inside_the_cooldown_is_refused() -> None:
-    """冷却窗口内重复点击必须被明确拒绝，而不是静默丢弃或重复计费。
-
-    这个按钮每点一次都真实产生模型费用，而后台本来每小时就会跑一次；「想立刻重算
-    一次」是合理需求，一分钟内连点五次不是。拒绝要能被页面显示出来，静默忽略会让
-    人以为没生效而继续点。
-    """
-    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
-    service = CustomerAdminService(
-        CustomerAdminRepositoryStub(cipher),
-        cipher,
-        JobQueueStub(),
-        tag_sync_enabled=False,
-        local_date_provider=lambda: date(2026, 8, 14),
-    )
-    start = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
-
-    await service.refresh_context(7, employee(), now=start)
-
-    with pytest.raises(CustomerConflictError):
-        await service.refresh_context(
-            7, employee(), now=start + timedelta(minutes=9)
-        )
-    # 窗口过去后可以再次触发。
-    await service.refresh_context(7, employee(), now=start + timedelta(minutes=11))
-
-
-@pytest.mark.asyncio
-async def test_the_cooldown_is_tracked_per_customer() -> None:
-    """冷却按客户独立计算：给 A 重算不该挡住 B。"""
-    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
-    repository = CustomerAdminRepositoryStub(cipher)
-    service = CustomerAdminService(
-        repository,
-        cipher,
-        JobQueueStub(),
-        tag_sync_enabled=False,
-        local_date_provider=lambda: date(2026, 8, 14),
-    )
-    start = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
-
-    await service.refresh_context(7, employee(), now=start)
-    repository.customer.id = 8
-    await service.refresh_context(8, employee(), now=start)

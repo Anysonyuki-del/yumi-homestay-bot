@@ -46,7 +46,7 @@
       <th scope="col">状态</th><th scope="col"><span class="visually-hidden">操作</span></th>
     </tr></thead>
     <tbody>{% for task in tasks %}<tr>
-      <td class="select-cell">{% if task.can_archive or task.can_cancel %}<input type="checkbox" name="task_ids" value="{{ task.id }}" aria-label="选择任务 {{ task.id }}">{% endif %}</td>
+      <td class="select-cell"><input type="checkbox" name="task_ids" value="{{ task.id }}" aria-label="选择任务 {{ task.id }}"></td>
       <td><strong>{{ task.type_label }}</strong></td>
       <td>{{ task.service_date_label }}</td>
       <td>{{ task.property_title or "待确认房源" }}</td>
@@ -55,7 +55,7 @@
     </tr>{% endfor %}</tbody>
   </table></div>
   <ul class="mobile-card-list clean-list">{% for task in tasks %}<li>
-    {% if task.can_archive or task.can_cancel %}<label class="card-select"><input type="checkbox" name="task_ids" value="{{ task.id }}"><span>选择</span></label>{% endif %}
+    <label class="card-select"><input type="checkbox" name="task_ids" value="{{ task.id }}"><span>选择</span></label>
     <a class="mobile-record-card" href="/employee/tasks/{{ task.id }}"><span><strong>{{ task.type_label }}</strong> {{ ui.badge(task.status_label, "warning" if task.can_cancel else "neutral") }}</span><small>{{ task.service_date_label }} · {{ task.property_title or "待确认房源" }}</small></a>
   </li>{% endfor %}</ul>
   <div class="selection-actions">
@@ -75,8 +75,8 @@
 {% if active_tab == "memory" %}
 <section class="detail-section panel panel--padded"><h2>AI 客户摘要</h2><form method="post" action="/employee/customers/{{ customer.id }}/summary" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="expected_version" value="{{ summary.version if summary else 0 }}"><label>七天内摘要<textarea name="short_summary" maxlength="4000">{{ summary.short_summary if summary else "" }}</textarea></label><label>长期摘要<textarea name="long_summary" maxlength="4000">{{ summary.long_summary if summary else "" }}</textarea></label><button type="submit">保存摘要</button></form>{% if summary and summary.unresolved_items %}<p class="field-help">历史待确认项（只读）：{{ summary.unresolved_items|join("；") }}</p>{% endif %}
 {# 手动重算走后台队列，因此文案只能说「已排队」，不能说成已完成：模型调用要几十秒，
-   页面刷新时多半还没跑完。生成出的记忆仍是候选，仍需在下方逐条批准。 #}
-<form method="post" action="/employee/customers/{{ customer.id }}/context-refresh" data-confirm="确定重新生成这位客户的摘要与结构化记忆吗？这会调用一次 AI，生成的记忆仍需您逐条审核。">
+   页面刷新时多半还没跑完。记忆沿用自动晋升规则，其余候选在下方人工复核。 #}
+<form method="post" action="/employee/customers/{{ customer.id }}/context-refresh" data-confirm="确定重新生成这位客户的摘要与结构化记忆吗？后台将按需调用 AI，符合条件的记忆会自动生效，其余候选需人工复核。">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <button class="button--secondary" type="submit">重新生成摘要与记忆</button>
   <span class="field-help">排入后台队列，通常一分钟内完成，完成后刷新本页查看。后台每小时也会自动更新一次。</span>

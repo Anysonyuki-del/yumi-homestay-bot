@@ -167,26 +167,8 @@ def normalize_subject_key(subject_key: str) -> str:
 
 
 def can_auto_activate_subject(subject_key: str) -> bool:
-    """判断主题是否允许自动晋级。
-
-    此前是一张只有七个主题的白名单（宠物名、楼层、安静、床型、沟通方式、饮食）。
-    模型生成的 subject_key 是自由文本，落在名单之外的一律停在候选等人工——2026-09-11
-    生产实测的四条候选没有一条在名单内，自动通道因此从未真正打开过，客户一多人工就
-    追不上。白名单要穷举模型可能生成的主题，注定追不上真实输出。
-
-    改为不按主题设限，把关交给其余判据：类别必须是稳定型（偏好或已确认事实）、
-    原文可验证、证据不得是模型推断、置信度达阈值，另有动态业务数据与指令注入两道
-    内容防线。主题本身不再是准入条件。
-
-    唯一仍被排除的是兜底主题 general：它表示模型没能给出有意义的主题，这类记忆质量
-    存疑；更要紧的是同一客户下所有 general 记忆共用一个 subject_key，会被判定为同主题
-    冲突，自动替代时互相覆盖，越攒越乱。
-
-    保留此函数而不是删除调用点：晋升判据集中在 _initial_memory_status 一处，将来若
-    需要按主题设限（例如出现被反复误提取的主题），改这里即可。
-    """
-    normalized = normalize_subject_key(subject_key)
-    return bool(normalized) and normalized != _FALLBACK_SUBJECT
+    """排除无法归类的 general，避免无关记忆共用主题后自动互相替代。"""
+    return normalize_subject_key(subject_key) != _FALLBACK_SUBJECT
 
 
 def is_dynamic_memory_text(text: str) -> bool:

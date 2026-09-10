@@ -1,9 +1,6 @@
-import logging
 import re
 from datetime import date
 from typing import Literal
-
-logger = logging.getLogger(__name__)
 
 WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
 TourismQueryMode = Literal["none", "stable", "live"]

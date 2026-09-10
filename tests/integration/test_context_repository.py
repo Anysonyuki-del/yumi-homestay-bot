@@ -17,6 +17,7 @@ from homestay_bot.domain.models import (
     BusinessTask,
     Conversation,
     Customer,
+    CustomerMemoryEvent,
     CustomerMemoryItem,
     Message,
     PropertyProfile,
@@ -478,14 +479,10 @@ async def test_duplicate_model_inference_cannot_downgrade_explicit_evidence() ->
 
 
 @pytest.mark.asyncio
-async def test_a_stronger_new_statement_supersedes_the_old_one() -> None:
-    """同主题出现证据不弱于既有的新陈述时，旧值让位、新值生效，且始终只有一个有效值。
-
-    此前这种情况会把新旧一起打成 DISPUTED——客人明明刚说了「我喜欢低楼层」，结果
-    连原来那条「喜欢高楼层」也一并不能用了，等于宁可什么都不记，而这正是人工负担
-    的来源。现在按证据强度定胜负；反方向（更弱的证据想覆盖）仍然只能进争议，见
-    test_a_weaker_new_statement_still_goes_to_dispute。
-    """
+@pytest.mark.parametrize("duplicate", [False, True])
+@pytest.mark.parametrize("confidence", [0.9, 0.99])
+async def test_memory_conflicts_keep_versions_and_events(duplicate, confidence) -> None:
+    """新增与重复候选共用冲突处理，替代/争议均保留版本和事件。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -498,34 +495,35 @@ async def test_a_stronger_new_statement_supersedes_the_old_one() -> None:
             external_message_id="memory-legacy-conflict",
             content="我喜欢低楼层",
         )
-        session.add_all(
-            [
-                CustomerMemoryItem(
-                    customer_id=customer.id,
-                    subject_key="floor_preference",
-                    category=CustomerMemoryCategory.PREFERENCE,
-                    statement="客户喜欢高楼层",
-                    status=CustomerMemoryStatus.ACTIVE,
-                    evidence_type=CustomerMemoryEvidenceType.USER_EXPLICIT,
-                    verified_at=now,
-                    confidence=0.95,
-                    confirmed_at=now,
-                    review_at=now + timedelta(days=180),
-                    expires_at=now + timedelta(days=365),
-                ),
-                CustomerMemoryItem(
-                    customer_id=customer.id,
-                    subject_key="floor_preference",
-                    category=CustomerMemoryCategory.PREFERENCE,
-                    statement="客户喜欢低楼层",
-                    status=CustomerMemoryStatus.CANDIDATE,
-                    evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
-                    confidence=0.7,
-                    review_at=now + timedelta(days=30),
-                    expires_at=now + timedelta(days=60),
-                ),
-            ]
-        )
+        existing = [
+            CustomerMemoryItem(
+                customer_id=customer.id,
+                version=5,
+                subject_key="floor_preference",
+                category=CustomerMemoryCategory.PREFERENCE,
+                statement="客户喜欢高楼层",
+                status=CustomerMemoryStatus.ACTIVE,
+                evidence_type=CustomerMemoryEvidenceType.USER_EXPLICIT,
+                verified_at=now,
+                confidence=0.95,
+                confirmed_at=now,
+                review_at=now + timedelta(days=180),
+                expires_at=now + timedelta(days=365),
+            ),
+            CustomerMemoryItem(
+                customer_id=customer.id,
+                version=5,
+                subject_key="floor_preference",
+                category=CustomerMemoryCategory.PREFERENCE,
+                statement="客户喜欢低楼层",
+                status=CustomerMemoryStatus.CANDIDATE,
+                evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
+                confidence=0.7,
+                review_at=now + timedelta(days=30),
+                expires_at=now + timedelta(days=60),
+            ),
+        ]
+        session.add_all(existing if duplicate else existing[:1])
         await session.flush()
         repository = SQLAlchemyContextRepository(session)
         candidate = CustomerMemoryCandidate(
@@ -534,7 +532,7 @@ async def test_a_stronger_new_statement_supersedes_the_old_one() -> None:
             "客户喜欢低楼层",
             CustomerMemoryEvidenceType.USER_EXPLICIT,
             source.external_message_id,
-            0.99,
+            confidence,
             source_excerpt="我喜欢低楼层",
         )
 
@@ -552,21 +550,31 @@ async def test_a_stronger_new_statement_supersedes_the_old_one() -> None:
             ).all()
         )
 
+        expected = (
+            CustomerMemoryStatus.SUPERSEDED if confidence == 0.99
+            else CustomerMemoryStatus.DISPUTED
+        )
         assert [memory.status for memory in memories] == [
-            CustomerMemoryStatus.SUPERSEDED,
-            CustomerMemoryStatus.ACTIVE,
+            expected,
+            CustomerMemoryStatus.ACTIVE if confidence == 0.99 else CustomerMemoryStatus.DISPUTED,
         ]
-        # 核心保证不变：同一主题下永远只有一个有效值。
-        active = [
-            memory
-            for memory in memories
-            if memory.status is CustomerMemoryStatus.ACTIVE
-        ]
-        assert len(active) == 1
-        assert active[0].statement == "客户喜欢低楼层"
-        # 事后能看出这次替代是哪种来由。
-        superseded = memories[0]
-        assert superseded.status_reason == "同主题出现证据不弱于既有的新陈述"
+        assert [memory.version for memory in memories] == [6, 6 if duplicate else 0]
+        # 仅新增替代分支建立版本链；重复候选保持原有链关系。
+        assert memories[1].supersedes_id == (
+            memories[0].id if confidence == 0.99 and not duplicate else None
+        )
+        events = list((await session.scalars(
+            select(CustomerMemoryEvent).where(
+                CustomerMemoryEvent.memory_item_id == memories[0].id,
+            )
+        )).all())
+        assert len(events) == 1
+        assert events[0].event_type == expected.value
+        assert events[0].previous_status == "ACTIVE"
+        assert events[0].new_status == expected.name
+        assert events[0].reason == (
+            "同主题出现证据不弱于既有的新陈述" if confidence == 0.99 else "同一主题存在冲突陈述"
+        )
 
     await engine.dispose()
 
