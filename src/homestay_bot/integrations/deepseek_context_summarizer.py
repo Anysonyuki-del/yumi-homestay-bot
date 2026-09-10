@@ -1,7 +1,8 @@
 import json
+import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from homestay_bot.domain.enums import (
     CustomerMemoryCategory,
@@ -23,6 +24,9 @@ from homestay_bot.services.customer_memory_policy import (
 
 class ContextSummarySafetyError(RuntimeError):
     """表示摘要输出仍包含不可发送给模型上下文的敏感字段。"""
+
+
+logger = logging.getLogger(__name__)
 
 
 class _MemoryCandidatePayload(BaseModel):
@@ -112,9 +116,27 @@ class DeepSeekContextSummarizer:
             max_tokens=self._MAX_OUTPUT_TOKENS,
             extra_body={"thinking": {"type": "disabled"}},
         )
-        payload = _SummaryPayload.model_validate_json(
-            response.choices[0].message.content or ""
-        )
+        try:
+            payload = _SummaryPayload.model_validate_json(
+                response.choices[0].message.content or ""
+            )
+        except ValidationError as error:
+            # Pydantic 的 ValidationError 本身带着字段级信息，而上游只会记下
+            # error_type=ValidationError，具体是哪个字段、什么形态不合规全部丢失，
+            # 结果是线上失败无法排查，只能靠猜模型返回了什么。
+            #
+            # 只记 loc 与 type：前者是字段路径，后者是 Pydantic 的错误码（如
+            # bool_parsing、greater_than_equal、string_too_short），都不含实际值。
+            # 刻意不记 input：那是模型基于客人消息生成的内容，进日志等于绕开脱敏。
+            logger.warning(
+                "客户摘要结构校验失败：tier=%s fields=%s",
+                tier,
+                "; ".join(
+                    f"{'.'.join(str(part) for part in item['loc'])}={item['type']}"
+                    for item in error.errors()[:8]
+                ),
+            )
+            raise
         output = "\n".join(
             [
                 payload.summary,

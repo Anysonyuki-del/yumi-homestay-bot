@@ -910,6 +910,11 @@ def test_service_tab_offers_bulk_archive_and_cancel_to_admins() -> None:
 
     assert page.status_code == 200
     assert 'action="/employee/tasks/archive-selected"' in page.text
+    # 全选框此前漏掉了：勾选逻辑靠 data-select-all，没有它就只能逐条点。
+    assert "data-select-all" in page.text
+    # 与任务列表页共用同一套表格结构，全选与镜像选择脚本因此直接生效。
+    assert 'class="data-table"' in page.text
+    assert 'class="mobile-card-list' in page.text
     assert 'formaction="/employee/tasks/cancel-selected"' in page.text
     assert 'name="task_ids" value="11"' in page.text
     assert 'name="task_ids" value="12"' in page.text

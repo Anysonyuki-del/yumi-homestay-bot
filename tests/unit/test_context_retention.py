@@ -1,8 +1,10 @@
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from homestay_bot.domain.enums import MessageOrigin
 from homestay_bot.domain.models import Message
@@ -466,3 +468,83 @@ async def test_context_summarizer_downgrades_unseen_source_to_inference() -> Non
     candidate = result.memory_candidates[0]
     assert candidate.evidence_type.value == "model_inference"
     assert candidate.source_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_a_schema_violation_is_logged_with_the_offending_fields(caplog) -> None:
+    """结构校验失败必须记下是哪个字段、什么形态不合规。
+
+    生产 2026-09-11 手动重算失败，作业只留下 error_code=ValidationError，日志也只有
+    error_type=ValidationError——Pydantic 本来带着字段级信息，全被 type(error).__name__
+    丢掉，线上因此只能靠猜模型返回了什么。
+    """
+    client = SummaryClientStub(
+        {
+            "summary": "客人偏好安静",
+            "memory_candidates": [
+                {
+                    "subject_key": "偏好",
+                    "category": "preference",
+                    "statement": "喜欢安静房间",
+                    "evidence_type": "user_explicit",
+                    "source_excerpt": "希望安静",
+                    # 模型把布尔写成字符串、把置信度写成百分制——两类都真实出现过。
+                    "confidence": 85,
+                    "is_correction": "false",
+                }
+            ],
+        }
+    )
+    summarizer = DeepSeekContextSummarizer(client, "deepseek-v4-flash")
+
+    with caplog.at_level(logging.WARNING), pytest.raises(ValidationError):
+        await summarizer.summarize(
+            tier="short",
+            existing_summary="",
+            messages=[
+                MemorySource(message_id="m-1", origin="guest", content="想住安静点")
+            ],
+        )
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "客户摘要结构校验失败" in logged
+    assert "confidence" in logged, "没有指出出问题的字段"
+    assert "less_than_equal" in logged or "confidence=" in logged
+
+
+@pytest.mark.asyncio
+async def test_the_validation_log_never_carries_the_model_output(caplog) -> None:
+    """校验日志只能记字段路径与错误码，不得带上模型返回的实际内容。
+
+    那些内容是模型基于客人消息生成的，写进日志等于绕开脱敏——这条日志本身不能
+    成为新的外泄路径。
+    """
+    client = SummaryClientStub(
+        {
+            "summary": "",
+            "memory_candidates": [
+                {
+                    "subject_key": "偏好",
+                    "category": "preference",
+                    "statement": "客人张先生住在珞喻路12号",
+                    "evidence_type": "user_explicit",
+                    "source_excerpt": "手机号13800138000",
+                    "confidence": 0.9,
+                    "is_correction": False,
+                }
+            ],
+        }
+    )
+    summarizer = DeepSeekContextSummarizer(client, "deepseek-v4-flash")
+
+    with caplog.at_level(logging.WARNING), pytest.raises(ValidationError):
+        await summarizer.summarize(
+            tier="short", existing_summary="", messages=[
+                MemorySource(message_id="m-1", origin="guest", content="你好")
+            ]
+        )
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "summary" in logged and "too_short" in logged
+    for leaked in ("张先生", "珞喻路12号", "13800138000"):
+        assert leaked not in logged, f"校验日志泄漏了模型输出：{leaked}"
