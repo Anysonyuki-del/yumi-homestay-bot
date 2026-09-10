@@ -1481,6 +1481,13 @@ class SessionAdminDiagnosticsRepository:
                 session
             ).pending_due_count(now=now)
 
+    async def delivery_failure_rollup(self, *, limit: int) -> Any:
+        """读取投递失败汇总后立即释放连接。"""
+        async with self._factory() as session:
+            return await SQLAlchemyAdminDiagnosticsRepository(
+                session
+            ).delivery_failure_rollup(limit=limit)
+
     async def list_external_calls(self, *, limit: int) -> tuple[Any, ...]:
         """读取外部调用汇总后立即释放连接。"""
         async with self._factory() as session:

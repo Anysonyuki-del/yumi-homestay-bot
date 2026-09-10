@@ -1,17 +1,20 @@
 """提供管理员调试审计与系统诊断所需的最小数据库投影。"""
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import Row, case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from homestay_bot.domain.enums import JobStatus
+from homestay_bot.domain.enums import JobStatus, MessageOrigin
 from homestay_bot.domain.models import (
     AuditLog,
     ExternalRequest,
     Job,
+    Message,
     PropertyProfile,
     RuntimeConfigState,
 )
@@ -43,6 +46,140 @@ class SafeExternalCallRollup:
     failed: int
     last_at: datetime
     last_succeeded: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryChain:
+    """一次投递失败及其重试的处理阶段，只含机器码与时间。
+
+    以「链」而不是「消息行」为单位：一次失败会派生改写或二次发送，那条重发在
+    数据库里是另一条消息。按行统计会把同一次未送达数成两次，也说不清它到底
+    了结没有——生产上消息 52 与它的改写 53 正是这种情况。
+    """
+
+    root_id: int
+    stage: str
+    attempts: int
+    error_codes: tuple[str, ...]
+    last_failed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryFailureRollup:
+    """投递失败按处理阶段的汇总，供只读看板使用。
+
+    `unattended` 是唯一需要人立刻接手的：既没有在途重试，也没有被受理的重发，
+    且从未通知过任何人——这条客人消息事实上无人知晓。其余三档是中性事实。
+    """
+
+    retrying: int
+    resent: int
+    notified: int
+    unattended: int
+    chains: tuple[DeliveryChain, ...]
+    truncated: bool
+
+    @property
+    def total(self) -> int:
+        """失败链总数。"""
+        return self.retrying + self.resent + self.notified + self.unattended
+
+
+def _is_true(value: object) -> bool:
+    """JSON 布尔在两个方言里分别取回 True 和 1，统一判定。"""
+    return value is True or value == 1 or value == "true"
+
+
+def _roll_up_delivery_chains(
+    rows: Sequence[Row[Any]], *, truncated: bool
+) -> DeliveryFailureRollup:
+    """把投递相关的消息行归并成链，并判定每条链停在哪个阶段。
+
+    阶段判定只用同一条链上的事实，顺序即优先级：
+    1. 任一环节还标着「重试在途」→ 系统仍在处理，不需要人。
+    2. 任一重试已被受理 → 已改写重发；受理不等于送达，但重试这一步已经走完。
+    3. 任一环节登记过失败通知 → 仍未送达，但人已经被叫到了。
+    4. 都不满足 → 无人知晓，这是唯一要人立刻接手的一档。
+    """
+    parsed = [
+        {
+            "id": int(row.id),
+            "sent_at": row.sent_at,
+            "status": row.status,
+            "error_code": row.error_code,
+            "retry_of": row.retry_of,
+            "pending": _is_true(row.pending),
+            "notified": _is_true(row.notified),
+        }
+        for row in rows
+    ]
+    by_id = {item["id"]: item for item in parsed}
+
+    def root_of(item: dict[str, object]) -> int:
+        """顺着 retry_of 往上找链根；窗口外或成环时就地收敛，不无限走。"""
+        current = item
+        seen: set[int] = set()
+        while True:
+            raw = current["retry_of"]
+            if not raw:
+                return int(cast(int, current["id"]))
+            try:
+                parent_id = int(cast(str, raw))
+            except (TypeError, ValueError):
+                return int(cast(int, current["id"]))
+            if parent_id in seen or parent_id not in by_id:
+                return parent_id if parent_id in by_id else int(cast(int, current["id"]))
+            seen.add(parent_id)
+            current = by_id[parent_id]
+
+    chains: dict[int, list[dict[str, object]]] = {}
+    for item in parsed:
+        chains.setdefault(root_of(item), []).append(item)
+
+    counters = {"retrying": 0, "resent": 0, "notified": 0, "unattended": 0}
+    built: list[DeliveryChain] = []
+    for root_id, members in chains.items():
+        failures = [item for item in members if item["status"] == "failed"]
+        if not failures:
+            # 只有被受理的重发落在窗口里、原始失败在窗口外：不臆断，不计数。
+            continue
+        if any(item["pending"] for item in members):
+            stage = "retrying"
+        elif any(
+            item["status"] == "accepted" and item["retry_of"] for item in members
+        ):
+            stage = "resent"
+        elif any(item["notified"] for item in members):
+            stage = "notified"
+        else:
+            stage = "unattended"
+        counters[stage] += 1
+        built.append(
+            DeliveryChain(
+                root_id=root_id,
+                stage=stage,
+                attempts=len(members),
+                error_codes=tuple(
+                    sorted(
+                        {
+                            str(item["error_code"])
+                            for item in failures
+                            if item["error_code"]
+                        }
+                    )
+                ),
+                last_failed_at=max(
+                    cast(datetime, item["sent_at"]) for item in failures
+                ),
+            )
+        )
+
+    built.sort(key=lambda chain: (chain.last_failed_at, chain.root_id), reverse=True)
+    return DeliveryFailureRollup(
+        chains=tuple(built),
+        truncated=truncated,
+        **counters,
+    )
 
 
 class SQLAlchemyAdminDiagnosticsRepository:
@@ -125,6 +262,56 @@ class SQLAlchemyAdminDiagnosticsRepository:
             )
             or 0
         )
+
+
+    async def delivery_failure_rollup(
+        self, *, limit: int = 400
+    ) -> DeliveryFailureRollup:
+        """按投递链汇总客人消息未送达的处理阶段。
+
+        只投影投递相关的机器码字段，不取 content、外部身份或会话正文：这张看板
+        要回答的是「有没有客人消息卡在没人管的状态」，不是让人回看聊天内容。
+
+        JSON 取值走 SQLAlchemy 的下标语法，PostgreSQL 走 `->>`、SQLite 走
+        `json_extract`，两个方言同一份代码。`limit` 是防止表增长后全表扫描的护栏；
+        取满时置 `truncated`，页面据此说明只统计了最近若干条，不假装是全量。
+        """
+        rows = (
+            await self._session.execute(
+                select(
+                    Message.id,
+                    Message.sent_at,
+                    Message.message_metadata["delivery_status"].as_string().label(
+                        "status"
+                    ),
+                    Message.message_metadata["delivery_error_code"].as_string().label(
+                        "error_code"
+                    ),
+                    Message.message_metadata["retry_of_message_id"].as_string().label(
+                        "retry_of"
+                    ),
+                    Message.message_metadata["delivery_retry_pending"].label("pending"),
+                    Message.message_metadata["delivery_failure_notified"].label(
+                        "notified"
+                    ),
+                )
+                .where(
+                    Message.origin == MessageOrigin.BOT,
+                    or_(
+                        Message.message_metadata["delivery_status"].as_string()
+                        == "failed",
+                        Message.message_metadata["retry_of_message_id"]
+                        .as_string()
+                        .is_not(None),
+                    ),
+                )
+                .order_by(Message.id.desc())
+                .limit(limit + 1)
+            )
+        ).all()
+
+        truncated = len(rows) > limit
+        return _roll_up_delivery_chains(rows[:limit], truncated=truncated)
 
     async def job_status_counts(self) -> dict[str, int]:
         """按状态统计任务数量，不选择 payload。"""

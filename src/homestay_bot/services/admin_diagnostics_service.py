@@ -37,6 +37,9 @@ class DiagnosticsRepositoryPort(Protocol):
     async def list_external_calls(self, *, limit: int) -> tuple[Any, ...]:
         """返回按端点汇总的外部调用结果。"""
 
+    async def delivery_failure_rollup(self, *, limit: int) -> Any:
+        """返回客人消息投递失败按处理阶段的汇总。"""
+
 
 class RuntimeStatusPort(Protocol):
     """定义当前运行配置状态读取。"""
@@ -62,6 +65,9 @@ class DiagnosticsSnapshot:
     # 会被读成积压。None 表示读取失败因而未知——此时页面退回原来的告警显示，
     # 而不是把全部待处理说成「排期待发」，那会在失败时低报真实积压。
     pending_due_count: int | None = None
+    # 客人消息投递失败按阶段的汇总。None 表示读取失败因而未知——页面据此说
+    # 「暂时读不到」，而不是显示 0，把「没查到」说成「没有问题」。
+    delivery_failures: Any | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +126,16 @@ class AdminDiagnosticsService:
         except Exception:
             logger.warning("管理员诊断到期任务计数失败 error_type=upstream_error")
 
+        delivery_failures: Any | None = None
+        try:
+            delivery_failures = await self._repository.delivery_failure_rollup(
+                limit=400
+            )
+        except Exception as error:
+            logger.warning(
+                "管理员诊断投递失败汇总失败：error_type=%s", type(error).__name__
+            )
+
         error_codes: tuple[str, ...] | None
         try:
             error_codes = await self._repository.recent_job_error_codes(limit=8)
@@ -153,6 +169,7 @@ class AdminDiagnosticsService:
             error_codes,
             revision,
             revision_source,
+            delivery_failures,
         )
         return DiagnosticsSnapshot(
             health=health,
@@ -165,6 +182,7 @@ class AdminDiagnosticsService:
             configuration_revision=revision,
             configuration_revision_source=revision_source,
             report_text=report,
+            delivery_failures=delivery_failures,
         )
 
     async def list_audits(self, *, page: int, page_size: int = 20) -> AuditPage:
@@ -201,6 +219,7 @@ class AdminDiagnosticsService:
         error_codes: tuple[str, ...] | None,
         revision: int | None,
         revision_source: ConfigurationRevisionSource,
+        delivery_failures: Any | None,
     ) -> str:
         """生成完整脱敏报告，并区分无数据、读取失败和有效运行值。"""
         lines = [
@@ -241,4 +260,17 @@ class AdminDiagnosticsService:
             lines.append("最近错误码：" + "、".join(error_codes))
         else:
             lines.append("最近错误码：无")
+
+        # 报告是交给技术人员排障的，未送达且无人知晓的条数必须在里面，否则
+        # 报告看着一切正常，真正卡住的客人消息反而只在页面上。
+        if delivery_failures is None:
+            lines.append("客人消息投递：无法读取")
+        else:
+            lines.append(
+                f"客人消息未送达：{delivery_failures.total} 次"
+                f"（重试在途 {delivery_failures.retrying}、"
+                f"已重发受理 {delivery_failures.resent}、"
+                f"已通知管家 {delivery_failures.notified}、"
+                f"无人知晓 {delivery_failures.unattended}）"
+            )
         return "\n".join(lines)

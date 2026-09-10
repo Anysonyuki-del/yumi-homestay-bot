@@ -20,6 +20,10 @@ from homestay_bot.domain.enums import (
     RoomOccupancyStatus,
     RoomOperationalStatus,
 )
+from homestay_bot.repositories.admin_diagnostics import (
+    DeliveryChain,
+    DeliveryFailureRollup,
+)
 from homestay_bot.routes.admin import router as admin_router
 from homestay_bot.routes.employee_auth import router as auth_router
 from homestay_bot.services.admin_dashboard_service import Snapshot
@@ -166,6 +170,10 @@ class DiagnosticsStub:
             configuration_revision=7,
             configuration_revision_source="runtime",
             report_text="YuMi 系统诊断报告（已脱敏）\n版本：1.2.3",
+            delivery_failures=DeliveryFailureRollup(
+                retrying=0, resent=0, notified=0, unattended=0,
+                chains=(), truncated=False,
+            ),
         )
 
     async def list_audits(self, *, page: int, page_size: int = 20) -> AuditPage:
@@ -1018,3 +1026,98 @@ def test_stale_events_are_annotated_as_last_synced_plan() -> None:
     assert response.status_code == 200
     # 仅当该桩确有事件行时才要求注记；否则至少时间轴的待核实说明在。
     assert "待核实" in response.text
+
+
+class DeliveryBoardDiagnosticsStub(DiagnosticsStub):
+    """生产四条投递链的真实分布：三次已重发受理、一次已通知管家。"""
+
+    async def snapshot(self):
+        """无人知晓为 0——这是运营最想先看到的那个数。"""
+        base = await DiagnosticsStub.snapshot(self)
+        return replace(
+            base,
+            delivery_failures=DeliveryFailureRollup(
+                retrying=0, resent=3, notified=1, unattended=0, truncated=False,
+                chains=(
+                    DeliveryChain(
+                        root_id=52, stage="notified", attempts=2,
+                        error_codes=("wecom_async_13",),
+                        last_failed_at=datetime(2026, 8, 21, tzinfo=UTC),
+                    ),
+                ),
+            ),
+        )
+
+
+def test_settled_delivery_failures_are_not_shown_as_an_alarm() -> None:
+    """已重发受理或已通知管家的未送达是中性事实，不该用告警色。
+
+    与「排期待发」同一条原则：数字要说明它意味着什么。全部已了结时页面不得
+    出现红色告警，否则运营每天都在看一个永远消不掉的红点。
+    """
+    client = build_client()
+    client.app.state.admin_diagnostics_service = DeliveryBoardDiagnosticsStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    page = client.get("/employee/admin/diagnostics")
+
+    assert page.status_code == 200
+    # 只看投递这一段：同页的「失败任务」本来就该是告警色，不能整页一起判。
+    section = page.text.split("未送达与重试", 1)[1].split("</section>", 1)[0]
+    assert "已改写重发并受理" in section
+    assert "仍未送达 · 已通知管家" in section
+    assert "没有人知道" not in section
+    assert "alert--danger" not in section
+    assert "badge--danger" not in section, "已了结的未送达不该用告警色徽标"
+
+
+class UnattendedDeliveryDiagnosticsStub(DiagnosticsStub):
+    """有一次未送达既无重试也没通知过任何人。"""
+
+    async def snapshot(self):
+        """这一档是唯一要人立刻接手的。"""
+        base = await DiagnosticsStub.snapshot(self)
+        return replace(
+            base,
+            delivery_failures=DeliveryFailureRollup(
+                retrying=0, resent=0, notified=0, unattended=1, truncated=False,
+                chains=(
+                    DeliveryChain(
+                        root_id=70, stage="unattended", attempts=1,
+                        error_codes=("wecom_async_13",),
+                        last_failed_at=datetime(2026, 9, 9, tzinfo=UTC),
+                    ),
+                ),
+            ),
+        )
+
+
+def test_a_delivery_nobody_knows_about_raises_a_real_alarm() -> None:
+    """无人知晓的未送达必须显眼，并说清该怎么办。"""
+    client = build_client()
+    client.app.state.admin_diagnostics_service = UnattendedDeliveryDiagnosticsStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    page = client.get("/employee/admin/diagnostics")
+
+    assert page.status_code == 200
+    assert "alert--danger" in page.text
+    assert "没有人知道" in page.text
+    assert "人工回复" in page.text, "光报警不说怎么处理，等于只给数字"
+    assert "#70" in page.text
+
+
+def test_the_delivery_board_never_renders_message_content() -> None:
+    """看板只回答「有没有卡住」，不得把客人消息正文带上页面。"""
+    client = build_client()
+    client.app.state.admin_diagnostics_service = UnattendedDeliveryDiagnosticsStub()
+    login_admin(client, next_path="/employee/admin/diagnostics")
+
+    page = client.get("/employee/admin/diagnostics")
+
+    # 桩里没有正文字段可泄漏，真正要守的是视图模型的形状：投递链只暴露
+    # 编号、阶段、次数、错误码与时间，任何一个新增字段都要重新审这条边界。
+    assert set(DeliveryChain.__dataclass_fields__) == {
+        "root_id", "stage", "attempts", "error_codes", "last_failed_at",
+    }
+    assert "conversation" not in page.text.lower()

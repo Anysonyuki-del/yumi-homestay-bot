@@ -164,6 +164,14 @@ _CHECK_GUIDANCE: dict[tuple[str, str], tuple[str, str, str]] = {
         "/employee/admin/settings",
     ),
 }
+# 投递链阶段的中文标签。判定在仓储层，这里只负责措辞：不说「已送达」，
+# 因为受理不等于客人收到；也不把「已通知管家」说成已解决。
+_DELIVERY_STAGE_LABELS = {
+    "retrying": "重试在途",
+    "resent": "已改写重发并受理",
+    "notified": "仍未送达 · 已通知管家",
+    "unattended": "仍未送达 · 无人知晓",
+}
 _TASK_STATUS_PRESENTATION = {
     "failed": ("失败任务", "danger"),
     "pending": ("待处理任务", "warning"),
@@ -468,6 +476,7 @@ async def admin_diagnostics(request: Request) -> Response:
         request=request,
         name="admin/diagnostics.html",
         context={
+            "delivery_stage_labels": _DELIVERY_STAGE_LABELS,
             "page_title": "系统诊断",
             "active_nav": "diagnostics",
             "overall_ok": health.get("status") == "ok",

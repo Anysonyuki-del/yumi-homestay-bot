@@ -64,6 +64,46 @@
   <p>{{ diagnostics.recent_job_error_codes|join("、") or "无" }}</p>
   {% endif %}
 </section>
+{# 客人消息投递：按投递链而非消息行计数，一次失败与它的重发是同一件事。
+   四档里只有「无人知晓」要人立刻接手，其余是中性事实，不用告警色制造焦虑。 #}
+<section class="panel">
+  <div class="panel__header"><div><p class="eyebrow">客人消息</p><h2>未送达与重试</h2></div><small>不含消息正文与客户身份</small></div>
+  {% if diagnostics.delivery_failures is none %}
+  <div class="alert alert--warning" role="alert">投递状态暂时无法读取，请检查数据库连接后重试。</div>
+  {% elif diagnostics.delivery_failures.total == 0 %}
+  <p class="empty-state">没有未送达的客人消息。</p>
+  {% else %}
+  {% set d = diagnostics.delivery_failures %}
+  {% if d.unattended %}
+  <div class="alert alert--danger" role="alert"><div>
+    <strong>{{ d.unattended }} 次未送达没有人知道</strong>
+    <p>这些客人消息既没有在途重试，也没有被受理的重发，而且从未通知过任何人。请按下方消息编号在企业微信会话里人工回复。</p>
+  </div></div>
+  {% endif %}
+  <dl class="diagnostics-list">
+    <div><dt>未送达合计</dt><dd>{{ ui.badge(d.total, "danger" if d.unattended else "neutral") }}</dd></div>
+    {% if d.retrying %}<div><dt>重试在途</dt><dd>{{ ui.badge(d.retrying, "neutral") }}<span class="field-help">系统仍在处理，无需人工。</span></dd></div>{% endif %}
+    {% if d.resent %}<div><dt>已改写重发并受理</dt><dd>{{ ui.badge(d.resent, "neutral") }}<span class="field-help">受理不等于客人已读，但重试这一步已走完。</span></dd></div>{% endif %}
+    {% if d.notified %}<div><dt>仍未送达 · 已通知管家</dt><dd>{{ ui.badge(d.notified, "neutral") }}<span class="field-help">人已经被叫到，跟进结果不在本系统内。</span></dd></div>{% endif %}
+    {% if d.unattended %}<div><dt>仍未送达 · 无人知晓</dt><dd>{{ ui.badge(d.unattended, "danger") }}</dd></div>{% endif %}
+  </dl>
+  <details class="delivery-chains">
+    <summary>逐条查看（{{ d.chains | length }} 条）</summary>
+    <div class="table-scroll"><table class="data-table">
+      <caption class="visually-hidden">未送达的客人消息及其处理阶段</caption>
+      <thead><tr><th scope="col">消息编号</th><th scope="col">处理阶段</th><th scope="col">尝试次数</th><th scope="col">错误码</th><th scope="col">最近失败</th></tr></thead>
+      <tbody>{% for chain in d.chains %}<tr>
+        <th scope="row">#{{ chain.root_id }}</th>
+        <td>{{ ui.badge(delivery_stage_labels[chain.stage], "danger" if chain.stage == "unattended" else "neutral") }}</td>
+        <td>{{ chain.attempts }}</td>
+        <td>{{ chain.error_codes | join("、") or "—" }}</td>
+        <td>{{ chain.last_failed_at | datetime_zh }}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% if d.truncated %}<p class="field-help">只统计了最近若干条投递记录，更早的未计入。</p>{% endif %}
+  </details>
+  {% endif %}
+</section>
 <section class="panel">
   <details class="diagnostics-report">
     <summary>完整脱敏报告</summary>
