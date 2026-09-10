@@ -98,6 +98,13 @@ class DeepSeekContextSummarizer:
                         "必须为 model_inference。客户明确纠正同一主题时 is_correction=true。"
                         "不要生成任何待办字段；只输出 JSON：summary 和"
                         "memory_candidates。memory_candidates 最多 10 条。"
+                        # 字段清单直接由 _SummaryPayload 生成，而不是在提示词里另抄
+                        # 一份：抄写版必然与 schema 脱节。生产 2026-09-11 的失败正是
+                        # 这样——提示词只零散提过 subject_key、source_excerpt 等，
+                        # category、statement、confidence 一个字都没写，evidence_type
+                        # 也只给了 model_inference 一个取值，模型于是漏填三个必填字段
+                        # 并猜了个不在枚举里的 evidence_type，校验必然失败。
+                        f"输出结构：{json.dumps(_SummaryPayload.model_json_schema(), ensure_ascii=False)}"
                     ),
                 },
                 {

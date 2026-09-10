@@ -6,11 +6,16 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from homestay_bot.domain.enums import MessageOrigin
+from homestay_bot.domain.enums import (
+    CustomerMemoryCategory,
+    CustomerMemoryEvidenceType,
+    MessageOrigin,
+)
 from homestay_bot.domain.models import Message
 from homestay_bot.integrations.deepseek_context_summarizer import (
     ContextSummarySafetyError,
     DeepSeekContextSummarizer,
+    _SummaryPayload,
 )
 from homestay_bot.services.context_retention import (
     ContextRetentionService,
@@ -548,3 +553,37 @@ async def test_the_validation_log_never_carries_the_model_output(caplog) -> None
     assert "summary" in logged and "too_short" in logged
     for leaked in ("张先生", "珞喻路12号", "13800138000"):
         assert leaked not in logged, f"校验日志泄漏了模型输出：{leaked}"
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_describes_every_field_the_schema_requires() -> None:
+    """提示词必须完整描述 schema 要求的字段与枚举取值，且随 schema 自动同步。
+
+    生产 2026-09-11 的失败根因就是两者脱节：提示词零散提过 subject_key、
+    source_excerpt、evidence_type，却一个字都没写 category、statement、confidence，
+    evidence_type 也只给了 model_inference 一个取值。模型因此漏填三个必填字段并猜了
+    个不在枚举里的值，Pydantic 校验必然失败——而结构化记忆一条都生成不出来。
+
+    断言从 schema 反推而不是写死字段名：将来给 _SummaryPayload 加字段时，这条测试
+    会自动要求提示词跟上，不需要有人记得同步。
+    """
+    client = SummaryClientStub({"summary": "客人偏好安静", "memory_candidates": []})
+    summarizer = DeepSeekContextSummarizer(client, "deepseek-v4-flash")
+
+    await summarizer.summarize(
+        tier="short",
+        existing_summary="",
+        messages=[MemorySource(message_id="m-1", origin="guest", content="想住安静点")],
+    )
+
+    prompt = json.dumps(client.requests[0], ensure_ascii=False)
+    candidate_schema = _SummaryPayload.model_json_schema()["$defs"][
+        "_MemoryCandidatePayload"
+    ]
+    for field in candidate_schema["required"]:
+        assert field in prompt, f"提示词没有描述必填字段 {field}"
+    for enum_type in (CustomerMemoryCategory, CustomerMemoryEvidenceType):
+        for member in enum_type:
+            assert member.value in prompt, (
+                f"提示词缺少 {enum_type.__name__} 的取值 {member.value}"
+            )

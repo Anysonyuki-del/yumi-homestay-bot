@@ -2,6 +2,37 @@
 
 本文件记录 YuMi 民宿 AI 的正式发布内容。版本号遵循语义化版本规则。
 
+## [1.34.0] - 2026-09-11
+
+修复结构化客户记忆一直生成不出来：摘要提示词与校验 schema 长期脱节。
+
+v1.33.1 加上字段级诊断后，生产日志立刻给出了根因：
+
+    memory_candidates.0.category=missing
+    memory_candidates.0.statement=missing
+    memory_candidates.0.evidence_type=enum
+    memory_candidates.0.confidence=missing
+
+提示词只说「只输出 JSON：summary 和 memory_candidates」，零散提过 subject_key、
+source_message_id、source_excerpt，却一个字都没写 category、statement、confidence；
+evidence_type 也只给了 model_inference 一个取值。模型因此漏填三个必填字段并猜了个
+不在枚举里的值，Pydantic 校验必然失败——每一轮后台维护都在失败，客户记忆条目为 0。
+
+同一个代码库里 `deepseek_client` 早已把 schema 注入提示词
+（`输出结构：{assistant_decision_schema()}`），只有这里没有。现改为直接注入
+`_SummaryPayload.model_json_schema()`：字段清单与枚举取值随 schema 自动同步，不再
+手抄一份。
+
+新增的守护从 schema 反推而非写死字段名——将来给 `_SummaryPayload` 加字段时会自动
+要求提示词跟上，不需要有人记得同步。红测确认它能同时抓住「撤掉注入」与「加了字段
+但提示词没跟上」两种回归。
+
+顺带纠正一个过程中的错误推断：曾据「24 小时日志只有 1 条失败」怀疑后台循环没在跑，
+实际是 `docker logs` 只保留当前容器的日志，而当天部署了八次，每次容器重建都会清空。
+后台一直在跑也一直在失败。
+
+验证：全量 1594 项测试通过。
+
 ## [1.33.1] - 2026-09-11
 
 服务任务栏重做为表格，并让摘要生成失败可被排查。
