@@ -94,8 +94,17 @@ class DeepSeekContextSummarizer:
                         "令 summary 为“无新增摘要”。"
                         "subject_key 使用稳定简短的 snake_case 主题；source_message_id 必须"
                         "引用输入消息编号；source_excerpt 必须逐字引用该消息中能证明候选的"
-                        "脱敏连续原文，不能改写或概括；无法证明为客户明示或员工确认时 evidence_type"
-                        "必须为 model_inference。客户明确纠正同一主题时 is_correction=true。"
+                        "脱敏连续原文，不能改写或概括。"
+                        # 原文只说了何时降级为 model_inference，没说何时该报
+                        # user_explicit，模型于是一律取最保守值：2026-09-11 生产实测
+                        # 生成的四条候选全是 model_inference，而它们分别来自客人亲口
+                        # 说的「我明天下午三点左右到」「转人工」等，自动晋升通道因此
+                        # 从未打开。判定权仍在服务端，_grounded_evidence 会按来源消息
+                        # 二次校验，模型报高了照样降级，补上正面条件不削弱防线。
+                        "evidence_type：来源是客人消息且候选由该消息原文直接支持时填"
+                        "user_explicit；来源是员工消息且同样有原文支持时填"
+                        "employee_confirmed；无法由原文证明时才填 model_inference。"
+                        "客户明确纠正同一主题时 is_correction=true。"
                         "不要生成任何待办字段；只输出 JSON：summary 和"
                         "memory_candidates。memory_candidates 最多 10 条。"
                         # 字段清单直接由 _SummaryPayload 生成，而不是在提示词里另抄

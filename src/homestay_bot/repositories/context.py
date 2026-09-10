@@ -39,10 +39,18 @@ from homestay_bot.services.customer_memory_policy import (
     redact_memory_text,
     source_excerpt_hash,
     stronger_evidence,
+    supersedes_existing,
     verify_source_excerpt,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _supersede_reason(correction_is_proven: bool) -> str:
+    """区分两种自动替代的来由，事后能从状态原因看出是哪一种。"""
+    if correction_is_proven:
+        return "客户或员工明确纠正"
+    return "同主题出现证据不弱于既有的新陈述"
 
 
 class SQLAlchemyContextRepository:
@@ -641,6 +649,14 @@ class SQLAlchemyContextRepository:
                 and source.content
                 and is_explicit_correction(source.content)
             )
+            # 除了「客人明确说改主意了」，证据不弱于既有记忆时也允许自动替代。
+            # 只有明确纠正才替代的话，客人再提一句相关的就会把新旧一起打成
+            # DISPUTED——本来可用的偏好也变得不能用，等于宁可什么都不记。
+            may_supersede = correction_is_proven or supersedes_existing(
+                evidence,
+                candidate.confidence,
+                [(item.evidence_type, item.confidence) for item in active_conflicts],
+            )
             if duplicate is not None:
                 duplicate.confidence = max(duplicate.confidence, candidate.confidence)
                 selected_evidence = stronger_evidence(duplicate.evidence_type, evidence)
@@ -670,7 +686,7 @@ class SQLAlchemyContextRepository:
                     )
                 if status is CustomerMemoryStatus.ACTIVE:
                     previous_status = duplicate.status
-                    if active_conflicts and not correction_is_proven:
+                    if active_conflicts and not may_supersede:
                         duplicate.status = CustomerMemoryStatus.DISPUTED
                         duplicate.status_reason = "同一主题存在冲突陈述"
                         for item in active_conflicts:
@@ -689,7 +705,7 @@ class SQLAlchemyContextRepository:
                         for item in active_conflicts:
                             active_previous_status = item.status
                             item.status = CustomerMemoryStatus.SUPERSEDED
-                            item.status_reason = "客户或员工明确纠正"
+                            item.status_reason = _supersede_reason(correction_is_proven)
                             item.version += 1
                             self._add_memory_event(
                                 item,
@@ -719,11 +735,11 @@ class SQLAlchemyContextRepository:
 
             supersedes_id = None
             if status is CustomerMemoryStatus.ACTIVE and active_conflicts:
-                if correction_is_proven:
+                if may_supersede:
                     for item in active_conflicts:
                         previous_status = item.status
                         item.status = CustomerMemoryStatus.SUPERSEDED
-                        item.status_reason = "客户或员工明确纠正"
+                        item.status_reason = _supersede_reason(correction_is_proven)
                         item.version += 1
                         self._add_memory_event(
                             item,

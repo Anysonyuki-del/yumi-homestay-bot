@@ -478,8 +478,14 @@ async def test_duplicate_model_inference_cannot_downgrade_explicit_evidence() ->
 
 
 @pytest.mark.asyncio
-async def test_reverified_duplicate_cannot_bypass_active_subject_conflict() -> None:
-    """历史候选重新获证时若撞上当前值，必须隔离争议而非产生双有效值。"""
+async def test_a_stronger_new_statement_supersedes_the_old_one() -> None:
+    """同主题出现证据不弱于既有的新陈述时，旧值让位、新值生效，且始终只有一个有效值。
+
+    此前这种情况会把新旧一起打成 DISPUTED——客人明明刚说了「我喜欢低楼层」，结果
+    连原来那条「喜欢高楼层」也一并不能用了，等于宁可什么都不记，而这正是人工负担
+    的来源。现在按证据强度定胜负；反方向（更弱的证据想覆盖）仍然只能进争议，见
+    test_a_weaker_new_statement_still_goes_to_dispute。
+    """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -547,9 +553,87 @@ async def test_reverified_duplicate_cannot_bypass_active_subject_conflict() -> N
         )
 
         assert [memory.status for memory in memories] == [
-            CustomerMemoryStatus.DISPUTED,
-            CustomerMemoryStatus.DISPUTED,
+            CustomerMemoryStatus.SUPERSEDED,
+            CustomerMemoryStatus.ACTIVE,
         ]
+        # 核心保证不变：同一主题下永远只有一个有效值。
+        active = [
+            memory
+            for memory in memories
+            if memory.status is CustomerMemoryStatus.ACTIVE
+        ]
+        assert len(active) == 1
+        assert active[0].statement == "客户喜欢低楼层"
+        # 事后能看出这次替代是哪种来由。
+        superseded = memories[0]
+        assert superseded.status_reason == "同主题出现证据不弱于既有的新陈述"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_weaker_new_statement_still_goes_to_dispute() -> None:
+    """证据更弱的新陈述不得覆盖既有事实，只能进入争议等人工。
+
+    这是自动替代的安全边界：模型推断永远覆盖不了客人明说过的事实。放开自动替代后，
+    真正危险的方向就是这一条——没有它，模型可以在无人过问的情况下改写客户档案。
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, source = await _customer_message(
+            session,
+            customer_name="弱证据客户",
+            external_message_id="memory-weak-evidence",
+            content="楼层随便都行",
+        )
+        session.add(
+            CustomerMemoryItem(
+                customer_id=customer.id,
+                subject_key="floor_preference",
+                category=CustomerMemoryCategory.PREFERENCE,
+                statement="客户喜欢高楼层",
+                status=CustomerMemoryStatus.ACTIVE,
+                evidence_type=CustomerMemoryEvidenceType.USER_EXPLICIT,
+                verified_at=now,
+                confidence=0.95,
+                confirmed_at=now,
+                review_at=now + timedelta(days=180),
+                expires_at=now + timedelta(days=365),
+            )
+        )
+        await session.flush()
+        repository = SQLAlchemyContextRepository(session)
+        candidate = CustomerMemoryCandidate(
+            "floor_preference",
+            CustomerMemoryCategory.PREFERENCE,
+            "客户对楼层没有偏好",
+            CustomerMemoryEvidenceType.MODEL_INFERENCE,
+            source.external_message_id,
+            0.99,
+            source_excerpt="楼层随便都行",
+        )
+
+        await repository.save_memory_observations(
+            customer.id,
+            ContextSummaryResult("无新增摘要", [], [candidate]),
+            [source],
+            now + timedelta(minutes=1),
+        )
+        memories = list(
+            (
+                await session.scalars(
+                    select(CustomerMemoryItem).order_by(CustomerMemoryItem.id)
+                )
+            ).all()
+        )
+
+        # 置信度再高也不行：模型推断的等级低于客人明示。
+        assert CustomerMemoryStatus.SUPERSEDED not in [m.status for m in memories]
+        assert memories[0].status is not CustomerMemoryStatus.SUPERSEDED
 
     await engine.dispose()
 

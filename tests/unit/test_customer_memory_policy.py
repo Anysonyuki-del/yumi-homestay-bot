@@ -11,6 +11,7 @@ from homestay_bot.services.customer_memory_policy import (
     memory_relevance_score,
     normalize_subject_key,
     redact_memory_text,
+    supersedes_existing,
     verify_source_excerpt,
 )
 
@@ -90,14 +91,47 @@ def test_evidence_rank_is_monotonic_from_inference_to_employee() -> None:
     assert evidence_rank(CustomerMemoryEvidenceType.EMPLOYEE_CONFIRMED) == 2
 
 
-def test_controlled_subjects_are_normalized_and_auto_activation_is_allowlisted() -> None:
-    """只有受控稳定主题可自动晋级，自由主题仍进入人工治理。"""
+def test_subject_keys_are_normalized_to_stable_forms() -> None:
+    """主题名归一化：同一概念的不同写法必须落到同一个键。"""
     assert normalize_subject_key("Pet Dog Name") == "pet_dog_name"
     assert normalize_subject_key("dog_name") == "pet_dog_name"
-    assert can_auto_activate_subject("pet_dog_name")
-    assert can_auto_activate_subject("quiet_preference")
-    assert not can_auto_activate_subject("current_room_price")
-    assert not can_auto_activate_subject("custom_free_form_fact")
+
+
+def test_auto_activation_no_longer_depends_on_a_subject_allowlist() -> None:
+    """主题本身不再是准入条件，自由主题也能走自动通道。
+
+    此前是一张只有七个主题的白名单。模型生成的 subject_key 是自由文本，落在名单外
+    的一律停在候选等人工——2026-09-11 生产实测的四条候选没有一条在名单内，自动通道
+    从未真正打开，客户一多人工就追不上。把关改由类别、原文可验证性、证据等级、置信度
+    与内容防线承担，主题不再设限。
+    """
+    assert can_auto_activate_subject("custom_free_form_fact")
+    assert can_auto_activate_subject("arrival_time_preference")
+    # 兜底主题 general 仍被排除：它表示模型没能归类，而且同一客户下所有 general
+    # 记忆共用一个 subject_key，自动替代时会互相覆盖。
+    assert not can_auto_activate_subject("   ")
+    assert not can_auto_activate_subject("general")
+
+
+def test_dynamic_business_subjects_are_still_blocked_by_content_defence() -> None:
+    """动态业务数据仍被拦住——移除白名单不得放开这一类。
+
+    白名单原本顺带挡住了 current_room_price 这类主题。真正的防线是内容判定，它按
+    「subject_key + statement」一起判，覆盖到位；这条测试锁住这个事实，防止有人把
+    内容防线也一并简化掉。
+    """
+    for subject_key, statement in (
+        ("current_room_price", "客户当前房价 399 元"),
+        ("order_status", "客户订单已确认"),
+        ("room_rate_preference", "客户接受每晚 400 元以内"),
+        ("payment_method", "客户用微信支付"),
+    ):
+        text = f"{subject_key} {statement}"
+        assert is_dynamic_memory_text(text) or is_instruction_like_memory(text), (
+            f"动态业务主题未被拦截：{text}"
+        )
+    # 对照：正常偏好不得被误拦。
+    assert not is_dynamic_memory_text("custom_free_form_fact 客户喜欢安静房间")
 
 
 def test_dynamic_or_instruction_like_content_is_not_safe_memory() -> None:
@@ -134,3 +168,33 @@ def test_relevance_favors_matching_subject_and_statement() -> None:
 
     assert dog_score > floor_score
     assert dog_score > 0
+
+
+def test_a_new_candidate_supersedes_only_when_its_evidence_is_no_weaker() -> None:
+    """自动替代既有记忆的门槛是证据不弱于对方，而不是有没有说「我改主意了」。
+
+    此前只有原文含明确纠正措辞才自动替代，否则新旧一起转 DISPUTED——本来有条可用的
+    「喜欢安静」，客人再提一句相关的，两条就都变争议、都不能用了，等于宁可什么都不
+    记，人工负担正是这么来的。
+
+    改用证据强度定胜负：客人明说的新偏好可以覆盖客人明说的旧偏好；模型推断则永远
+    覆盖不了客人明说的事实。
+    """
+    explicit = CustomerMemoryEvidenceType.USER_EXPLICIT
+    inference = CustomerMemoryEvidenceType.MODEL_INFERENCE
+    confirmed = CustomerMemoryEvidenceType.EMPLOYEE_CONFIRMED
+
+    # 同级证据、置信度不低于既有：可以自动替代。
+    assert supersedes_existing(explicit, 0.9, [(explicit, 0.85)])
+    assert supersedes_existing(explicit, 0.9, [(explicit, 0.9)])
+    # 更强的证据：可以。
+    assert supersedes_existing(confirmed, 0.85, [(explicit, 0.95)])
+    # 更弱的证据：不行，无论置信度多高。
+    assert not supersedes_existing(inference, 0.99, [(explicit, 0.8)])
+    # 同级但置信度更低：不行。
+    assert not supersedes_existing(explicit, 0.81, [(explicit, 0.9)])
+    # 多条既有记忆时，必须不弱于其中每一条。
+    assert not supersedes_existing(explicit, 0.9, [(explicit, 0.85), (confirmed, 0.9)])
+    assert supersedes_existing(confirmed, 0.95, [(explicit, 0.85), (confirmed, 0.9)])
+    # 没有既有冲突时不涉及替代。
+    assert not supersedes_existing(explicit, 0.9, [])

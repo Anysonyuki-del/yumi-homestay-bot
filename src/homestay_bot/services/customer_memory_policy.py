@@ -1,6 +1,6 @@
 import hashlib
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from homestay_bot.domain.enums import CustomerMemoryEvidenceType
 from homestay_bot.services.guest_reply_policy import (
@@ -58,17 +58,6 @@ _SUBJECT_ALIASES = {
     "contact_preference": "communication_preference",
     "food_preference": "dietary_preference",
 }
-_CONTROLLED_SUBJECTS = frozenset(
-    {
-        "pet_dog_name",
-        "pet_cat_name",
-        "floor_preference",
-        "quiet_preference",
-        "bed_preference",
-        "communication_preference",
-        "dietary_preference",
-    }
-)
 _SUBJECT_QUERY_TERMS = {
     "pet_dog_name": ("狗", "小狗", "宠物", "dog", "puppy", "名字", "叫什么"),
     "pet_cat_name": ("猫", "小猫", "宠物", "cat", "kitten", "名字", "叫什么"),
@@ -84,6 +73,33 @@ _EVIDENCE_RANKS = {
     CustomerMemoryEvidenceType.EMPLOYEE_CONFIRMED.value: 2,
     "admin_confirmed": 3,
 }
+
+
+def supersedes_existing(
+    evidence: CustomerMemoryEvidenceType,
+    confidence: float,
+    existing: Sequence[tuple[CustomerMemoryEvidenceType, float]],
+) -> bool:
+    """判断新候选能否自动替代同主题的既有生效记忆。
+
+    此前自动替代只在原文含明确纠正措辞时发生，否则新旧一起转 DISPUTED——本来有条
+    可用的「喜欢安静」，客人再提一句相关的，两条就都变争议、都不能用，等于宁可什么
+    都不记，人工负担正是这么来的。
+
+    改用证据强度定胜负：新候选必须在证据等级上不弱于**每一条**既有记忆，且在同级时
+    置信度不低于对方。于是客人明说的新偏好可以覆盖客人明说的旧偏好，而模型推断永远
+    覆盖不了客人明说的事实——后者才是真正危险的方向。
+
+    没有既有冲突时返回 False：那种情况不涉及替代，由调用方按普通新增处理。
+    """
+    if not existing:
+        return False
+    rank = evidence_rank(evidence)
+    return all(
+        rank > evidence_rank(other_evidence)
+        or (rank == evidence_rank(other_evidence) and confidence >= other_confidence)
+        for other_evidence, other_confidence in existing
+    )
 
 
 def redact_memory_text(text: str) -> str:
@@ -138,16 +154,39 @@ def stronger_evidence(
     return current
 
 
+# 无法归类时的兜底主题。它不参与自动晋升：同一客户下所有 general 记忆共用这一个
+# subject_key，会被判成同主题冲突而互相覆盖。
+_FALLBACK_SUBJECT = "general"
+
+
 def normalize_subject_key(subject_key: str) -> str:
     """规范主题键并把常见模型别名收敛到受控主题。"""
     normalized = _SUBJECT_KEY_PATTERN.sub("_", subject_key.casefold()).strip("_")[:128]
-    normalized = normalized or "general"
+    normalized = normalized or _FALLBACK_SUBJECT
     return _SUBJECT_ALIASES.get(normalized, normalized)
 
 
 def can_auto_activate_subject(subject_key: str) -> bool:
-    """判断主题是否允许通过本地确定性证据自动晋级。"""
-    return normalize_subject_key(subject_key) in _CONTROLLED_SUBJECTS
+    """判断主题是否允许自动晋级。
+
+    此前是一张只有七个主题的白名单（宠物名、楼层、安静、床型、沟通方式、饮食）。
+    模型生成的 subject_key 是自由文本，落在名单之外的一律停在候选等人工——2026-09-11
+    生产实测的四条候选没有一条在名单内，自动通道因此从未真正打开过，客户一多人工就
+    追不上。白名单要穷举模型可能生成的主题，注定追不上真实输出。
+
+    改为不按主题设限，把关交给其余判据：类别必须是稳定型（偏好或已确认事实）、
+    原文可验证、证据不得是模型推断、置信度达阈值，另有动态业务数据与指令注入两道
+    内容防线。主题本身不再是准入条件。
+
+    唯一仍被排除的是兜底主题 general：它表示模型没能给出有意义的主题，这类记忆质量
+    存疑；更要紧的是同一客户下所有 general 记忆共用一个 subject_key，会被判定为同主题
+    冲突，自动替代时互相覆盖，越攒越乱。
+
+    保留此函数而不是删除调用点：晋升判据集中在 _initial_memory_status 一处，将来若
+    需要按主题设限（例如出现被反复误提取的主题），改这里即可。
+    """
+    normalized = normalize_subject_key(subject_key)
+    return bool(normalized) and normalized != _FALLBACK_SUBJECT
 
 
 def is_dynamic_memory_text(text: str) -> bool:
