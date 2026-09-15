@@ -29,6 +29,27 @@ from homestay_bot.repositories.admin_operations import (
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 TIMELINE_PAST_DAYS = 2
+
+
+def _relative_day_word(day: date, today: date) -> str:
+    """把日期渲染成今天/明天/昨天，超出范围则用绝对写法。
+
+    住宿条文案与房间事件文案共用这一个实现：两处措辞一旦分叉，
+    同一张卡片上会同时出现「今天 12:00」和「9月16日 12:00」两种写法。
+    """
+    delta_days = (day - today).days
+    if delta_days == 0:
+        return "今天"
+    if delta_days == 1:
+        return "明天"
+    if delta_days == -1:
+        return "昨天"
+    return f"{day.month}月{day.day}日"
+
+
+def _stay_clock_label(moment: datetime, today: date) -> str:
+    """住宿条的单侧时刻文案，例如「今天 12:00」。"""
+    return f"{_relative_day_word(moment.date(), today)} {moment.hour:02d}:{moment.minute:02d}"
 # 民宿营业节奏：12:00 计划退房，12:00–15:00 周转清洁，15:00 起入住。全部按武汉本地时间。
 CHECK_OUT_TIME = time(12, 0, tzinfo=WUHAN_TIMEZONE)
 CHECK_IN_TIME = time(15, 0, tzinfo=WUHAN_TIMEZONE)
@@ -255,6 +276,11 @@ class TimelineBar:
     checkout_verified: bool
     semantic: str = "future"
     overlaps: bool = False
+    # 手机版式用真实起止时刻替代「姓名 · N 晚」的重复呈现。
+    # 文案在服务端生成，模板只渲染；住宿真实起止超出窗口时标注延续，
+    # 不把裁切后的窗口边界当成真实时刻——那会显示一个从未发生的时间。
+    start_label: str = ""
+    end_label: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -710,6 +736,7 @@ class AdminOperationsService:
         入住不算重叠、可同轨。退房不晚于入住的异常区间不伪造几何，仅标记待核对。
         """
         w1 = w0 + timedelta(hours=span_hours)
+        today = local_now.date()
         checkin_time = time(15, 0, tzinfo=None)
         checkout_time = time(12, 0, tzinfo=None)
 
@@ -777,6 +804,12 @@ class AdminOperationsService:
                     checkout_verified=interval.checkout_verified,
                     semantic=semantic,
                     overlaps=overlaps,
+                    start_label=(
+                        "更早" if left_cont else _stay_clock_label(start, today)
+                    ),
+                    end_label=(
+                        "延续更晚" if right_cont else _stay_clock_label(end, today)
+                    ),
                 )
             )
         lane_count = max(1, len(lane_ends))
@@ -845,15 +878,7 @@ class AdminOperationsService:
 
         def _abs_label(kind: str, target: datetime) -> str:
             """服务端构造绝对时间文案；模板只渲染，不解析中文日期。"""
-            delta_days = (target.date() - today).days
-            if delta_days == 0:
-                day_word = "今天"
-            elif delta_days == 1:
-                day_word = "明天"
-            elif delta_days == -1:
-                day_word = "昨天"
-            else:
-                day_word = f"{target.month}月{target.day}日"
+            day_word = _relative_day_word(target.date(), today)
             clock = f"{target.hour:02d}:{target.minute:02d}"
             if kind == "checkin":
                 return f"{day_word} {clock} 起入住"

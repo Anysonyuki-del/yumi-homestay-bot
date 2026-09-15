@@ -94,3 +94,39 @@ def test_anomaly_checkout_not_after_checkin_is_flagged_not_faked() -> None:
     """退房不晚于入住：标记异常，不伪造几何。"""
     bars, lanes, overlap, anomaly = _bars([_iv(1, "2026-09-09", "2026-09-09")])
     assert anomaly and bars == []
+
+
+# --- 起止时间文案（手机版式用） -------------------------------------------
+
+
+def test_stay_labels_use_the_same_day_wording_as_room_events() -> None:
+    """住宿条的起止文案沿用既有的今天/明天/昨天/M月D日 约定。
+
+    手机版式把「姓名 · N 晚」换成「起 → 止 · N 晚」，需要真实日期。
+    文案在服务端生成，模板只渲染，不解析中文日期——与 target_label 同一条原则。
+    """
+    # 窗口 9/07 起 6 天，此刻 9/09 04:00，因此 9/09 是「今天」、9/10 是「明天」。
+    bars, *_ = _bars([_iv(1, "2026-09-09", "2026-09-10")])
+    assert len(bars) == 1
+    assert bars[0].start_label == "今天 15:00"
+    assert bars[0].end_label == "明天 12:00"
+
+
+def test_stay_labels_fall_back_to_absolute_date_outside_relative_range() -> None:
+    """超出昨天/今天/明天的日期用绝对写法，不编造相对词。"""
+    bars, *_ = _bars([_iv(1, "2026-09-11", "2026-09-12")])
+    assert bars[0].start_label == "9月11日 15:00"
+    assert bars[0].end_label == "9月12日 12:00"
+
+
+def test_stay_labels_mark_continuation_instead_of_clipped_time() -> None:
+    """住宿真实起止超出窗口时标注延续，不把裁切后的边界当成真实时刻。
+
+    裁切只是画图需要；把 w0 当作入住时刻会显示一个从未发生的时间。
+    """
+    # 窗口 9/07–9/13；这笔 9/05 入住、9/20 退房，两端都超出。
+    bars, *_ = _bars([_iv(1, "2026-09-05", "2026-09-20")])
+    assert bars[0].left_continues is True
+    assert bars[0].right_continues is True
+    assert bars[0].start_label == "更早"
+    assert bars[0].end_label == "延续更晚"

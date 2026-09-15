@@ -319,7 +319,7 @@ tbody tr:hover { background: var(--surface-sunk); }
 .drawer-close { position: absolute; top: 10px; right: 8px; }
 .drawer-trigger { display: none; }
 .js-enabled .drawer-trigger { display: inline-grid; }
-.topbar { position: sticky; z-index: 20; top: 0; display: grid; min-height: var(--topbar-height); grid-template-columns: 44px 1fr auto; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: rgb(255 255 255 / 82%); backdrop-filter: saturate(180%) blur(12px); -webkit-backdrop-filter: saturate(180%) blur(12px); }
+.topbar { position: sticky; z-index: 20; top: 0; display: grid; min-height: var(--topbar-height); grid-template-columns: 44px 1fr auto; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
 html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .topbar__brand { color: var(--muted); font-size: var(--t-sm); font-weight: 600; }
 .topbar__account { display: inline-flex; min-height: 40px; align-items: center; gap: 7px; padding: 7px 9px; border-radius: var(--r-sm); color: var(--ink-soft); font-weight: 600; text-decoration: none; }
@@ -560,6 +560,10 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   --cal-current-line: color-mix(in srgb, var(--primary) 42%, var(--surface));
   --cal-current-ink: #1a3d8a;
   --cal-current-ink: color-mix(in srgb, var(--primary) 50%, var(--ink-strong));
+  --cal-overlap-stripe: #ddb290;
+  --cal-overlap-stripe: color-mix(in srgb, var(--warning) 45%, var(--surface));
+  --cal-warn-line: #e8cbb5;
+  --cal-warn-line: color-mix(in srgb, var(--warning) 30%, var(--surface));
   margin: 24px 0 16px; background: var(--surface);
 }
 .cal__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 10px; }
@@ -599,7 +603,8 @@ a.cal__bar:focus-visible { outline: 2px solid var(--primary); outline-offset: 2p
 /* 不支持 :has 时直接展示所有订单，防止出现无法展开的数据。 */
 @supports selector(:has(*)) {
   .cal__more { display: block; }
-  .cal__tracks { height: calc(var(--preview-rows) * var(--track-height)); }
+  /* 折叠态封顶三条轨道，但不足三条时按真实行数收紧，避免留空轨道。 */
+  .cal__tracks { height: calc(min(var(--rows), var(--preview-rows)) * var(--track-height)); }
   .cal__bar--extra, .cal__identity--extra { display: none; }
   .cal__segment:has(> .cal__more[open]) .cal__tracks { height: calc(var(--rows) * var(--track-height)); }
   .cal__segment:has(> .cal__more[open]) .cal__bar--extra { display: flex; }
@@ -612,16 +617,61 @@ a.cal__bar:focus-visible { outline: 2px solid var(--primary); outline-offset: 2p
 .room-operation-card .room-next-action strong { font-size: 13px; line-height: 1.6; }
 .room-operation-card .room-next-action .button { background: var(--primary); border-color: var(--primary); color: var(--surface); font-size: 13px; }
 .room-operation-card__aux .field-help { font-size: 12px; }
+/* 手机版式（Spec 2026-09-16）：不切段，跨度交给迷你条，身份交给订单卡。
+   桌面甘特图规则一行未动，两套布局由下面的 @container 切换。 */
+/* 日期格设最小宽度，窗口天数多到放不下时整条带横向滚动，而不是把格子压到读不了。
+   旧的手机甘特图靠切成 3 天一段来维持可读宽度；新版不分段，改用这个视口。
+   列宽下限 44px：生产窗口 6 天需 6×44 + 5×2(gap) = 274px，
+   手机卡片内容宽约 294px（360 减去卡片内外边距），放得下且留有余量。
+   注意别漏算 gap——按 6×48 估成 288px 会以为放得下，实际 298px 会溢出。
+   迷你条与日期条共用同一个滚动容器，因此滚动时两者始终对齐。 */
+.cal-m__viewport { overflow-x: auto; overscroll-behavior-x: contain; }
+/* max-content 让网格按列的最小贡献（48px）撑开，min-width:100% 保证有余量时
+   仍铺满并由 1fr 均分。不写死总宽，因此不必再手工把 gap 算进去。 */
+.cal-m__track { width: max-content; min-width: 100%; }
+.cal-m__strip { display: grid; grid-template-columns: repeat(var(--days, 6), minmax(44px, 1fr)); gap: 2px; }
+.cal-m__day { padding: 6px 2px 5px; text-align: center; border-radius: 6px; background: var(--surface-sunk); }
+.cal-m__dow { display: block; font-size: 11px; line-height: 1.3; color: var(--muted); }
+.cal-m__dnum { display: block; font-size: 14px; font-weight: 700; line-height: 1.25; color: var(--ink-mid); }
+.cal-m__day--today { background: var(--primary-soft); box-shadow: inset 0 0 0 1px var(--cal-future-line); }
+.cal-m__day--today .cal-m__dow, .cal-m__day--today .cal-m__dnum { color: var(--primary-hover); }
+/* 无人住的日期压低对比，让有人住的日子先被看到；数据来自 RoomDayOperation.occupied。 */
+.cal-m__day--free .cal-m__dnum { color: var(--line-soft); font-weight: 600; }
+
+.cal-m__rail { display: grid; gap: 3px; margin-top: 6px; }
+.cal-m__lane { position: relative; height: 8px; border-radius: 999px; background: var(--surface-sunk); }
+.cal-m__fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; background: var(--cal-current-line); }
+.cal-m__fill--future { background: var(--cal-future-line); }
+.cal-m__fill--past { background: var(--line-strong); }
+/* 重叠用斜纹而不是纯色：色盲用户也能与相邻轨区分。 */
+.cal-m__fill--overlap { background: repeating-linear-gradient(45deg, var(--warning) 0 4px, var(--cal-overlap-stripe) 4px 8px); }
+
+.cal-m__list { display: grid; gap: 8px; margin-top: 10px; }
+.cal-m__item { display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 0 12px 0 0; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
+.cal-m__edge { align-self: stretch; border-radius: var(--r-sm) 0 0 var(--r-sm); background: var(--cal-current-line); }
+.cal-m__item--future .cal-m__edge { background: var(--cal-future-line); }
+.cal-m__item--past .cal-m__edge { background: var(--line-strong); }
+.cal-m__item--overlap .cal-m__edge { background: var(--warning); }
+.cal-m__item--featured { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+/* 整张卡是点击区：只让姓名可点会退化到 24px，低于 44px 触控下限。 */
+.cal-m__hit { display: block; min-height: 44px; padding: 11px 0; color: inherit; text-decoration: none; }
+.cal-m__hit:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: var(--r-sm); }
+.cal-m__name { display: block; font-size: 15px; font-weight: 600; color: var(--primary); overflow-wrap: anywhere; }
+a.cal-m__hit:hover .cal-m__name { color: var(--primary-hover); }
+span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
+.cal-m__meta { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.cal-m__when { font-variant-numeric: tabular-nums; }
+.cal-m__state { flex: none; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--ink-soft); background: var(--surface-sunk); }
+.cal-m__state--now { color: var(--primary-hover); background: var(--primary-soft); }
+.cal-m__state--warn { color: var(--warning); background: var(--warning-soft); border: 1px solid var(--cal-warn-line); }
+.cal-m__state--done { color: var(--ink-soft); background: var(--surface-sunk); }
+
 @container (max-width: 620px) {
   .cal__layout--wide { display: none; }
   .cal__layout--compact { display: block; }
-  .cal__segment { --track-height: 88px; --bar-offset: 44px; }
-  .cal__identity { display: flex; align-items: center; position: absolute; left: 0; max-width: 100%; height: 44px; gap: 4px; font-size: 12px; color: var(--muted); }
-  .cal__identity a { display: inline-flex; align-items: center; min-height: 44px; color: var(--primary); overflow-wrap: anywhere; }
-  @supports selector(:has(*)) {
-    .cal__identity--extra { display: none; }
-    .cal__segment:has(> .cal__more[open]) .cal__identity--extra { display: flex; }
-  }
+  /* 旧的紧凑甘特图覆盖规则已随手机版式一并移除：
+     --track-height/--bar-offset 与 .cal__identity 只服务于那套布局。
+     桌面端不使用它们，手机端改用 .cal-m__*。 */
 }
 @media (max-width: 520px) {
   .room-operation-card { padding: 18px; }

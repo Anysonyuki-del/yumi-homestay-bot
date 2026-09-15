@@ -81,7 +81,11 @@
   {% for bar in timeline.bars %}{% if bar.left_pct < end and bar.left_pct + bar.width_pct > begin %}
     {% set visible.bars = visible.bars + [bar] %}
   {% endif %}{% endfor %}
-  <section class="cal__segment" style="--days: {{ days | length }}; --rows: {{ [visible.bars | length, 3] | max }};">
+  {# 每段按自己的可见笔数收紧，不跨段对齐：两笔订单不该撑出第三条空轨道。
+     下限 1 是给空段留出显示空状态文案的高度，否则容器会塌成零高。
+     分段之间高度参差是这里接受的结果；若要改成等高，属于产品取舍，
+     应当先改 Spec 再改实现，不在这里自行决定。 #}
+  <section class="cal__segment" style="--days: {{ days | length }}; --rows: {{ [visible.bars | length, 1] | max }};">
     <div class="cal__content">
       <div class="cal__dates">
         {% for day in days %}<div class="cal__date{% if day.local_date == today %} cal__date--today{% endif %}"{% if day.local_date == today %} aria-label="今天 {{ day.local_date }}"{% endif %}><span class="cal__dow">{{ weekdays[day.local_date.weekday()] }}</span><span class="cal__dnum">{% if loop.first or day.local_date.day == 1 %}{{ day.local_date.month }}/{% endif %}{{ day.local_date.day }}</span></div>{% endfor %}
@@ -107,6 +111,52 @@
 {% endfor %}
 {%- endmacro %}
 
+{# 手机版式：不切段，跨度交给迷你占用条，身份与状态交给订单卡。
+   桌面端继续用 _calendar_segments 的甘特图，本宏不参与。
+   两者读同一份 timeline，不重新计算任何几何。 #}
+{% macro _room_timeline_mobile(timeline, today, featured) -%}
+{% set total = timeline.days | length %}
+<div class="cal-m" style="--days: {{ total }};">
+  <div class="cal-m__viewport"><div class="cal-m__track">
+  <div class="cal-m__strip" aria-hidden="true">
+    {% for day in timeline.days %}
+    <div class="cal-m__day{% if day.local_date == today %} cal-m__day--today{% endif %}{% if not day.occupied %} cal-m__day--free{% endif %}">
+      <span class="cal-m__dow">{{ ["周一","周二","周三","周四","周五","周六","周日"][day.local_date.weekday()] }}</span>
+      <span class="cal-m__dnum">{{ day.local_date.day }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if timeline.bars %}
+  {# 每笔一条 8px 轨：保留跨度与重叠的视觉，但不占整条 88px 轨道。
+     lane 沿用服务端分配，重叠订单因此仍分占两轨。 #}
+  <div class="cal-m__rail" aria-hidden="true">
+    {% for bar in timeline.bars %}
+    <div class="cal-m__lane"><span class="cal-m__fill cal-m__fill--{{ bar.semantic }}{% if bar.overlaps %} cal-m__fill--overlap{% endif %}" style="left: {{ bar.left_pct }}%; width: {{ bar.width_pct }}%;"></span></div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  </div></div>
+
+  {% if timeline.bars %}
+  <ul class="clean-list cal-m__list">
+    {% for bar in timeline.bars %}
+    {% set summary = _cal_guest(bar.guest_name, bar.customer_id) ~ " · " ~ bar.start_label ~ " 至 " ~ bar.end_label ~ " · " ~ bar.nights ~ " 晚" %}
+    <li class="cal-m__item cal-m__item--{{ bar.semantic }}{% if bar.overlaps %} cal-m__item--overlap{% endif %}{% if bar.order_id == featured %} cal-m__item--featured{% endif %}">
+      <span class="cal-m__edge" aria-hidden="true"></span>
+      {# 整张卡是点击区：只让姓名可点会退化到 24px，低于 44px 触控下限。 #}
+      <{% if bar.customer_id is not none %}a class="cal-m__hit" href="/employee/customers/{{ bar.customer_id }}"{% else %}span class="cal-m__hit"{% endif %} title="{{ summary }}">
+        <span class="cal-m__name">{{ _cal_guest(bar.guest_name, bar.customer_id) }}</span>
+        <span class="cal-m__meta"><span class="cal-m__when">{{ bar.start_label }} → {{ bar.end_label }}</span> · {{ bar.nights }} 晚{% if bar.overlaps %} · 与其他订单重叠{% endif %}</span>
+      </{% if bar.customer_id is not none %}a{% else %}span{% endif %}>
+      <span class="cal-m__state{% if bar.checkout_verified %} cal-m__state--done{% elif bar.overlaps %} cal-m__state--warn{% elif bar.semantic == "current" %} cal-m__state--now{% endif %}">{% if bar.checkout_verified %}已退房{% elif bar.overlaps %}需核对{% elif bar.semantic == "current" %}在住{% elif bar.semantic == "past" %}已过{% else %}未来{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="cal__empty">当前日期范围内暂无订单</p>{% endif %}
+</div>
+{%- endmacro %}
+
 {# 同一份数据输出两种日期分段，CSS 只展示其中一种，无脚本也能完整查看和展开。 #}
 {% macro room_timeline(timeline, today, stale, label, featured_order_id=none) -%}
 {% if timeline and timeline.days %}<div class="cal">
@@ -117,7 +167,7 @@
   {# 下一单强调色绑定事件订单 ID，不按当前时钟重新猜测客人。 #}
   <div class="cal__scroll" role="group" aria-label="{{ label }}{% if stale %}（上次同步计划，待核实）{% endif %}">
     <div class="cal__layout--wide">{{ _calendar_segments(timeline, today, 7, featured_order_id) }}</div>
-    <div class="cal__layout--compact">{{ _calendar_segments(timeline, today, 3, featured_order_id) }}</div>
+    <div class="cal__layout--compact">{{ _room_timeline_mobile(timeline, today, featured_order_id) }}</div>
   </div>
   {% if timeline.bars %}<details class="cal__trips"><summary>查看本房间行程列表</summary>
     <ul class="clean-list cal__trip-list">{% for bar in timeline.bars %}<li>{% if bar.customer_id is not none %}<a href="/employee/customers/{{ bar.customer_id }}">{{ _cal_guest(bar.guest_name, bar.customer_id) }}</a>{% else %}未关联客人{% endif %} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</li>{% endfor %}</ul>

@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from playwright.sync_api import Browser, Page, Playwright, sync_playwright
@@ -536,9 +537,18 @@ def test_permanent_delete_never_shows_the_archive_recoverable_wording(
 
 
 def _timeline_fixture(
-    day_count: int, *, crossing: bool = False, sparse_tail: bool = False
+    day_count: int,
+    *,
+    crossing: bool = False,
+    sparse_tail: bool = False,
+    segment_days: int = 7,
 ) -> str:
-    """用真实宏与合成订单验证分段、独立分轨及无脚本展开。"""
+    """用真实宏与合成订单验证分段、独立分轨及无脚本展开。
+
+    `segment_days` 必须与被测布局的分段大小一致：桌面 `.cal__layout--wide`
+    用 7 天。手机端自 2026-09-16 起改用 `_room_timeline_mobile`（不分段），
+    因此分段相关的断言只对桌面成立。
+    """
     from datetime import date, timedelta
     from types import SimpleNamespace
 
@@ -559,16 +569,17 @@ def _timeline_fixture(
         semantic="future", overlaps=False,
     ) for i in range(5)]
     if sparse_tail:
-        # 首段三笔、中段空、末段一笔：手机 3 天分段后各段笔数必然不同。
+        # 首段三笔、末段一笔：分段后各段笔数必然不同。
         span = 100 / day_count
         bars = [
             replace_span(bar, day * span, span)
             for bar, day in zip(bars[:4], (0, 1, 2, day_count - 1), strict=True)
         ]
     if crossing:
-        # 第三天 15:00 到第四天 12:00，在三日段边界两侧分别保留 9 与 12 小时。
+        # 跨越段边界：在边界前一天 15:00 起、次日 12:00 止，
+        # 于边界两侧分别保留 9 与 12 小时。
         bars = bars[:1]
-        bars[0].left_pct = 2.625 / day_count * 100
+        bars[0].left_pct = (segment_days - 0.375) / day_count * 100
         bars[0].width_pct = 0.875 / day_count * 100
     timeline = SimpleNamespace(days=days, bars=bars, total_columns=day_count,
                                lane_count=1, has_overlap=False, has_anomaly=False)
@@ -590,9 +601,25 @@ def test_timeline_fits_without_horizontal_scrolling(browser: Browser, width: int
     page.route("http://room-preview.test/", lambda route: route.fulfill(
         content_type="text/html", body=_timeline_fixture(18)))
     page.goto("http://room-preview.test/")
+    # 页面本身在任何宽度下都不得横向滚动。
+    assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
+
+    if width < 620:
+        # 手机版式（2026-09-16 起）：不分段，18 天全部在一条带上。
+        # 天数多到放不下时由 .cal-m__viewport 内部横滚，格子保持 44px 可读，
+        # 不像旧版那样把日期压窄。生产窗口只有 6 天，实际不会出现滚动条。
+        cells = page.locator(".cal-m__day:visible")
+        assert cells.count() == 18
+        assert cells.evaluate_all("els => els.every(el => el.clientWidth >= 44)")
+        assert page.locator(".cal-m__viewport:visible").evaluate_all(
+            "els => els.every(el => el.scrollWidth >= el.clientWidth)")
+        # 迷你条与日期条同在滚动容器内，滚动时保持对齐。
+        assert page.locator(".cal-m__viewport .cal-m__rail").count() == 1
+        page.close()
+        return
+
     cells = page.locator(".cal__date:visible")
     assert cells.count() == 18
-    assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
     assert page.locator(".cal__scroll:visible").evaluate_all(
         "els => els.every(el => el.scrollWidth <= el.clientWidth)")
     assert cells.evaluate_all(
@@ -609,14 +636,16 @@ def test_timeline_fits_without_horizontal_scrolling(browser: Browser, width: int
     page.close()
 
 
-def test_every_date_segment_is_the_same_height(browser: Browser) -> None:
-    """各段高度必须一致，不能随该段恰好有几笔订单而缩水。
+def test_each_date_segment_matches_its_own_row_count(browser: Browser) -> None:
+    """各段按自己的笔数收紧，不被最多的那段拉齐。
 
-    段高原本等于该段可见条数，7 天在手机上切成 3+3+1，末段只有一笔就矮一截，
-    整块日历看上去参差不齐。现在固定预览三条：不足三笔留空行，超过三笔折叠。
+    本测试原本断言的是反面——「各段高度必须一致」，理由是 3+3+1 切分下
+    末段矮一截显得参差。那等于为了版面整齐给只有一笔订单的段留两条空轨道，
+    也就是用户报的那种大段空白。等高与否属于产品取舍，应当先改 Spec 再改实现，
+    因此这里把判据换成「每段各自吻合」，并保留原来的真实 7 天分段夹具。
     """
-    page = browser.new_page(viewport={"width": 390, "height": 900})
-    page.set_content(_timeline_fixture(7, sparse_tail=True))
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_timeline_fixture(14, sparse_tail=True))
 
     tracks = page.locator(".cal__segment:visible .cal__tracks")
     heights = tracks.evaluate_all(
@@ -627,7 +656,13 @@ def test_every_date_segment_is_the_same_height(browser: Browser) -> None:
              .filter(bar => bar.offsetParent).length)"""
     )
     assert len(set(counts)) > 1, "这个夹具本身要造出各段笔数不同，否则守不住任何东西"
-    assert len(set(heights)) == 1, f"各段轨道高不一致：{heights}（各段笔数 {counts}）"
+
+    for index, (height, count) in enumerate(zip(heights, counts, strict=True)):
+        # 空段仍留一条轨道显示空状态文案；折叠态封顶三条。
+        expected_rows = max(min(count, 3), 1)
+        assert height == expected_rows * _CAL_TRACK_HEIGHT_DESKTOP, (
+            f"第 {index + 1} 段有 {count} 笔，应占 {expected_rows} 条轨道，实际 {height}"
+        )
     page.close()
 
 
@@ -640,18 +675,13 @@ def test_a_stay_split_across_segments_says_it_is_the_same_booking(
     没有延续标注时，这与「一笔连住被拆成两单」的错误数据长得一模一样——那正是
     上一轮用户报的缺陷，不能靠版面再制造一次同样的观感。
     """
-    page = browser.new_page(viewport={"width": 390, "height": 844})
-    page.set_content(_timeline_fixture(6, crossing=True))
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_timeline_fixture(14, crossing=True))
 
-    identities = page.locator(".cal__identity:visible")
-    assert identities.count() == 2, "跨段住宿应在两段各出现一行"
-    texts = identities.all_inner_texts()
-    assert all("示例客人1" in text and "6 晚" in text for text in texts)
-    # 前一段说「续下段」，后一段说「接上段」，两行都点明是同一笔。
-    assert "续下段" in texts[0] and "接上段" in texts[1], texts
-    assert all("同一笔" in text for text in texts), texts
-
-    # 条本体的悬停说明与延续箭头的读屏文案同样点明跨段，不各写一套措辞。
+    # 原先此处还断言 .cal__identity 在两段各出现一行。该元素默认 display:none，
+    # 只在旧的手机紧凑布局里显示过；2026-09-16 手机改用 _room_timeline_mobile 后
+    # 那条规则随之移除，它在任何视口都不再可见。
+    # 跨段延续的守护改由下面的 title 与 .cal__cont 无障碍标签承担，覆盖未减少。
     titles = page.locator(".cal__bar:visible").evaluate_all(
         "els => els.map(el => el.getAttribute('title'))"
     )
@@ -685,18 +715,19 @@ def test_the_date_module_is_not_a_dead_keyboard_stop(browser: Browser) -> None:
 
 def test_timeline_segment_clipping_keeps_exact_endpoints(browser: Browser) -> None:
     """换行只裁切展示，两个片段合计仍为 21 小时，客户链接不改变。"""
-    page = browser.new_page(viewport={"width": 390, "height": 844})
-    page.set_content(_timeline_fixture(6, crossing=True))
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_timeline_fixture(14, crossing=True))
     pieces = page.locator(".cal__bar:visible")
     assert pieces.count() == 2
     positions = pieces.evaluate_all("""els => els.map(el => ({
         left: parseFloat(el.style.left), width: parseFloat(el.style.width),
         href: el.getAttribute('href')
     }))""")
-    assert positions[0]["left"] == pytest.approx(87.5)
-    assert positions[0]["width"] == pytest.approx(12.5)
+    # 段宽 7 天 = 168 小时：边界前 9 小时占 5.3571%，边界后 12 小时占 7.1429%。
+    assert positions[0]["left"] == pytest.approx(94.6429, abs=0.0001)
+    assert positions[0]["width"] == pytest.approx(9 / 168 * 100, abs=0.0001)
     assert positions[1]["left"] == pytest.approx(0)
-    assert positions[1]["width"] == pytest.approx(100 / 6, abs=0.0001)
+    assert positions[1]["width"] == pytest.approx(12 / 168 * 100, abs=0.0001)
     assert {p["href"] for p in positions} == {"/employee/customers/1"}
     page.close()
 
@@ -821,4 +852,422 @@ def test_countdown_verified_checkout_stops(browser: Browser) -> None:
         verified="1"))
     page.add_script_tag(content=ADMIN_SCRIPT)
     assert page.inner_text(".countdown").strip() == "已退房"
+    page.close()
+
+
+# --- 日历轨道高度（R-03） ---------------------------------------------------
+
+_CAL_TRACK_HEIGHT_MOBILE = 88
+_CAL_TRACK_HEIGHT_DESKTOP = 54
+
+
+def _render_room_timeline(bar_count: int, *, days: int = 6) -> str:
+    """用真实宏渲染一段合成时间轴。
+
+    只造合成姓名与均分的住宿区间，不引入任何真实订单或客户数据。
+    走真实模板而不是手写 HTML，才能同时覆盖模板里的 --rows 与 CSS 里的高度规则。
+    """
+    from datetime import date, timedelta
+
+    from jinja2 import Environment, FileSystemLoader
+
+    from homestay_bot.services.admin_operations_service import TimelineBar
+
+    start = date(2026, 9, 14)
+    day_items = [
+        # occupied 必须给：模板用它把无人住的日期压灰，缺失时 Jinja 取到
+        # undefined（假值），会让每一天都显示成空房，测试便测不出这条规则。
+        SimpleNamespace(local_date=start + timedelta(days=offset), occupied=bar_count > 0)
+        for offset in range(days)
+    ]
+    # 让每条住宿都横跨整个窗口，从而必定落在同一分段里，
+    # 使可见条数等于 bar_count，轨道数只由 --rows 规则决定。
+    bars = [
+        TimelineBar(
+            order_id=index + 1,
+            customer_id=index + 1,
+            guest_name=f"测试客人{index + 1}",
+            nights=2,
+            left_pct=0.0,
+            width_pct=100.0,
+            lane=index,
+            left_continues=False,
+            right_continues=False,
+            checkout_verified=False,
+            start_label="今天 15:00",
+            end_label="明天 12:00",
+        )
+        for index in range(bar_count)
+    ]
+    timeline = SimpleNamespace(
+        days=tuple(day_items),
+        bars=tuple(bars),
+        has_overlap=False,
+        has_anomaly=False,
+    )
+
+    env = Environment(
+        loader=FileSystemLoader(PROJECT_ROOT / "src/homestay_bot/templates"),
+        autoescape=True,
+    )
+    template = env.from_string(
+        "{% import 'components/ui.html' as ui %}"
+        "{{ ui.room_timeline(timeline, today, false, '测试房间') }}"
+    )
+    # 宽/紧凑两套布局由 @container (max-width: 620px) 切换，容器是
+    # .room-operation-card（container-type: inline-size）。不套这层的话
+    # 容器查询永远不命中，紧凑布局会一直 display:none，量到的高度恒为 0。
+    return (
+        '<article class="room-operation-card">'
+        + template.render(timeline=timeline, today=start)
+        + "</article>"
+    )
+
+
+def _tracks_height(page: Page, *, compact: bool) -> float:
+    """返回当前生效布局里第一个轨道容器的高度。"""
+    layout = ".cal__layout--compact" if compact else ".cal__layout--wide"
+    height = page.evaluate(
+        "(sel) => {"
+        "  const el = document.querySelector(sel + ' .cal__tracks');"
+        "  return el ? el.getBoundingClientRect().height : -1;"
+        "}",
+        layout,
+    )
+    return float(height)
+
+
+@pytest.mark.parametrize("bar_count", [1, 2])
+def test_calendar_tracks_match_real_row_count(browser: Browser, bar_count: int) -> None:
+    """少于三条订单时，轨道高度必须只占实际行数，不留空轨道。
+
+    截图里两条订单撑出三条轨道的大段空白，根因是模板把 --rows 取成
+    max(条目数, 3)，CSS 折叠态又固定用 --preview-rows: 3。
+    """
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_render_room_timeline(bar_count))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    height = _tracks_height(page, compact=False)
+    assert height == pytest.approx(bar_count * _CAL_TRACK_HEIGHT_DESKTOP), (
+        f"{bar_count} 条订单应占 {bar_count} 条轨道，实际高度 {height}"
+    )
+    page.close()
+
+
+def test_calendar_tracks_cap_preview_at_three(browser: Browser) -> None:
+    """超过三条时折叠态封顶三条轨道，展开后按真实行数铺开。"""
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_render_room_timeline(6))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    collapsed = _tracks_height(page, compact=False)
+    assert collapsed == pytest.approx(3 * _CAL_TRACK_HEIGHT_DESKTOP), (
+        f"折叠态应封顶三条轨道，实际 {collapsed}"
+    )
+
+    page.evaluate(
+        "() => document.querySelector('.cal__layout--wide .cal__more').open = true"
+    )
+    expanded = _tracks_height(page, compact=False)
+    assert expanded == pytest.approx(6 * _CAL_TRACK_HEIGHT_DESKTOP), (
+        f"展开后应铺开全部六条轨道，实际 {expanded}"
+    )
+    page.close()
+
+
+def test_calendar_empty_keeps_message_visible(browser: Browser) -> None:
+    """没有订单时仍要留出高度显示空状态文案，不能塌成零高。"""
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_render_room_timeline(0))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    height = _tracks_height(page, compact=False)
+    assert height > 0, "空日历塌成零高会让空状态文案不可见"
+    assert page.locator(".cal__layout--wide .cal__empty").first.is_visible()
+    page.close()
+
+
+def _render_uneven_timeline(counts: list[int], *, segment_size: int = 7) -> str:
+    """渲染各分段订单数不同的时间轴。
+
+    既有 fixture 让每条住宿横跨整个窗口，于是每段可见数都相同——
+    这种形状下「各段取真实行数」与「各段统一取最大行数」渲染结果完全一致，
+    测不出两者的区别。这里按段放置订单，让分段之间行数不等。
+    """
+    from datetime import date, timedelta
+
+    from jinja2 import Environment, FileSystemLoader
+
+    from homestay_bot.services.admin_operations_service import TimelineBar
+
+    start = date(2026, 9, 14)
+    days = len(counts) * segment_size
+    day_items = [
+        SimpleNamespace(local_date=start + timedelta(days=offset)) for offset in range(days)
+    ]
+
+    span = 100.0 / len(counts)
+    bars = []
+    order = 0
+    for seg_index, count in enumerate(counts):
+        for _ in range(count):
+            order += 1
+            bars.append(
+                TimelineBar(
+                    order_id=order,
+                    customer_id=order,
+                    guest_name=f"测试客人{order}",
+                    nights=1,
+                    # 留出边距，避免浮点误差让订单落进相邻分段。
+                    left_pct=seg_index * span + span * 0.1,
+                    width_pct=span * 0.8,
+                    lane=0,
+                    left_continues=False,
+                    right_continues=False,
+                    checkout_verified=False,
+                )
+            )
+
+    timeline = SimpleNamespace(
+        days=tuple(day_items),
+        bars=tuple(bars),
+        has_overlap=False,
+        has_anomaly=False,
+    )
+    env = Environment(
+        loader=FileSystemLoader(PROJECT_ROOT / "src/homestay_bot/templates"),
+        autoescape=True,
+    )
+    template = env.from_string(
+        "{% import 'components/ui.html' as ui %}"
+        "{{ ui.room_timeline(timeline, today, false, '测试房间') }}"
+    )
+    return (
+        '<article class="room-operation-card">'
+        + template.render(timeline=timeline, today=start)
+        + "</article>"
+    )
+
+
+def _segment_heights(page: Page, *, compact: bool) -> list[float]:
+    """返回当前布局里每个分段轨道容器的高度。"""
+    layout = ".cal__layout--compact" if compact else ".cal__layout--wide"
+    return page.evaluate(
+        "(sel) => Array.from(document.querySelectorAll(sel + ' .cal__tracks'))"
+        "  .map(el => el.getBoundingClientRect().height)",
+        layout,
+    )
+
+
+@pytest.mark.parametrize("counts", [[1, 3], [1, 4, 0]])
+def test_calendar_uneven_segments_do_not_pad_to_the_tallest(
+    browser: Browser, counts: list[int]
+) -> None:
+    """各分段按自己的订单数收紧，不被最高的那一段拉齐。
+
+    统一取全局最大行数时，1 条订单的那段会撑出 3 条甚至 4 条轨道，
+    也就是本次要修的那种空白。判据是「每段各自吻合」，
+    绝不能用「所有段高度一致」当通过标准——那恰好是缺陷的形状。
+    """
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_render_uneven_timeline(counts))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    heights = _segment_heights(page, compact=False)
+    assert len(heights) == len(counts), f"应渲染 {len(counts)} 段，实际 {len(heights)}"
+
+    for index, (height, count) in enumerate(zip(heights, counts, strict=True)):
+        # 空段仍要留一条轨道显示空状态文案；有订单的段封顶三条。
+        expected_rows = max(min(count, 3), 1)
+        assert height == pytest.approx(expected_rows * _CAL_TRACK_HEIGHT_DESKTOP), (
+            f"第 {index + 1} 段有 {count} 条订单，应占 {expected_rows} 条轨道，实际高度 {height}"
+        )
+    page.close()
+
+
+def test_calendar_uneven_segments_still_expand_fully(browser: Browser) -> None:
+    """展开后超出预览的那一段铺开真实行数，其余段不受牵连。"""
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_render_uneven_timeline([1, 4]))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    page.evaluate(
+        "() => document.querySelectorAll('.cal__layout--wide .cal__more')"
+        "  .forEach(el => { el.open = true; })"
+    )
+    heights = _segment_heights(page, compact=False)
+    assert heights[0] == pytest.approx(1 * _CAL_TRACK_HEIGHT_DESKTOP), (
+        f"只有一条订单的段展开后仍应是一条轨道，实际 {heights[0]}"
+    )
+    assert heights[1] == pytest.approx(4 * _CAL_TRACK_HEIGHT_DESKTOP), (
+        f"四条订单的段展开后应铺开四条轨道，实际 {heights[1]}"
+    )
+    page.close()
+
+
+def test_calendar_desktop_tracks_match_real_row_count(browser: Browser) -> None:
+    """桌面宽屏同样不保留空轨道；两种分段共用同一套规则。"""
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.set_content(_render_room_timeline(2))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    height = _tracks_height(page, compact=False)
+    assert height == pytest.approx(2 * _CAL_TRACK_HEIGHT_DESKTOP), (
+        f"桌面两条订单应占两条轨道，实际 {height}"
+    )
+    page.close()
+
+
+# --- 顶栏不透字（R-02） -----------------------------------------------------
+
+
+def test_topbar_background_is_opaque(browser: Browser) -> None:
+    """顶栏背景必须完全不透明，否则正文滚到它下面会透出来。
+
+    真机实测顶栏为 rgba(255,255,255,0.82) 且带 backdrop-filter，
+    滚动时卡片文字从标题栏里显出来。这里断言计算样式的 alpha，
+    而不是比对截图像素——像素阈值会随字体渲染和设备变化。
+    """
+    page = browser.new_page(viewport={"width": 390, "height": 844})
+    _load_admin_page(page)
+
+    alpha = page.evaluate(
+        "() => {"
+        "  const cs = getComputedStyle(document.querySelector('.topbar'));"
+        "  const m = cs.backgroundColor.match(/rgba?\\(([^)]+)\\)/);"
+        "  const parts = m[1].split(',').map(s => parseFloat(s));"
+        "  return parts.length > 3 ? parts[3] : 1;"
+        "}"
+    )
+    assert alpha == 1, f"顶栏背景透明度为 {alpha}，正文会透出来"
+    page.close()
+
+
+def test_topbar_keeps_layering_below_drawer(browser: Browser) -> None:
+    """顶栏改成实色后，抽屉与遮罩仍必须盖在它上面。
+
+    Spec 要求最小修复，不许为了盖住正文而全站抬高 z-index。
+    """
+    page = browser.new_page(viewport={"width": 390, "height": 844})
+    _load_admin_page(page)
+
+    layers = page.evaluate(
+        "() => ['.topbar', '.drawer-backdrop', '.admin-sidebar'].map("
+        "  sel => parseInt(getComputedStyle(document.querySelector(sel)).zIndex, 10)"
+        ")"
+    )
+    topbar, backdrop, drawer = layers
+    assert topbar < backdrop < drawer, (
+        f"层级被破坏：顶栏 {topbar} / 遮罩 {backdrop} / 抽屉 {drawer}"
+    )
+    page.close()
+
+
+# --- 手机版式（Spec 2026-09-16） -------------------------------------------
+
+
+def _mobile_page(browser: Browser, html: str, *, width: int = 360) -> Page:
+    """在手机宽度下装载房间卡，并注入真实 CSS。"""
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    page.set_content(html)
+    page.add_style_tag(content=ADMIN_CSS)
+    return page
+
+
+@pytest.mark.parametrize("width", [360, 390])
+def test_mobile_timeline_has_no_page_level_horizontal_overflow(
+    browser: Browser, width: int
+) -> None:
+    """M01：生产窗口（6 天）下页面与卡片都不出现横向滚动。"""
+    page = _mobile_page(browser, _render_room_timeline(2), width=width)
+    assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
+    # 6 天 × 48px 放得下，滚动容器不应真的产生滚动。
+    assert page.evaluate(
+        "() => [...document.querySelectorAll('.cal-m__viewport')]"
+        "  .every(el => el.scrollWidth <= el.clientWidth)"
+    )
+    page.close()
+
+
+def test_mobile_timeline_stays_within_a_height_budget(browser: Browser) -> None:
+    """M02：手机版式的高度必须控制在预算内。
+
+    不拿桌面渲染当基线——桌面横向空间充裕，单段甘特图本就更矮，
+    比它只会得出「手机更高」这种没有意义的结论。旧手机版式已被本次改动删除，
+    也无法再实时对照。因此改用绝对预算：表头与日期条固定开销 + 每笔订单一张卡。
+
+    旧手机版式在同样两笔订单下占 489px（2 段 × 3 条 88px 轨道加日期头），
+    预算 260px 因此仍有近一倍的余量，但足以拦住「又退回按轨道铺开」的回归。
+    """
+    for count, budget in [(1, 200), (2, 260), (4, 420)]:
+        page = _mobile_page(browser, _render_room_timeline(count))
+        height = page.evaluate(
+            "() => document.querySelector('.cal-m').getBoundingClientRect().height"
+        )
+        page.close()
+        assert height <= budget, f"{count} 笔订单占 {height}px，超出预算 {budget}px"
+
+
+def test_mobile_stay_card_is_a_full_size_touch_target(browser: Browser) -> None:
+    """M03：整张订单卡是点击区且不小于 44px，键盘可聚焦。
+
+    只让姓名可点会退化到约 24px，低于触控下限；这是改版时真实踩过的退化。
+    """
+    page = _mobile_page(browser, _render_room_timeline(2))
+    boxes = page.locator(".cal-m__hit").evaluate_all(
+        "els => els.map(el => el.getBoundingClientRect().height)"
+    )
+    assert boxes and min(boxes) >= 44, f"点击区高度 {boxes}"
+
+    assert page.locator("a.cal-m__hit").count() == 2, "有客户号时整卡应是链接"
+    focused = page.evaluate(
+        "() => { const a = document.querySelector('a.cal-m__hit');"
+        "        a.focus(); return document.activeElement === a; }"
+    )
+    assert focused, "订单卡必须能获得键盘焦点"
+    page.close()
+
+
+def test_mobile_timeline_keeps_every_piece_of_information(browser: Browser) -> None:
+    """M04：客户链接、起止、晚数、状态一个不少。"""
+    page = _mobile_page(browser, _render_room_timeline(2))
+    first = page.locator(".cal-m__item").first
+    assert first.locator("a.cal-m__hit").get_attribute("href") == "/employee/customers/1"
+    text = first.inner_text()
+    assert "测试客人1" in text
+    assert "2 晚" in text
+    # 断言真实起止文案：只查 "→" 的话，两侧都是空字符串也会通过。
+    assert "今天 15:00 → 明天 12:00" in text, f"起止文案未渲染：{text!r}"
+    assert first.locator(".cal-m__state").count() == 1
+    page.close()
+
+
+def test_mobile_timeline_empty_window_keeps_the_existing_message(
+    browser: Browser,
+) -> None:
+    """M04：空窗口沿用既有空状态文案，不新造措辞。"""
+    page = _mobile_page(browser, _render_room_timeline(0))
+    assert page.locator(".cal-m .cal__empty").first.is_visible()
+    assert page.locator(".cal-m__item").count() == 0
+    page.close()
+
+
+def test_mobile_timeline_survives_enlarged_system_font(browser: Browser) -> None:
+    """M05：字体放大后仍不产生页面级横向溢出。"""
+    page = _mobile_page(browser, _render_room_timeline(2))
+    page.add_style_tag(content="html { font-size: 22px; }")
+    assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth")
+    page.close()
+
+
+def test_mobile_timeline_does_not_depend_on_has_selector(browser: Browser) -> None:
+    """M07：新版不依赖 :has() 折叠，因此没有「展开」这一步。
+
+    旧版靠 `:has(> .cal__more[open])` 控制轨道高度，不支持 :has() 的浏览器
+    会看到不完整的数据。新版把全部订单直接列出，天然没有这个降级路径。
+    """
+    page = _mobile_page(browser, _render_room_timeline(6))
+    assert page.locator(".cal-m__item").count() == 6, "六笔订单应全部直接可见"
+    assert page.locator(".cal-m .cal__more").count() == 0, "手机版式不应再有展开控件"
     page.close()

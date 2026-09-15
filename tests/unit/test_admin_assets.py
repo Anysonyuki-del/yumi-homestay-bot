@@ -128,48 +128,33 @@ def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() 
     )
 
 
-def test_narrow_room_cards_switch_to_the_short_date_segment() -> None:
-    """窄卡片必须换成短日期段，否则日期列会被压到读不了。
+def test_narrow_room_cards_switch_to_the_mobile_timeline() -> None:
+    """窄卡片切换到手机版式，宽卡片保留分段甘特图。
 
-    「格子完全不可读」出现过两次，根因都是宽日期段落进了放不下它的卡片。v1.23.0
-    改用纵向分段（宽 7 天／窄 3 天）取代横向滚动，代价是可读性完全依赖容器查询：
-    一旦 `.room-operation-card` 掉了 `container-type`，查询永不命中，7 列会静默
-    挤进窄卡片，正是老故障重现。这里守住这条链路的三个环节；真实像素宽度由
-    tests/browser 在 390/1280 两档实测。
+    2026-09-16 前两侧共用 `_calendar_segments`，只是段宽不同（7 天 / 3 天）。
+    现在手机改用 `_room_timeline_mobile`：不分段，跨度交给迷你条、身份交给订单卡。
+    这条测试锁住「两套布局各自接到正确的宏」，避免哪天两边又被合并回同一个。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
     ui = (ASSET_ROOT / "templates/components/ui.html").read_text()
 
-    card = re.findall(r"\.room-operation-card \{([^}]*)\}", css)
-    assert card and "container-type: inline-size" in card[0], (
-        "房间卡片缺少 container-type，容器查询不会命中，窄卡片会用宽日期段"
-    )
-
     container_query = re.search(
-        r"@container \(max-width: (\d+)px\) \{(.*?)\n\}", css, re.S
+        r"@container\s*\(max-width:\s*620px\)\s*\{(.*?)\n\}", css, re.S
     )
-    assert container_query, "找不到切换到短日期段的容器查询"
-    assert ".cal__layout--wide { display: none; }" in container_query.group(2)
-    assert ".cal__layout--compact { display: block; }" in container_query.group(2)
+    assert container_query, "找不到切换布局的容器查询"
+    body = container_query.group(1)
+    assert ".cal__layout--wide { display: none; }" in body
+    assert ".cal__layout--compact { display: block; }" in body
 
-    # 段长必须小到能在对应宽度里读出日期：阈值 / 段长 = 每列可用宽度下限。
-    threshold = int(container_query.group(1))
-    sizes = [
-        int(size)
-        for size in re.findall(
-            r"_calendar_segments\(timeline, today, (\d+), featured_order_id\)", ui
-        )
-    ]
-    assert len(sizes) == 2, f"应有宽／窄两套日期段，实际 {sizes}"
-    wide, compact = sizes
-    assert threshold / wide >= 70, f"{wide} 天段在 {threshold}px 卡片里每列不足 70px"
-    assert compact < wide, "窄卡片的日期段必须比宽卡片短"
-
-    # 日期段自适应卡片宽度，不靠横向滚动兜底，也就不能再隐藏溢出内容。
-    scroll = re.findall(r"\.cal__scroll \{([^}]*)\}", css)
-    assert scroll and "overflow-x" not in scroll[0]
-    list_rules = re.findall(r"\.room-operations-list \{([^}]*)\}", css)
-    assert list_rules and "repeat(2" not in "".join(list_rules)
+    assert "_calendar_segments(timeline, today, 7, featured_order_id)" in ui, (
+        "宽布局必须继续使用 7 天分段的甘特图"
+    )
+    assert "_room_timeline_mobile(timeline, today, featured_order_id)" in ui, (
+        "窄布局必须使用手机专用宏"
+    )
+    assert "_calendar_segments(timeline, today, 3" not in ui, (
+        "手机端不应再切成 3 天一段"
+    )
 
 
 def test_admin_shell_uses_grouped_lightweight_navigation() -> None:
@@ -448,8 +433,13 @@ def test_calendar_bar_palette_stays_derived_from_the_primary_token() -> None:
         css,
     )
     assert len(pairs) >= 4, f"color-mix 与回退值没有成对声明：{pairs}"
+    # 住宿条配色挂 --primary；2026-09-16 手机版式新增的重叠告警色挂 --warning，
+    # 二者都是语义令牌。真正要守的是下面那条：回退值与 color-mix 不得脱钩。
+    allowed_bases = {"--primary", "--warning"}
     for name, fallback, top, percent, bottom in pairs:
-        assert top == "--primary", f"{name} 没有挂在主色上，换主色时不会跟着走"
+        assert top in allowed_bases, (
+            f"{name} 挂在 {top} 上，既不是主色也不是告警色，换令牌时不会跟着走"
+        )
         expected = _srgb_mix(root[top], root[bottom], float(percent))
         assert fallback.lower() == expected, (
             f"{name} 回退值 {fallback} 与 color-mix 结果 {expected} 不一致"
