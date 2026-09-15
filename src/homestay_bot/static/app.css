@@ -666,15 +666,15 @@ span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
 .cal-m__state--warn { color: var(--warning); background: var(--warning-soft); border: 1px solid var(--cal-warn-line); }
 .cal-m__state--done { color: var(--ink-soft); background: var(--surface-sunk); }
 
-/* 中屏（卡宽 460–620px）：手机版式不再随卡片拉伸。
-   这一段容不下桌面甘特图——短住宿的条子放不下 94px 的条内标签
-   （卡宽 560px 时一晚只有 87px），而手机版式铺满 560px 后
-   日期格被拉到约 90px、订单卡姓名与徽章之间空出一大片。
-   封顶让它保持手机下的紧凑比例；日期条与迷你条同在 .cal-m 内，
-   一起收窄，因此对齐关系不受影响。 */
-@container (min-width: 460px) {
-  .cal-m { max-width: 420px; }
-}
+/* 手机版式封顶 420px，卡片再宽也不拉伸。
+   中屏（卡宽约 500–620px）两头不靠：桌面甘特图进不来——卡宽 560px 时
+   一晚住宿的条子只有 87px，放不下 94px 的条内标签；手机版式铺满又会把
+   日期格拉到约 90px、订单卡姓名与徽章之间空出一大片。
+   这里不加容器查询：内容宽不足 420px 时 max-width 本就不起作用，
+   手机端因此不受影响。加了反而有害——container-type: inline-size 量的是
+   内容盒，`min-width: 460px` 实际对应卡宽约 512px，会漏掉 460–512px 这一段。
+   日期条与迷你条同在 .cal-m 内一起收窄，百分比定位的对齐关系不受影响。 */
+.cal-m { max-width: 420px; }
 
 @container (max-width: 620px) {
   .cal__layout--wide { display: none; }

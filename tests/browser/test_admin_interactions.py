@@ -1309,21 +1309,56 @@ def test_mobile_timeline_does_not_stretch_on_mid_width_cards(browser: Browser) -
 
 
 @pytest.mark.parametrize("width", [360, 390])
-def test_mobile_timeline_cap_does_not_reach_phone_widths(
-    browser: Browser, width: int
-) -> None:
-    """手机宽度下不得命中中屏封顶。
+def test_mobile_timeline_cap_does_not_shrink_phones(browser: Browser, width: int) -> None:
+    """手机宽度下日历仍铺满卡片，封顶不得把它压窄。
 
-    直接断言计算样式里的 max-width 是 none，而不是比对日历宽度——
-    手机卡片内容宽本来就不到 420px，比宽度的话封顶生不生效都能通过，
-    等于什么都没验证。
+    封顶是无条件声明的：内容宽不足 420px 时 max-width 本就不起作用。
+    因此这里断言的是**效果**——日历宽度仍等于卡片内容宽。
+    若有人把上限调到 300px 之类，手机端会平白缩窄，本测试立刻失败。
+
+    容差 3px：祖先链上无任何 padding/margin/border（已实测核对），
+    差值来自 getBoundingClientRect 的亚像素取整。
     """
     page = browser.new_page(viewport={"width": width, "height": 900})
     page.set_content(_render_room_timeline(2))
     page.add_style_tag(content=ADMIN_CSS)
 
-    cap = page.evaluate(
-        "() => getComputedStyle(document.querySelector('.cal-m')).maxWidth"
+    geom = page.evaluate(
+        "() => {"
+        "  const card = document.querySelector('.room-operation-card');"
+        "  const cs = getComputedStyle(card);"
+        "  const inner = card.getBoundingClientRect().width"
+        "    - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);"
+        "  return {inner, cal: document.querySelector('.cal-m').getBoundingClientRect().width};"
+        "}"
     )
-    assert cap == "none", f"手机宽度 {width} 不应命中中屏封顶，实际 max-width={cap}"
+    assert geom["inner"] < 420, "夹具必须是内容宽不足封顶值的手机场景"
+    assert geom["cal"] == pytest.approx(geom["inner"], abs=3), (
+        f"手机下日历应铺满内容宽 {geom['inner']}，实际 {geom['cal']}"
+    )
+    page.close()
+
+
+@pytest.mark.parametrize("card_width", [480, 520, 560, 600])
+def test_mobile_timeline_cap_covers_the_whole_mid_band(
+    browser: Browser, card_width: int
+) -> None:
+    """整个中屏区间都被封顶覆盖，不留缝。
+
+    先前把封顶挂在 `@container (min-width: 460px)` 下，而
+    container-type: inline-size 量的是内容盒，460 实际对应卡宽约 512px，
+    460–512px 这一段没被覆盖、日期格仍被拉到 73px。改为无条件封顶后补此测试。
+    """
+    page = browser.new_page(viewport={"width": card_width + 80, "height": 900})
+    page.set_content(_render_room_timeline(2))
+    page.add_style_tag(content=ADMIN_CSS)
+    page.evaluate(
+        "(w) => { document.querySelector('.room-operation-card').style.width = w + 'px'; }",
+        card_width,
+    )
+
+    cal = page.evaluate(
+        "() => document.querySelector('.cal-m').getBoundingClientRect().width"
+    )
+    assert cal <= 420, f"卡宽 {card_width}px 下日历应封顶 420px，实际 {cal}"
     page.close()
