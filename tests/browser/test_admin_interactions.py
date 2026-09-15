@@ -1275,3 +1275,55 @@ def test_mobile_timeline_does_not_depend_on_has_selector(browser: Browser) -> No
     assert page.locator(".cal-m__item").count() == 6, "六笔订单应全部直接可见"
     assert page.locator(".cal-m .cal__more").count() == 0, "手机版式不应再有展开控件"
     page.close()
+
+
+def test_mobile_timeline_does_not_stretch_on_mid_width_cards(browser: Browser) -> None:
+    """中屏（卡宽 460–620px）下手机版式封顶，不随卡片拉伸。
+
+    这一段既进不了桌面甘特图（短住宿的条内标签放不下），
+    铺满又会让日期格被拉到约 90px、订单卡姓名与徽章之间空出一大片。
+    """
+    page = browser.new_page(viewport={"width": 620, "height": 900})
+    page.set_content(_render_room_timeline(2))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    geom = page.evaluate(
+        "() => {"
+        "  const card = document.querySelector('.room-operation-card');"
+        "  const m = document.querySelector('.cal-m');"
+        "  const strip = document.querySelector('.cal-m__strip');"
+        "  const rail = document.querySelector('.cal-m__rail');"
+        "  return {card: card.getBoundingClientRect().width,"
+        "          cal: m.getBoundingClientRect().width,"
+        "          strip: strip.getBoundingClientRect().width,"
+        "          rail: rail.getBoundingClientRect().width};"
+        "}"
+    )
+    assert geom["card"] > 460, f"夹具必须落在中屏区间，实际卡宽 {geom['card']}"
+    assert geom["cal"] <= 420, f"中屏下日历应封顶 420px，实际 {geom['cal']}"
+    # 日期条与迷你条同在 .cal-m 内一起收窄，对齐关系不能因封顶而错位。
+    assert geom["strip"] == pytest.approx(geom["rail"], abs=1), (
+        f"日期条 {geom['strip']} 与迷你条 {geom['rail']} 宽度不一致，百分比定位会错位"
+    )
+    page.close()
+
+
+@pytest.mark.parametrize("width", [360, 390])
+def test_mobile_timeline_cap_does_not_reach_phone_widths(
+    browser: Browser, width: int
+) -> None:
+    """手机宽度下不得命中中屏封顶。
+
+    直接断言计算样式里的 max-width 是 none，而不是比对日历宽度——
+    手机卡片内容宽本来就不到 420px，比宽度的话封顶生不生效都能通过，
+    等于什么都没验证。
+    """
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    page.set_content(_render_room_timeline(2))
+    page.add_style_tag(content=ADMIN_CSS)
+
+    cap = page.evaluate(
+        "() => getComputedStyle(document.querySelector('.cal-m')).maxWidth"
+    )
+    assert cap == "none", f"手机宽度 {width} 不应命中中屏封顶，实际 max-width={cap}"
+    page.close()
