@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">"YuMi 工作台"</string>
+    <string name="main_activity_title">"YuMi 工作台"</string>
+    <!-- 工作台入口与构建模式已移至 generated_entry.xml，由 src-tauri/build.rs 生成。
+         两侧同源，不会再出现 Rust 用测试地址而 Android 用生产地址的分叉。 -->
+    <string name="net_error_title">无法连接工作台</string>
+    <string name="net_error_body">没能打开服务器上的页面。常见原因：设备当前没有网络；连着无法上网的 Wi-Fi；网络需要先在浏览器里完成登录认证；或服务器暂时不可达。</string>
+    <string name="net_error_retry">重新打开工作台</string>
+    <string name="net_error_note">重试只会重新打开工作台首页，不会重新提交你上一次的操作。如果刚才正在提交表单，请先回到对应列表确认记录状态。</string>
+    <string name="exit_confirm_title">退出 YuMi 工作台？</string>
+    <string name="exit_confirm_body">关闭软件不等于退出登录。共用设备请先在网页里点退出登录。</string>
+    <string name="exit_confirm_ok">退出</string>
+    <string name="exit_confirm_cancel">留在应用</string>
+    <string name="save_image_title">保存图片</string>
+    <string name="save_image_body">将这张图片保存到你选择的位置。保存的文件属于你的文件，退出登录或卸载应用都不会删除它。</string>
+    <string name="save_image_ok">选择保存位置</string>
+    <string name="save_image_cancel">取消</string>
+    <string name="save_image_working">正在下载…</string>
+    <string name="save_image_done">已保存</string>
+    <string name="save_image_cancelled">已取消，未保存。</string>
+    <string name="save_image_write_failed">写入失败，未保存。</string>
+    <string name="save_busy">正在保存上一张图片，请完成或取消后再试。</string>
+    <string name="save_stale">保存流程已中断，请重新长按图片保存。</string>
+    <string name="save_partial">未保存完整，所选位置可能留有不完整文件，请检查后自行删除。</string>
+    <string name="back_confirm_title">离开当前页面？</string>
+    <string name="back_confirm_body">无法确认上一页是否会重新提交刚才的操作，因此将回到工作台首页。未保存的修改会丢失。</string>
+    <string name="back_confirm_ok">回到工作台</string>
+    <string name="back_confirm_cancel">留在本页</string>
+</resources>

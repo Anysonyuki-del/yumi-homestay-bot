@@ -1,0 +1,41 @@
+[package]
+name = "yumi"
+version = "0.1.0"
+description = "YuMi 工作台客户端"
+edition = "2021"
+# 与 rust-toolchain.toml 锁定的版本一致，避免用更旧的编译器构建。
+rust-version = "1.98"
+
+[lib]
+# Tauri 移动端要求共享库同时产出 staticlib 与 cdylib：
+# Android 侧通过生成工程加载该库的 JNI 入口，Windows 侧由 main.rs 走 rlib。
+name = "yumi_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 只引入外壳所需依赖。不引入 HTTP 客户端、业务序列化模型或前端框架：
+# 业务请求全部由系统 WebView 直接发往服务器，Rust 不复制业务接口。
+tauri = { version = "2", features = [] }
+# 外链确认只用到「问一句」和「交给系统浏览器」两件事。
+# 两者都只在 Rust 侧调用：capabilities 仍为空，远程网页无法通过 IPC 触达它们。
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+url = "2"
+
+[features]
+default = []
+# 隔离测试后台构建。启用后入口地址改由编译期环境变量 YUMI_TEST_ENTRY 指定，
+# 允许 http 与非默认端口，仅供阶段 A 技术验证使用。
+# 正式构建绝不能启用：不启用时测试地址不会以任何形式进入产物。
+test-backend = []
+# 显示诊断构建。启用后启动入口改为打包的本地测量页 ui/diagnostics.html，
+# 完全不联网、不触碰业务后台，供修复 Spec 第 3 节建立可比基线使用。
+# 正式构建不启用：该页面既不是入口，也不会被导航策略放行。
+diagnostics = []
+
+[profile.release]
+# 正式包去掉符号，减少体积并避免泄漏本机构建路径。
+strip = true

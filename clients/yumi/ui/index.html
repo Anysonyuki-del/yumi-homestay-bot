@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>无法连接工作台</title>
+    <!--
+      本页是客户端唯一的打包页面，只在连接服务器失败时由原生控制层进入。
+      刻意不接受任何路径或 URL 参数，不调用 Tauri IPC，也不引入前端框架：
+      重试是一个指向固定工作台入口的普通链接，由导航策略照常判定。
+      具体的错误类别（DNS、断网、TLS）由原生提示给出，不通过本页传参。
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1c1c1e;
+        --muted: #5a5a5e;
+        --line: #d8d8dc;
+        --accent: #1a5fb4;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1c1e;
+          --fg: #f2f2f7;
+          --muted: #a1a1a6;
+          --line: #3a3a3c;
+          --accent: #7aa2e3;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px 20px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.6 -apple-system, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", system-ui, sans-serif;
+        display: flex;
+        justify-content: center;
+      }
+      main {
+        width: 100%;
+        max-width: 34rem;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0 0 0.75rem;
+      }
+      p {
+        margin: 0 0 1rem;
+      }
+      ul {
+        margin: 0 0 1.5rem;
+        padding-left: 1.25rem;
+        color: var(--muted);
+      }
+      li {
+        margin-bottom: 0.4rem;
+      }
+      .retry {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0 1.5rem;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .note {
+        margin-top: 2rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.875rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>无法连接工作台</h1>
+      <p>没能打开服务器上的页面。常见原因：</p>
+      <ul>
+        <li>设备当前没有网络，或正连着无法上网的 Wi-Fi</li>
+        <li>网络需要先在浏览器里完成登录认证</li>
+        <li>服务器正在维护或暂时不可达</li>
+      </ul>
+      <p><a class="retry" href="https://akros.icu/employee/admin">重新打开工作台</a></p>
+      <p class="note">
+        重试只会重新打开工作台首页，不会重新提交你上一次的操作。
+        如果刚才正在提交表单，请先回到对应列表确认记录状态，不要直接再提交一次。
+      </p>
+    </main>
+  </body>
+</html>

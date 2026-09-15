@@ -477,3 +477,311 @@ Codex 只跑了 4 个相关测试文件，全量套件里 `test_admin_assets.py`
 - [x] 完整受限权限备份：源码、.env、私有上传及 PostgreSQL custom dump；356 个转储条目，备份文件权限 600。
 
 发布顺序：最终 Ponytail 审查 → 提交并推送 main / v1.35.1 → 仅替换 API → 核对版本、迁移、PostgreSQL 连续运行、健康与登录页面。提交后操作及验收结果记录在本轮会话与受忽略的 .stage 发布日志，避免为记录发布结果再产生一个未部署提交。
+
+## YuMi Windows / Android 客户端（2026-09-12，用户已回复“开始”）
+
+实施依据：`docs/specs/2026-09-12_windows-android-client-spec.md`（R2）。源码基线 `ec74610`。
+用户决策：授权在本机安装全套构建工具链；Windows 侧标为未验证，先推进 Android 与共享代码。
+
+### 阶段 A：工具链和双端技术验证
+
+- [x] 复核工作区、AGENTS.md 与 Spec 作用域；核对构建机器条件。
+      结论：主机 macOS arm64，Rust、JDK、Android SDK/NDK 全部缺失，无 Windows 构建环境。
+- [x] `clients/yumi/tests/webview_fixture.py`：标准库 HTTP fixture，覆盖登录重定向、一次性 CSRF、
+      带计数的 POST 与 PRG、inline 私有图片、失效会话返回 200 登录 HTML、403、外域重定向、
+      中断传输、中文文件名上传、取消选择、格式拒绝、自动外跳、target=_blank、慢响应、业务 500。
+      验证：22 项场景全部通过（scratchpad/verify_fixture.py）。
+- [x] `clients/yumi/src-tauri/src/lib.rs`：导航策略 `classify_navigation`、`classify_url`、
+      `is_exact_local_error_page` 及 14 个单元测试。**尚未编译，等工具链就绪后运行。**
+- [x] Rust 侧工具链：rustup 1.29.1（Homebrew）+ Rust stable **1.98.1**，tauri-cli **2.11.4**。
+      `rust-toolchain.toml` 已锁定 1.98.1 与 aarch64-linux-android target。
+- [x] JDK 17 与 Android SDK/NDK 全部就位并锁定版本：
+      JDK **Temurin 17.0.20.1**、cmdline-tools 12.0、platform-tools 37.0.1、
+      platforms;android-36、build-tools **35.0.0**（AGP 8.11 实际要求）与 36.0.0、
+      NDK **27.3.13750724**(r27d)、Gradle **8.14.3**、AGP **8.11.0**、Kotlin 1.9.25。
+      每个产物都比对官方校验和后才使用（JDK 对 Adoptium API SHA256；
+      SDK/NDK 对 Google repository2-3.xml SHA1；Gradle 对官方 .sha256）。
+- [x] 最小 Tauri 共享工程建立并编译通过。实测 **tauri 2.11.5**（与 Spec 7.1 假设一致）、
+      tauri-build 2.6.3、wry 0.55.1、tao 0.35.3、url 2.5.8。
+      `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 三项通过，22 个单元测试。
+- [x] 导航策略按 Spec 5 重构为「允许来源 = 编译期入口 URL 的来源」，不再硬编码主机名：
+      `classify_url_against` 为可测核心，先拒用户信息、再判同源、最后按外部链接处理。
+      测试地址只经 `test-backend` 特性 + 编译期 `YUMI_TEST_ENTRY` 注入；
+      已实测缺该变量时编译失败，正式构建因此不可能含测试地址（A14 的实现手段）。
+- [x] **运行验证（macOS/WKWebView，开发态）**：测试构建加载隔离 fixture，
+      入口指向 `/autoredirect`，fixture 日志确认收到 `GET /autoredirect -> 302`，
+      客户端日志确认 `http://127.0.0.1 -> AllowInApp`、`https://example.com -> ConfirmExternal`。
+      证明 `on_navigation` 对首次加载与重定向都会触发，且无用户手势的自动外跳被拦住。
+      **此项不构成 Windows(WebView2) 或 Android(Android WebView) 验收**，macOS 不是交付平台。
+- [x] capabilities 隔离：`src-tauri/capabilities/` 目录不存在，配置 `"capabilities": []`，
+      未注册任何 invoke 命令，`withGlobalTauri: false`。Android 生成工程建立后需复查是否被模板重新引入。
+- [x] **Android release APK 构建成功**，产物校验通过：
+      applicationId `icu.akros.yumi`、versionName `0.1.0`、versionCode 1000、
+      `minSdkVersion=29`、`targetSdk=36`、`native-code` 仅 `arm64-v8a`、
+      `usesCleartextTraffic=false`、**无 debuggable**、
+      权限仅 INTERNET（无存储/相册权限，符合 F-04 第 4 条）、
+      包内检索不到测试地址而正式入口在 so 内（A14 双重保证成立）。
+- [x] 按 Spec 修正生成工程中两处不符（都落在可维护、非生成的文件）：
+      `app/build.gradle.kts` minSdk 24 → **29**（Spec 第 1 节 Android 10+）；
+      `AndroidManifest.xml` 补 `allowBackup="false"` 并新增
+      `res/xml/data_extraction_rules.xml`、`res/xml/backup_rules.xml`
+      排除云备份与换机直传（Spec 第 5 节禁止备份迁移认证数据）。已重建 APK 复验生效。
+- [ ] 测试构建验证登录、首次改密与普通 GET 导航（需真机或模拟器；当前两者都没有）。
+- [ ] 实测带会话的私有图片保存、上传取消、确认对话框与 Android 返回事件。
+- [ ] 核对 Spec 第 7.1 节各能力在锁定版本的公开接入点，记录实际符号与平台代码路径。
+
+退出条件：Android 侧关键平台能力有运行证据；Windows 能力标为未验证，不进入“两端技术验证通过”状态。
+
+### Spec 7.1 平台接入点核对结果（Tauri 2.11.5 实测，读代码所得，尚未运行验证）
+
+生成的 Kotlin 位于 `gen/android/app/src/main/java/icu/akros/yumi/generated/`，
+该目录被 `app/.gitignore` 的 `/src/main/**/generated` 忽略，每次构建重新生成，
+因此不能修改其中任何文件；可维护的适配点只有 `MainActivity.kt`、
+`app/build.gradle.kts`、`AndroidManifest.xml` 与 `res/`。
+
+| 能力 | 实测结论 |
+| --- | --- |
+| 导航策略 | **两端共享**。`RustWebViewClient.shouldOverrideUrlLoading` 与 `RustWebView.loadUrl` 都调用 `Rust.shouldOverride(id, url)`，即 Rust 侧 `on_navigation`。已写好的 `classify_url` 在 Android 上同样生效，无需另写一套。Spec 7.1 把 Android 导航当作独立未知项，实际比预期好。 |
+| 新窗口 | `RustWebView` 只设了 `javaScriptCanOpenWindowsAutomatically = true`，**未启用 `setSupportMultipleWindows`**，wry 也**未实现 `onCreateWindow`**。在该配置下 Android WebView 会把 `target=_blank` 当作同一视图内的普通导航处理，因而落入上面的共享策略。Spec 7.1 担心的「`on_new_window` 不支持 Android」不构成缺口，但**此结论来自读代码，必须真机/模拟器复验**。 |
+| 返回键 | `WryActivity.handleBackNavigation` 是 `open val`、`onWebViewCreate(webView)` 是 `open fun`，`MainActivity` 可直接覆盖，**不需要 fork 框架**。但默认实现是 `canGoBack() → goBack()` 无条件回退历史，与 Spec F-03「不得走会重放 POST 的回退路径」冲突，**必须覆盖为 false 并自行实现**。 |
+| 文件选择 | `RustWebChromeClient.onShowFileChooser` 已完整实现（含权限请求与 ActivityResult 生命周期），F-04 上传侧可直接复用。 |
+| 网络错误 | `RustWebViewClient.onReceivedError` 存在且区分 `isForMainFrame`，可用于 F-05 的整页错误判断，不会被子资源错误误触发。 |
+| 下载 / 长按保存 | wry **未设置 `DownloadListener`、未占用长按与命中测试**，这三个接入点在 `onWebViewCreate` 中完全空闲，F-04 的「保存图片」可在此实现且不与框架冲突。平台 `CookieManager` 可用（wry 自身也在用），满足 F-04 第 2 条「只从平台 Cookie 管理器读取」。 |
+
+**一个必须记住的约束**：`RustWebChromeClient` 与 `RustWebViewClient` 都是 Kotlin 默认的 `final` 类，
+**无法继承**。若将来确需改写其行为，唯一受支持的路径是在 `onWebViewCreate` 里用委托包装，
+不能靠继承，也不能改生成文件。
+
+### 阶段 A 已发现的事实（影响实现，需并入后续 Spec 修订）
+
+- 私有附件不带 `Content-Disposition`：`routes/private_files.py::download_private_file` 与
+  `routes/properties.py::download_property_qr` 均以 `filename=None` 构造 FileResponse，
+  只设置 `media_type`、`Cache-Control: no-store`、`X-Content-Type-Options: nosniff`。
+  因此原生“保存图片”拿不到服务器给定文件名，必须自行从 URL 末段与 Content-Type 推导，
+  并按 Spec F-04 第 5 条清理路径成分与危险字符。Spec 第 2 节未记录这一点。
+- HTTP 头只能是 latin-1，中文文件名无法直接放进 `Content-Disposition`；
+  真实后台回避该问题的方式正是不发该头，客户端不应假定能从响应头取到中文名。
+- 构建环境事实（需写进 INSTALL/交接说明）：本机默认源极慢（adoptium 约 60 KB/s、
+  dl.google.com 约 34–546 KB/s、ghcr.io 直接 `HTTP/2 PROTOCOL_ERROR`），
+  国内镜像快 45–120 倍。Gradle 的 JVM **不读 `HTTP_PROXY` 环境变量**，
+  必须用 `GRADLE_OPTS` 传 `-Dhttp(s).proxyHost/Port`，否则在依赖解析处静默挂死。
+  本次用会话级 `GRADLE_USER_HOME` + init 脚本换镜像，
+  未修改用户全局 Gradle 配置，也未把镜像地址写进生成工程，可复现性不受影响。
+- 安装 Android SDK 必须接受 Google SDK 许可协议，已在用户授权「安装 Android SDK + NDK」
+  的范围内代为接受，许可文件位于 `$ANDROID_HOME/licenses`。
+
+### 阶段 B / C
+
+按 Spec 第 8 节执行，阶段 A 退出条件满足后展开。
+
+## Android 实测问题修复（2026-09-13，用户已回复「开始实施修复方案」）
+
+实施依据：`docs/specs/2026-09-13_android-field-test-fixes-spec.md`。
+
+### 先核对 Spec 对交接文档的三处纠正——全部成立
+
+- [x] **返回键：我的交接结论是错的。** `generated/TauriActivity.kt:35` 有
+      `override val handleBackNavigation: Boolean = false`，Wry 默认的无条件 `goBack()`
+      并未生效。此前只读了 `WryActivity` 就下结论，漏了中间这层。相关推断作废。
+- [x] `.topbar` 确为 `rgb(255 255 255 / 82%)` + `backdrop-filter: blur(12px)`，
+      顶部内容透出由半透明背景解释，不是 z-index 错误。
+- [x] `_calendar_segments` 确实把 `--rows` 取成 `max(条目数, 3)`；宏只有 2 个调用方
+      （`room_timeline` 内的 wide/compact 两处）。
+
+### R-01 系统栏 / 刘海 / 键盘（已改，待真机验证）
+
+- [x] `MainActivity.onWebViewCreate`：安全边界改为 systemBars 与 displayCutout
+      **逐边取最大值**，IME 与底部栏同样取大值而非相加（避免双重补偿）；
+      每次由 inset 重新赋值不累加；补 `ViewCompat.requestApplyInsets` 解决首次派发时序。
+- [x] **真机验证：padding 方案被证伪，已改为 margin 并验证通过。**
+      设备 vivo V2502DA / Android 16 (API 36) / WebView 151 / density 3.5 / 手势导航。
+      - 证伪证据：`setPadding(上 140)` 后诊断页 `innerHeight` 仍是 800 CSS px
+        （= 2800 物理 px ÷ 3.5，整屏高度），`visualViewport.offsetTop` 为 0，
+        顶栏仍被状态栏压住。padding 没有缩小网页视口。
+      - 改 margin 后：`WebView 屏幕坐标 0,140`、`宽高 1260×2660`、
+        `innerHeight 760`、`避让方式 margin`、`父容器 ContentFrameLayout`，顶栏完整可见。
+      - 键盘避让：弹出时 `WebView 高 1614`、`边距 上 140 / 下 1046`，
+        验算 2800−140−1046=1614 吻合，且为单次补偿，无三重补偿。
+      - `env(safe-area-inset-*)` 四项均为 0px：页面未声明 viewport-fit=cover，
+        不能依赖 CSS 安全区，必须由原生层负责。
+- [ ] V01/V02 剩余项：键盘十次显隐后尺寸恢复、横竖屏、刘海横屏、三键导航。
+      投屏可读数值但无法可靠驱动软键盘与返回手势，这几项需在手机上直接操作。
+
+### R-03 日历空轨道（已修，已验证）
+
+- [x] **发现与 Spec 冲突并解决**：既有 `test_every_date_segment_is_the_same_height`
+      要求各段高度一致（7 天切成 3+3+1 时末段不能矮一截），最少三行正是为此引入。
+      Spec 要求「两笔订单不留第三条空轨道」，直接改会打破它。
+      两者仅在各段笔数不同时冲突。改为 **`--rows` 取各段可见笔数的最大值**（下限 1），
+      笔数都少时一起收紧、笔数不齐时一起对齐，两个要求同时满足。
+- [x] `app.css` 折叠态由固定 `--preview-rows` 改为 `min(--rows, --preview-rows)`，
+      否则只改模板不生效（Spec 已点明这一点）。
+- [x] 新增 5 条 browser 回归（1/2 笔精确占行、>3 笔折叠封顶且展开铺开、空日历保留文案高度、
+      桌面宽屏同规则）。先复现再修：红测显示 1 笔和 2 笔都占 264px（3×88）。
+- [x] 验证：browser 31 passed、资源单测 15 passed、相关 69 passed；
+      `src/` 净改动 19 行。mypy 回到改动前的 2 个既有错误，未新增。
+
+### 诊断基线设施（Spec 第 3 节）
+
+- [x] `clients/yumi/ui/diagnostics.html`：自包含测量页，不联网、无客户数据。
+      含视口/DPR/visualViewport、根元素字号与 10rem 实测标尺、`env()` 安全区、
+      与 `.topbar` 同构的 sticky 探针、键盘测试输入框、可回传的数值汇总。
+- [x] `lib.rs` 新增 `diagnostics` 特性：入口改为打包本地页；启动时用
+      `asset_resolver` 自检页面是否真的打进产物（缺页会直接报错而不是显示空白）。
+- [x] `MainActivity` 注入原生测量（机型/API/WebView 版本/density/**fontScale**/
+      导航方式/WebView 几何/各类 inset/可见窗口边界）。单向原生→网页，未注册任何
+      invoke 命令，capabilities 仍为空。
+- [x] 门控改为「当前页面就是那个打包诊断页」而非 debuggable 标志：业务页面来自 https
+      远程来源，永不命中本地路径，因此即使进正式包也不会向业务页面注入。
+- [x] Rust：fmt / clippy(-D warnings，正式与诊断两种配置) / 25 个单元测试全过。
+
+### 本轮新增的工具链事实
+
+- **`cargo tauri android build` 会主动剥掉 `app/build.gradle.kts` 里的
+  `applicationIdSuffix`**（实测：加入后构建，文件哈希变化且该行消失），
+  但保留 `versionNameSuffix`、`minSdk` 与注释。因此测试包身份隔离不能走这条路，
+  需改用 Tauri 侧配置；而改 Tauri identifier 又会牵动 Kotlin namespace 与 JNI 入口
+  （原 Spec R2 第 5 节已警告），此项留待专门处理。
+- 日历的宽/紧凑切换用的是 **`@container (max-width: 620px)`**（容器为
+  `.room-operation-card` 的 `container-type: inline-size`），不是媒体查询。
+  测试夹具不套这层容器时紧凑布局恒为 `display:none`，量到的高度恒为 0。
+- **Tauri 把 `frontendDist` 资源压缩后嵌入二进制**：用 `strings` 搜文件名会搜到
+  代码里的字符串字面量而非资源键，据此判断「资源没打包」是错的。
+  可靠判据是运行期 `asset_resolver`。
+
+### 待办
+
+- [x] **R-02 显示比例：实测无缩放异常，按 Spec 第 5 节第一条不改 WebView 缩放。**
+      `系统 fontScale = 1`（默认未放大）、`visualViewport.scale = 1`、
+      根元素 `font-size 16px`（浏览器默认）、`innerWidth 360 CSS px`、无整页横向溢出。
+      1260 物理 px ÷ 3.5 = 360，属小屏手机的正常视口宽度。用户感知的「偏大」
+      来自 3.5 倍 DPR 下的物理字号，不是缩放故障；应作为版式密度问题处理。
+- [x] **R-02 顶部遮盖：已修并验证。** `.topbar` 由 `rgb(255 255 255 / 82%)` +
+      `backdrop-filter: saturate(180%) blur(12px)` 改为实色 `var(--surface)`（即 #fff，同色不变观感），
+      并移除两条 backdrop-filter。sticky、z-index: 20、栅格布局、padding 全部保留。
+      新增 2 条回归：顶栏背景 alpha 必须为 1；抽屉(40) > 遮罩(30) > 顶栏(20) 层级不被破坏。
+      按 Spec 第 8 节只断言计算样式与层级数值，不做截图像素断言。
+      红测先复现 alpha = 0.82。改后 browser 33 passed、资源单测 15 passed、
+      相关面 350 passed / 1 skipped（跳过的是需显式启用的 DeepSeek 契约测试）。
+      全仓 app.css 已无其他 `82%` 或 `backdrop-filter` 残留，改动闭合。
+
+  **注意**：网页改动要经后端单独发布才会到达生产 APK，重新打 APK 不会让线上样式更新
+  （Spec 第 8 节第 3 条）。当前改动仅在本地验证，未部署。
+- [ ] 原阶段 A 未完成项（返回、target=_blank、外链确认、本地错误页接线、图片保存、
+      测试身份、图标、Windows）按 Spec 第 7 节处置，不与界面修复混报完成。
+
+## 阶段 A 剩余能力实现（2026-09-14，用户回复「全部做完」）
+
+Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节表格。
+本轮只实现与本机验证，**未部署、未提交、未发包给员工**。
+
+- [x] **图标统一**：`cargo tauri icon` 重生成，Android mipmap 不再是 Tauri 模板默认图，
+      与桌面侧同源（当前仍为占位图，待用户提供正式品牌图后重跑同一条命令）。
+- [x] **返回键（F-03）**：`MainActivity.installBackHandling` 用 OnBackPressedDispatcher 接管，
+      顺序为 键盘 → 错误界面 → 可回退历史 → 根页面确认退出。
+      `TauriActivity.handleBackNavigation = false` 已关掉 Wry 默认回退，不存在双重处理。
+      POST 不重放由 `SafeWebViewClient.onFormResubmission` 显式拒绝（不依赖 Android 默认值）。
+      网页抽屉交由页面自己关闭，原生层不猜 DOM 状态。
+- [x] **连接错误页（F-05）**：做成**原生覆盖层**而非导航到打包 HTML。
+      理由：导航到本地资源就要为本地协议在导航策略上开口子，与 Spec 第 5 节
+      「来自远程页的任意本地协议导航一律拒绝」冲突；原生绘制完全不产生导航。
+      重试只 GET 固定工作台入口，地址存于 strings.xml，由 Rust 单测
+      `android资源里的入口地址与常量一致` 锁定与 `WORKSTATION_URL` 不分叉（已做反向验证）。
+- [x] **外链确认（F-03）**：`lib.rs` 接入 tauri-plugin-dialog / opener，
+      `ConfirmExternal` 先拦下再弹含目标域名的原生确认，用户不操作则不外跳。
+      自动重定向重复提示由 `should_prompt_external` 抑制（5 秒窗口，2 条单测覆盖跨目标与过期）。
+      两个插件只在 Rust 侧调用，capabilities 仍为空，远程网页无法经 IPC 触达。
+- [x] **图片保存（F-04）**：`ImageSaver` + 长按命中测试。wry 未占用长按与 DownloadListener，
+      属空闲扩展点，无需包装框架对象。
+      顺序为**先下载校验、再让用户选位置**：反过来会在用户选中的位置留下空文件或登录页 HTML。
+      逐跳同源、Cookie 只取自平台 CookieManager、非 2xx 与非图片类型一律拒绝、
+      文件名为中性时间戳（不沿用私有附件标识）、只创建新文档不覆盖、失败只删本次临时文件。
+- [x] **测试身份隔离（A14）**：实测 `cargo tauri android build` **会重写
+      `app/build.gradle.kts` 并精准删掉 `applicationIdSuffix`**（同文件里的 minSdk、
+      versionNameSuffix 和注释都保留）。改为放进独立的 `app/identity.gradle` 再 apply 进来，
+      该写法在重写后留存。验证：debug 包 applicationId = `icu.akros.yumi.test`，
+      而 Activity 仍为 `icu.akros.yumi.MainActivity`（namespace 未动，JNI 符号完好）。
+- [x] **诊断产物与正式产物分离**：新增 `ui-diagnostics/` 与
+      `src-tauri/tauri.diagnostics.conf.json`，诊断构建换 frontendDist。
+      复查正式包：诊断页正文（「顶栏探针」）在 dex 与 so 中均已不存在。
+- [x] **Kotlin 安全边界单测**：新增 `app/src/test/.../SecurityBoundaryTest.kt`，
+      5 项通过（诊断注入门控 3 项 + 图片保存同源判定 2 项）。
+      已做反向验证：把门控改成前缀匹配后「业务页面与伪造地址一律不注入」立即失败。
+
+**遗留与已知偏差（不得当作已解决）**：
+
+- 正式包 dex 仍含 `diagnostics.html` 与 `__yumiNative` 字符串：Kotlin 侧是运行时门控而非构建期剔除。
+  该页面在正式构建中既不在打包资源里、也被导航策略拒绝，因此不可达；
+  上述 Kotlin 单测证明门控不会命中任何业务地址。但「字符串不在包里」这一条并未达成。
+- 本轮所有 Android 行为（返回键、错误界面、图片保存、外链确认）**只有编译与单测证据，
+  尚无真机运行证据**。必须真机验证后才能计入 Spec 第 9 节验收。
+- 测试签名密钥因临时目录被清理而丢失，已重新生成并改放
+  `clients/yumi/.local/`（已 gitignore）。**新签名与此前发出的 b1–b5 不同，
+  安装 b6 前必须先卸载旧测试包**。这不是 Spec 6.2 的正式发布密钥。
+- Windows 侧一切仍为未验证。
+
+## 阶段 A 收尾 Spec 实施（2026-09-15，用户回复「开整直接做完」）
+
+依据 `docs/specs/2026-09-15_android-phase-a-closure-spec.md`。C01–C09 九项全部先核实再修。
+本轮未部署、未提交、未发包给员工。
+
+### 逐项处置
+
+- [x] **C07 日历分段（先核实，结论成立）**：`--rows` 实为 `peak.rows`（跨段取最大），
+      与我 09-14 报告里写的「真实行数」不符。根因是我为「分段视觉等高」在实现注释里
+      自行做了产品取舍。已删除 peak 预扫描，改为各段自己的 `visible.bars | length`（下限 1）。
+      旧测试 `test_every_date_segment_is_the_same_height` 把「等高」写成通过标准，
+      已改判据为「每段各自吻合」并保留其真实 7 天分段夹具；另加 3 条不均匀分段红测
+      （[1,3] / [1,4,0] / 展开态）。先红后绿：1 笔的段原为 264px，修后 88px。
+- [x] **C04 来源分叉**：`build.rs` 现按构建模式算出唯一入口，经 `cargo:rustc-env`
+      注入 Rust，并生成 `values/generated_entry.xml` 给 Android。两侧同源，构建期即不可能分叉。
+      跨语言测试改为**无条件**校验（旧版 `cfg(not(test-backend))` 恰好漏掉真正会分叉的场景）。
+- [x] **C05 身份隔离**：`identity.gradle` 改读 `build-mode.properties`，
+      非 production 模式（含 release）一律加 `.test`。实测 diagnostics-release 与
+      isolated-test-release 的 applicationId 均为 `icu.akros.yumi.test`，
+      Activity 仍为 `icu.akros.yumi.MainActivity`（namespace 未动，JNI 完好）。
+- [x] **C09 诊断隔离**：诊断采集与注入移入 `src/diagnostics/java`，
+      非诊断模式编译 `src/nodiagnostics/java` 的同接口空实现。
+      正式包复查：`diagnostics.html`、`__yumiNative`、`DiagnosticsGate`、`避让方式`、
+      `顶栏探针` **在 dex 中全部消失**，只剩空实现。09-14 遗留的那条缺口已关闭。
+- [x] **C01 保存串单**：新增 `SaveSession`，单一在途操作 + 自增 ID 匹配回调，
+      忙碌时第二次长按只提示不排队；`onDestroy` 作废在途操作并清理临时文件。
+- [x] **C02 结果处理**：`parseResult` 现要求 `RESULT_OK`；`commit` 失败时
+      用 `DocumentsContract.deleteDocument` 清理本次新建的目标，删不掉则如实提示
+      「可能留有不完整文件」，不谎称未写入。
+- [x] **C03 内容校验**：核对 `Content-Length` 与实收字节；用 `BitmapFactory`
+      的 `inJustDecodeBounds` 验证真实可解码（不分配位图，不自写格式解析器）。
+      上限取服务端**允许配置的最大值 25 MiB**（`config.py::private_upload_max_bytes`
+      的 `le` 约束），不是默认 10 MiB——按默认值设限会让调高配置后的合法附件存不下。
+      **我最初凭空写了 12 MiB，是读了真实配置后改正的。**
+- [x] **C06 返回保护**：可回退时不再直接 `goBack`。原生层看不到历史条目的 HTTP 方法，
+      `WebBackForwardList` 只给 URL，无法证明上一页是安全 GET。改为原生确认离开
+      并提示未保存内容会丢失，确认后 GET 当前构建的工作台入口。
+- [x] **C08 外链在途互斥**：`ExternalPromptState` 把「在途互斥」与「五秒去重」分开。
+      新增测试证明去重窗口拦不住不同 URL 的连续跳转，必须靠在途互斥。
+- [x] **跨语言策略差异**：Kotlin `isSaveable` 补齐 userInfo 拒绝，与 Rust 一致；
+      测试新增 3 个 userInfo 用例。
+
+### 验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| Rust fmt / clippy / test | 通过 / 0 问题 / **29 项** |
+| Kotlin（production 模式） | 2 项（诊断测试按设计被排除） |
+| Kotlin（diagnostics 模式） | **5 项**（条件源码集生效） |
+| 浏览器回归 | **36 项** |
+| 资源单测 | 15 项 |
+| 构建组合 | production-release / isolated-test-release / diagnostics-release 身份与来源均正确 |
+
+构建期防线做了反向验证，三种错误组合均被拒绝：缺 `YUMI_TEST_ENTRY`、
+`test-backend` 与 `diagnostics` 同时启用、测试入口填成生产地址。
+
+### 仍未完成
+
+- **B5 真实业务联调与真机验收整体未做**：A04/A07 需接真实路由、`AdminAuthService`、
+  真实 CSRF 服务与隔离数据库，并让设备访问隔离实例。本轮全部改动只有编译与单测证据，
+  **没有任何真机运行证据**，不得计入 Spec 第 9 节验收。
+- 返回键、错误界面、图片保存、外链确认、`target=_blank` 的真机表现仍未验证。
+- 网页侧改动需后端单独发布才会到生产，当前仅本地验证。
+- Windows 侧保持未验证。
+- 正式发布 keystore 仍未生成；当前为测试签名。

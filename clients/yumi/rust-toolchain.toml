@@ -1,0 +1,7 @@
+# 锁定阶段 A 实际验证过的工具链，避免不同机器用不同编译器构建客户端。
+# 升级前需重新跑一次 fmt / clippy / test 与两端构建验收。
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+# Android 目标在阶段 A 安装 NDK 后补齐，届时随本文件一起锁定。
+targets = ["aarch64-linux-android"]

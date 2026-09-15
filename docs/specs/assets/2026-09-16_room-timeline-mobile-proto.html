@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>房间日期工作台 · 手机版式比对</title>
+<style>
+:root{
+  --primary:#2563eb;--primary-hover:#1d4ed8;--primary-soft:#eff6ff;
+  --page:#f4f6fa;--surface:#fff;--surface-sunk:#f8fafc;
+  --text:#1e293b;--ink-strong:#0f172a;--ink-mid:#334155;--ink-soft:#475569;--muted:#57637a;
+  --line:#e2e8f0;--line-strong:#cbd5e1;--line-soft:#94a3b8;
+  --success:#15803d;--success-soft:#f0fdf4;--warning:#b45309;--warning-soft:#fffbeb;
+  --danger:#b42318;--danger-soft:#fef2f2;
+  --cal-future-bg:color-mix(in srgb,var(--primary) 8%,var(--surface));
+  --cal-future-line:color-mix(in srgb,var(--primary) 25%,var(--surface));
+  --cal-current-bg:color-mix(in srgb,var(--primary) 15%,var(--surface));
+  --cal-current-line:color-mix(in srgb,var(--primary) 42%,var(--surface));
+  --cal-current-ink:color-mix(in srgb,var(--primary) 50%,var(--ink-strong));
+  --r-sm:8px;--r-md:12px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#e6e9ef;font:15px/1.55 -apple-system,"PingFang SC",system-ui,sans-serif;color:var(--text)}
+.wrap{display:flex;gap:28px;padding:24px;align-items:flex-start;flex-wrap:wrap}
+.col{width:360px}
+.col h2{margin:0 0 4px;font-size:14px;color:var(--ink-soft)}
+.col .note{margin:0 0 10px;font-size:12px;color:var(--muted)}
+.phone{width:360px;background:var(--page);border:1px solid var(--line-strong);border-radius:16px;overflow:hidden}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:18px;margin:12px}
+
+/* ---------- 共用：房间头 ---------- */
+.rt{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.rt h3{margin:0;font-size:20px;line-height:1.25;color:var(--ink-strong)}
+.rt .sub{margin:2px 0 0;font-size:12px;color:var(--muted)}
+.tag{flex:none;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:600;
+     background:var(--warning-soft);color:var(--warning);border:1px solid #fde68a}
+
+/* ---------- A：现状 ---------- */
+.a-ev{margin:14px 0 0;padding:12px;background:var(--surface-sunk);border-radius:var(--r-sm)}
+.a-ev dt{font-size:12px;color:var(--muted)}
+.a-ev .row{display:flex;justify-content:space-between;align-items:flex-end;gap:10px;margin-top:6px}
+.a-ev .g{font-size:18px;font-weight:700;color:var(--primary)}
+.a-ev .cd{font-size:22px;font-weight:700;color:var(--ink-strong);text-align:right;line-height:1.2}
+.a-ev .abs{font-size:12px;color:var(--muted);margin-top:4px}
+.a-head{display:flex;justify-content:space-between;align-items:baseline;margin:18px 0 8px}
+.a-head b{font-size:15px}.a-head span{font-size:12px;color:var(--muted)}
+.a-seg{margin-bottom:16px}
+.a-dates{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:2px solid var(--line)}
+.a-dates div{padding:8px 4px;text-align:center;font-size:13px;color:var(--ink-mid)}
+.a-dates div.today{border-bottom:2px solid var(--primary);color:var(--primary);font-weight:700;margin-bottom:-2px}
+.a-dates .dow{font-size:12px;color:var(--muted);margin-right:4px}
+.a-tracks{position:relative;height:264px;
+  background:repeating-linear-gradient(to right,transparent 0,transparent calc(100%/3 - 1px),var(--line) calc(100%/3 - 1px),var(--line) calc(100%/3))}
+.a-id{position:absolute;left:0;top:0;height:44px;display:flex;align-items:center;font-size:12px;color:var(--muted)}
+.a-id a{color:var(--primary)}
+.a-bar{position:absolute;height:44px;top:44px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--cal-current-line);background:var(--cal-current-bg);color:var(--cal-current-ink);
+  border-radius:var(--r-sm);font-size:14px;font-weight:600}
+.a-empty{padding:14px 2px;font-size:13px;color:var(--muted)}
+
+/* ---------- B：提案 ---------- */
+.b-head{display:flex;justify-content:space-between;align-items:baseline;margin:16px 0 10px}
+.b-head b{font-size:15px}.b-head span{font-size:12px;color:var(--muted)}
+
+/* 6 天一屏，不再分段：360px 下每列 60px 放得下「周一 / 14」 */
+.b-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:2px}
+.b-day{padding:6px 2px 5px;text-align:center;border-radius:6px;background:var(--surface-sunk)}
+.b-day .dow{display:block;font-size:11px;color:var(--muted);line-height:1.3}
+.b-day .num{display:block;font-size:14px;font-weight:700;color:var(--ink-mid);line-height:1.25}
+.b-day.today{background:var(--primary-soft);box-shadow:inset 0 0 0 1px var(--cal-future-line)}
+.b-day.today .dow{color:var(--primary-hover)}
+.b-day.today .num{color:var(--primary-hover)}
+.b-day.free .num{color:var(--line-soft);font-weight:600}
+
+/* 迷你占用条：保留「跨度与重叠」的视觉，但每条只 8px 而不是一整条 88px 轨道 */
+.b-rail{position:relative;margin-top:6px;display:grid;gap:3px}
+.b-lane{position:relative;height:8px;border-radius:999px;background:var(--surface-sunk)}
+.b-fill{position:absolute;top:0;bottom:0;border-radius:999px;background:var(--cal-current-line)}
+.b-fill.future{background:var(--cal-future-line)}
+.b-fill.past{background:var(--line-strong)}
+.b-fill.overlap{background:repeating-linear-gradient(45deg,var(--warning) 0 4px,#f5c97a 4px 8px)}
+
+/* 订单卡：一笔一张，替代「身份行 + 轨道条」两处重复 */
+.b-list{margin-top:10px;display:grid;gap:8px}
+/* 整张卡就是客户链接的点击区：保证触控目标远超 44px，
+   而不是只让姓名那一行可点（那只有 24px，低于下限）。 */
+.b-item{display:grid;grid-template-columns:4px 1fr auto;gap:10px;align-items:center;
+  padding:0 12px 0 0;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface)}
+.b-hit{display:block;padding:11px 0;min-height:44px;text-decoration:none;color:inherit}
+.b-item:has(.b-hit:focus-visible){outline:2px solid var(--primary);outline-offset:2px}
+.b-item .edge{align-self:stretch;border-radius:var(--r-sm) 0 0 var(--r-sm);background:var(--cal-current-line)}
+.b-item.future .edge{background:var(--cal-future-line)}
+.b-item.past .edge{background:var(--line-strong)}
+.b-name{display:block;font-size:15px;font-weight:600;color:var(--primary)}
+.b-meta{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.b-when{font-variant-numeric:tabular-nums}
+.b-state{flex:none;font-size:12px;font-weight:600;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.b-state.now{background:var(--primary-soft);color:var(--primary-hover)}
+.b-state.out{background:var(--warning-soft);color:var(--warning);border:1px solid #fde68a}
+.b-state.done{background:var(--surface-sunk);color:var(--ink-soft)}
+.b-free{margin-top:8px;padding:9px 12px;border:1px dashed var(--line-strong);border-radius:var(--r-sm);
+  font-size:13px;color:var(--muted);background:var(--surface-sunk)}
+.b-warn{margin-top:8px;padding:8px 10px;border-radius:var(--r-sm);font-size:12px;
+  background:var(--warning-soft);color:var(--warning);border:1px solid #fde68a}
+.b-more{margin-top:8px;font-size:13px;color:var(--primary);min-height:44px;display:flex;align-items:center}
+</style></head><body>
+<div class="wrap">
+
+<!-- ================= A 现状 ================= -->
+<div class="col">
+  <h2>A · 现状（截图形态）</h2>
+  <p class="note">6 天切成 3+3 两段甘特图；一笔订单占满一段。</p>
+  <div class="phone"><div class="card">
+    <div class="rt"><div>
+      <h3>示例房间 A</h3><p class="sub">房号待补充</p>
+    </div><span class="tag">今日离店</span></div>
+
+    <dl class="a-ev"><dt>本次退房</dt>
+      <div class="row"><span class="g">示例客人甲</span>
+        <div><div style="font-size:12px;color:var(--muted)">距计划退房还有</div>
+        <div class="cd">11 小时 36 分钟</div></div></div>
+      <div class="abs">今天 12:00（计划）</div>
+    </dl>
+
+    <div class="a-head"><b>近期安排</b><span>9/14–9/19</span></div>
+
+    <div class="a-seg">
+      <div class="a-dates">
+        <div><span class="dow">周一</span>9/14</div>
+        <div><span class="dow">周二</span>15</div>
+        <div class="today"><span class="dow">周三</span>16</div>
+      </div>
+      <div class="a-tracks">
+        <div class="a-id"><a href="#">示例客人甲</a>&nbsp;· 2 晚</div>
+        <div class="a-bar" style="left:25%;width:58%">示例客人甲 · 2 晚</div>
+      </div>
+    </div>
+
+    <div class="a-seg">
+      <div class="a-dates">
+        <div><span class="dow">周四</span>9/17</div>
+        <div><span class="dow">周五</span>18</div>
+        <div><span class="dow">周六</span>19</div>
+      </div>
+      <div class="a-tracks" style="height:88px"><p class="a-empty">当前日期范围内暂无订单</p></div>
+    </div>
+  </div></div>
+</div>
+
+<!-- ================= B 提案 ================= -->
+<div class="col">
+  <h2>B · 提案（同一份数据）</h2>
+  <p class="note">6 天一屏不分段；跨度交给迷你条，身份交给订单卡。</p>
+  <div class="phone"><div class="card">
+    <div class="rt"><div>
+      <h3>示例房间 A</h3><p class="sub">房号待补充</p>
+    </div><span class="tag">今日离店</span></div>
+
+    <dl class="a-ev"><dt>本次退房</dt>
+      <div class="row"><span class="g">示例客人甲</span>
+        <div><div style="font-size:12px;color:var(--muted)">距计划退房还有</div>
+        <div class="cd">11 小时 36 分钟</div></div></div>
+      <div class="abs">今天 12:00（计划）</div>
+    </dl>
+
+    <div class="b-head"><b>近期安排</b><span>9/14–9/19</span></div>
+
+    <div class="b-strip">
+      <div class="b-day"><span class="dow">周一</span><span class="num">14</span></div>
+      <div class="b-day"><span class="dow">周二</span><span class="num">15</span></div>
+      <div class="b-day today"><span class="dow">周三</span><span class="num">16</span></div>
+      <div class="b-day free"><span class="dow">周四</span><span class="num">17</span></div>
+      <div class="b-day free"><span class="dow">周五</span><span class="num">18</span></div>
+      <div class="b-day free"><span class="dow">周六</span><span class="num">19</span></div>
+    </div>
+
+    <div class="b-rail">
+      <div class="b-lane"><div class="b-fill" style="left:12.5%;width:29.2%"></div></div>
+    </div>
+
+    <div class="b-list">
+      <div class="b-item">
+        <i class="edge"></i>
+        <a class="b-hit" href="#"><span class="b-name">示例客人甲</span>
+          <span class="b-meta"><span class="b-when">9/14 15:00 → 今天 12:00</span> · 2 晚</span></a>
+        <span class="b-state out">今日离店</span>
+      </div>
+    </div>
+
+    <p class="b-free">9/17 起 3 天空房</p>
+  </div></div>
+</div>
+
+<!-- ================= C 密集场景 ================= -->
+<div class="col">
+  <h2>C · 提案在密集数据下</h2>
+  <p class="note">4 笔订单含一处重叠与一笔跨窗延续。</p>
+  <div class="phone"><div class="card">
+    <div class="rt"><div>
+      <h3>《春和景明》</h3><p class="sub">A 栋 201</p>
+    </div><span class="tag" style="background:var(--danger-soft);color:var(--danger);border-color:#fecdca">时间重叠</span></div>
+
+    <div class="b-head"><b>近期安排</b><span>9/14–9/19</span></div>
+
+    <div class="b-strip">
+      <div class="b-day"><span class="dow">周一</span><span class="num">14</span></div>
+      <div class="b-day"><span class="dow">周二</span><span class="num">15</span></div>
+      <div class="b-day today"><span class="dow">周三</span><span class="num">16</span></div>
+      <div class="b-day"><span class="dow">周四</span><span class="num">17</span></div>
+      <div class="b-day"><span class="dow">周五</span><span class="num">18</span></div>
+      <div class="b-day"><span class="dow">周六</span><span class="num">19</span></div>
+    </div>
+
+    <div class="b-rail">
+      <div class="b-lane"><div class="b-fill past" style="left:0;width:24%"></div></div>
+      <div class="b-lane"><div class="b-fill" style="left:24%;width:30%"></div></div>
+      <div class="b-lane"><div class="b-fill overlap" style="left:46%;width:26%"></div></div>
+      <div class="b-lane"><div class="b-fill future" style="left:70%;width:30%"></div></div>
+    </div>
+
+    <p class="b-warn">存在订单时间重叠，需核对</p>
+
+    <div class="b-list">
+      <div class="b-item past"><i class="edge"></i>
+        <a class="b-hit" href="#"><span class="b-name">林雅云</span>
+          <span class="b-meta"><span class="b-when">更早 → 9/15 12:00</span> · 3 晚</span></a>
+        <span class="b-state done">已退房</span></div>
+      <div class="b-item"><i class="edge"></i>
+        <a class="b-hit" href="#"><span class="b-name">肖飞扬</span>
+          <span class="b-meta"><span class="b-when">9/15 15:00 → 9/17 12:00</span> · 2 晚</span></a>
+        <span class="b-state now">在住</span></div>
+      <div class="b-item"><i class="edge" style="background:var(--warning)"></i>
+        <a class="b-hit" href="#"><span class="b-name">周允</span>
+          <span class="b-meta"><span class="b-when">9/16 15:00 → 9/18 12:00</span> · 2 晚 · 与上一笔重叠</span></a>
+        <span class="b-state out">需核对</span></div>
+      <div class="b-item future"><i class="edge"></i>
+        <a class="b-hit" href="#"><span class="b-name">陈知微</span>
+          <span class="b-meta"><span class="b-when">9/18 15:00 → 延续更晚</span> · 3 晚</span></a>
+        <span class="b-state">未来</span></div>
+    </div>
+  </div></div>
+</div>
+
+</div></body></html>

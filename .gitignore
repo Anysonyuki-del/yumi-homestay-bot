@@ -33,3 +33,26 @@ run-deploy.command
 # 每次工具更新都会在业务仓库制造上万行噪音 diff，也会把 14MB 无关文件带进
 # 公开仓库和部署包。文件保留在工作区，只是不再进版本库。
 .agents/
+
+# YuMi 客户端（clients/yumi）构建产物与本机工具链路径。
+# 本仓库公开，签名密钥与签名配置绝不能进入版本库或安装包。
+clients/yumi/src-tauri/target/
+clients/yumi/src-tauri/gen/android/.gradle/
+clients/yumi/src-tauri/gen/android/build/
+clients/yumi/src-tauri/gen/android/app/build/
+clients/yumi/src-tauri/gen/android/local.properties
+clients/yumi/src-tauri/gen/android/.idea/
+clients/yumi/src-tauri/gen/apple/
+*.keystore
+*.jks
+keystore.properties
+clients/yumi/src-tauri/gen/android/keystore.properties
+
+# 客户端本机测试签名与口令。仅供阶段 A 真机验证，不是 Spec 6.2 的正式发布密钥。
+# 放在仓库目录内是为了跨会话保持同一签名身份（临时目录会被清理，
+# 换签名会导致已装测试包必须先卸载才能升级），但绝不进版本库。
+clients/yumi/.local/
+
+# 由 src-tauri/build.rs 生成的构建输入，随构建模式变化，不进版本库。
+clients/yumi/src-tauri/gen/android/app/build-mode.properties
+clients/yumi/src-tauri/gen/android/app/src/main/res/values/generated_entry.xml

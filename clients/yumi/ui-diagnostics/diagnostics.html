@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YuMi 客户端显示诊断</title>
+    <!--
+      阶段 A 修复 Spec 第 3 节要求的可比基线页面。
+
+      这是打包在客户端内的本地页面，不联网、不含任何客户数据，
+      只读取本设备的视口与样式数值。仅供诊断构建使用，正式构建不会进入这里。
+
+      页面刻意自包含：不依赖局域网 fixture，用户装上即可测量并回传数值，
+      不需要在手机和开发机之间搭测试服务。
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1c1c1e;
+        --muted: #5a5a5e;
+        --line: #d8d8dc;
+        --accent: #2563eb;
+        --surface: #f4f6fa;
+        --warn: #a16207;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1c1e;
+          --fg: #f2f2f7;
+          --muted: #a1a1a6;
+          --line: #3a3a3c;
+          --accent: #7aa2e3;
+          --surface: #2c2c2e;
+          --warn: #d6a441;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.55 -apple-system, "Segoe UI", "PingFang SC", system-ui, sans-serif;
+      }
+
+      /*
+        与后台 app.css 的 .topbar 完全同构：sticky + 82% 白底 + backdrop blur。
+        Spec 第 5 节要判断“顶部内容透出”到底是半透明背景所致，还是原生系统栏遮挡，
+        这里用同一套样式在隔离页面复现，避免在生产页面上试错。
+      */
+      .topbar-probe {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: grid;
+        grid-template-columns: 44px 1fr auto;
+        align-items: center;
+        gap: 8px;
+        min-height: 52px;
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--line);
+        background: rgb(255 255 255 / 82%);
+        backdrop-filter: saturate(180%) blur(12px);
+        -webkit-backdrop-filter: saturate(180%) blur(12px);
+        font-weight: 600;
+      }
+      @media (prefers-color-scheme: dark) {
+        .topbar-probe { background: rgb(28 28 30 / 82%); }
+      }
+      .topbar-probe__dot {
+        width: 28px; height: 28px; border-radius: 50%;
+        background: var(--accent);
+      }
+
+      main { padding: 12px; }
+      h2 {
+        margin: 22px 0 8px;
+        font-size: 15px;
+        color: var(--accent);
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 4px;
+      }
+      h2:first-of-type { margin-top: 8px; }
+      table { width: 100%; border-collapse: collapse; }
+      td {
+        padding: 4px 0;
+        vertical-align: top;
+        font-variant-numeric: tabular-nums;
+      }
+      td:first-child { color: var(--muted); padding-right: 10px; white-space: nowrap; }
+      td:last-child { text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+      .absent { color: var(--warn); font-weight: 400; }
+
+      .ruler {
+        /* 1rem 实测宽度：用于区分“系统字体放大”与“页面 CSS 问题” */
+        width: 10rem;
+        height: 6px;
+        background: var(--accent);
+        border-radius: 3px;
+      }
+      .filler p {
+        margin: 0 0 14px;
+        padding: 14px;
+        border-radius: 8px;
+        background: var(--surface);
+      }
+      label { display: block; margin: 0 0 10px; }
+      label span { display: block; color: var(--muted); font-size: 13px; }
+      input {
+        width: 100%;
+        min-height: 44px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+      }
+      button {
+        min-height: 44px;
+        padding: 0 18px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+      }
+      textarea {
+        width: 100%;
+        height: 180px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--fg);
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .hint { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+    </style>
+  </head>
+  <body>
+    <div class="topbar-probe">
+      <div class="topbar-probe__dot"></div>
+      <div>顶栏探针（与后台同样式）</div>
+      <div>☰</div>
+    </div>
+
+    <main>
+      <h2>① 原生层测量</h2>
+      <table id="native-table">
+        <tr><td colspan="2" class="absent">等待原生层注入…</td></tr>
+      </table>
+      <p class="hint">
+        若此处长时间显示「未注入」，说明原生诊断没生效，
+        请在回传时一并说明，不要把它当作 inset 为 0。
+      </p>
+
+      <h2>② 视口</h2>
+      <table id="viewport-table"></table>
+
+      <h2>③ 字体与缩放</h2>
+      <table id="font-table"></table>
+      <div class="ruler"></div>
+      <p class="hint">上面这条是 10rem 宽。默认设置下应约等于 160 CSS px。</p>
+
+      <h2>④ 安全区 env()</h2>
+      <table id="safe-table"></table>
+
+      <h2>⑤ 滚动测试</h2>
+      <p class="hint">往下滚，观察顶栏是否透出正文、是否被系统状态栏盖住。</p>
+      <div class="filler" id="filler"></div>
+
+      <h2>⑥ 键盘测试</h2>
+      <p class="hint">依次点下面三个输入框，观察键盘弹出后提交按钮是否还能看到或滚到。</p>
+      <label><span>第一个输入框</span><input type="text" placeholder="点这里弹出键盘" /></label>
+      <label><span>第二个输入框</span><input type="text" placeholder="再点这里" /></label>
+      <label><span>最后一个输入框（紧挨提交）</span><input type="text" placeholder="重点看这个" /></label>
+      <p><button type="button" id="refresh">刷新测量</button></p>
+
+      <h2>⑦ 回传数据</h2>
+      <p class="hint">把下面整段截图或复制发回即可。不含任何客户数据。</p>
+      <textarea id="dump" readonly></textarea>
+    </main>
+
+    <script>
+      // 所有测量都不涉及网络与业务数据，只读取本设备的视口、样式与原生注入值。
+
+      /** 取整到一位小数，避免浮点噪音淹没真正的差异。 */
+      function r1(v) {
+        return typeof v === "number" && isFinite(v) ? Math.round(v * 10) / 10 : String(v);
+      }
+
+      /** 把 [标签, 值] 列表渲染进表格；值为 null 时标成缺失而不是 0。 */
+      function render(tableId, rows) {
+        var html = rows
+          .map(function (row) {
+            var val = row[1];
+            var cls = val === null || val === undefined || val === "" ? ' class="absent"' : "";
+            var shown = cls ? "未提供" : val;
+            return "<tr><td>" + row[0] + "</td><td" + cls + ">" + shown + "</td></tr>";
+          })
+          .join("");
+        document.getElementById(tableId).innerHTML = html;
+        return rows;
+      }
+
+      /** 读取 CSS env() 安全区数值。未声明 viewport-fit=cover 时通常为 0，这本身就是结论。 */
+      function envInset(name) {
+        var probe = document.createElement("div");
+        probe.style.cssText =
+          "position:fixed;top:-9999px;padding-top:env(" + name + ",0px)";
+        document.body.appendChild(probe);
+        var v = parseFloat(getComputedStyle(probe).paddingTop) || 0;
+        probe.remove();
+        return v;
+      }
+
+      function collect() {
+        var vv = window.visualViewport;
+        var docEl = document.documentElement;
+        var cs = getComputedStyle(docEl);
+        var bar = document.querySelector(".topbar-probe");
+        var barRect = bar.getBoundingClientRect();
+        var barCs = getComputedStyle(bar);
+
+        var viewportRows = render("viewport-table", [
+          ["innerWidth × innerHeight", window.innerWidth + " × " + window.innerHeight],
+          ["devicePixelRatio", window.devicePixelRatio],
+          ["screen.width × height", screen.width + " × " + screen.height],
+          ["visualViewport 宽 × 高", vv ? r1(vv.width) + " × " + r1(vv.height) : null],
+          ["visualViewport.scale", vv ? r1(vv.scale) : null],
+          ["visualViewport.offsetTop", vv ? r1(vv.offsetTop) : null],
+          ["文档滚动宽度", docEl.scrollWidth],
+          ["是否整页横向溢出", docEl.scrollWidth > window.innerWidth ? "是（异常）" : "否"],
+        ]);
+
+        var fontRows = render("font-table", [
+          ["根元素 font-size", cs.fontSize],
+          ["根元素 line-height", cs.lineHeight],
+          ["body font-size", getComputedStyle(document.body).fontSize],
+          ["10rem 实测宽度", r1(document.querySelector(".ruler").getBoundingClientRect().width) + "px"],
+          ["顶栏 background", barCs.backgroundColor],
+          ["顶栏 backdrop-filter", barCs.backdropFilter || barCs.webkitBackdropFilter || "无"],
+          ["顶栏 z-index", barCs.zIndex],
+          ["顶栏 top / height", r1(barRect.top) + " / " + r1(barRect.height)],
+        ]);
+
+        var safeRows = render("safe-table", [
+          ["safe-area-inset-top", envInset("safe-area-inset-top") + "px"],
+          ["safe-area-inset-bottom", envInset("safe-area-inset-bottom") + "px"],
+          ["safe-area-inset-left", envInset("safe-area-inset-left") + "px"],
+          ["safe-area-inset-right", envInset("safe-area-inset-right") + "px"],
+        ]);
+
+        // 原生层通过 evaluateJavascript 写入 window.__yumiNative，
+        // 没有注册任何 invoke 命令，网页无法反向调用原生。
+        var nativeRows;
+        var n = window.__yumiNative;
+        if (n && typeof n === "object") {
+          nativeRows = render(
+            "native-table",
+            Object.keys(n).map(function (k) {
+              return [k, n[k]];
+            })
+          );
+        } else {
+          document.getElementById("native-table").innerHTML =
+            '<tr><td colspan="2" class="absent">未注入（原生诊断未生效）</td></tr>';
+          nativeRows = [["原生注入", "未生效"]];
+        }
+
+        var lines = [];
+        lines.push("=== YuMi 客户端显示诊断 ===");
+        lines.push("UA: " + navigator.userAgent);
+        lines.push("采集时刻: " + new Date().toISOString());
+        [
+          ["原生层", nativeRows],
+          ["视口", viewportRows],
+          ["字体与缩放", fontRows],
+          ["安全区", safeRows],
+        ].forEach(function (group) {
+          lines.push("");
+          lines.push("[" + group[0] + "]");
+          group[1].forEach(function (row) {
+            lines.push("  " + row[0] + ": " + (row[1] === null ? "未提供" : row[1]));
+          });
+        });
+        document.getElementById("dump").value = lines.join("\n");
+      }
+
+      // 填充足够长的正文，保证 sticky 顶栏一定会压到内容上。
+      var filler = document.getElementById("filler");
+      for (var i = 1; i <= 12; i++) {
+        var p = document.createElement("p");
+        p.textContent =
+          "第 " + i + " 段测试文字。这段内容只是用来把页面撑长，不含任何真实业务数据。" +
+          "滚动时请观察上方顶栏：文字是否从顶栏背景里透出来。";
+        filler.appendChild(p);
+      }
+
+      // 原生层注入完成后会回调这里，解决「inset 派发早于页面加载」的时序问题。
+      window.__yumiOnNative = collect;
+
+      collect();
+      document.getElementById("refresh").addEventListener("click", collect);
+      window.addEventListener("resize", collect);
+      window.addEventListener("orientationchange", collect);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", collect);
+        window.visualViewport.addEventListener("scroll", collect);
+      }
+
+      // 兜底重试：若注入既没赶上首次渲染、回调也没触发，
+      // 在最初几秒内多取几次，避免把时序问题误判成「原生诊断未生效」。
+      var tries = 0;
+      var retry = setInterval(function () {
+        if (window.__yumiNative || ++tries > 10) {
+          clearInterval(retry);
+        }
+        collect();
+      }, 400);
+    </script>
+  </body>
+</html>

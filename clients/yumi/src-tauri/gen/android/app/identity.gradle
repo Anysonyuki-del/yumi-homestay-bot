@@ -1,0 +1,59 @@
+// 应用身份隔离与诊断源码集，全部由构建模式驱动。
+//
+// 模式来自 build-mode.properties，该文件由 src-tauri/build.rs 在编译 Rust 时写出，
+// 值与 Rust 的 YUMI_ENTRY / YUMI_BUILD_MODE 同源。
+//
+// 这样做的原因：先前身份后缀挂在 debug 构建类型上，于是
+// 「diagnostics 的 release 构建」拿到的是生产应用标识，
+// 靠的是人记得在命令行加 --debug——那不是防线。现在只要不是 production 模式，
+// 无论 debug 还是 release，一律使用独立标识。
+//
+// 本文件刻意独立于 build.gradle.kts：cargo tauri android build 每次都会重写
+// 那个文件，并会精准删掉写在其中的 applicationIdSuffix（实测同文件里的
+// minSdk、versionNameSuffix 和注释都保留，唯独这一行被抹）。
+
+def modeFile = file("build-mode.properties")
+if (!modeFile.exists()) {
+    throw new GradleException(
+        "缺少 build-mode.properties。它由 src-tauri/build.rs 生成，" +
+        "请通过 cargo tauri android build 构建，或先执行一次 cargo build。\n" +
+        "不提供默认值是有意的：默认成 production 会让测试构建悄悄拿到生产应用标识。"
+    )
+}
+
+def buildModeProps = new Properties()
+modeFile.withInputStream { buildModeProps.load(it) }
+def buildMode = buildModeProps.getProperty("mode")
+def isProductionBuild = Boolean.parseBoolean(buildModeProps.getProperty("isProduction"))
+
+if (!(buildMode in ["production", "isolated-test", "diagnostics"])) {
+    throw new GradleException("build-mode.properties 里的 mode 无法识别: ${buildMode}")
+}
+
+android {
+    defaultConfig {
+        if (!isProductionBuild) {
+            // 只改 applicationId，不动 namespace：生成的 Kotlin 包路径、Activity 类名
+            // 与 Rust JNI 入口符号保持 icu.akros.yumi 不变，无需重新生成工程。
+            // 两个包可并存于同一台设备，数据目录各自独立，登录态互不共享。
+            applicationIdSuffix ".test"
+            versionNameSuffix "-${buildMode}"
+        }
+    }
+
+    sourceSets {
+        // 诊断的采集与注入只进 diagnostics 构建；其余模式编译同接口空实现，
+        // 因此正式包里不存在可执行的测量入口，而不是靠运行时判断绕开。
+        main.java.srcDirs += (buildMode == "diagnostics")
+            ? "src/diagnostics/java"
+            : "src/nodiagnostics/java"
+
+        // 诊断门控的单测只在包含该实现的构建里运行。
+        if (buildMode == "diagnostics") {
+            test.java.srcDirs += "src/testDiagnostics/java"
+        }
+    }
+}
+
+// 构建时把模式打印出来，避免产物装到设备上才发现身份不对。
+println("[YuMi] 构建模式=${buildMode} 生产身份=${isProductionBuild}")

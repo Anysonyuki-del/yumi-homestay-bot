@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Spec 第 5 节：禁止系统备份迁移应用认证数据。
+  cloud-backup 与 device-transfer 全部排除，避免会话 Cookie、WebView 数据目录
+  随云备份或换机直传离开本设备。用户主动保存到文档目录的附件属于用户文件，
+  不在应用私有数据范围内，不受本规则影响。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>
