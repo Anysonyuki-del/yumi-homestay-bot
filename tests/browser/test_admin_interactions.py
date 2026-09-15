@@ -636,13 +636,15 @@ def test_timeline_fits_without_horizontal_scrolling(browser: Browser, width: int
     page.close()
 
 
-def test_each_date_segment_matches_its_own_row_count(browser: Browser) -> None:
-    """各段按自己的笔数收紧，不被最多的那段拉齐。
+def test_each_date_segment_collapses_to_three_rows(browser: Browser) -> None:
+    """真实分段夹具下，各段折叠态同为三行。
 
-    本测试原本断言的是反面——「各段高度必须一致」，理由是 3+3+1 切分下
-    末段矮一截显得参差。那等于为了版面整齐给只有一笔订单的段留两条空轨道，
-    也就是用户报的那种大段空白。等高与否属于产品取舍，应当先改 Spec 再改实现，
-    因此这里把判据换成「每段各自吻合」，并保留原来的真实 7 天分段夹具。
+    这条测试的判据来回改过两次，值得记一笔：最初断言「各段高度必须一致」，
+    后来因手机端空轨道问题改成「每段按自身笔数收紧」，
+    2026-09-16 手机独立版式后下限按用户要求恢复，于是又回到同高——
+    但机理不同：现在是三行下限托底，不是跨段对齐到最多的那段。
+    两者的区别由 test_calendar_uneven_segments_expand_to_their_own_row_counts
+    在展开态区分，本测试只守折叠态的稳定高度。
     """
     page = browser.new_page(viewport={"width": 1440, "height": 900})
     page.set_content(_timeline_fixture(14, sparse_tail=True))
@@ -658,10 +660,8 @@ def test_each_date_segment_matches_its_own_row_count(browser: Browser) -> None:
     assert len(set(counts)) > 1, "这个夹具本身要造出各段笔数不同，否则守不住任何东西"
 
     for index, (height, count) in enumerate(zip(heights, counts, strict=True)):
-        # 空段仍留一条轨道显示空状态文案；折叠态封顶三条。
-        expected_rows = max(min(count, 3), 1)
-        assert height == expected_rows * _CAL_TRACK_HEIGHT_DESKTOP, (
-            f"第 {index + 1} 段有 {count} 笔，应占 {expected_rows} 条轨道，实际 {height}"
+        assert height == 3 * _CAL_TRACK_HEIGHT_DESKTOP, (
+            f"第 {index + 1} 段有 {count} 笔，折叠态应为 3 行，实际 {height}"
         )
     page.close()
 
@@ -938,19 +938,20 @@ def _tracks_height(page: Page, *, compact: bool) -> float:
 
 
 @pytest.mark.parametrize("bar_count", [1, 2])
-def test_calendar_tracks_match_real_row_count(browser: Browser, bar_count: int) -> None:
-    """少于三条订单时，轨道高度必须只占实际行数，不留空轨道。
+def test_calendar_collapsed_height_holds_three_tracks(browser: Browser, bar_count: int) -> None:
+    """桌面折叠态恒为三条轨道，使各房间卡高度一致。
 
-    截图里两条订单撑出三条轨道的大段空白，根因是模板把 --rows 取成
-    max(条目数, 3)，CSS 折叠态又固定用 --preview-rows: 3。
+    这个下限一度被去掉：当时手机端与桌面共用同一套甘特图，切成 3 天一段后
+    一笔订单会撑出三条空轨道。2026-09-16 手机改用独立版式后，那个理由不再成立，
+    下限按用户要求恢复——它换来的是卡片高度稳定与重叠订单的落脚空间。
     """
     page = browser.new_page(viewport={"width": 1440, "height": 900})
     page.set_content(_render_room_timeline(bar_count))
     page.add_style_tag(content=ADMIN_CSS)
 
     height = _tracks_height(page, compact=False)
-    assert height == pytest.approx(bar_count * _CAL_TRACK_HEIGHT_DESKTOP), (
-        f"{bar_count} 条订单应占 {bar_count} 条轨道，实际高度 {height}"
+    assert height == pytest.approx(3 * _CAL_TRACK_HEIGHT_DESKTOP), (
+        f"{bar_count} 条订单折叠态应占 3 条轨道，实际高度 {height}"
     )
     page.close()
 
@@ -1061,14 +1062,12 @@ def _segment_heights(page: Page, *, compact: bool) -> list[float]:
 
 
 @pytest.mark.parametrize("counts", [[1, 3], [1, 4, 0]])
-def test_calendar_uneven_segments_do_not_pad_to_the_tallest(
+def test_calendar_uneven_segments_collapse_to_the_same_three_rows(
     browser: Browser, counts: list[int]
 ) -> None:
-    """各分段按自己的订单数收紧，不被最高的那一段拉齐。
+    """折叠态各段都是三行——这是下限带来的，不是跨段对齐。
 
-    统一取全局最大行数时，1 条订单的那段会撑出 3 条甚至 4 条轨道，
-    也就是本次要修的那种空白。判据是「每段各自吻合」，
-    绝不能用「所有段高度一致」当通过标准——那恰好是缺陷的形状。
+    两者形状相同但机理不同，下一条测试用展开态把它们区分开。
     """
     page = browser.new_page(viewport={"width": 1440, "height": 900})
     page.set_content(_render_uneven_timeline(counts))
@@ -1076,18 +1075,22 @@ def test_calendar_uneven_segments_do_not_pad_to_the_tallest(
 
     heights = _segment_heights(page, compact=False)
     assert len(heights) == len(counts), f"应渲染 {len(counts)} 段，实际 {len(heights)}"
-
-    for index, (height, count) in enumerate(zip(heights, counts, strict=True)):
-        # 空段仍要留一条轨道显示空状态文案；有订单的段封顶三条。
-        expected_rows = max(min(count, 3), 1)
-        assert height == pytest.approx(expected_rows * _CAL_TRACK_HEIGHT_DESKTOP), (
-            f"第 {index + 1} 段有 {count} 条订单，应占 {expected_rows} 条轨道，实际高度 {height}"
+    for index, height in enumerate(heights):
+        assert height == pytest.approx(3 * _CAL_TRACK_HEIGHT_DESKTOP), (
+            f"第 {index + 1} 段折叠态应为 3 行，实际 {height}"
         )
     page.close()
 
 
-def test_calendar_uneven_segments_still_expand_fully(browser: Browser) -> None:
-    """展开后超出预览的那一段铺开真实行数，其余段不受牵连。"""
+def test_calendar_uneven_segments_expand_to_their_own_row_counts(
+    browser: Browser,
+) -> None:
+    """展开后各段按自己的笔数铺开，不被最多的那段拉齐。
+
+    这才是「不跨段对齐」的真正判据：若实现改回取全局最大笔数，
+    只有一笔的那段展开后会变成四行，本测试立刻失败。
+    折叠态恒三行是下限的结果，区分不出两种实现。
+    """
     page = browser.new_page(viewport={"width": 1440, "height": 900})
     page.set_content(_render_uneven_timeline([1, 4]))
     page.add_style_tag(content=ADMIN_CSS)
@@ -1097,23 +1100,24 @@ def test_calendar_uneven_segments_still_expand_fully(browser: Browser) -> None:
         "  .forEach(el => { el.open = true; })"
     )
     heights = _segment_heights(page, compact=False)
-    assert heights[0] == pytest.approx(1 * _CAL_TRACK_HEIGHT_DESKTOP), (
-        f"只有一条订单的段展开后仍应是一条轨道，实际 {heights[0]}"
+    # 一笔的段受三行下限托底；四笔的段按真实行数铺开。
+    assert heights[0] == pytest.approx(3 * _CAL_TRACK_HEIGHT_DESKTOP), (
+        f"只有一笔的段展开后应为三行下限，实际 {heights[0]}"
     )
     assert heights[1] == pytest.approx(4 * _CAL_TRACK_HEIGHT_DESKTOP), (
-        f"四条订单的段展开后应铺开四条轨道，实际 {heights[1]}"
+        f"四笔的段展开后应铺开四条轨道，实际 {heights[1]}"
     )
     page.close()
 
 
-def test_calendar_desktop_tracks_match_real_row_count(browser: Browser) -> None:
-    """桌面宽屏同样不保留空轨道；两种分段共用同一套规则。"""
+def test_calendar_desktop_collapsed_height_is_stable(browser: Browser) -> None:
+    """桌面宽屏折叠态同样恒为三行，房间卡之间不会高低不齐。"""
     page = browser.new_page(viewport={"width": 1440, "height": 900})
     page.set_content(_render_room_timeline(2))
     page.add_style_tag(content=ADMIN_CSS)
 
     height = _tracks_height(page, compact=False)
-    assert height == pytest.approx(2 * _CAL_TRACK_HEIGHT_DESKTOP), (
+    assert height == pytest.approx(3 * _CAL_TRACK_HEIGHT_DESKTOP), (
         f"桌面两条订单应占两条轨道，实际 {height}"
     )
     page.close()

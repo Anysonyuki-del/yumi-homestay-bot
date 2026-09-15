@@ -81,11 +81,13 @@
   {% for bar in timeline.bars %}{% if bar.left_pct < end and bar.left_pct + bar.width_pct > begin %}
     {% set visible.bars = visible.bars + [bar] %}
   {% endif %}{% endfor %}
-  {# 每段按自己的可见笔数收紧，不跨段对齐：两笔订单不该撑出第三条空轨道。
-     下限 1 是给空段留出显示空状态文案的高度，否则容器会塌成零高。
-     分段之间高度参差是这里接受的结果；若要改成等高，属于产品取舍，
-     应当先改 Spec 再改实现，不在这里自行决定。 #}
-  <section class="cal__segment" style="--days: {{ days | length }}; --rows: {{ [visible.bars | length, 1] | max }};">
+  {# 本宏自 2026-09-16 起只服务桌面：手机端改用 _room_timeline_mobile。
+     下限三行是桌面的取舍——各房间卡高度一致，且重叠订单有落脚的轨道。
+     此前去掉这个下限，是因为手机端把同一套甘特图切成 3 天一段后，
+     一笔订单会撑出三条空轨道；手机不再走这里之后，那个理由不复存在。
+     仍然按各段自己的笔数取值、不跨段对齐到最多的那段：
+     四笔的段展开后是四行，不会把只有一笔的段也拉到四行。 #}
+  <section class="cal__segment" style="--days: {{ days | length }}; --rows: {{ [visible.bars | length, 3] | max }};">
     <div class="cal__content">
       <div class="cal__dates">
         {% for day in days %}<div class="cal__date{% if day.local_date == today %} cal__date--today{% endif %}"{% if day.local_date == today %} aria-label="今天 {{ day.local_date }}"{% endif %}><span class="cal__dow">{{ weekdays[day.local_date.weekday()] }}</span><span class="cal__dnum">{% if loop.first or day.local_date.day == 1 %}{{ day.local_date.month }}/{% endif %}{{ day.local_date.day }}</span></div>{% endfor %}
