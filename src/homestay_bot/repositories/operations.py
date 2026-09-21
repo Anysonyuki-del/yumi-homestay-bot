@@ -1,10 +1,23 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String, and_, delete, exists, func, literal, or_, select, update
+from sqlalchemy import (
+    String,
+    and_,
+    case,
+    delete,
+    exists,
+    func,
+    literal,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy import cast as sa_cast
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -658,17 +671,27 @@ class SQLAlchemyOperationsRepository:
         ]
 
     async def require_purgeable(self, task_ids: list[int]) -> list[str]:
-        """校验全部任务存在且已归档，返回待删除的私有文件编号。
+        """锁住并复核整批任务均存在且已归档，返回其附件的私有文件编号。
 
-        校验必须在删除磁盘文件之前完成：先删文件再发现某条不该删，照片已经
-        找不回来了。混入未归档任务时拒绝整批，不静默跳过。
+        行锁按编号升序取得并持有到外层事务结束，与恢复归档的单行锁互斥：恢复先
+        提交则这里读到未归档而整批拒绝；这里先锁住则恢复等到删除提交后只会看到
+        任务不存在。刻意不用 SKIP LOCKED——那会把用户明确勾选的一整批静默删成
+        一部分。populate_existing 让锁后读到的新行版本覆盖会话里可能早已加载的
+        旧 archived_at，否则锁住了新版本却仍按旧值判断。
+
+        混入缺失或未归档任务时拒绝整批，不静默跳过。附件编号只在锁定并校验通过
+        后读取；磁盘照片由提交后的 worker 删除，这里不碰文件。
         """
         if not task_ids:
             raise OperationRefused("请先勾选要删除的任务")
         unique_ids = sorted(set(task_ids))
         tasks = list(
             await self._session.scalars(
-                select(BusinessTask).where(BusinessTask.id.in_(unique_ids))
+                select(BusinessTask)
+                .where(BusinessTask.id.in_(unique_ids))
+                .order_by(BusinessTask.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         )
         if missing := sorted(set(unique_ids) - {task.id for task in tasks}):
@@ -692,27 +715,44 @@ class SQLAlchemyOperationsRepository:
         task_ids: list[int],
         actor_employee_id: int,
     ) -> int:
-        """永久删除勾选的已归档任务，返回删除数量。
+        """在当前事务内整批永久删除勾选的已归档任务，返回删除数量。
 
-        这里重新校验一次归档状态：校验与删除之间隔着磁盘文件删除，期间状态
-        可能已被其他会话改变。
+        仓储自己再做一次锁定复核，不依赖调用方或路由已经预检过：同一事务内重复
+        加锁不会阻塞。DELETE 仍带归档条件并用 RETURNING 取实际删除的集合，与
+        所选集合不一致就抛错，由外层回滚整批，绝不把删了一部分当作成功。墓碑与
+        审计只按最终删除集合记录，和删除、照片清理登记同事务提交。
         """
         await self.require_purgeable(task_ids)
         unique_ids = sorted(set(task_ids))
+        rows = (
+            await self._session.execute(
+                delete(BusinessTask)
+                .where(
+                    BusinessTask.id.in_(unique_ids),
+                    BusinessTask.archived_at.is_not(None),
+                )
+                .returning(BusinessTask.id, BusinessTask.dedupe_key)
+                .execution_options(synchronize_session="fetch")
+            )
+        ).all()
+        deleted_ids = sorted(row.id for row in rows)
+        if deleted_ids != unique_ids:
+            raise OperationRefused("所选任务状态已变化，本批未删除，请刷新后重试")
+        await self.mark_purged_many(
+            [row.dedupe_key for row in rows],
+            now=datetime.now(UTC),
+        )
         self._session.add(
             AuditLog(
                 actor_employee_id=actor_employee_id,
                 action="business_task_purged",
                 target_type="business_task",
                 target_id="selection",
-                details={"count": len(unique_ids), "task_ids": unique_ids},
+                details={"count": len(deleted_ids), "task_ids": deleted_ids},
             )
         )
-        await self._session.execute(
-            delete(BusinessTask).where(BusinessTask.id.in_(unique_ids))
-        )
         await self._session.flush()
-        return len(unique_ids)
+        return len(deleted_ids)
 
     async def purge_task(self, task_id: int, actor_employee_id: int) -> None:
         """永久删除一条已归档任务；附件行由外键级联删除。
@@ -744,7 +784,7 @@ class SQLAlchemyOperationsRepository:
                 },
             )
         )
-        await self._mark_purged(task.dedupe_key)
+        await self.mark_purged_many([task.dedupe_key], now=datetime.now(UTC))
         await self._session.delete(task)
         await self._session.flush()
 
@@ -830,36 +870,74 @@ class SQLAlchemyOperationsRepository:
         return task
 
     async def _purged_mark(self, dedupe_key: str) -> PurgedTaskMark | None:
-        """返回仍在保留期内的删除墓碑；过期墓碑视为不存在并顺手清掉。"""
-        mark = await self._session.scalar(
-            select(PurgedTaskMark).where(PurgedTaskMark.dedupe_key == dedupe_key)
-        )
-        if mark is None:
-            return None
-        cutoff = datetime.now(UTC) - timedelta(days=PURGED_MARK_RETENTION_DAYS)
-        purged_at = mark.purged_at
-        if purged_at.tzinfo is None:
-            purged_at = purged_at.replace(tzinfo=UTC)
-        if purged_at < cutoff:
-            # 过期即失效：墓碑只防止「刚删完又被同步造回来」，不永久封禁
-            # 某个房间的某一天。
-            await self._session.delete(mark)
-            await self._session.flush()
-            return None
-        return mark
+        """返回仍在保留期内的删除墓碑；过期墓碑视为不存在并顺手清掉。
 
-    async def _mark_purged(self, dedupe_key: str | None) -> None:
-        """为带去重键的系统任务留下删除墓碑；人工任务没有去重键，不留。"""
-        if not dedupe_key:
-            return
-        existing = await self._session.scalar(
-            select(PurgedTaskMark).where(PurgedTaskMark.dedupe_key == dedupe_key)
+        清理过期墓碑用带到期条件的 DELETE，而不是先读对象再无条件删除：另一
+        事务可能刚把同一键刷新为新的删除时间，旧读数会把这块有效墓碑误删，导致
+        刚删除的任务被同步造回来。删完再以最新行版本读取仍存在的墓碑。
+        """
+        cutoff = datetime.now(UTC) - timedelta(days=PURGED_MARK_RETENTION_DAYS)
+        # 过期即失效：墓碑只防止「刚删完又被同步造回来」，不永久封禁某个房间的
+        # 某一天。严格小于 cutoff 才算过期，与原有边界一致。
+        await self._session.execute(
+            delete(PurgedTaskMark)
+            .where(
+                PurgedTaskMark.dedupe_key == dedupe_key,
+                PurgedTaskMark.purged_at < cutoff,
+            )
+            .execution_options(synchronize_session="fetch")
         )
-        now = datetime.now(UTC)
-        if existing is not None:
-            existing.purged_at = now
+        return cast(
+            PurgedTaskMark | None,
+            await self._session.scalar(
+                select(PurgedTaskMark)
+                .where(PurgedTaskMark.dedupe_key == dedupe_key)
+                .execution_options(populate_existing=True)
+            ),
+        )
+
+    async def mark_purged_many(
+        self,
+        dedupe_keys: Iterable[str | None],
+        *,
+        now: datetime,
+    ) -> None:
+        """为一批已删除的系统任务写入或刷新删除墓碑，与删除同事务提交。
+
+        单条删除、人工批量删除和自动归档清理三处共用这一个入口。墓碑记的是
+        BusinessTask 原有的业务去重键，不是照片清理 job 的摘要键；人工任务没有
+        去重键，不留墓碑。`now` 必须是实际删除发生的时间：自动清理若误用
+        180 天前的 archived_at，墓碑一写入就已过期。
+
+        同键已存在时用数据库原生 upsert 刷新，且只前移不后退；唯一键冲突不靠
+        外层 rollback 兜底，写入失败就让整个删除事务失败，不会删了却漏记。
+        """
+        keys = sorted({key for key in dedupe_keys if key})
+        if not keys:
             return
-        self._session.add(PurgedTaskMark(dedupe_key=dedupe_key, purged_at=now))
+        dialect = self._session.get_bind().dialect.name
+        if dialect == "postgresql":
+            insert_factory: Any = postgresql_insert
+        elif dialect == "sqlite":
+            insert_factory = sqlite_insert
+        else:
+            raise RuntimeError(f"删除墓碑不支持的数据库方言：{dialect}")
+        statement = insert_factory(PurgedTaskMark).values(
+            [{"dedupe_key": key, "purged_at": now} for key in keys]
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=[PurgedTaskMark.dedupe_key],
+            set_={
+                "purged_at": case(
+                    (
+                        statement.excluded.purged_at > PurgedTaskMark.purged_at,
+                        statement.excluded.purged_at,
+                    ),
+                    else_=PurgedTaskMark.purged_at,
+                )
+            },
+        )
+        await self._session.execute(statement)
 
     async def archive_selected(
         self,

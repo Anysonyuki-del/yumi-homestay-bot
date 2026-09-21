@@ -785,3 +785,97 @@ Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节�
 - 网页侧改动需后端单独发布才会到生产，当前仅本地验证。
 - Windows 侧保持未验证。
 - 正式发布 keystore 仍未生成；当前为测试签名。
+
+## 数据库清理可靠性与 RAG 检索（2026-09-21，用户回复「英文先不管，a，一次跑完」）
+
+依据 `docs/specs/2026-09-21_database-optimization-spec.md`（R4）。PG 验收走路径（c）：
+本机没有 Docker 或 Postgres，不安装、不推分支，PG 用例和 CI 步骤只写好待审。
+本轮不提交、不推送、不部署。
+
+### A：清理可靠性（含 D1/D2）
+
+- [x] A1 有界去重键：`task_page_service.py::build_attachment_cleanup_dedupe_key`，
+      自动清理和人工批量删除共用；单条删除的 `task-purge:<id>` 不变。
+- [x] A2 有界清理：`retention.py::purge/purge_archived_tasks` 每次只处理一批，不自行提交；
+      归档清理用 `FOR UPDATE SKIP LOCKED` + `DELETE … RETURNING`；
+      `application.py::_run_retention_round/_run_retention_phase` 每批一个短事务，
+      两阶段互不影响，每阶段每轮最多 20 批，整轮固定一个 now；
+      失败日志不带 exc_info，避免把 SQL 参数写进日志。
+- [x] 删除 `delete_file` 与 `_run_retention_loop` 的 `storage` 参数。
+- [x] D1 人工批量删除：`operations.py::require_purgeable` 按编号升序 `FOR UPDATE` 并用
+      `populate_existing`；`purge_selected` 带归档条件 `RETURNING`，删除集合不一致则整批失败。
+- [x] D2 墓碑：`operations.py::mark_purged_many` 原生 upsert（时间只前移），三个删除入口共用；
+      `_purged_mark` 过期清理改为带条件的 DELETE。
+- [x] A3 SQLite 回归与变异验证：12 处关键保护逐一删除后都有测试失败。
+- [x] A3 PG 用例 `tests/integration/test_retention_postgresql.py` 与 CI 隔离 PG 步骤已写好。
+      **PostgreSQL 未验收**：T1/T9/T12/T17 未执行。
+- [ ] A4 线上基线：没有生产只读授权，未采集。
+
+### C：RAG 检索（C0/C1；C2 未启动）
+
+- [x] C0 评估集：校准集 40 条由 Claude 编写，`tests/fixtures/knowledge_retrieval_cases.json`；
+      留出集 40 条由 Codex（gpt-5.6-sol）独立编写，`knowledge_retrieval_holdout.json`，
+      sha256 `1605a5e9…3dc8b`，在 C1 动手前冻结。用户默认模型 gpt-6-astra 需要更新的
+      Codex CLI（本机 0.152.1），这次运行单独指定 `-m gpt-5.6-sol`，没有改用户配置。
+      留出集单独成一个文件（Spec 原写同一文件），这样作者边界清楚。
+- [x] 基线：`knowledge_retrieval_baseline.json`，在改动前的源码上记录；放行按生产口径
+      计算（被判为专属问题且证据门通过）。
+- [x] C1 `knowledge_service.py`：共享主题别名 `PROPERTY_TOPICS`（15 个主题，多义词只用于
+      检索排序）；问题虚词过滤；整条问答入证，放不进预算就整条跳过并计数（`retrieve_detailed`）。
+- [x] C1 `deepseek_client.py`：证据门按主题逐一找本店范围内的支撑句，多主题缺一个就不算已覆盖，
+      分类和关键词不作证；回复里的免费说法和数字要有证据，否则退回「尚未确认」，且不生成 FAQ 候选。
+- [x] C1 `answer_policy.py::is_property_specific` 复用主题别名。
+- [x] 变异验证：10 处关键保护逐一删除后都有测试失败。
+- 兜底文案仍然只有中文（用户：英文先不管）。
+
+| 指标 | 校准 基线→C1 | 留出 基线→C1（只跑一次） |
+| --- | --- | --- |
+| Recall@3（目标 ≥0.90） | 0.828 → 1.000 | 0.935 → 0.935 |
+| 证据完整 | 0.833 → 1.000 | 0.828 → 1.000 |
+| 证据门判断准确率 | 0.375 → 0.925 | 0.400 → 0.550 |
+| 错误放行（目标 0） | 1 → 0 | 2 → 2 |
+| 模拟回复判定准确率 | 0.778 → 1.000 | 0.333 → 0.833 |
+| 隔离（目标 100%） | 1.000 → 1.000 | 0.950 → 0.950 |
+| 边界：知识不放行实时问题 | 1.000 → 1.000 | 1.000 → 1.000 |
+| 检索耗时 P50/P95（含 SQLite 读取，合成规模） | 0.46/0.64 ms | 0.43/0.72 ms |
+
+留出集未达标，按 strict xfail 记录，门槛不变：
+- hold-iso-31、hold-iso-35（错误放行）：「路口」「桥边」「商户」不在周边措辞词表里，
+  周边商户的句子被当成本店早餐证据。真缺陷，未修。
+- hold-iso-35、hold-bound-39（隔离）：Codex 把已启用的周边商户信息和静态价格标为禁止入证，
+  本评估的隔离口径是「停用、旧答案、候选草稿」。口径不一致，需要用户确认。
+- 保守漏判（共 16 条，全部退回「尚未确认」，方向安全）：同义说法不在别名表
+  （车搁哪儿、甩洗、爬楼、抽两口、降温设备、Can I park、lift）；主题不在表里
+  （晚到入住、儿童用品、空调、屋顶露台）。这满足 C2 的准入条件「C1 后仍有成组同义漏检」。
+
+范围外发现（未修）：「今晚还有空房吗」不被交易分类或房态强制规则识别（词表里没有「空房」），
+属于交易策略，C 阶段不改。
+
+### 验收状态
+
+| 项 | 状态 |
+| --- | --- |
+| T2–T8、T10、T11、T13–T16、T18 | SQLite 通过 |
+| T1、T9、T12、T17 | PG 用例已写好，**未执行（PostgreSQL 未验收）** |
+| K1–K9 | 本地通过；K2 只验证了证据门，英文兜底文案未改 |
+| K10–K12（C2） | 未启动 |
+| 真实模型、生产 | 未验证、未采集 |
+| 全量 pytest | 1685 通过 / 24 跳过（15 项真实契约 + 9 项 PG）/ 1 xfail |
+
+### Codex 交接审查补修：C1 证据来源（2026-09-21）
+
+用户已明确“开始”；依据 Spec 9.4.1，只修问题标题作证、否定免费与问句数字作证三条路径及直接相关的范围校验。上表是 Claude 历史交付记录，K1～K9 不能视为全部验收通过：公开留出集仍有已知失败，PG/真实模型亦未验收。
+
+- [x] 核对三条缺陷与所有调用方，确认现有 `respond` 测试可复用。
+- [x] 写端到端回归并确认红测：6 个拦截场景修复前全部失败；最终共 12 个回归场景。
+- [x] 修复共享证据判断，保留真实答案、周边问答和明确否定的正常回复。
+- [x] 运行受影响验证集与静态检查：248 passed / 1 xfailed；Ruff 通过，mypy 133 个源码文件通过。公开留出集错误放行 2 → 0，隔离仍为 0.950。
+- [x] 更新交接第 12 节；未提交、未推送、未部署。独立留出/PG/真实模型仍未验收，保留隔离失败标记。
+
+### 复核 Codex §9.4.1 补修并修复放行回归（2026-09-21，用户回复「开始修」）
+
+- [x] 复核：§9.4.1 的问句数字、周边标题修复成立；答案判据与否定窗口过宽，引入 4 个错误放行（入住字眼、数字+单位当距离、远端否定、被子量词）。
+- [x] Spec §9.4.2 补记范围；`deepseek_client.py::_ANSWER_TOPIC_PATTERNS/_CLOCK_TIME/_FREE_NEGATION_PATTERN` 收窄。
+- [x] 4 条回归测试：换回旧判据时失败原因是「被放行」，修复后通过。
+- [x] 全量 1701 通过 / 24 跳过 / 1 xfail；ruff、mypy、diff-check 通过。
+- 保留：距离证据不核对目的地（交接前已有）；中文距离问题走联网旅游搜索，不经知识证据门。

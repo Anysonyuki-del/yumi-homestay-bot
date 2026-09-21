@@ -35,7 +35,12 @@ from homestay_bot.services.guest_reply_policy import (
     remove_ungrounded_property_claims,
     sanitize_guest_reply,
 )
-from homestay_bot.services.knowledge_service import KnowledgeService
+from homestay_bot.services.knowledge_service import (
+    KnowledgeService,
+    PropertyTopic,
+    detect_property_topics,
+    normalize_text,
+)
 from homestay_bot.services.model_budget import (
     MODEL_BUDGET,
     bound_json_value,
@@ -47,6 +52,85 @@ from homestay_bot.services.stay_date_range import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 讲周边商户或公共设施的句子不能证明本店提供；只有客人本来就在问周边时才算数。
+_EXTERNAL_SCOPE_PATTERN = re.compile(
+    r"附近|周边|周围|楼下|街口|隔壁|对面|nearby|next\s+door|across\s+the\s+street|downstairs",
+    re.IGNORECASE,
+)
+_EVIDENCE_SENTENCE_SPLIT = re.compile(r"[。！？!?；;\n]+|(?<=\.)\s+")
+_FREE_CLAIM_PATTERN = re.compile(
+    r"免费|不收费|不另收费|无需付费|不用付费|不要钱|\bfree\b|no\s+charge|complimentary"
+    r"|at\s+no\s+cost",
+    re.IGNORECASE,
+)
+# 只认紧贴在「免费」前面的否定：「不免费」「not free」不是免费的肯定证据。
+# 窗口一放宽，「不用预约也能免费」里的「不用」就会被误当成否定，回复里
+# 真正的免费断言反而逃过检查。
+_FREE_NEGATION_PATTERN = re.compile(
+    r"(?:不是|并非|没有|无法|不能|不再|不|非|未)\s*$"
+    r"|(?:\bnot|\bnever|\bno\s+longer|n['’]t)\s+$",
+    re.IGNORECASE,
+)
+_NUMBER_PATTERN = re.compile(r"\d+(?:[.:]\d+)?")
+_LIST_MARKER_PATTERN = re.compile(r"(?m)^\s*\d{1,2}[.、)）]\s*")
+# 钟点表达：14:00、3 点、三点、中午、3 pm。单独的数字（如「10 公斤」）不算。
+_CLOCK_TIME = (
+    r"(?:\d{1,2}\s*[:：]\s*\d{2}|\d{1,2}\s*[点时]|[一二两三四五六七八九十]{1,3}\s*点"
+    r"|中午|正午|\d{1,2}\s*(?:am|pm)\b|\bnoon\b)"
+)
+# 问句别名不能直接覆盖陈述句：只补足已有主题的明确答案表达，不扩大问题分类。
+# 每条都要求答案真的在讲这件事，不能只是顺带出现主题字眼：「猫狗入住」不讲
+# 入住时间，「加一床被子」不是加床，「步行 3 分钟的停车场」不讲到景点多远。
+_ANSWER_TOPIC_PATTERNS = {
+    "入住退房时间": re.compile(
+        rf"{_CLOCK_TIME}[^，。；,.;]{{0,8}}(?:入住|退房)"
+        rf"|(?:入住|退房)[^，。；,.;]{{0,8}}{_CLOCK_TIME}"
+        rf"|check[- ]?(?:in|out)[^,.;]{{0,20}}{_CLOCK_TIME}"
+        rf"|{_CLOCK_TIME}[^,.;]{{0,20}}check[- ]?(?:in|out)",
+        re.IGNORECASE,
+    ),
+    "加床": re.compile(
+        r"折叠床|(?:加|额外)(?:一|1)?张[^，。；,.;]{0,3}床|rollaway|extra\s+bed|folding\s+bed",
+        re.IGNORECASE,
+    ),
+    # 「away」「步行 N 分钟」常出现在讲停车场、车站的句子里，单独不能当距离证据；
+    # 问题里取得出目的地时，由 _passage_states_topic 另外核对目的地与距离数值。
+    "距离": re.compile(r"相距"),
+}
+_LOCAL_POLICY_PATTERN = re.compile(
+    r"本店|民宿|我们|暂停提供|不提供|\b(?:homestay|our property)\b", re.IGNORECASE,
+)
+# 距离数值：900 米、12 分钟、1.5 公里、a 12-minute walk、300 m。
+_DISTANCE_UNIT_PATTERN = re.compile(
+    r"\d+(?:\.\d+)?\s*-?\s*(?:米|公里|千米|分钟|kilometers?|kilometres?|km|meters?|metres?"
+    r"|minutes?|mins?|m)(?![a-z])",
+    re.IGNORECASE,
+)
+# 从距离问题里取出目的地：「离江汉路步行街多远」「How far is it to the metro station?」。
+_DISTANCE_DESTINATION_PATTERNS = (
+    re.compile(
+        r"(?:离|距离?|到)(?P<place>[^，,。？?！!、\s]{2,16}?)有?"
+        r"(?:多远|多久|远吗|近吗|远不远|要走多久)"
+    ),
+    re.compile(
+        r"how\s+far\s+is\s+(?:it\s+)?(?:from\s+(?:here|the\s+homestay|your\s+place)\s+)?"
+        r"to\s+(?P<place>[^?.!,]+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"how\s+far\s+is\s+(?P<place>[^?.!,]+?)\s+from\s+"
+        r"(?:here|the\s+homestay|you|your\s+place)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"distance\s+to\s+(?P<place>[^?.!,]+)", re.IGNORECASE),
+)
+_PLACE_FILLER_WORDS = frozenset({"the", "and", "our", "your", "homestay", "from", "near"})
+# 标题或分类在讲价格、费用的条目；问实时房价房态时，与所问主题无关的这类条目不交给模型。
+_PRICE_ENTRY_PATTERN = re.compile(
+    r"价格|价钱|房价|房费|费用|收费|多少钱|参考价|\bprices?\b|\brates?\b|\bcosts?\b|\bfees?\b",
+    re.IGNORECASE,
+)
 
 _ASSISTANT_FAILURE_REPLIES = {
     "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。",
@@ -616,8 +700,14 @@ class DeepSeekGuestAssistant:
         *,
         property_knowledge_grounded: bool,
         faq_candidate_ids: set[int],
+        knowledge_evidence: list[Any] | None = None,
     ) -> AssistantDecision:
-        """校验模型 JSON，并执行确定性风险归一化。"""
+        """校验模型 JSON，并执行确定性风险归一化。
+
+        knowledge_evidence 是本次实际交给模型的审核知识，仅在专属事实只靠知识
+        （而非百居易工具）确认时传入：主题有证据不等于回复里的「免费」和数字
+        也有证据，对不上就按未确认处理。
+        """
         decision = AssistantDecision.model_validate_json(output_text)
         local_handoff_reason = determine_handoff_reason(question_text)
         updates: dict[str, Any] = {
@@ -643,6 +733,20 @@ class DeepSeekGuestAssistant:
                 updates["intent"] = "booking_inquiry"
         property_specific = is_property_specific(question_text)
         transaction_sensitive = is_transaction_sensitive(question_text)
+        reply_grounded = property_knowledge_grounded
+        if (
+            property_specific
+            and property_knowledge_grounded
+            and knowledge_evidence is not None
+            and self._has_unsupported_property_claims(
+                decision.reply_text,
+                question_text,
+                knowledge_evidence,
+            )
+        ):
+            # 只退回保守回复。审核知识其实存在、是模型说过了头，所以下面判断
+            # FAQ 候选资格时仍用原来的 property_knowledge_grounded，不生成候选。
+            reply_grounded = False
         if not property_specific:
             # 客人未询问民宿专属信息时，删除模型主动添加的未审核宣传，
             # 避免把房型、设施或公共空间的臆测当作本店事实发送。
@@ -661,9 +765,10 @@ class DeepSeekGuestAssistant:
             )
         elif (
             property_specific
-            and not property_knowledge_grounded
+            and not reply_grounded
             and decision.task_suggestion is None
         ):
+            topics = detect_property_topics(question_text)
             topic = self._property_topic(question_text)
             safe_reply = (
                 f"当前审核资料尚未确认{topic}信息。"
@@ -676,6 +781,20 @@ class DeepSeekGuestAssistant:
                     "建议先考虑附近公共停车场或合规停车位，"
                     "到店前再请工作人员确认周边停车安排。"
                 )
+            if decision.language is Language.EN:
+                # 英文客人收到英文兜底；用词与中文一致：只说未确认，给替代建议。
+                safe_reply = (
+                    "Our reviewed information hasn't confirmed "
+                    f"{topics[0].english if topics else 'this detail about the homestay'} yet. "
+                    "Please check with our staff before you arrive, and keep a backup "
+                    "plan that doesn't depend on it."
+                )
+                if topic == "停车":
+                    safe_reply = (
+                        "Our reviewed information hasn't confirmed parking at the homestay "
+                        "yet. You may want to consider a nearby public car park or another "
+                        "legal parking spot, and ask our staff to confirm before you arrive."
+                    )
             updates.update(
                 {
                     "reply_text": safe_reply,
@@ -861,25 +980,118 @@ class DeepSeekGuestAssistant:
 
     @staticmethod
     def _property_topic(question_text: str) -> str:
-        """从专属问题中提取用于知识匹配和安全回复的主题。"""
-        for topic in (
-            "停车",
-            "早餐",
-            "宠物",
-            "加床",
-            "电梯",
-            "厨房",
-            "洗衣",
-            "发票",
-            "接送",
-            "无障碍",
-            "吸烟",
-            "行李寄存",
-            "距离",
-        ):
-            if topic in question_text:
-                return topic
-        return "民宿专属"
+        """返回问题里优先级最高的民宿专属主题，用于安全回复措辞。"""
+        topics = detect_property_topics(question_text)
+        return topics[0].name if topics else "民宿专属"
+
+    @staticmethod
+    def _scope_knowledge(question_text: str, knowledge: list[Any]) -> list[Any]:
+        """剔除不该交给模型的审核知识。
+
+        问本店事实而没问周边时，标题在讲附近、周边的问答对答案没有帮助：证据门
+        不会拿它作证，回复会被固定的未确认文案替换，留着只会让模型把周边说成
+        本店。问实时房价、房态这类交易问题时，与所问主题无关的价格条目（例如
+        「平时房价」）不能交给模型，免得被当成今晚的价格；问停车费时，讲停车
+        收费的条目照常保留。
+        """
+        asks_nearby = _EXTERNAL_SCOPE_PATTERN.search(normalize_text(question_text)) is not None
+        drop_nearby = not asks_nearby and is_property_specific(question_text)
+        drop_price = is_transaction_sensitive(question_text)
+        asked_topics = {topic.name for topic in detect_property_topics(question_text)}
+        scoped: list[Any] = []
+        for item in knowledge:
+            title = normalize_text(item.question)
+            if drop_nearby and _EXTERNAL_SCOPE_PATTERN.search(title):
+                continue
+            subject = f"{item.category}\n{item.question}"
+            if drop_price and _PRICE_ENTRY_PATTERN.search(normalize_text(subject)):
+                entry_topics = {topic.name for topic in detect_property_topics(subject)}
+                if not entry_topics & asked_topics:
+                    continue
+            scoped.append(item)
+        return scoped
+
+    @staticmethod
+    def _distance_destination(question_text: str) -> str | None:
+        """取出距离问题里的目的地；取不出时返回 None。"""
+        normalized = normalize_text(question_text)
+        for pattern in _DISTANCE_DESTINATION_PATTERNS:
+            match = pattern.search(normalized)
+            if match is not None:
+                place = re.sub(r"^(?:the\s+|那个|这个)", "", match.group("place").strip())
+                return place or None
+        return None
+
+    @staticmethod
+    def _mentions_place(passage: str, place: str) -> bool:
+        """判断分句是否提到目的地：中文要求原样出现，英文要求实词全部出现。"""
+        words = [
+            word
+            for word in re.findall(r"[a-z0-9]+", place)
+            if len(word) >= 3 and word not in _PLACE_FILLER_WORDS
+        ]
+        if words:
+            return all(re.search(rf"\b{re.escape(word)}\b", passage) for word in words)
+        return place in passage
+
+    @classmethod
+    def _passage_states_topic(
+        cls,
+        topic: PropertyTopic,
+        passage: str,
+        destination: str | None,
+    ) -> bool:
+        """判断一个已规范化的答案分句是否真的在讲所问主题。
+
+        距离问题取得出目的地时，分句必须提到这个目的地，并有距离用语或「数字+
+        距离单位」：讲停车场「步行 3 分钟」的句子不能证明到地铁站多远。
+        """
+        answer_pattern = _ANSWER_TOPIC_PATTERNS.get(topic.name)
+        states_topic = topic.aliases.search(passage) is not None or (
+            answer_pattern is not None and answer_pattern.search(passage) is not None
+        )
+        if topic.name == "距离" and destination is not None:
+            return cls._mentions_place(passage, destination) and (
+                states_topic or _DISTANCE_UNIT_PATTERN.search(passage) is not None
+            )
+        return states_topic
+
+    @classmethod
+    def _supporting_knowledge(
+        cls,
+        topic: PropertyTopic,
+        question_text: str,
+        knowledge: list[Any],
+    ) -> list[Any]:
+        """返回在本店适用范围内明确讲到该主题的审核问答。
+
+        问题标题只能限定主题和范围，不能证明设施存在；事实必须出自答案正文。
+        周边问答不能给本店事实背书，即使答案省略了标题中的“附近”。分类和关键词
+        仍只帮助检索；答案按句检查范围，除非客人本来就在问周边。
+        """
+        asks_nearby = _EXTERNAL_SCOPE_PATTERN.search(normalize_text(question_text)) is not None
+        destination = (
+            cls._distance_destination(question_text) if topic.name == "距离" else None
+        )
+        supporting: list[Any] = []
+        for item in knowledge:
+            if not asks_nearby and _EXTERNAL_SCOPE_PATTERN.search(normalize_text(item.question)):
+                continue
+            passages = _EVIDENCE_SENTENCE_SPLIT.split(item.answer)
+            for passage in passages:
+                normalized = normalize_text(passage)
+                if not asks_nearby and _EXTERNAL_SCOPE_PATTERN.search(normalized):
+                    # “本店不提供早餐，楼下有早餐店”保留明确的本店前句；不能把
+                    # “楼下有商店，提供早餐”的后句抽出来，丢失其周边主体。
+                    normalized = re.split(r"[，,]", normalized, maxsplit=1)[0]
+                    if _LOCAL_POLICY_PATTERN.search(normalized) is None:
+                        continue
+                if not cls._passage_states_topic(topic, normalized, destination):
+                    continue
+                if asks_nearby or _EXTERNAL_SCOPE_PATTERN.search(normalized) is None:
+                    supporting.append(item)
+                    break
+        return supporting
 
     @classmethod
     def _has_relevant_property_knowledge(
@@ -887,14 +1099,64 @@ class DeepSeekGuestAssistant:
         question_text: str,
         knowledge: list[Any],
     ) -> bool:
-        """判断审核知识是否明确覆盖当前民宿专属主题。"""
-        topic = cls._property_topic(question_text)
-        if topic == "民宿专属":
+        """判断审核知识是否覆盖了问题问到的每一个民宿专属主题。
+
+        多主题问题缺任何一个都不算已覆盖，避免用一个主题的证据为整句话背书。
+        识别不出主题时保守判为未覆盖。
+        """
+        # ponytail: 主题按固定别名识别，证据按句匹配主题词并排除周边措辞；不做
+        # 语义蕴含，也不区分具体房间。评估集持续出现范围误判时再引入更强的
+        # 适用范围标注或 C2 方案。
+        topics = detect_property_topics(question_text)
+        if not topics:
             return False
-        corpus = "\n".join(
-            f"{item.question}\n{item.answer}" for item in knowledge
+        return all(
+            cls._supporting_knowledge(topic, question_text, knowledge)
+            for topic in topics
         )
-        return topic in corpus
+
+    @staticmethod
+    def _has_affirmative_free_claim(text: str) -> bool:
+        """只认可未被同一短分句否定的免费说法，避免“不免费”为“免费”背书。
+
+        ponytail: 这是常见否定的保守词面校验，不证明复杂条件或双重否定的语义。
+        它仅用于已有的免费断言安全门，不代替审核知识的适用范围判断。
+        """
+        return any(
+            _FREE_NEGATION_PATTERN.search(text[max(0, match.start() - 24):match.start()])
+            is None
+            for match in _FREE_CLAIM_PATTERN.finditer(text)
+        )
+
+    @classmethod
+    def _has_unsupported_property_claims(
+        cls,
+        reply_text: str,
+        question_text: str,
+        knowledge: list[Any],
+    ) -> bool:
+        """检查回复里能机械核对的本店断言是否都有证据：免费说法和数字。
+
+        证据只取支撑所问主题的审核答案，标题和客人问句中的猜测不作为事实。
+        回复肯定免费而答案没有肯定证据，或数字不在答案中，均按未确认处理。
+        列表序号不算数字；复杂例外和任意自然语言蕴含仍不在此机械检查的保证内。
+        """
+        supporting: dict[int, Any] = {}
+        for topic in detect_property_topics(question_text):
+            for item in cls._supporting_knowledge(topic, question_text, knowledge):
+                supporting[id(item)] = item
+        evidence = normalize_text(
+            "\n".join(item.answer for item in supporting.values())
+        )
+        reply = _LIST_MARKER_PATTERN.sub("", normalize_text(reply_text))
+        if cls._has_affirmative_free_claim(reply) and not cls._has_affirmative_free_claim(evidence):
+            return True
+        allowed: set[str] = set()
+        for token in _NUMBER_PATTERN.findall(evidence):
+            # 证据写 6:30，回复写「6 点半」也算同一时间。
+            allowed.add(token)
+            allowed.update(re.split(r"[.:]", token))
+        return any(token not in allowed for token in _NUMBER_PATTERN.findall(reply))
 
     @staticmethod
     def _should_force_availability(
@@ -913,7 +1175,7 @@ class DeepSeekGuestAssistant:
             return True
 
         asks_availability = re.search(
-            r"有房|几间房|房态|可订|availability",
+            r"有房|空房|余房|剩房|满房|订满|几间房|房态|可订|availability",
             question_text,
             re.IGNORECASE,
         )
@@ -967,7 +1229,8 @@ class DeepSeekGuestAssistant:
         if follows_previous_turn is not None:
             return False
         asks_availability = re.search(
-            r"有房|几间房|房态|可订|可用房|availability",
+            # 「空房」「订满」等同义说法与「有房」一样是在问实时房态。
+            r"有房|空房|余房|剩房|满房|订满|几间房|房态|可订|可用房|availability",
             question_text,
             re.IGNORECASE,
         )
@@ -1153,7 +1416,12 @@ class DeepSeekGuestAssistant:
                 confidence=0.95,
             )
 
-        knowledge = await self._knowledge.retrieve(language, question_text)
+        # 剔除在检索之后、构建上下文与证据门之前统一完成：模型看不到的内容，
+        # 证据门也不会拿来作证。
+        knowledge = self._scope_knowledge(
+            question_text,
+            await self._knowledge.retrieve(language, question_text),
+        )
         faq_candidates = await self._build_faq_candidate_context()
         faq_candidate_ids = {
             int(item["id"])
@@ -1341,6 +1609,10 @@ class DeepSeekGuestAssistant:
                                 or property_tool_grounded
                             ),
                             faq_candidate_ids=faq_candidate_ids,
+                            # 工具结果里的数字不在知识中，只有单靠知识确认时才核对。
+                            knowledge_evidence=(
+                                None if property_tool_grounded else knowledge
+                            ),
                         )
                         refined_reply = await self._refine_reply(
                             decision.reply_text

@@ -1,8 +1,11 @@
 import re
 from typing import Literal
 
+from homestay_bot.services.knowledge_service import detect_property_topics
+
 _TRANSACTION_PATTERN = re.compile(
-    r"房态|有房|可订|价格|房价|多少钱|参考价|退款|退多少|"
+    # 「还有空房吗」「订满了吗」与「有房」同义，都要走实时房态，不能由模型猜。
+    r"房态|有房|空房|余房|剩房|满房|订满|可订|价格|房价|多少钱|参考价|退款|退多少|"
     r"取消|改期|付款|支付|到账|订单|预订状态|发票金额|"
     r"availability|room rate|price|refund|cancel|reschedule|"
     r"payment|reservation status|invoice amount",
@@ -147,8 +150,17 @@ def is_transaction_sensitive(text: str) -> bool:
 
 
 def is_property_specific(text: str) -> bool:
-    """判断文本是否要求回答本民宿专属事实。"""
-    return _PROPERTY_SPECIFIC_PATTERN.search(text) is not None
+    """判断文本是否要求回答本民宿专属事实。
+
+    除固定词外，复用知识检索的主题别名：检索能用「泊车」「wash my clothes」
+    找到审核知识，这里却判为非专属问题的话，回复里的本店信息会被当作未审核
+    宣传删掉，召回等于白做。别名只收含义明确的说法，不把「猫」「lift」这类
+    多义词算作在问本店。
+    """
+    return (
+        _PROPERTY_SPECIFIC_PATTERN.search(text) is not None
+        or bool(detect_property_topics(text))
+    )
 
 
 def handoff_reason(text: str) -> str | None:

@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select, text
@@ -33,6 +34,7 @@ from homestay_bot.repositories.operations import (
     PURGED_MARK_RETENTION_DAYS,
     SQLAlchemyOperationsRepository,
 )
+from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
 from homestay_bot.services.business_task_service import BusinessTaskService
 from homestay_bot.services.task_lifecycle_service import TaskLifecycleService
 from homestay_bot.services.task_page_service import TaskPageService
@@ -1330,5 +1332,327 @@ async def test_purge_mark_expires_and_stops_blocking() -> None:
         )
 
         assert recreated is not None
+
+    await engine.dispose()
+
+
+async def _purge_setup() -> tuple[object, async_sessionmaker]:
+    """创建开启外键的内存库，并准备房间与管理员。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.execute(text("PRAGMA foreign_keys=ON"))
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        session.add_all(
+            [
+                PropertyProfile(id=101, title="测试房间"),
+                Employee(id=1, wecom_userid="admin", name="管理员", role=EmployeeRole.ADMIN),
+            ]
+        )
+        await session.commit()
+    return engine, factory
+
+
+def _archived(
+    *,
+    archived_at: datetime,
+    dedupe_key: str | None = None,
+    service_date: date = date(2026, 8, 1),
+) -> BusinessTask:
+    """构造一条已归档的终态任务。"""
+    return BusinessTask(
+        dedupe_key=dedupe_key,
+        task_type=BusinessTaskType.CLEANING,
+        status=BusinessTaskStatus.COMPLETED,
+        property_id=101,
+        service_date=service_date,
+        description="已归档",
+        archived_at=archived_at,
+    )
+
+
+async def _purge_through(entry: str, session, task_ids: list[int]) -> None:
+    """按指定入口永久删除任务：单条、人工批量或自动归档清理。"""
+    repository = SQLAlchemyOperationsRepository(session)
+    if entry == "single":
+        for task_id in task_ids:
+            await repository.purge_task(task_id, 1)
+    elif entry == "manual_batch":
+        assert await repository.purge_selected(task_ids, 1) == len(task_ids)
+    else:
+        assert await SQLAlchemyRetentionRepository(session).purge_archived_tasks() == len(
+            task_ids
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["single", "manual_batch", "retention"])
+async def test_every_purge_entry_leaves_a_tombstone_that_blocks_turnover(
+    entry: str,
+) -> None:
+    """三种删除入口都给系统任务写原业务键墓碑，同来源同步不再重建。
+
+    周转任务没有附件也要写；人工任务没有业务键，不写。用新会话在提交后验证，
+    不同房间日期照常创建。
+    """
+    engine, factory = await _purge_setup()
+    # 自动清理只处理归档满 180 天的任务；另两种入口不看归档时长。
+    archived_at = datetime.now(UTC) - timedelta(days=200)
+
+    async with factory() as session:
+        turnover = _archived(archived_at=archived_at, dedupe_key="turnover:101:2026-08-01")
+        manual = _archived(archived_at=archived_at)
+        session.add_all([turnover, manual])
+        await session.commit()
+
+    async with factory() as session:
+        await _purge_through(entry, session, [turnover.id, manual.id])
+        await session.commit()
+
+    async with factory() as session:
+        marks = list(await session.scalars(select(PurgedTaskMark.dedupe_key)))
+        assert marks == ["turnover:101:2026-08-01"]
+        repository = SQLAlchemyOperationsRepository(session)
+        assert await repository.create_turnover(
+            property_id=101,
+            service_date=date(2026, 8, 1),
+        ) is None
+        assert await repository.create_turnover(
+            property_id=101,
+            service_date=date(2026, 8, 2),
+        ) is not None
+        await session.commit()
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bulk_purge_rolls_back_whole_batch_when_any_task_is_ineligible() -> None:
+    """混入未归档或缺失任务时整批拒绝：删除、墓碑、审计都不留下。"""
+    engine, factory = await _purge_setup()
+    archived_at = datetime(2026, 8, 5, tzinfo=UTC)
+
+    async with factory() as session:
+        eligible = _archived(archived_at=archived_at, dedupe_key="turnover:101:2026-08-01")
+        open_task = BusinessTask(
+            dedupe_key="turnover:101:2026-08-02",
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.COMPLETED,
+            property_id=101,
+            service_date=date(2026, 8, 2),
+            description="未归档",
+        )
+        session.add_all([eligible, open_task])
+        await session.commit()
+
+    for selection, error in (
+        ([eligible.id, open_task.id], OperationRefused),
+        ([eligible.id, 99_999], LookupError),
+    ):
+        async with factory() as session:
+            with pytest.raises(error):
+                await SQLAlchemyOperationsRepository(session).purge_selected(selection, 1)
+            await session.rollback()
+
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(BusinessTask)) == 2
+        assert await session.scalar(select(func.count()).select_from(PurgedTaskMark)) == 0
+        assert await session.scalar(select(func.count()).select_from(AuditLog)) == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bulk_purge_refuses_partial_delete_even_if_precheck_is_bypassed(
+    monkeypatch,
+) -> None:
+    """删除语句自己带归档条件并核对返回集合：少删一条也整批失败回滚。
+
+    这里让锁定复核失效，模拟复核与删除之间状态被改掉，验证最后一道防线不会
+    把删了一部分当作成功。重复编号只计一次。
+    """
+    engine, factory = await _purge_setup()
+    archived_at = datetime(2026, 8, 5, tzinfo=UTC)
+
+    async with factory() as session:
+        first = _archived(archived_at=archived_at, dedupe_key="turnover:101:2026-08-01")
+        second = _archived(
+            archived_at=archived_at,
+            dedupe_key="turnover:101:2026-08-02",
+            service_date=date(2026, 8, 2),
+        )
+        open_task = BusinessTask(
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.COMPLETED,
+            property_id=101,
+            service_date=date(2026, 8, 3),
+            description="未归档",
+        )
+        session.add_all([first, second, open_task])
+        await session.commit()
+
+    async def skip_check(self, task_ids):
+        """模拟复核被绕过。"""
+        return []
+
+    with monkeypatch.context() as patched:
+        patched.setattr(SQLAlchemyOperationsRepository, "require_purgeable", skip_check)
+        async with factory() as session:
+            with pytest.raises(OperationRefused):
+                await SQLAlchemyOperationsRepository(session).purge_selected(
+                    [first.id, open_task.id],
+                    1,
+                )
+            await session.rollback()
+
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(BusinessTask)) == 3
+        assert await session.scalar(select(func.count()).select_from(PurgedTaskMark)) == 0
+        assert await session.scalar(select(func.count()).select_from(AuditLog)) == 0
+
+    async with factory() as session:
+        purged = await SQLAlchemyOperationsRepository(session).purge_selected(
+            [second.id, first.id, second.id],
+            1,
+        )
+        await session.commit()
+        audit = await session.scalar(
+            select(AuditLog).where(AuditLog.action == "business_task_purged")
+        )
+
+    assert purged == 2
+    assert audit is not None
+    assert audit.details == {"count": 2, "task_ids": sorted([first.id, second.id])}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bulk_purge_rereads_archive_state_already_loaded_in_session(
+    tmp_path: Path,
+) -> None:
+    """会话里早已加载的旧 archived_at 不能决定删除：复核必须读最新行版本。
+
+    另一个会话已经把任务恢复出归档并提交，本会话的身份映射里仍是旧对象；
+    批量删除必须据最新状态整批拒绝。
+    """
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ops.sqlite3'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        session.add_all(
+            [
+                PropertyProfile(id=101, title="测试房间"),
+                Employee(id=1, wecom_userid="admin", name="管理员", role=EmployeeRole.ADMIN),
+            ]
+        )
+        await session.flush()
+        task = _archived(archived_at=datetime(2026, 8, 5, tzinfo=UTC))
+        session.add(task)
+        await session.commit()
+
+    async with factory() as stale, factory() as other:
+        loaded = await stale.get(BusinessTask, task.id)
+        assert loaded is not None and loaded.archived_at is not None
+        await SQLAlchemyOperationsRepository(other).restore_task(task.id, 1)
+        await other.commit()
+
+        # 断言由锁定复核本身拒绝（而不是靠 DELETE 条件兜底），才能证明复核读到
+        # 的是最新行版本。
+        with pytest.raises(OperationRefused, match="只有已归档的任务可以永久删除"):
+            await SQLAlchemyOperationsRepository(stale).require_purgeable([task.id])
+        await stale.rollback()
+
+    async with factory() as session:
+        assert await session.get(BusinessTask, task.id) is not None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_tombstone_refresh_never_moves_backwards() -> None:
+    """同键重复写墓碑只保留一行，时间只前移不后退；空键被忽略。"""
+    engine, factory = await _purge_setup()
+    earlier = datetime(2026, 9, 1, tzinfo=UTC)
+    later = datetime(2026, 9, 10, tzinfo=UTC)
+
+    async with factory() as session:
+        repository = SQLAlchemyOperationsRepository(session)
+        await repository.mark_purged_many(["turnover:101:2026-08-01", None, ""], now=later)
+        await repository.mark_purged_many(["turnover:101:2026-08-01"], now=earlier)
+        await session.commit()
+
+    async with factory() as session:
+        marks = list(await session.scalars(select(PurgedTaskMark)))
+        assert len(marks) == 1
+        assert marks[0].purged_at.replace(tzinfo=UTC) == later
+        newest = datetime(2026, 9, 20, tzinfo=UTC)
+        await SQLAlchemyOperationsRepository(session).mark_purged_many(
+            ["turnover:101:2026-08-01", "turnover:101:2026-08-01"],
+            now=newest,
+        )
+        await session.commit()
+        refreshed = await session.scalar(
+            select(PurgedTaskMark).execution_options(populate_existing=True)
+        )
+        assert refreshed is not None
+        assert refreshed.purged_at.replace(tzinfo=UTC) == newest
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_tombstone_just_inside_retention_still_blocks() -> None:
+    """离过期还差一分钟的墓碑仍然挡住重建，也不会被顺手清掉。"""
+    engine, factory = await _purge_setup()
+
+    async with factory() as session:
+        session.add(
+            PurgedTaskMark(
+                dedupe_key="turnover:101:2026-08-01",
+                purged_at=datetime.now(UTC)
+                - timedelta(days=PURGED_MARK_RETENTION_DAYS)
+                + timedelta(minutes=1),
+            )
+        )
+        await session.commit()
+
+    async with factory() as session:
+        assert await SQLAlchemyOperationsRepository(session).create_turnover(
+            property_id=101,
+            service_date=date(2026, 8, 1),
+        ) is None
+        await session.commit()
+        assert await session.scalar(select(func.count()).select_from(PurgedTaskMark)) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_tombstones_do_not_suppress_credential_review_tasks() -> None:
+    """凭证复核类任务不读墓碑：即使有同键墓碑，必要的人工待办照常生成。"""
+    engine, factory = await _purge_setup()
+
+    async with factory() as session:
+        repository = SQLAlchemyOperationsRepository(session)
+        await repository.mark_purged_many(
+            ["credential-failure:7", "credential-review:101:2026-08-01"],
+            now=datetime.now(UTC),
+        )
+        failure = await repository.create_credential_failure_review(
+            delivery_id=7,
+            reason="timeout",
+        )
+        review = await repository.create_credential_review(
+            property_id=101,
+            local_date=date(2026, 8, 1),
+            order_ids=[1, 2],
+        )
+        await session.commit()
+
+    assert failure.dedupe_key == "credential-failure:7"
+    assert review.dedupe_key == "credential-review:101:2026-08-01"
 
     await engine.dispose()

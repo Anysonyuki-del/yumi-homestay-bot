@@ -97,3 +97,107 @@ async def test_retrieve_returns_empty_when_no_entry_is_relevant() -> None:
     context = await service.retrieve(Language.ZH, "如何给自行车轮胎充气？")
 
     assert context == []
+
+
+class RowsRepositoryStub:
+    """返回构造时给定的知识行。"""
+
+    def __init__(self, rows: list[KnowledgeRow]) -> None:
+        """保存知识行。"""
+        self.rows = rows
+
+    async def list_active(self):
+        """返回全部知识行。"""
+        return self.rows
+
+
+def _row(entry_id: int, question: str, answer: str, **fields) -> KnowledgeRow:
+    """构造中英文字段齐全的知识行。"""
+    return KnowledgeRow(
+        id=entry_id,
+        category=fields.get("category", "须知"),
+        question_zh=question,
+        answer_zh=answer,
+        question_en=fields.get("question_en", "Note?"),
+        answer_en=fields.get("answer_en", "See note."),
+        keywords=fields.get("keywords", []),
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieve_keeps_the_whole_answer_beyond_the_old_cutoff() -> None:
+    """答案尾部的收费与例外不能被截掉：整条问答是最小证据单元。"""
+    answer = "入住须知。" * 260 + "延迟退房每小时加收 50 元，节假日不接受延迟退房。"
+    assert len(answer) > 1_300
+    service = KnowledgeService(RowsRepositoryStub([_row(1, "延迟退房有什么规定？", answer)]))
+
+    context = await service.retrieve(Language.ZH, "可以延迟退房吗")
+
+    assert context[0].answer == answer
+
+
+@pytest.mark.asyncio
+async def test_retrieve_skips_units_that_do_not_fit_and_counts_them() -> None:
+    """放不进预算的问答整条跳过并计数，不截断；来源数与总字符数守住上限。"""
+    long_answer = "停车说明。" * 1_300
+    rows = [_row(1, "停车有什么规定？", long_answer, category="停车")]
+    rows += [
+        _row(index, f"停车问题{index}？", "门口有临时车位。", category="停车")
+        for index in range(2, 12)
+    ]
+    service = KnowledgeService(RowsRepositoryStub(rows))
+
+    retrieval = await service.retrieve_detailed(
+        Language.ZH,
+        "停车有什么规定",
+        char_budget=6_000,
+    )
+
+    assert retrieval.budget_skipped == 1
+    assert all(item.answer != long_answer[:1_200] for item in retrieval.snippets)
+    assert 1 not in [item.source_id for item in retrieval.snippets]
+    assert len(retrieval.snippets) == 8
+    assert (
+        sum(len(i.category) + len(i.question) + len(i.answer) for i in retrieval.snippets)
+        <= 6_000
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieve_expands_known_topic_synonyms() -> None:
+    """「泊车」「wash my clothes」能召回停车、洗衣知识，原问题不被改写。"""
+    rows = [
+        _row(1, "民宿可以停车吗？", "门口有 2 个临时车位。", category="停车"),
+        _row(
+            2,
+            "有洗衣机吗？",
+            "公共区域有洗衣机。",
+            category="洗衣",
+            question_en="Do you have a washing machine?",
+            answer_en="There is a washing machine in the common area.",
+        ),
+        _row(3, "可以用厨房吗？", "厨房每天开放。", category="厨房",
+             question_en="Can I use the kitchen?"),
+    ]
+    service = KnowledgeService(RowsRepositoryStub(rows))
+
+    parking = await service.retrieve(Language.ZH, "能泊车不")
+    laundry = await service.retrieve(Language.EN, "Where can I wash my clothes?")
+
+    assert parking[0].source_id == 1
+    assert laundry[0].source_id == 2
+
+
+@pytest.mark.asyncio
+async def test_question_filler_words_do_not_make_unrelated_entries_relevant() -> None:
+    """「你们」「Do you have」这类虚词不算相关证据，无答案问题不硬配条目。"""
+    rows = [
+        _row(1, "你们提供早餐吗？", "不提供早餐。", category="早餐",
+             question_en="Do you have breakfast?"),
+        _row(2, "你们可以开发票吗？", "可以开电子发票。", category="发票",
+             question_en="Do you have invoices?"),
+    ]
+    service = KnowledgeService(RowsRepositoryStub(rows))
+
+    assert await service.retrieve(Language.ZH, "你们有游泳池吗") == []
+    assert await service.retrieve(Language.EN, "Do you have a gym?") == []

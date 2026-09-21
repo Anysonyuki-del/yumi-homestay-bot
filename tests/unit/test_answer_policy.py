@@ -1,5 +1,6 @@
 import pytest
 
+from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
 from homestay_bot.services.answer_policy import (
     facility_fault_exclusion,
     handoff_reason,
@@ -118,3 +119,11 @@ def test_room_facility_wins_over_ambiguous_official_channel_context() -> None:
     assert has_facility_fault_signal(text)
     assert facility_fault_exclusion(text) is None
     assert is_service_request(text)
+
+
+def test_vacancy_wording_is_a_realtime_availability_question() -> None:
+    """「空房」「余房」「订满」与「有房」同义，必须识别为实时房态，由百居易查询。"""
+    for question in ("今晚还有空房吗", "明天还有余房吗", "周末订满了吗"):
+        assert is_transaction_sensitive(question), question
+        assert DeepSeekGuestAssistant._should_force_availability(question), question
+    assert not is_transaction_sensitive("这间房空调怎么开")

@@ -4,7 +4,8 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Callable, Coroutine
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -2709,39 +2710,164 @@ async def _run_faq_maintenance_loop(
         await asyncio.sleep(3600)
 
 
-async def _run_retention_loop(
+# ponytail: 每个阶段每轮最多 20 批，即通用清理每类至多 1 万条、归档父任务至多
+# 2,000 个，是保守的固定上限。日志稳定出现 possibly_incomplete，或单轮耗时超出
+# 可接受的清理窗口时，再依据统计调整批量或频率；本轮不做自适应调度。
+RETENTION_MAX_BATCHES_PER_PHASE = 20
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionPhaseResult:
+    """一轮清理中单个阶段已提交的结果；只统计成功提交的批次。"""
+
+    counts: dict[str, int]
+    batches: int
+    elapsed_seconds: float
+    failed_error_type: str | None
+    possibly_incomplete: bool
+
+
+def _database_error_code(error: BaseException) -> str | None:
+    """取数据库驱动给出的 SQLSTATE 供定位。
+
+    只取错误码，不取异常正文：SQLAlchemy 的异常文本会带上 SQL 语句和参数，
+    其中可能有附件编号或清理载荷。
+    """
+    original = getattr(error, "orig", None)
+    for attribute in ("sqlstate", "pgcode"):
+        value = getattr(original, attribute, None)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+async def _run_retention_phase(
     factory: async_sessionmaker[AsyncSession],
-    storage: PrivateFileStorage,
-) -> None:
-    """每天在独立事务清理过期终态历史，失败时保活并等待下一轮。"""
-    while True:
+    phase: str,
+    run_batch: Callable[
+        [SQLAlchemyRetentionRepository],
+        Awaitable[tuple[dict[str, int], bool]],
+    ],
+) -> RetentionPhaseResult:
+    """反复执行一批清理，每批独立短事务提交，直到不满批、达到上限或出错。
+
+    run_batch 返回本批计数和「本批是否满」。出错时当前批随会话关闭回滚，此前
+    已提交的批次保留，本阶段就此结束，不影响另一阶段。取消必须原样抛出，保证
+    停机及时。
+    """
+    started = time.monotonic()
+    counts: dict[str, int] = {}
+    batches = 0
+    last_batch_full = False
+    failed_error_type: str | None = None
+    while batches < RETENTION_MAX_BATCHES_PER_PHASE:
         try:
             async with factory() as session:
-                repository = SQLAlchemyRetentionRepository(session)
-                deleted = await repository.purge()
-                deleted["archived_tasks"] = await repository.purge_archived_tasks(
-                    delete_file=storage.delete,
+                batch_counts, last_batch_full = await run_batch(
+                    SQLAlchemyRetentionRepository(session)
                 )
                 await session.commit()
-                logger.info(
-                    "历史记录清理完成：approval_pii=%s jobs=%s "
-                    "external_requests=%s hostex_events=%s audit_logs=%s "
-                    "archived_tasks=%s",
-                    deleted.get("booking_approval_pii", 0),
-                    deleted.get("jobs", 0),
-                    deleted.get("external_requests", 0),
-                    deleted.get("hostex_webhook_events", 0),
-                    deleted.get("audit_logs", 0),
-                    deleted.get("archived_tasks", 0),
-                )
         except asyncio.CancelledError:
             raise
         except Exception as error:
+            failed_error_type = type(error).__name__
+            # 不带 exc_info：异常文本可能夹带 SQL 参数，阶段、批次序号、异常类型与
+            # SQLSTATE 已足够定位。
             logger.warning(
-                "历史记录清理失败，下一轮继续：error_type=%s",
-                type(error).__name__,
-                exc_info=error,
+                "历史记录清理阶段失败，已回滚当前批：phase=%s batch=%s "
+                "error_type=%s sqlstate=%s",
+                phase,
+                batches + 1,
+                failed_error_type,
+                _database_error_code(error),
             )
+            break
+        batches += 1
+        for name, value in batch_counts.items():
+            counts[name] = counts.get(name, 0) + value
+        if not last_batch_full:
+            break
+    return RetentionPhaseResult(
+        counts=counts,
+        batches=batches,
+        elapsed_seconds=time.monotonic() - started,
+        failed_error_type=failed_error_type,
+        # 达到上限且最后一批仍满，只说明可能还有剩余，不代表已证明有积压。
+        possibly_incomplete=(
+            failed_error_type is None
+            and last_batch_full
+            and batches >= RETENTION_MAX_BATCHES_PER_PHASE
+        ),
+    )
+
+
+async def _run_retention_round(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime | None = None,
+) -> None:
+    """执行一轮历史清理：通用清理与归档任务清理两个独立阶段。
+
+    整轮固定一个 UTC now，所有批次共用同一组保留期边界，不随耗时漂移。两个阶段
+    各用自己的短会话，一个阶段失败不影响另一个。自动清理不再是整轮原子操作，
+    但单批内「删任务、写墓碑、登记照片清理」仍同事务提交。
+    """
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    started = time.monotonic()
+
+    async def purge_general(
+        repository: SQLAlchemyRetentionRepository,
+    ) -> tuple[dict[str, int], bool]:
+        """清理一批通用终态历史；任一类满批就需要继续。"""
+        batch_size = repository.PURGE_BATCH_SIZE
+        counts = await repository.purge(now=current, batch_size=batch_size)
+        return counts, any(value >= batch_size for value in counts.values())
+
+    async def purge_archived(
+        repository: SQLAlchemyRetentionRepository,
+    ) -> tuple[dict[str, int], bool]:
+        """清理一批到期归档任务；删除数满批才需要继续。"""
+        batch_size = repository.ARCHIVED_TASK_BATCH_SIZE
+        deleted = await repository.purge_archived_tasks(
+            now=current,
+            batch_size=batch_size,
+        )
+        return {"archived_tasks": deleted}, deleted >= batch_size
+
+    general = await _run_retention_phase(factory, "general", purge_general)
+    archived = await _run_retention_phase(factory, "archived_tasks", purge_archived)
+    phases = {"general": general, "archived_tasks": archived}
+    logger.info(
+        "历史记录清理轮次结束：elapsed=%.1fs approval_pii=%s jobs=%s "
+        "external_requests=%s hostex_events=%s audit_logs=%s archived_tasks=%s "
+        "general_batches=%s general_elapsed=%.1fs archived_batches=%s "
+        "archived_elapsed=%.1fs failed_phases=%s possibly_incomplete=%s",
+        time.monotonic() - started,
+        general.counts.get("booking_approval_pii", 0),
+        general.counts.get("jobs", 0),
+        general.counts.get("external_requests", 0),
+        general.counts.get("hostex_webhook_events", 0),
+        general.counts.get("audit_logs", 0),
+        archived.counts.get("archived_tasks", 0),
+        general.batches,
+        general.elapsed_seconds,
+        archived.batches,
+        archived.elapsed_seconds,
+        ",".join(
+            name for name, result in phases.items() if result.failed_error_type
+        )
+        or "none",
+        ",".join(
+            name for name, result in phases.items() if result.possibly_incomplete
+        )
+        or "none",
+    )
+
+
+async def _run_retention_loop(factory: async_sessionmaker[AsyncSession]) -> None:
+    """启动后立即清理一轮，之后每天一轮；单轮失败只记日志，循环保活。"""
+    while True:
+        await _run_retention_round(factory)
         await asyncio.sleep(86_400)
 
 
@@ -3870,7 +3996,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                     _create_runtime_task(_run_faq_maintenance_loop(factory=factory))
                 )
                 started_tasks.append(_create_runtime_task(
-                        _run_retention_loop(factory, private_file_storage)
+                        _run_retention_loop(factory)
                     ))
                 started_tasks.append(
                     _create_runtime_task(

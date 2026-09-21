@@ -14,6 +14,21 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    services:
+      # 仅供清理与行锁回归使用的隔离库；凭据为合成值，与生产角色无关。
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: yumi_test
+          POSTGRES_PASSWORD: yumi-test-only
+          POSTGRES_DB: yumi_test_retention
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U yumi_test -d yumi_test_retention"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: 检出源码
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -45,6 +60,19 @@ jobs:
 
       - name: 无外联测试
         run: python -m pytest -q
+
+      - name: 隔离 PostgreSQL 迁移
+        env:
+          DATABASE_URL: postgresql+asyncpg://yumi_test:yumi-test-only@127.0.0.1:5432/yumi_test_retention
+        run: python -m alembic upgrade head
+
+      - name: 隔离 PostgreSQL 回归
+        env:
+          YUMI_TEST_POSTGRES_URL: postgresql+asyncpg://yumi_test:yumi-test-only@127.0.0.1:5432/yumi_test_retention
+        # 先确认变量存在，避免用例因缺变量全部跳过却被当成通过。
+        run: |
+          python -c 'import os; assert os.environ.get("YUMI_TEST_POSTGRES_URL"), "需要隔离 PostgreSQL 测试库"'
+          python -m pytest -q -rs tests/integration/test_retention_postgresql.py
 
       - name: 构建生产镜像
         run: docker build --tag yumi-homestay-bot:ci .

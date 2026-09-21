@@ -8,7 +8,12 @@ from homestay_bot.domain.enums import (
     BusinessTaskType,
     EmployeeRole,
 )
-from homestay_bot.services.task_page_service import TaskPageService
+from homestay_bot.domain.models import Job
+from homestay_bot.services.task_page_service import (
+    ATTACHMENT_CLEANUP_JOB_TYPE,
+    TaskPageService,
+    build_attachment_cleanup_dedupe_key,
+)
 
 
 def employee(
@@ -301,3 +306,101 @@ async def test_attachment_visibility_follows_its_task() -> None:
         )
 
     assert visible.task_id == 1
+
+
+def test_attachment_cleanup_key_is_bounded_and_order_independent() -> None:
+    """同一集合无论顺序和重复都得同一个键；来源隔离；多大批量都不超长。"""
+    key = build_attachment_cleanup_dedupe_key([3, 1, 2, 3], source="manual")
+
+    assert key == build_attachment_cleanup_dedupe_key([1, 2, 3], source="manual")
+    assert key.startswith("task-manual-batch:")
+    assert len(key) == len("task-manual-batch:") + 64
+    retention_key = build_attachment_cleanup_dedupe_key([1, 2, 3], source="retention")
+    assert retention_key.startswith("task-retention-batch:")
+    assert retention_key != key
+    assert build_attachment_cleanup_dedupe_key([1, 2], source="manual") != key
+
+    # 旧格式在 40 个五位数编号时就有 254 字符，超出 jobs.dedupe_key 的列宽；
+    # 新键长度与批量无关。
+    column_length = Job.__table__.c.dedupe_key.type.length
+    many = range(10_000, 10_040)
+    legacy = "task-retention:" + ",".join(str(value) for value in many)
+    assert len(legacy) == 254 > column_length
+    for source in ("manual", "retention"):
+        bounded = build_attachment_cleanup_dedupe_key(
+            range(10_000, 20_000),
+            source=source,  # type: ignore[arg-type]
+        )
+        assert len(bounded) <= column_length
+
+
+def test_attachment_cleanup_key_rejects_unknown_source_and_empty_batch() -> None:
+    """来源只接受两个内部固定值；空批次没有可清理的照片，不生成共用键。"""
+    with pytest.raises(ValueError):
+        build_attachment_cleanup_dedupe_key([1], source="other")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        build_attachment_cleanup_dedupe_key([], source="manual")
+
+
+class PurgeRepositoryStub:
+    """记录批量永久删除的调用顺序。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.calls: list[tuple[str, list[int]]] = []
+
+    async def require_purgeable(self, task_ids: list[int]) -> list[str]:
+        """返回两张待清理照片。"""
+        self.calls.append(("require_purgeable", list(task_ids)))
+        return ["a" * 32 + ".png", "b" * 32 + ".png"]
+
+    async def purge_selected(self, task_ids: list[int], actor_employee_id: int) -> int:
+        """返回去重后的删除数量。"""
+        self.calls.append(("purge_selected", list(task_ids)))
+        return len(set(task_ids))
+
+
+class CleanupQueueStub:
+    """记录登记的照片清理任务。"""
+
+    def __init__(self) -> None:
+        """初始化登记记录。"""
+        self.enqueued: list[tuple[str, dict[str, object], str | None]] = []
+
+    async def enqueue(self, job_type, payload, *, dedupe_key=None):
+        """记录一次登记。"""
+        self.enqueued.append((job_type, payload, dedupe_key))
+        return SimpleNamespace(id=1)
+
+
+@pytest.mark.asyncio
+async def test_bulk_purge_registers_cleanup_with_bounded_manual_key() -> None:
+    """人工批量删除实际使用共享的有界键，与输入顺序和重复无关。"""
+    repository = PurgeRepositoryStub()
+    queue = CleanupQueueStub()
+    service = TaskPageService(repository, TaskStateStub(), queue)  # type: ignore[arg-type]
+
+    purged = await service.purge_many([12, 11, 12], employee(1, EmployeeRole.ADMIN))
+
+    assert purged == 2
+    assert queue.enqueued == [
+        (
+            ATTACHMENT_CLEANUP_JOB_TYPE,
+            {"file_ids": ["a" * 32 + ".png", "b" * 32 + ".png"]},
+            build_attachment_cleanup_dedupe_key([11, 12], source="manual"),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_staff_bulk_purge_is_refused_before_touching_anything() -> None:
+    """普通员工批量永久删除仍被拒绝，仓储与清理队列都不被调用。"""
+    repository = PurgeRepositoryStub()
+    queue = CleanupQueueStub()
+    service = TaskPageService(repository, TaskStateStub(), queue)  # type: ignore[arg-type]
+
+    with pytest.raises(PermissionError):
+        await service.purge_many([11, 12], employee(2, EmployeeRole.STAFF))
+
+    assert repository.calls == []
+    assert queue.enqueued == []

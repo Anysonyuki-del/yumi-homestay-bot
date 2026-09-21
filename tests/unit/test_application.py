@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import logging
 import sqlite3
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, cast
@@ -124,79 +124,335 @@ def test_deferred_ack_and_final_use_distinct_outbox_delivery_phases() -> None:
     ) is None
 
 
-class _StubStorage:
-    """记录清理循环请求删除的私有文件编号。"""
+class _RetentionSession:
+    """模拟一批清理使用的短会话，只记录是否提交。"""
+
+    def __init__(self, index: int, log: list[tuple[str, int]]) -> None:
+        """绑定会话序号和共享事件日志。"""
+        self.index = index
+        self.committed = False
+        self._log = log
+
+    async def commit(self) -> None:
+        """记录本批提交。"""
+        self.committed = True
+        self._log.append(("commit", self.index))
+
+
+class _RetentionSessionFactory:
+    """每次调用给出一个新会话；未提交就退出视为回滚。"""
 
     def __init__(self) -> None:
-        """初始化删除记录。"""
-        self.deleted: list[str] = []
+        """初始化会话列表与提交/回滚日志。"""
+        self.sessions: list[_RetentionSession] = []
+        self.log: list[tuple[str, int]] = []
 
-    def delete(self, file_id: str) -> None:
-        """记录一次删除请求。"""
-        self.deleted.append(file_id)
+    def __call__(self) -> Any:
+        """返回异步上下文管理器，模拟 `async with factory() as session`。"""
+        session = _RetentionSession(len(self.sessions), self.log)
+        self.sessions.append(session)
+        log = self.log
+
+        class Context:
+            """退出时未提交则记为回滚，异常照常向外传播。"""
+
+            async def __aenter__(self) -> _RetentionSession:
+                """进入本批会话。"""
+                return session
+
+            async def __aexit__(self, exc_type, exc, traceback) -> None:
+                """会话关闭即回滚未提交的写入。"""
+                if not session.committed:
+                    log.append(("rollback", session.index))
+
+        return Context()
+
+
+def _retention_repository(
+    general: list[Any],
+    archived: list[Any],
+    seen: list[tuple[str, int, datetime]],
+) -> type:
+    """按脚本逐批返回计数或抛出异常的清理仓储替身，批量固定为 2。"""
+
+    class RetentionRepositoryStub:
+        """记录每次调用绑定的会话与轮次时间。"""
+
+        PURGE_BATCH_SIZE = 2
+        ARCHIVED_TASK_BATCH_SIZE = 2
+
+        def __init__(self, session: _RetentionSession) -> None:
+            """绑定当前批的短会话。"""
+            self._session = session
+
+        async def purge(self, *, now: datetime, batch_size: int) -> dict[str, int]:
+            """按脚本返回通用清理计数。"""
+            assert batch_size == 2
+            seen.append(("general", self._session.index, now))
+            outcome = general.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return cast(dict[str, int], outcome)
+
+        async def purge_archived_tasks(self, *, now: datetime, batch_size: int) -> int:
+            """按脚本返回归档清理数量。"""
+            assert batch_size == 2
+            seen.append(("archived", self._session.index, now))
+            outcome = archived.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return cast(int, outcome)
+
+    return RetentionRepositoryStub
+
+
+def _general_counts(**overrides: int) -> dict[str, int]:
+    """返回通用清理五类计数，未指定的为零。"""
+    counts = {
+        "booking_approval_pii": 0,
+        "jobs": 0,
+        "external_requests": 0,
+        "hostex_webhook_events": 0,
+        "audit_logs": 0,
+    }
+    counts.update(overrides)
+    return counts
+
+
+def _retention_summary(caplog) -> str:
+    """取出本轮结束时的汇总日志。"""
+    summaries = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("历史记录清理轮次结束")
+    ]
+    assert len(summaries) == 1
+    return summaries[0]
 
 
 @pytest.mark.asyncio
-async def test_retention_loop_purges_and_commits_daily(monkeypatch) -> None:
-    """历史记录维护应每天清理一次，并在独立事务提交。"""
-    calls: list[object] = []
-    session = SimpleNamespace()
-
-    async def commit() -> None:
-        """记录清理事务提交。"""
-        calls.append("commit")
-
-    session.commit = commit
-
-    class SessionContext:
-        """返回固定清理会话。"""
-
-        async def __aenter__(self):
-            """进入测试会话。"""
-            return session
-
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
-            """退出测试会话。"""
-
-    class RetentionRepositoryStub:
-        """记录清理仓储调用。"""
-
-        def __init__(self, selected_session) -> None:
-            """验证仓储绑定当前短会话。"""
-            assert selected_session is session
-
-        async def purge(self):
-            """返回固定删除计数。"""
-            calls.append("purge")
-            return {"jobs": 2}
-
-        async def purge_archived_tasks(self, *, delete_file, now=None):
-            """记录归档任务清理，并确认拿到了可用的文件删除入口。"""
-            assert callable(delete_file)
-            calls.append("purge_archived_tasks")
-            return 0
-
-    async def stop_after_cycle(delay: float) -> None:
-        """观察到一天调度间隔后终止无限循环。"""
-        assert delay == 86_400
-        raise StopRetentionLoop
-
+async def test_retention_round_commits_each_batch_until_short(
+    monkeypatch,
+    caplog,
+) -> None:
+    """每批一个短会话各自提交；任一类满批就继续，都不满才结束该阶段。"""
+    seen: list[tuple[str, int, datetime]] = []
     monkeypatch.setattr(
         application,
         "SQLAlchemyRetentionRepository",
-        RetentionRepositoryStub,
-        raising=False,
+        _retention_repository(
+            general=[_general_counts(jobs=2, audit_logs=1), _general_counts(jobs=1)],
+            archived=[2, 1],
+            seen=seen,
+        ),
     )
-    monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
+    factory = _RetentionSessionFactory()
+    now = datetime(2026, 9, 21, 3, tzinfo=UTC)
 
-    with pytest.raises(StopRetentionLoop):
-        await application._run_retention_loop(
-            cast(Any, lambda: SessionContext()),
-            cast(Any, _StubStorage()),
+    with caplog.at_level(logging.INFO, logger="homestay_bot.application"):
+        await application._run_retention_round(cast(Any, factory), now=now)
+
+    # 四批四个会话，各自提交，没有任何回滚
+    assert factory.log == [("commit", 0), ("commit", 1), ("commit", 2), ("commit", 3)]
+    assert [(phase, index) for phase, index, _ in seen] == [
+        ("general", 0),
+        ("general", 1),
+        ("archived", 2),
+        ("archived", 3),
+    ]
+    assert {value for _, _, value in seen} == {now}
+    summary = _retention_summary(caplog)
+    assert "jobs=3" in summary
+    assert "audit_logs=1" in summary
+    assert "archived_tasks=3" in summary
+    assert "general_batches=2" in summary
+    assert "archived_batches=2" in summary
+    assert "failed_phases=none" in summary
+    assert "possibly_incomplete=none" in summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_phase", ["general", "archived_tasks"])
+async def test_retention_batch_failure_keeps_committed_work_and_other_phase(
+    monkeypatch,
+    caplog,
+    failing_phase: str,
+) -> None:
+    """某批失败只回滚当前批：此前批次保留，另一阶段照常用新会话执行。
+
+    失败日志只留阶段、批次、异常类型与 SQLSTATE，不得带出异常正文里的 SQL
+    语句和参数。
+    """
+    failure = OperationalError(
+        "DELETE FROM business_tasks WHERE id IN (?)",
+        {"file_ids": ["secret-file-id"]},
+        sqlite3.OperationalError("database is locked"),
+    )
+    general: list[Any] = [_general_counts(jobs=2), _general_counts(jobs=1)]
+    archived: list[Any] = [2, 1]
+    if failing_phase == "general":
+        general[1] = failure
+    else:
+        archived[1] = failure
+    seen: list[tuple[str, int, datetime]] = []
+    monkeypatch.setattr(
+        application,
+        "SQLAlchemyRetentionRepository",
+        _retention_repository(general=general, archived=archived, seen=seen),
+    )
+    factory = _RetentionSessionFactory()
+
+    with caplog.at_level(logging.INFO, logger="homestay_bot.application"):
+        await application._run_retention_round(
+            cast(Any, factory),
+            now=datetime(2026, 9, 21, tzinfo=UTC),
         )
 
-    # 归档任务清理必须在同一事务内、提交之前完成
-    assert calls == ["purge", "purge_archived_tasks", "commit"]
+    # 每批都是新会话；失败批回滚，前后已提交的批次不受影响
+    assert factory.log == [
+        ("commit", 0),
+        ("commit", 1) if failing_phase == "archived_tasks" else ("rollback", 1),
+        ("commit", 2),
+        ("rollback", 3) if failing_phase == "archived_tasks" else ("commit", 3),
+    ]
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+    ]
+    assert warnings == [
+        f"历史记录清理阶段失败，已回滚当前批：phase={failing_phase} batch=2 "
+        "error_type=OperationalError sqlstate=None"
+    ]
+    assert all(record.exc_info is None for record in caplog.records)
+    assert "secret-file-id" not in caplog.text
+    assert "DELETE FROM" not in caplog.text
+    summary = _retention_summary(caplog)
+    # 只统计已提交批次
+    if failing_phase == "general":
+        assert "jobs=2" in summary
+        assert "archived_tasks=3" in summary
+    else:
+        assert "jobs=3" in summary
+        assert "archived_tasks=2" in summary
+    assert f"failed_phases={failing_phase}" in summary
+
+
+@pytest.mark.asyncio
+async def test_retention_phase_stops_at_batch_cap_and_flags_possible_backlog(
+    monkeypatch,
+    caplog,
+) -> None:
+    """持续满批时到上限即停并提示可能未完成，下一次每日调度再继续。"""
+    monkeypatch.setattr(application, "RETENTION_MAX_BATCHES_PER_PHASE", 3)
+    seen: list[tuple[str, int, datetime]] = []
+    monkeypatch.setattr(
+        application,
+        "SQLAlchemyRetentionRepository",
+        _retention_repository(
+            general=[_general_counts(jobs=2) for _ in range(5)],
+            archived=[0],
+            seen=seen,
+        ),
+    )
+    factory = _RetentionSessionFactory()
+
+    with caplog.at_level(logging.INFO, logger="homestay_bot.application"):
+        await application._run_retention_round(
+            cast(Any, factory),
+            now=datetime(2026, 9, 21, tzinfo=UTC),
+        )
+
+    assert [phase for phase, _, _ in seen] == ["general"] * 3 + ["archived"]
+    summary = _retention_summary(caplog)
+    assert "jobs=6" in summary
+    assert "possibly_incomplete=general" in summary
+    assert "failed_phases=none" in summary
+
+
+@pytest.mark.asyncio
+async def test_retention_round_fixes_one_now_across_midnight(monkeypatch) -> None:
+    """一轮只取一次当前时间：批次跨过午夜也沿用同一组保留期边界。"""
+    ticks = iter(
+        datetime(2026, 9, 21, 23, 59, 59, tzinfo=UTC) + timedelta(seconds=offset)
+        for offset in range(100)
+    )
+
+    class TickingDatetime(datetime):
+        """每次取当前时间都前进一秒，暴露任何逐批重取 now 的实现。"""
+
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            """返回下一个时刻。"""
+            return next(ticks)
+
+    monkeypatch.setattr(application, "datetime", TickingDatetime)
+    seen: list[tuple[str, int, datetime]] = []
+    monkeypatch.setattr(
+        application,
+        "SQLAlchemyRetentionRepository",
+        _retention_repository(
+            general=[_general_counts(jobs=2), _general_counts(jobs=2), _general_counts()],
+            archived=[2, 0],
+            seen=seen,
+        ),
+    )
+
+    await application._run_retention_round(cast(Any, _RetentionSessionFactory()))
+
+    assert len(seen) == 5
+    assert {value for _, _, value in seen} == {
+        datetime(2026, 9, 21, 23, 59, 59, tzinfo=UTC)
+    }
+
+
+@pytest.mark.asyncio
+async def test_retention_cancellation_propagates_without_commit(monkeypatch) -> None:
+    """停机取消必须立即向外传播，不能被当作普通失败吞掉后继续下一阶段。"""
+    seen: list[tuple[str, int, datetime]] = []
+    monkeypatch.setattr(
+        application,
+        "SQLAlchemyRetentionRepository",
+        _retention_repository(
+            general=[asyncio.CancelledError()],
+            archived=[0],
+            seen=seen,
+        ),
+    )
+    factory = _RetentionSessionFactory()
+
+    with pytest.raises(asyncio.CancelledError):
+        await application._run_retention_round(
+            cast(Any, factory),
+            now=datetime(2026, 9, 21, tzinfo=UTC),
+        )
+
+    assert factory.log == [("rollback", 0)]
+    assert [phase for phase, _, _ in seen] == ["general"]
+
+
+@pytest.mark.asyncio
+async def test_retention_loop_runs_a_round_then_waits_one_day(monkeypatch) -> None:
+    """启动后立即清理一轮，之后按一天间隔调度。"""
+    calls: list[object] = []
+
+    async def record_round(factory) -> None:
+        """记录一轮清理。"""
+        calls.append(("round", factory))
+
+    async def stop_after_cycle(delay: float) -> None:
+        """观察到一天调度间隔后终止无限循环。"""
+        calls.append(("sleep", delay))
+        raise StopRetentionLoop
+
+    monkeypatch.setattr(application, "_run_retention_round", record_round)
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
+    factory = object()
+
+    with pytest.raises(StopRetentionLoop):
+        await application._run_retention_loop(cast(Any, factory))
+
+    assert calls == [("round", factory), ("sleep", 86_400)]
 
 
 @pytest.mark.asyncio

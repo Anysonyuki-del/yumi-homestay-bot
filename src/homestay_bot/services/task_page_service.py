@@ -1,7 +1,9 @@
+import hashlib
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from homestay_bot.domain.enums import (
@@ -206,6 +208,37 @@ class TaskListItem:
 
 
 ATTACHMENT_CLEANUP_JOB_TYPE = "task_attachment_cleanup"
+
+# 批量清理键的来源前缀固定且互不相同：自动清理与人工删除即使恰好命中同一组
+# 任务编号，也各自登记，不会被全局去重误并成一条。
+_ATTACHMENT_CLEANUP_BATCH_PREFIXES = {
+    "retention": "task-retention-batch:",
+    "manual": "task-manual-batch:",
+}
+
+
+def build_attachment_cleanup_dedupe_key(
+    task_ids: Iterable[int],
+    *,
+    source: Literal["retention", "manual"],
+) -> str:
+    """为一批已删除任务生成定长的照片清理去重键。
+
+    旧键把全部任务编号直接拼进去，二十来个五位数编号就超过 jobs.dedupe_key
+    的 128 字符上限；PostgreSQL 会拒绝写入并让整轮清理回滚。这里改为对去重、
+    数值排序后的编号取 SHA-256 完整摘要：同一集合无论输入顺序或重复都得到同一
+    个键，批量多大长度都固定。单条删除的 `task-purge:<id>` 本就有界，不走这里。
+    """
+    prefix = _ATTACHMENT_CLEANUP_BATCH_PREFIXES.get(source)
+    if prefix is None:
+        raise ValueError(f"未知的照片清理来源：{source}")
+    unique_ids = sorted({int(value) for value in task_ids})
+    if not unique_ids:
+        # 空集合没有可清理的照片，调用方本不该走到这里；拒绝而不是生成一个
+        # 所有空批次共用的键。
+        raise ValueError("照片清理批次至少需要一个任务编号")
+    canonical = ",".join(str(value) for value in unique_ids)
+    return prefix + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class AttachmentCleanupQueue(Protocol):
@@ -605,13 +638,16 @@ class TaskPageService:
 
         批量入口与单条同一套约束：删库与清理登记一起提交，提交失败则照片一张
         不少。此前批量删除还可能只删掉一部分文件就中断。
+
+        仓储在同一事务里锁行、复核并要求整批删除成功，否则抛错回滚；因此走到
+        登记这一步时，所选集合就是实际删除的集合，清理键按它计算。
         """
         self._require_admin(employee)
         file_ids = await self._tasks.require_purgeable(task_ids)
         purged = await self._tasks.purge_selected(task_ids, employee.id)
         await self._schedule_attachment_cleanup(
             file_ids,
-            "task-purge-batch:" + ",".join(str(value) for value in sorted(set(task_ids))),
+            build_attachment_cleanup_dedupe_key(task_ids, source="manual"),
         )
         return purged
 
