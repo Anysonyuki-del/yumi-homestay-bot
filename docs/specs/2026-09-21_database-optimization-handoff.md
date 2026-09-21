@@ -281,3 +281,39 @@ git diff --check
 - 距离证据不核对目的地（`ponytail:` 已注明）：答案写「离地铁站 500 米」时，仍可能被当作问另一处距离的证据。这个缺口交接前就有；要处理，需另行确认「目的地一致」规则。
 - §12.3 列出的其余事项不变：上下文隔离的两条分歧、同义漏判、PostgreSQL 未验收、真实模型与生产未验证、「空房」识别缺口。
 - 这一轮的 4 条回归测试是看过代码后编写的，不是独立留出集。
+
+## 14. 收尾补齐与 1.37.0 发布准备（2026-09-22，用户回复「全部做完」）
+
+依据 Spec §7.2、§9.4.3、§9.5.0。
+
+### 14.1 已完成
+
+| 项 | 结果 |
+| --- | --- |
+| PostgreSQL 验收 | 分支 `release/1.37.0` 推送后，CI 在隔离的 PostgreSQL 16 上从零迁移到 head，`test_retention_postgresql.py` **18 通过、0 跳过**（9 条真连库：T1、T9、T12、T17），其余步骤与生产镜像构建全部通过 |
+| A4 线上基线 | 只读采集，见 Spec §7.2：无清理积压，旧超长键缺陷从未触发，**生产启用的知识条目为 0** |
+| 上下文隔离（剔除） | `deepseek_client.py::_scope_knowledge`；留出集第一版隔离 0.950 → 1.000，第一版的 xfail 已按其条件移除 |
+| 距离核对目的地 | `_distance_destination/_mentions_place/_passage_states_topic`；`cal-xl-09` 靠目的地核对恢复放行 |
+| 「空房」识别 | `answer_policy._TRANSACTION_PATTERN` 与 `_is_standalone_availability_query/_should_force_availability` |
+| 英文兜底文案 | 专属事实未确认时，按回复语言给中文或英文；`PropertyTopic.english` |
+| 变异验证 | 本轮 6 处新增保护逐一删除，都有测试失败 |
+| 全量 `pytest` | 1707 通过，24 跳过（15 项真实契约 + 9 项 PG，PG 已在 CI 执行），0 xfail |
+
+### 14.2 第二套留出集（Codex 编写，C2 前基线）
+
+`tests/fixtures/knowledge_retrieval_holdout_v2.json`，sha256 `6df864144c0b15d0819ab3975fff63fd8a45091a4304dbf617ec56d4ca382dcd`，40 条（synonym 14、cross_language 8、long_answer 4、no_answer 6、isolation 5、multi_topic 2、boundary 1）。
+
+在 1.37.0 代码上只看了汇总，逐条结果写在 `knowledge_retrieval_baseline_v2.json`，**调 C2 期间不查看**：
+
+| 指标 | 结果 |
+| --- | --- |
+| Recall@3 | 0.900（目标 ≥0.90） |
+| 多主题覆盖 | 0.500 |
+| 证据完整 | 1.000 |
+| 证据门判断准确率 | 0.525 |
+| 错误放行 | **1**（目标 0，未达标） |
+| 模拟回复判定准确率 | 0.833 |
+| 隔离 | **0.975**（目标 1.000，未达标） |
+| 实时问题被工具路由识别 | 0/1 |
+
+这是 C1 第一次接受独立检验：召回刚好达标，安全项有 1 条错误放行、1 条隔离失败，具体用例留到 C2 冻结后一并查看。生产知识库目前为空，证据门不会放行任何本店事实，所以这条错误放行现在在生产上触发不了。

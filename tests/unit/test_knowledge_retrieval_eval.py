@@ -20,7 +20,8 @@
 
 模型只用确定性函数替身，不证明真实模型的最终回答准确率。
 
-记录基线或查看报告（在仓库根目录执行，`--show-holdout` 才列出留出集逐条失败）：
+记录基线或查看报告（在仓库根目录执行，`--show-holdout` 才列出留出集逐条失败；
+`--record-baseline-v2` 只把第二套留出集写进独立基线文件）：
     PYTHONPATH=src:tests .venv/bin/python \
         tests/unit/test_knowledge_retrieval_eval.py --report
     PYTHONPATH=src:tests .venv/bin/python \
@@ -51,8 +52,12 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 CASE_FILES = {
     "calibration": FIXTURES / "knowledge_retrieval_cases.json",
     "holdout": FIXTURES / "knowledge_retrieval_holdout.json",
+    # 第二套留出集：调参结束、代码冻结后才看逐条结果，平时只出汇总。
+    "holdout_v2": FIXTURES / "knowledge_retrieval_holdout_v2.json",
 }
 BASELINE_FILE = FIXTURES / "knowledge_retrieval_baseline.json"
+BASELINE_V2_FILE = FIXTURES / "knowledge_retrieval_baseline_v2.json"
+BLIND_SPLITS = ("holdout_v2",)
 GROUPS = {
     "synonym",
     "cross_language",
@@ -344,12 +349,12 @@ def _validate_case(case: dict[str, Any], split: str) -> None:
         assert isinstance(case["stub_reply_supported"], bool), case["case_id"]
 
 
-@pytest.mark.parametrize("split", ["calibration", "holdout"])
+@pytest.mark.parametrize("split", ["calibration", "holdout", "holdout_v2"])
 def test_eval_cases_are_well_formed(split: str) -> None:
     """用例结构完整、编号唯一，关键事实确实出自正确来源。"""
     cases = load_cases(split)
-    if split == "holdout" and not cases:
-        pytest.skip("留出集尚未提供")
+    if split != "calibration" and not cases:
+        pytest.skip(f"{split} 尚未提供")
     assert len(cases) == 40
     assert len({case["case_id"] for case in cases}) == 40
     for case in cases:
@@ -405,6 +410,27 @@ def _load_baseline() -> dict[str, dict[str, Any]]:
     return {item["case_id"]: item for item in data["outcomes"]}
 
 
+def _record_blind_baseline(outcomes: list[CaseOutcome]) -> None:
+    """只记录第二套留出集在当前代码上的逐条结果，写入独立文件，不覆盖第一版基线。"""
+    selected = [item for item in outcomes if item.split in BLIND_SPLITS]
+    payload = {
+        "note": "C2 改动前（v1.37.0）第二套留出集的逐条结果；只在 C2 冻结后对比。",
+        "summary": {
+            key: value
+            for key, value in summarize(selected).items()
+            if not key.startswith("latency")
+        },
+        "outcomes": [
+            {key: value for key, value in asdict(item).items() if key != "elapsed_ms"}
+            for item in selected
+        ],
+    }
+    BASELINE_V2_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _record_baseline(outcomes: list[CaseOutcome]) -> None:
     """写入改动前的逐用例结果，只含编号、来源、判定与汇总，不含耗时。"""
     payload = {
@@ -436,14 +462,14 @@ def _record_baseline(outcomes: list[CaseOutcome]) -> None:
 
 def _print_report(outcomes: list[CaseOutcome], *, show_holdout: bool) -> None:
     """打印分划分汇总；留出集默认只给汇总，不给逐用例失败。"""
-    for split in ("calibration", "holdout"):
+    for split in CASE_FILES:
         selected = [item for item in outcomes if item.split == split]
         if not selected:
             continue
         print(f"== {split}")
         for key, value in summarize(selected).items():
             print(f"  {key}: {value:.3f}" if isinstance(value, float) else f"  {key}: {value}")
-        if split == "holdout" and not show_holdout:
+        if split != "calibration" and not show_holdout:
             continue
         for item in selected:
             if kinds := failure_kinds(item):
@@ -455,8 +481,10 @@ def _print_report(outcomes: list[CaseOutcome], *, show_holdout: bool) -> None:
 
 if __name__ == "__main__":
     all_outcomes: list[CaseOutcome] = []
-    for split_name in ("calibration", "holdout"):
+    for split_name in CASE_FILES:
         all_outcomes.extend(asyncio.run(evaluate_split(split_name)))
     if "--record-baseline" in sys.argv:
         _record_baseline(all_outcomes)
+    if "--record-baseline-v2" in sys.argv:
+        _record_blind_baseline(all_outcomes)
     _print_report(all_outcomes, show_holdout="--show-holdout" in sys.argv)
