@@ -2,6 +2,42 @@
 
 日期：2026-09-23。本文是接手入口。
 
+## Codex 审查补修（2026-09-23，本地未发布）
+
+### 后续修复：延迟退房（用户明确“直接修复”）
+
+最终全量离线验证：**1794 passed / 24 skipped，0 failed**（58.62 秒）；Ruff、mypy 122 源码文件、diff-check 通过。跳过的外部契约和 PostgreSQL 仍未验收。本轮没有提交、推送或部署。
+
+`knowledge_evidence_policy.py::_SPECIAL_QUALIFIERS` 的 `late_checkout` 现在只接受明确延迟/推迟/延后退房规则，不再把普通“退房时间”作证；肯定或否定规则均按审核原文输出。新增 3 项真实 `respond` 回归先红后绿，覆盖缺少规则、完整收费/节假日条件、明确不支持延迟；普通退房时间问答也验证保留。相关 45 项测试通过。
+
+六套关键词复验中，`calibration` 最终回复断言正确率由 0.889 升至 1.000，`unsafe_final` 由 1 降为 0；其他表列指标不变，六套计划错误放行及负样本未获确认数均为 0。下文 `cal-long-01` 失败及 1790/1/24 是修复前历史，不再是当前缺陷。回答覆盖仍有缺口，不能把负样本通过解释为所有问题都能答对；无真实语义调用或生产验收。
+
+### 延迟退房补修前的审查记录（保留追溯）
+
+以下为本地五项补修完成、延迟退房尚未补修时的结果，当前状态以上一节为准。本轮只修改本地源码、测试及记录，没有提交、推送、部署、调用真实模型或访问生产。原始样本、旧基线及未跟踪 `docs/knowledge/` 均保留。
+
+- `knowledge_evidence_policy.py::build_evidence_plan`：未识别物品的借用请求进入未确认；同主题候选在选首条前检查免费/收费冲突，跨主题分别检查。
+- `knowledge_evidence_policy.py::_topic_attribute_text`：属性使用所属主题分句；无主语的紧接句承接主题，明确转入停车等其他主题的时间不再给早餐背书。仍是有限规则，复杂并列、隐式指代及未知意图不具备语义完备保证。
+- `answer_policy.py::is_static_service_fee` 与 `DeepSeekGuestAssistant._static_evidence_plan/_validate_decision`：静态服务收费可使用审核知识；混合明确房价、房态、订单、退款等问题继续保留交易边界。
+- `test_knowledge_retrieval_eval.py::reply_passes_oracle/evaluate_case`：不再把 grounded 或字符串变化当作最终正确。核对标注正确来源、必需来源、关键事实及原文组合，或已标注正确回复/固定兜底。新改写默认不通过，需人工判读。`stub_changed` 仅表示文字变化，`unsafe_final` 表示负样本最终内容未获判据确认，不直接等同已证实有害。
+
+**不能宣称安全项全绿。** 新判据暴露现存 `cal-long-01`：问“退房能不能晚一点”，最终返回普通入住/退房时间，未回答延迟退房收费及节假日限制。使用 `git show HEAD:.../knowledge_evidence_policy.py` 加载未修改的策略后也得到同一错误回复，确认不是本轮引入。根因是 `_SPECIAL_QUALIFIERS` 的 `late_checkout` 证据规则把“退房时间”视作延迟退房规则。旧评估以 grounded 为通过掩盖了它；现保留失败，不删样本、不放宽门禁。下一轮应在 Spec 确认后区分普通退房时间与延迟退房能力，并覆盖肯定、否定及收费/节假日条件。
+
+六套关键词离线评估（230 条，无外部请求）：
+
+本地最终验证：新增 7 项回归先红后绿；全量 `RUN_LIVE_CONTRACT_TESTS=0 .venv/bin/python -m pytest -q --tb=short` 为 **1790 passed / 1 failed / 24 skipped**，57.15 秒；唯一失败为上述 calibration 最终回复门禁。Ruff、mypy（122 源码文件）、`git diff --check` 通过。跳过项包括外部契约及未设置测试 URL 的 PostgreSQL 验证；不构成已验收。
+
+| 集合 | Recall@3 | 计划错误放行 | 最终回复断言正确率 | 未获确认负样本 |
+| --- | --- | --- | --- | --- |
+| calibration | 1.000 | 0 | 0.889 | 1 |
+| calibration_v2 | 0.864 | 0 | 无回复样本 | 0 |
+| holdout | 0.935 | 0 | 0.833 | 0 |
+| holdout_v2 | 0.900 | 0 | 0.833 | 0 |
+| holdout_v3 | 0.929 | 0 | 1.000 | 0 |
+| holdout_v4 | 0.611 | 0 | 0.500 | 0 |
+
+隔离全部通过，有边界样本的集合边界检查通过；无回复样本不构成最终回复安全证据。此表不能与旧字符串变化口径直接比较，也不能代表语义检索、真实模型、PostgreSQL 或生产验收。关键词报告命令：`PYTHONPATH=src:tests RUN_LIVE_CONTRACT_TESTS=0 .venv/bin/python tests/unit/test_knowledge_retrieval_eval.py --report`。
+
 ## 1. 一句话现状
 
 证据门改造已实施、验证、发布并**部署到生产**（`v1.39.0`，上线核对见 §10）。语义检索代码仍默认关闭，生产知识库仍为 0 条。

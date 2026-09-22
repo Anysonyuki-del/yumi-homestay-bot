@@ -415,3 +415,67 @@ async def test_night_supply_needs_evidence_about_the_time_window() -> None:
 
     assert "24小时" not in decision.reply_text
     assert "尚未确认" in decision.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('knowledge', [
+    [], [KnowledgeSnippet(1, '借用', '转换插头借用', '不提供转换插头借用。')],
+])
+async def test_unrecognized_borrowing_never_promises_items(knowledge) -> None:
+    """未知物品不因未命中设施清单绕过证据检查，包括空知识库。"""
+    d, _ = await _respond_with('能借转换插头吗？', '可以免费借，押金100元。', knowledge)
+    assert '100' not in d.reply_text
+    assert '尚未确认' in d.reply_text
+
+
+@pytest.mark.asyncio
+async def test_fee_conflict_is_checked_within_topic_before_selection() -> None:
+    """同主题矛盾候选不能按排名挑一个；不同主题的免费与收费不矛盾。"""
+    free = KnowledgeSnippet(1, '停车', '停车政策', '停车免费。')
+    paid = KnowledgeSnippet(2, '停车', '停车收费', '停车每天收费20元。')
+    breakfast = KnowledgeSnippet(3, '早餐', '早餐政策', '早餐免费。')
+    d, _ = await _respond_with('停车收费吗？', '停车免费。', [free, paid])
+    assert '尚未确认' in d.reply_text
+    d, _ = await _respond_with('停车收费吗，早餐免费吗？', '都免费。', [paid, breakfast])
+    assert d.reply_text == paid.answer + '\n' + breakfast.answer
+
+
+@pytest.mark.asyncio
+async def test_breakfast_cannot_borrow_parking_time() -> None:
+    """另一主题的时段不证明早餐时间；无主语承接仍可使用。"""
+    wrong = KnowledgeSnippet(1, '早餐', '早餐安排', '早餐放在大厅。停车场22:00关闭。')
+    correct = KnowledgeSnippet(2, '早餐', '早餐安排', '早餐放在大厅。每天08:00送到。')
+    d, _ = await _respond_with('早餐几点送到？', '早餐22点送到。', [wrong])
+    assert '尚未确认' in d.reply_text
+    d, _ = await _respond_with('早餐几点送到？', '早餐22点送到。', [correct])
+    assert d.reply_text == correct.answer
+
+
+@pytest.mark.asyncio
+async def test_static_parking_amount_is_not_a_live_room_price() -> None:
+    """静态停车费从审核知识回答，真正的房价仍须实时证据。"""
+    k = KnowledgeSnippet(1, '停车', '停车收费', '停车每天20元。')
+    d, _ = await _respond_with('停车多少钱？', '停车每天20元。', [k])
+    assert d.reply_text == k.answer
+    d, _ = await _respond_with('今晚房价多少钱，停车多少钱？', '房价300元。', [k])
+    assert '300' not in d.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rule", [
+    None,
+    "如需延迟退房，最晚可延至14:00，每小时加收50元，节假日不接受延迟退房。",
+    "不支持延迟退房，请在12:00前退房。",
+])
+async def test_late_checkout_requires_its_own_rule(rule: str | None) -> None:
+    """普通时间不证明可延迟；有专属规则时保留否定、收费和节假日条件。"""
+    normal = KnowledgeSnippet(1, "入住", "入住退房时间", "退房时间为中午12:00以前。")
+    knowledge = [normal]
+    if rule:
+        knowledge.append(KnowledgeSnippet(2, "入住", "延迟退房", rule))
+    decision, _ = await _respond_with(
+        "退房能不能晚一点", "可以免费延迟到14:00。", knowledge,
+    )
+    assert decision.reply_text == rule if rule else "尚未确认" in decision.reply_text
+    ordinary, _ = await _respond_with("几点退房？", normal.answer, [normal])
+    assert ordinary.reply_text == normal.answer

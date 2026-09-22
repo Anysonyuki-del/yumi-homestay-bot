@@ -93,8 +93,7 @@ _SPECIAL_QUALIFIERS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = 
         re.compile(r"婴儿|宝宝|婴儿床|baby|infant|\bcot\b|crib", re.IGNORECASE),
     ),
     (
-        # 问的是能不能延迟退房，答案讲「退房当日可寄存行李」不算数：必须讲退房
-        # 时间本身或延迟退房的规则。提前入住同理。
+        # 延迟退房属于额外能力；普通退房时间和退房当日寄存行李均不能证明它。
         "late_checkout",
         re.compile(
             r"延迟退房|晚一?点退房|退房.{0,6}(?:晚|延|推迟)|late\s+check-?\s?out"
@@ -105,8 +104,8 @@ _SPECIAL_QUALIFIERS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = 
             re.IGNORECASE,
         ),
         re.compile(
-            r"退房时间|延迟退房|退房为|退房是|退房不?晚于|late\s+check-?\s?out"
-            r"|check-?\s?out\s+(?:time|is|at|before|by)",
+            r"(?:延迟|推迟|延后)退房|晚一?点退房|退房.{0,6}(?:延迟|推迟|延后)"
+            r"|late\s+check-?\s?out|check-?\s?out\s+late",
             re.IGNORECASE,
         ),
     ),
@@ -222,8 +221,14 @@ _INSTRUCTION_INJECTION = re.compile(
     re.IGNORECASE,
 )
 
-# 指代不清：客人用「那个」「这东西」指房里的某样东西，检索也确实找到了候选，
-# 但无法确认问的是哪一项。只在这种情况下澄清，普通旅游和通用问题不受影响。
+# 未知物品的借用请求仍属于需要核实的服务能力，不能落入无约束通用回答。
+_BORROWING_REQUEST = re.compile(
+    r"(?:能|可以|可否|能否|想|要|有没有).{0,6}借(?!钱|款|贷)|借用"
+    r"|\b(?:can|could|may)\s+(?:i|we)\s+borrow\b",
+    re.IGNORECASE,
+)
+
+# 指代不清且检索到候选时澄清，普通旅游和通用问题不受影响。
 _VAGUE_REFERENCE = re.compile(
     r"那个|这个|那东西|这东西|那玩意|它(?:能|会|怎么|好用)"
     r"|that\s+(?:thing|one)|this\s+(?:thing|one)",
@@ -318,10 +323,29 @@ def _conflicting_fee_claims(answers: Sequence[str]) -> bool:
     """多条答案对同一问题一方说免费、一方说收费时不投票，按未确认处理。"""
     if len(answers) < 2:
         return False
-    free = any(_AFFIRMATIVE_FEE_FREE.search(item) for item in answers)
-    paid = any(_PAID_FEE.search(item) for item in answers)
+    # 先移除明确的免费/不收费表达再找收费，避免“不收费”自己和自己冲突。
+    free = any(
+        _AFFIRMATIVE_FEE_FREE.search(re.sub(r"不免费|并非免费|not\s+free", "", item))
+        for item in answers
+    )
+    paid = any(_PAID_FEE.search(_AFFIRMATIVE_FEE_FREE.sub("", item)) for item in answers)
     return free and paid
 
+
+def _topic_attribute_text(topic: PropertyTopic, answer: str) -> str:
+    """属性只取当前主题的分句；无主语句承接最近明确主题，不借用他项数值。
+
+    ponytail: 只处理显式主题和紧邻承接，不证明任意代词或复杂并列的语义归属。
+    """
+    active = {topic.name}
+    passages = []
+    for passage in re.split(r"[，,。！？!?；;\n]+|(?<=\.)\s+", answer):
+        named = {item.name for item in detect_property_topics(passage)}
+        if named:
+            active = named
+        if topic.name in active:
+            passages.append(passage)
+    return "\n".join(passages)
 
 def already_clarified(messages: Sequence[dict[str, str]]) -> bool:
     """会话里是否已经发出过澄清提问。"""
@@ -347,6 +371,8 @@ def build_evidence_plan(
     entries = list(knowledge)
     topics = tuple(detect_property_topics(question_text))
     if not topics:
+        if _BORROWING_REQUEST.search(question_text):
+            return EvidencePlan("insufficient", (), (), "borrowing_unconfirmed")
         qualifiers = {
             item for item in asked_attributes(question_text) if item.startswith("special:")
         }
@@ -380,16 +406,17 @@ def build_evidence_plan(
         if not supporting:
             return EvidencePlan("insufficient", topics, (), f"no_support:{topic.name}")
         attributes = asked_attributes(question_text, topic)
-        # 每个主题只取第一条覆盖全部所问属性的问答：检索顺序即相关度，同一单元
-        # 内条件完整；不把多条答案的数字、费用、否定拆开重组。
-        covering = next(
-            (
-                item
-                for item in supporting
-                if all(_covers_attribute(attribute, item.answer) for attribute in attributes)
-            ),
-            None,
-        )
+        # 先收齐同一主题满足属性的候选，检查冲突后才选第一条，不能先丢掉反证。
+        covering_items = [
+            item for item in supporting
+            if all(_covers_attribute(attribute, _topic_attribute_text(topic, item.answer))
+                   for attribute in attributes)
+        ]
+        if _conflicting_fee_claims([
+            _topic_attribute_text(topic, item.answer) for item in covering_items
+        ]):
+            return EvidencePlan("insufficient", topics, (), "conflicting_answers")
+        covering = covering_items[0] if covering_items else None
         if covering is None:
             return EvidencePlan(
                 "insufficient",
@@ -403,8 +430,6 @@ def build_evidence_plan(
     if any(_INSTRUCTION_INJECTION.search(item) for item in chosen):
         # 需要人工复核的条目不原样转发，也不让模型改写后发出。
         return EvidencePlan("insufficient", topics, (), "answer_needs_review")
-    if _conflicting_fee_claims(chosen):
-        return EvidencePlan("insufficient", topics, (), "conflicting_answers")
     if len(chosen) > 1 and sum(len(item) for item in chosen) > STATIC_REPLY_MAX_CHARS:
         # 单条审核问答是最小证据单元，再长也整条发出，绝不截掉尾部的条件与例外；
         # 只有需要拼接多条时才可能超出预算，这时请客人把问题问得更具体。

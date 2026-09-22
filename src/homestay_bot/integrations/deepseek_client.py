@@ -22,6 +22,7 @@ from homestay_bot.services.answer_policy import (
     is_booking_action_request,
     is_property_specific,
     is_service_request,
+    is_static_service_fee,
     is_transaction_sensitive,
 )
 from homestay_bot.services.answer_policy import (
@@ -766,7 +767,9 @@ class DeepSeekGuestAssistant:
             if decision.intent == "booking_confirmed":
                 updates["intent"] = "booking_inquiry"
         property_specific = is_property_specific(question_text)
-        transaction_sensitive = is_transaction_sensitive(question_text)
+        transaction_sensitive = (
+            is_transaction_sensitive(question_text) and not is_static_service_fee(question_text)
+        )
         reply_grounded = property_knowledge_grounded
         if (
             property_specific
@@ -1059,8 +1062,8 @@ class DeepSeekGuestAssistant:
         「早餐几点送到？另外停车怎么收费？」这类问句也算作请求，用它跳过证据门
         等于留了一个绕过口。
         """
-        if has_facility_fault_signal(question_text) or is_transaction_sensitive(
-            question_text
+        if has_facility_fault_signal(question_text) or (
+            is_transaction_sensitive(question_text) and not is_static_service_fee(question_text)
         ):
             return None
         plan = build_evidence_plan(

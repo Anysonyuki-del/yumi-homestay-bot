@@ -231,3 +231,19 @@ def facility_fault_exclusion(text: str) -> Literal["private", "external"] | None
 def is_booking_action_request(text: str) -> bool:
     """判断本轮客人是否明确确认提交预订资料，而非仅咨询预订。"""
     return _BOOKING_CONFIRMATION_PATTERN.search(text) is not None
+
+
+def is_static_service_fee(text: str) -> bool:
+    """识别可用审核知识回答的服务收费；明确订单、房价、退款仍保持交易边界。"""
+    if _LODGING_PRICE_PATTERN.search(text) or re.search(
+        r"房价|房费|房态|有房|空房|余房|剩房|满房|订满|可订|订房|预订|订单"
+        r"|退款|退费|退多少|取消|改期|支付|付款|到账|发票金额|availability|reschedule"
+        r"|room\s+(?:rate|price)|reservation|booking|refund|cancel|payment|invoice\s+amount"
+        r"|how\s+much.{0,45}\brooms?\b",
+        text, re.IGNORECASE,
+    ):
+        return False
+    return bool(detect_property_topics(text)) and re.search(
+        r"多少钱|收费|费用|价格|免费|how\s+much|\bcost|\bfee|\bprice|\bcharge|\bfree",
+        text, re.IGNORECASE,
+    ) is not None

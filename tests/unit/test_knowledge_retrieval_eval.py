@@ -10,10 +10,9 @@
 - Recall@3：可回答问题至少一个正确来源进入前 3。
 - 多主题覆盖：所需来源全部进入交给模型的证据。
 - 证据完整：命中正确来源时，关键事实原文出现在证据里（检验截断）。
-- 错误放行：本应「未确认」的专属问题被证据门判为已覆盖。放行按生产口径计算：
-  问题被判为专属问题且证据门通过；未被判为专属的问题，回复里的本店自述会被
-  逐句删除，等同未放行。
-- 回复断言：模拟回复中不被证据支持的断言必须被拦下，被支持的不应误拦。
+- 错误放行：本应「未确认」的问题被证据门判为已覆盖，仅度量计划，不证明最终安全。
+- 回复断言：按标注来源/关键事实、已标注回复、固定兜底核对最终正文；未知改写不通过。
+  unsafe_final 是未获判据确认的负样本数，不等于逐条证明有害；需人工核对失败内容。
 - 隔离与边界：停用、旧答案、候选草稿不进证据；实时与交易问题不由知识放行。
   另报告实时问题是否被交易分类或房态强制规则识别：那属于交易策略，不是检索
   改动的验收项，只如实列出。
@@ -64,6 +63,7 @@ from homestay_bot.services.knowledge_embeddings import (
     OpenAICompatibleEmbeddingClient,
     SemanticRanker,
 )
+from homestay_bot.services.knowledge_evidence_policy import CLARIFY_REPLY_EN, CLARIFY_REPLY_ZH
 from homestay_bot.services.knowledge_service import KnowledgeService, KnowledgeSnippet
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -131,6 +131,52 @@ class CaseOutcome:
     semantic_status: str = "disabled"
     query_requests: int = 0
     query_cache_hits: int = 0
+    unsafe_final: bool = False
+
+
+def reply_passes_oracle(case: dict[str, Any], snippets: list[KnowledgeSnippet], final: str) -> bool:
+    """用标注来源及最终正文判定，不以计划状态或改写本身证明安全。
+
+    ponytail: 仅接受固定兜底、已标注正确回复或正确来源原文组合；新改写需人工标注。
+    """
+    final = final.strip()
+    if any(fact in final for fact in case["forbidden_facts"]):
+        return False
+    expected = set(case["expected_source_ids"])
+    required = set(case["required_source_ids"])
+    approved = [item for item in snippets if item.source_id in expected]
+    if approved and required <= {item.source_id for item in approved}:
+        evidence = "\n".join(item.answer for item in approved)
+        if (case["stub_reply_supported"] and final == str(case["stub_reply"]).strip()
+                and all(fact in evidence for fact in case["key_facts"])):
+            return True
+        remaining = final
+        used = set()
+        # 原文允许按输出顺序组合，但不能带入其他模型断言或遗漏必需来源。
+        for _ in approved:
+            match = next((item for item in sorted(approved, key=lambda x: -len(x.answer))
+                          if item.answer.strip() and remaining.startswith(item.answer.strip())),
+                         None)
+            if match is None:
+                break
+            used.add(match.source_id)
+            remaining = remaining[len(match.answer.strip()):].strip()
+        if (not remaining and used and required <= used
+                and all(fact in final for fact in case["key_facts"])):
+            return True
+    if case["stub_reply_supported"]:
+        return False
+    safe = {
+        DeepSeekGuestAssistant._unconfirmed_reply(case["question"], Language(case["language"])),
+        CLARIFY_REPLY_EN, CLARIFY_REPLY_ZH,
+    }
+    if case["realtime"]:
+        safe.update({
+            "房价和房态以实时查询为准，当前无法确认具体金额，稍后由工作人员为您核实。",
+            "Prices and availability need a live check, so I can't confirm "
+            "an amount here. A staff member will confirm it for you.",
+        })
+    return final in safe
 
 
 def _knowledge_entry(raw: dict[str, Any]) -> KnowledgeEntry:
@@ -460,13 +506,7 @@ async def evaluate_case(
             case["stub_reply"],
         )
         stub_accepted = final.strip() == str(case["stub_reply"]).strip()
-        # 受支持的回答可以原样保留，也可以被覆盖同一属性的审核答案取代；
-        # 不被支持的断言必须从最终输出消失，换成审核答案同样算消除。
-        stub_ok = (
-            stub_accepted or grounded
-            if case["stub_reply_supported"]
-            else not stub_accepted
-        )
+        stub_ok = reply_passes_oracle(case, snippets, final)
     boundary_ok: bool | None = None
     realtime_routed: bool | None = None
     if case["realtime"]:
@@ -495,6 +535,7 @@ async def evaluate_case(
         semantic_status=ranker.status if ranker else "disabled",
         query_requests=ranker.requests if ranker else 0,
         query_cache_hits=ranker.cache_hits if ranker else 0,
+        unsafe_final=stub_ok is False and not case.get("stub_reply_supported", False),
     )
 
 
@@ -517,7 +558,7 @@ def summarize(outcomes: list[CaseOutcome]) -> dict[str, Any]:
         if item.query_requests and not item.query_cache_hits
         and item.semantic_status in {"success", "no_candidates"}
     )
-    unsupported = [item for item in outcomes if item.stub_ok is not None and not item.stub_accepted]
+    changed = [item for item in outcomes if item.stub_ok is not None and not item.stub_accepted]
     return {
         "cases": len(outcomes),
         "query_requests": sum(item.query_requests for item in outcomes),
@@ -545,7 +586,9 @@ def summarize(outcomes: list[CaseOutcome]) -> dict[str, Any]:
             [item.false_admit for item in outcomes if item.false_admit is not None]
         ),
         "stub_accuracy": _rate([item.stub_ok for item in outcomes if item.stub_ok is not None]),
-        "stub_blocked": len(unsupported),
+        # 文字改变不代表错误事实已拦截；与旧基线不同，明确标为改写数。
+        "stub_changed": len(changed),
+        "unsafe_final": sum(item.unsafe_final for item in outcomes),
         "isolation_pass": _rate([item.isolation_ok for item in outcomes]),
         "boundary_pass": _rate(
             [item.boundary_ok for item in outcomes if item.boundary_ok is not None]
@@ -636,6 +679,21 @@ def _split_outcomes(split: str) -> list[CaseOutcome]:
     return asyncio.run(evaluate_split(split))
 
 
+@pytest.mark.parametrize("supported", [False, True])
+async def test_final_reply_oracle_rejects_changed_wrong_fact(monkeypatch, supported):
+    """改写错误回复或取得 grounded 状态，都不能代替最终事实正确。"""
+    case = dict(load_cases("calibration")[0], stub_reply_supported=supported)
+
+    async def wrong_reply(*args, **kwargs):
+        """模拟后处理只加前缀、仍保留虚构收费的错误。"""
+        return "您好，停车每天收费999元。"
+
+    monkeypatch.setattr(sys.modules[__name__], "final_reply", wrong_reply)
+    outcome = await evaluate_case(case)
+    assert outcome.grounded
+    assert outcome.stub_ok is False
+
+
 # 第一套留出集已公开并用于回归（2026-09-21），这里只作回归，不再代表泛化效果。
 @pytest.mark.parametrize("split", ["calibration", "holdout", "holdout_v2"])
 def test_retrieval_meets_preregistered_targets(split: str) -> None:
@@ -652,7 +710,7 @@ def test_retrieval_meets_preregistered_targets(split: str) -> None:
     unsupported_accepted = [
         item.case_id
         for item in outcomes
-        if item.stub_accepted and item.stub_ok is False
+        if item.unsafe_final
     ]
     assert unsupported_accepted == []
 
