@@ -73,6 +73,9 @@ CASE_FILES = {
     "holdout": FIXTURES / "knowledge_retrieval_holdout.json",
     # 第二套已于 2026-09-22 揭示失败并用于修复，现仅作回归，不再是独立留出。
     "holdout_v2": FIXTURES / "knowledge_retrieval_holdout_v2.json",
+    # 第三套独立留出集（Codex 编写）：语义检索调参结束、代码冻结后才看逐条结果，
+    # 平时只出汇总；用来在同一版本上比较纯关键词与关键词 + 语义。
+    "holdout_v3": FIXTURES / "knowledge_retrieval_holdout_v3.json",
 }
 BASELINE_FILE = FIXTURES / "knowledge_retrieval_baseline.json"
 BASELINE_V2_FILE = FIXTURES / "knowledge_retrieval_baseline_v2.json"
@@ -538,7 +541,10 @@ def _validate_case(case: dict[str, Any], split: str) -> None:
         assert isinstance(case["stub_reply_supported"], bool), case["case_id"]
 
 
-@pytest.mark.parametrize("split", ["calibration", "calibration_v2", "holdout", "holdout_v2"])
+@pytest.mark.parametrize(
+    "split",
+    ["calibration", "calibration_v2", "holdout", "holdout_v2", "holdout_v3"],
+)
 def test_eval_cases_are_well_formed(split: str) -> None:
     """用例结构完整、编号唯一，关键事实确实出自正确来源。"""
     cases = load_cases(split)
