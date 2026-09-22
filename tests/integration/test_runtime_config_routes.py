@@ -456,3 +456,49 @@ def test_settings_form_offers_a_way_to_clear_the_webhook_secret() -> None:
     command = service.activation_calls[0]["command"]
     assert isinstance(command, UpdateRuntimeConfig)
     assert command.clear_hostex_webhook_secret_token is True
+
+
+def test_settings_page_offers_semantic_retrieval_and_passes_its_fields() -> None:
+    """设置页展示语义检索分组；提交时开关、地址、模型与 key 都进入更新命令。"""
+    client, service = build_client()
+    login_admin(client, next_path="/employee/admin/settings")
+    page = client.get("/employee/admin/settings")
+    csrf = tokens(page.text, "/employee/admin/settings/activate")[0]
+
+    assert "语义检索（可选）" in page.text
+    assert 'name="embedding_enabled"' in page.text
+
+    response = client.post(
+        "/employee/admin/settings/activate",
+        data={
+            "csrf_token": csrf,
+            "password": "correct-password",
+            "expected_revision": "6",
+            "embedding_enabled": "true",
+            "embedding_api_key": "sk-test-embedding",
+            "embedding_model": "BAAI/bge-m3",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    command = service.activation_calls[0]["command"]
+    assert command.embedding_enabled is True
+    assert command.embedding_api_key == "sk-test-embedding"
+    assert command.embedding_model == "BAAI/bge-m3"
+
+
+def test_unchecked_semantic_retrieval_box_turns_it_off() -> None:
+    """复选框未勾选即表示关闭，不能被当作「保留原值」。"""
+    client, service = build_client()
+    login_admin(client, next_path="/employee/admin/settings")
+    page = client.get("/employee/admin/settings")
+    csrf = tokens(page.text, "/employee/admin/settings/activate")[0]
+
+    client.post(
+        "/employee/admin/settings/activate",
+        data={"csrf_token": csrf, "password": "correct-password", "expected_revision": "6"},
+        follow_redirects=False,
+    )
+
+    assert service.activation_calls[0]["command"].embedding_enabled is False

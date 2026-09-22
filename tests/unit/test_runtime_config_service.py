@@ -675,3 +675,99 @@ def test_filling_and_clearing_the_same_secret_is_refused() -> None:
 def test_blank_webhook_secret_alone_still_keeps_the_original_value() -> None:
     """只留空不勾选清除，仍是「保留原值」——清空必须是显式动作。"""
     assert UpdateRuntimeConfig(hostex_webhook_secret_token="   ").normalized_updates() == {}
+
+
+SEMANTIC_FIELDS = (
+    "embedding_enabled",
+    "embedding_base_url",
+    "embedding_model",
+    "embedding_api_key",
+)
+
+
+def test_snapshot_saved_before_semantic_retrieval_loads_with_it_off() -> None:
+    """生产上已存的旧快照没有语义检索字段，读取时按默认补齐且保持关闭。"""
+    legacy = build_snapshot().to_dict()
+    for name in SEMANTIC_FIELDS:
+        legacy.pop(name)
+
+    restored = RuntimeConfigSnapshot.from_dict(legacy)
+
+    assert restored.embedding_enabled is False
+    assert restored.embedding_api_key is None
+    assert restored.embedding_model == "BAAI/bge-m3"
+    assert restored.embedding_base_url == "https://api.siliconflow.cn/v1"
+
+
+def test_snapshot_still_rejects_unknown_or_other_missing_fields() -> None:
+    """放宽只针对后加的可选字段：未知字段或缺少原有字段照旧拒绝。"""
+    unknown = build_snapshot().to_dict() | {"surprise": "value"}
+    missing_core = build_snapshot().to_dict()
+    missing_core.pop("deepseek_model")
+    # schema_version 本身有默认值，只有结构检查能发现它缺失。
+    missing_version = build_snapshot().to_dict()
+    missing_version.pop("schema_version")
+
+    for payload in (unknown, missing_core, missing_version):
+        with pytest.raises(ValueError):
+            RuntimeConfigSnapshot.from_dict(payload)
+
+
+def test_enabling_semantic_retrieval_requires_a_key_and_masks_it() -> None:
+    """开启时必须填 key；页面只显示状态和尾号，关闭时不要求 key。"""
+    with pytest.raises(ValueError):
+        build_snapshot(embedding_enabled=True, embedding_api_key=None).validate()
+    with pytest.raises(ValueError):
+        build_snapshot(embedding_enabled=True, embedding_api_key=UNCONFIGURED_SECRET).validate()
+    build_snapshot(embedding_enabled=False, embedding_api_key=None).validate()
+
+    enabled = build_snapshot(embedding_enabled=True, embedding_api_key="sk-test-embedding-9876")
+    enabled.validate()
+    view = enabled.masked_view()
+
+    assert view.embedding_enabled is True
+    assert view.embedding_api_key == "已配置 ····9876"
+    assert "sk-test" not in repr(enabled)
+
+
+def test_clearing_the_key_requires_turning_semantic_retrieval_off() -> None:
+    """开着语义检索时清除 key 会被拒绝；关闭并清除则保存为空。"""
+    enabled = build_snapshot(embedding_enabled=True, embedding_api_key="sk-test-embedding-9876")
+
+    with pytest.raises(ValueError):
+        enabled.merged(UpdateRuntimeConfig(clear_embedding_api_key=True).normalized_updates())
+    cleared = enabled.merged(
+        UpdateRuntimeConfig(
+            embedding_enabled=False,
+            clear_embedding_api_key=True,
+        ).normalized_updates()
+    )
+
+    assert cleared.embedding_enabled is False
+    assert cleared.embedding_api_key is None
+
+
+def test_semantic_retrieval_test_result_is_kept_for_the_version_history() -> None:
+    """版本记录保留语义检索分项的安全状态，其余字段照旧过滤。"""
+    from homestay_bot.services.runtime_config_service import safe_provider_results
+
+    payload = {
+        "providers": {
+            "embedding": {
+                "succeeded": False,
+                "error_code": "embedding_auth_failed",
+                "raw": "should-not-survive",
+                "checks": {
+                    "embeddings": {"succeeded": False, "error_code": "embedding_auth_failed"}
+                },
+            }
+        }
+    }
+
+    assert safe_provider_results(payload) == {
+        "embedding": {
+            "succeeded": False,
+            "error_code": "embedding_auth_failed",
+            "checks": {"embeddings": {"succeeded": False, "error_code": "embedding_auth_failed"}},
+        }
+    }

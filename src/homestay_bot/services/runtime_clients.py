@@ -32,6 +32,10 @@ from homestay_bot.integrations.wecom.contact_client import WeComContactClient
 from homestay_bot.routes.hostex_webhook import HostexWebhookService
 from homestay_bot.routes.wecom_callback import WeComCallbackService
 from homestay_bot.services.cancellation import complete_cleanup
+from homestay_bot.services.knowledge_embeddings import (
+    OpenAICompatibleEmbeddingClient,
+    SemanticRanker,
+)
 from homestay_bot.services.lifecycle_reminders import TourismReminderWeatherProvider
 from homestay_bot.services.outbound_url_policy import (
     OutboundUrlPolicy,
@@ -77,6 +81,9 @@ class RuntimeClientBundle:
     # 百居易 Webhook 密钥是否已真正配置。默认 False：没显式说明配置过就按未配置
     # 处理，宁可少报健康也不把「没配」误报成正常。
     hostex_webhook_configured: bool = False
+    # 语义检索开启时才有值：向量补齐循环用它按当前配置版本生成向量。
+    knowledge_embedder: Any | None = None
+    embedding_model: str | None = None
     _close_state: _BundleCloseState = field(
         default_factory=_BundleCloseState,
         repr=False,
@@ -363,8 +370,13 @@ async def build_runtime_client_bundle(
     web_search_status_setter: Callable[[Any], None],
     outbound_url_policy: OutboundUrlPolicy | None = None,
     external_call_recorder: Any = None,
+    knowledge_vectors: Any | None = None,
 ) -> RuntimeClientBundle:
-    """从完整快照构造一个 revision 的生产客户端，并明确连接池所有权。"""
+    """从完整快照构造一个 revision 的生产客户端，并明确连接池所有权。
+
+    语义检索只在快照开启且提供了向量存储时启用：构造 embedding 客户端，回复
+    助手改用带语义召回的知识服务；关闭时不创建任何对外连接。
+    """
     snapshot.validate()
     policy = outbound_url_policy or OutboundUrlPolicy()
     owned: list[Any] = []
@@ -426,6 +438,36 @@ async def build_runtime_client_bundle(
         if contact_client is not None:
             owned.append(contact_client)
 
+        knowledge_embedder: OpenAICompatibleEmbeddingClient | None = None
+        assistant_knowledge = knowledge
+        if snapshot.embedding_enabled and knowledge_vectors is not None:
+            # 补齐时一批十几条长文本要多等一会儿；客人查询另由语义组件限时 3 秒。
+            embedding_http = build_public_https_client(
+                policy,
+                timeout_seconds=30.0,
+                record=external_call_recorder,
+                provider="embedding",
+            )
+            owned.append(embedding_http)
+            embedding_sdk = AsyncOpenAI(
+                api_key=snapshot.embedding_api_key,
+                base_url=snapshot.embedding_base_url,
+                http_client=embedding_http,
+                max_retries=0,
+            )
+            owned[-1] = embedding_sdk
+            knowledge_embedder = OpenAICompatibleEmbeddingClient(
+                embedding_sdk,
+                snapshot.embedding_model,
+            )
+            assistant_knowledge = knowledge.with_semantic(
+                SemanticRanker(
+                    knowledge_embedder,
+                    knowledge_vectors,
+                    snapshot.embedding_model,
+                )
+            )
+
         tourism_searcher = DeepSeekTourismSearcher(
             client=deepseek_anthropic,
             model=snapshot.deepseek_model,
@@ -435,7 +477,7 @@ async def build_runtime_client_bundle(
         assistant = DeepSeekGuestAssistant(
             chat_client=deepseek_chat,
             tourism_searcher=tourism_searcher,
-            knowledge=knowledge,
+            knowledge=assistant_knowledge,
             model=snapshot.deepseek_model,
             safety_hmac_key=safety_hmac_key,
             tool_executor=HostexReadOnlyToolExecutor(hostex),
@@ -493,6 +535,10 @@ async def build_runtime_client_bundle(
                 snapshot.hostex_reconcile_interval_seconds
             ),
             closeables=tuple(owned),
+            knowledge_embedder=knowledge_embedder,
+            embedding_model=(
+                snapshot.embedding_model if knowledge_embedder is not None else None
+            ),
         )
     except BaseException:
         await _close_partial_resources(owned)

@@ -250,8 +250,14 @@ async def activate_settings(
     wecom_contact_secret: Annotated[str | None, Form()] = None,
     wecom_duty_userids: Annotated[str | None, Form()] = None,
     wecom_poll_interval_seconds: Annotated[float | None, Form(ge=5, le=300)] = None,
+    # 复选框：页面总按当前状态渲染，未勾选提交即表示关闭语义检索。
+    embedding_enabled: Annotated[bool, Form()] = False,
+    embedding_base_url: Annotated[str | None, Form(max_length=2048)] = None,
+    embedding_model: Annotated[str | None, Form(max_length=256)] = None,
+    embedding_api_key: Annotated[str | None, Form()] = None,
     clear_wecom_contact_secret: Annotated[bool, Form()] = False,
     clear_hostex_webhook_secret_token: Annotated[bool, Form()] = False,
+    clear_embedding_api_key: Annotated[bool, Form()] = False,
 ) -> Response:
     """消费激活 nonce，绑定会话版本与页面 revision 后测试并保存候选。"""
     employee_id, admin_id, session_version = await _admin_context(request)
@@ -268,6 +274,7 @@ async def activate_settings(
         (wecom_agent_secret, 4096),
         (wecom_contact_secret, 4096),
         (wecom_duty_userids, 4096),
+        (embedding_api_key, 4096),
     )
     if not password or any(
         value is not None and len(value) > limit for value, limit in sensitive_limits
@@ -293,8 +300,13 @@ async def activate_settings(
         wecom_contact_secret=wecom_contact_secret,
         wecom_duty_userids=wecom_duty_userids,
         wecom_poll_interval_seconds=wecom_poll_interval_seconds,
+        embedding_enabled=embedding_enabled,
+        embedding_base_url=embedding_base_url,
+        embedding_model=embedding_model,
+        embedding_api_key=embedding_api_key,
         clear_wecom_contact_secret=clear_wecom_contact_secret,
         clear_hostex_webhook_secret_token=clear_hostex_webhook_secret_token,
+        clear_embedding_api_key=clear_embedding_api_key,
     )
     try:
         await _service(request).create_and_test(

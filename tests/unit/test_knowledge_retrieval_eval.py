@@ -20,6 +20,11 @@
 
 模型只用确定性函数替身，不证明真实模型的最终回答准确率。
 
+真实语义检索（只在手动运行时联网；key 只从环境变量或 ~/.config/yumi/siliconflow.env
+读取，不打印；向量缓存在系统临时目录，调参时同一文本不重复计费）：
+    PYTHONPATH=src:tests .venv/bin/python \
+        tests/unit/test_knowledge_retrieval_eval.py --report --semantic [--min-similarity 0.5]
+
 记录基线或查看报告（在仓库根目录执行，`--show-holdout` 才列出留出集逐条失败；
 `--record-baseline-v2` 只把第二套留出集写进独立基线文件）：
     PYTHONPATH=src:tests .venv/bin/python \
@@ -29,9 +34,12 @@
 """
 
 import asyncio
+import hashlib
 import json
+import os
 import statistics
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -46,6 +54,12 @@ from homestay_bot.domain.models import Base, KnowledgeCandidate, KnowledgeEntry
 from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
 from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
 from homestay_bot.services.answer_policy import is_property_specific, is_transaction_sensitive
+from homestay_bot.services.knowledge_embeddings import (
+    SEMANTIC_MIN_SIMILARITY,
+    KnowledgeEmbeddingSync,
+    OpenAICompatibleEmbeddingClient,
+    SemanticRanker,
+)
 from homestay_bot.services.knowledge_service import KnowledgeService, KnowledgeSnippet
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -155,7 +169,77 @@ def reply_accepted(
     )
 
 
-async def evaluate_case(case: dict[str, Any]) -> CaseOutcome:
+@dataclass(frozen=True)
+class SemanticEvalConfig:
+    """手动评估时的真实语义检索设置。"""
+
+    embedder: Any
+    model: str
+    min_similarity: float
+
+
+class CachedEmbedder:
+    """带磁盘缓存的向量化客户端：同一模型同一文本只向服务商请求一次。"""
+
+    def __init__(self, inner: Any, model: str, path: Path) -> None:
+        """包装真实客户端并加载缓存。"""
+        self._inner = inner
+        self._model = model
+        self._path = path
+        self._cache: dict[str, list[float]] = (
+            json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        )
+
+    def _key(self, text: str) -> str:
+        """缓存键：模型与文本的摘要，缓存文件里不存正文。"""
+        return hashlib.sha256(f"{self._model}\n{text}".encode()).hexdigest()
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """先查缓存，缺的一次性请求后写回。"""
+        missing = [text for text in texts if self._key(text) not in self._cache]
+        if missing:
+            for text, vector in zip(missing, await self._inner.embed(missing), strict=True):
+                self._cache[self._key(text)] = vector
+            self._path.write_text(json.dumps(self._cache), encoding="utf-8")
+        return [self._cache[self._key(text)] for text in texts]
+
+
+def _load_semantic_config(argv: list[str]) -> SemanticEvalConfig | None:
+    """解析 --semantic；key 只从环境变量或本机私有文件读取。"""
+    if "--semantic" not in argv:
+        return None
+    key = os.environ.get("YUMI_EMBEDDING_API_KEY")
+    key_file = Path.home() / ".config" / "yumi" / "siliconflow.env"
+    if not key and key_file.exists():
+        for line in key_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("YUMI_EMBEDDING_API_KEY="):
+                key = line.split("=", 1)[1].strip()
+    if not key:
+        raise SystemExit("需要 YUMI_EMBEDDING_API_KEY 或 ~/.config/yumi/siliconflow.env")
+    from openai import AsyncOpenAI
+
+    from homestay_bot.config import DEFAULT_EMBEDDING_BASE_URL, DEFAULT_EMBEDDING_MODEL
+
+    minimum = SEMANTIC_MIN_SIMILARITY
+    if "--min-similarity" in argv:
+        minimum = float(argv[argv.index("--min-similarity") + 1])
+    client = AsyncOpenAI(api_key=key, base_url=DEFAULT_EMBEDDING_BASE_URL, max_retries=2)
+    cache = Path(tempfile.gettempdir()) / "yumi-embedding-eval-cache.json"
+    return SemanticEvalConfig(
+        embedder=CachedEmbedder(
+            OpenAICompatibleEmbeddingClient(client, DEFAULT_EMBEDDING_MODEL),
+            DEFAULT_EMBEDDING_MODEL,
+            cache,
+        ),
+        model=DEFAULT_EMBEDDING_MODEL,
+        min_similarity=minimum,
+    )
+
+
+async def evaluate_case(
+    case: dict[str, Any],
+    semantic: SemanticEvalConfig | None = None,
+) -> CaseOutcome:
     """在独立内存库里执行一个用例并给出各项判定。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
@@ -181,8 +265,32 @@ async def evaluate_case(case: dict[str, Any]) -> CaseOutcome:
             async with factory() as session:
                 await _apply_mutation(session, mutation)
                 await session.commit()
+        if semantic is not None:
+            # 与生产一致：先按内容哈希补齐向量，再检索。
+            from homestay_bot.application import (
+                SessionKnowledgeRepository,
+                SessionKnowledgeVectorStore,
+            )
+
+            await KnowledgeEmbeddingSync(
+                SessionKnowledgeRepository(factory),
+                SessionKnowledgeVectorStore(factory),
+                semantic.embedder,
+                semantic.model,
+            ).sync_once(limit=10_000)
         async with factory() as session:
-            service = KnowledgeService(SQLAlchemyKnowledgeRepository(session))
+            repository = SQLAlchemyKnowledgeRepository(session)
+            service = KnowledgeService(repository)
+            if semantic is not None:
+                service = service.with_semantic(
+                    SemanticRanker(
+                        semantic.embedder,
+                        repository,
+                        semantic.model,
+                        min_similarity=semantic.min_similarity,
+                        timeout_seconds=30.0,
+                    )
+                )
             started = time.perf_counter()
             retrieved = await service.retrieve(Language(case["language"]), case["question"])
             # 与生产一致：剔除后的才是交给模型的证据。
@@ -320,9 +428,12 @@ def failure_kinds(outcome: CaseOutcome) -> list[str]:
     return kinds
 
 
-async def evaluate_split(split: str) -> list[CaseOutcome]:
+async def evaluate_split(
+    split: str,
+    semantic: SemanticEvalConfig | None = None,
+) -> list[CaseOutcome]:
     """按顺序评估一个划分的全部用例。"""
-    return [await evaluate_case(case) for case in load_cases(split)]
+    return [await evaluate_case(case, semantic) for case in load_cases(split)]
 
 
 def _validate_case(case: dict[str, Any], split: str) -> None:
@@ -481,8 +592,13 @@ def _print_report(outcomes: list[CaseOutcome], *, show_holdout: bool) -> None:
 
 if __name__ == "__main__":
     all_outcomes: list[CaseOutcome] = []
-    for split_name in CASE_FILES:
-        all_outcomes.extend(asyncio.run(evaluate_split(split_name)))
+    semantic_config = _load_semantic_config(sys.argv)
+    splits = [
+        name for name in CASE_FILES
+        if "--only" not in sys.argv or name == sys.argv[sys.argv.index("--only") + 1]
+    ]
+    for split_name in splits:
+        all_outcomes.extend(asyncio.run(evaluate_split(split_name, semantic_config)))
     if "--record-baseline" in sys.argv:
         _record_baseline(all_outcomes)
     if "--record-baseline-v2" in sys.argv:

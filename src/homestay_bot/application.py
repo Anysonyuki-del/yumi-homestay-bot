@@ -145,6 +145,11 @@ from homestay_bot.services.faq_candidate_context import (
 from homestay_bot.services.faq_candidate_service import FrequentFaqService
 from homestay_bot.services.faq_draft_job import FaqDraftJobService
 from homestay_bot.services.hostex_sync import HostexSyncService
+from homestay_bot.services.knowledge_embeddings import (
+    KnowledgeEmbeddingSync,
+    PendingVector,
+    StoredVector,
+)
 from homestay_bot.services.knowledge_service import KnowledgeService
 from homestay_bot.services.lifecycle_reminders import (
     LifecycleReminderService,
@@ -725,6 +730,29 @@ class SessionKnowledgeRepository:
         """读取启用知识并在返回前关闭会话。"""
         async with self._factory() as session:
             return await SQLAlchemyKnowledgeRepository(session).list_active()
+
+
+class SessionKnowledgeVectorStore:
+    """用独立短会话读写知识向量；写入在自己的事务里提交。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂。"""
+        self._factory = factory
+
+    async def list_vectors(self, model: str) -> list[StoredVector]:
+        """读取某模型的全部知识向量并在返回前关闭会话。"""
+        async with self._factory() as session:
+            return await SQLAlchemyKnowledgeRepository(session).list_vectors(model)
+
+    async def save_current_vectors(self, model: str, vectors: list[PendingVector]) -> int:
+        """写入仍与当前正文一致的向量并提交，返回写入条数。"""
+        async with self._factory() as session:
+            saved = await SQLAlchemyKnowledgeRepository(session).save_current_vectors(
+                model,
+                vectors,
+            )
+            await session.commit()
+            return saved
 
 
 class SessionFaqCandidateRepository:
@@ -2837,7 +2865,14 @@ async def _run_retention_round(
     general = await _run_retention_phase(factory, "general", purge_general)
     archived = await _run_retention_phase(factory, "archived_tasks", purge_archived)
     phases = {"general": general, "archived_tasks": archived}
-    logger.info(
+    # 生产环境不输出 INFO 日志；触达批次上限时必须看得见，才能判断是否要调整上限。
+    level = (
+        logging.WARNING
+        if any(result.possibly_incomplete for result in phases.values())
+        else logging.INFO
+    )
+    logger.log(
+        level,
         "历史记录清理轮次结束：elapsed=%.1fs approval_pii=%s jobs=%s "
         "external_requests=%s hostex_events=%s audit_logs=%s archived_tasks=%s "
         "general_batches=%s general_elapsed=%.1fs archived_batches=%s "
@@ -2869,6 +2904,45 @@ async def _run_retention_loop(factory: async_sessionmaker[AsyncSession]) -> None
     while True:
         await _run_retention_round(factory)
         await asyncio.sleep(86_400)
+
+
+async def _run_knowledge_embedding_loop(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    registry: RuntimeClientRegistry,
+) -> None:
+    """启动后立即、之后每小时为启用知识补齐语义检索向量。
+
+    每轮取当前配置版本的 embedding 客户端；语义检索关闭时这一轮什么都不做。失败
+    只记异常类型，下一小时自动重试：补齐按内容哈希对账，天然幂等。
+    """
+    while True:
+        try:
+            async with registry.acquire() as bundle:
+                embedder = bundle.knowledge_embedder
+                model = bundle.embedding_model
+                if embedder is not None and model:
+                    report = await KnowledgeEmbeddingSync(
+                        SessionKnowledgeRepository(factory),
+                        SessionKnowledgeVectorStore(factory),
+                        embedder,
+                        model,
+                    ).sync_once()
+                    if report.pending:
+                        logger.warning(
+                            "知识向量补齐：pending=%s embedded=%s saved=%s",
+                            report.pending,
+                            report.embedded,
+                            report.saved,
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "知识向量补齐失败，下一轮重试：error_type=%s",
+                type(error).__name__,
+            )
+        await asyncio.sleep(3600)
 
 
 async def _run_context_maintenance_loop(
@@ -3483,6 +3557,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             safety_hmac_key=bootstrap.session_secret.encode(),
             web_search_status_setter=web_search_state.set,
             external_call_recorder=record_external_call,
+            knowledge_vectors=SessionKnowledgeVectorStore(factory),
         )
 
     async def handle_message(
@@ -3998,6 +4073,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 started_tasks.append(_create_runtime_task(
                         _run_retention_loop(factory)
                     ))
+                started_tasks.append(
+                    _create_runtime_task(
+                        _run_knowledge_embedding_loop(
+                            factory=factory,
+                            registry=candidate_registry,
+                        )
+                    )
+                )
                 started_tasks.append(
                     _create_runtime_task(
                         _run_context_maintenance_loop(

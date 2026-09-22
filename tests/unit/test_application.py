@@ -1552,3 +1552,128 @@ def test_only_a_real_webhook_event_refreshes_the_webhook_heartbeat() -> None:
         now_provider=lambda: moment,
     )
     assert app.state.hostex_webhook_last_success == moment
+
+
+class StopEmbeddingLoop(RuntimeError):
+    """表示测试已观察到一轮知识向量补齐。"""
+
+
+class _RegistryStub:
+    """按固定 bundle 模拟运行客户端注册表。"""
+
+    def __init__(self, bundle: Any) -> None:
+        """保存要交出的 bundle。"""
+        self.bundle = bundle
+
+    @contextlib.asynccontextmanager
+    async def acquire(self):
+        """交出 bundle。"""
+        yield self.bundle
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_embedding_loop_only_syncs_when_semantic_retrieval_is_on(
+    monkeypatch,
+    enabled: bool,
+) -> None:
+    """语义检索关闭时这一轮什么都不做；开启时用当前配置版本的客户端补齐。"""
+    calls: list[tuple[object, str]] = []
+
+    class SyncStub:
+        """记录补齐调用。"""
+
+        def __init__(self, entries, store, embedder, model) -> None:
+            """记录装配参数。"""
+            calls.append((embedder, model))
+
+        async def sync_once(self):
+            """返回空报告。"""
+            return SimpleNamespace(pending=0, embedded=0, saved=0)
+
+    async def stop(delay: float) -> None:
+        """观察到一小时间隔后结束循环。"""
+        assert delay == 3600
+        raise StopEmbeddingLoop
+
+    embedder = object()
+    bundle = SimpleNamespace(
+        knowledge_embedder=embedder if enabled else None,
+        embedding_model="BAAI/bge-m3" if enabled else None,
+    )
+    monkeypatch.setattr(application, "KnowledgeEmbeddingSync", SyncStub)
+    monkeypatch.setattr(application.asyncio, "sleep", stop)
+
+    with pytest.raises(StopEmbeddingLoop):
+        await application._run_knowledge_embedding_loop(
+            factory=cast(Any, object()),
+            registry=cast(Any, _RegistryStub(bundle)),
+        )
+
+    assert calls == ([(embedder, "BAAI/bge-m3")] if enabled else [])
+
+
+@pytest.mark.asyncio
+async def test_embedding_loop_failure_is_logged_by_type_and_retried(monkeypatch, caplog) -> None:
+    """补齐出错只记异常类型，循环照常进入下一小时，不带出正文。"""
+
+    class FailingSync:
+        """补齐时抛出带敏感正文的异常。"""
+
+        def __init__(self, *args) -> None:
+            """忽略装配参数。"""
+
+        async def sync_once(self):
+            """模拟服务商报错。"""
+            raise RuntimeError("provider said 13812345678")
+
+    async def stop(delay: float) -> None:
+        """第一次等待时结束循环。"""
+        raise StopEmbeddingLoop
+
+    bundle = SimpleNamespace(knowledge_embedder=object(), embedding_model="BAAI/bge-m3")
+    monkeypatch.setattr(application, "KnowledgeEmbeddingSync", FailingSync)
+    monkeypatch.setattr(application.asyncio, "sleep", stop)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="homestay_bot.application"),
+        pytest.raises(StopEmbeddingLoop),
+    ):
+        await application._run_knowledge_embedding_loop(
+            factory=cast(Any, object()),
+            registry=cast(Any, _RegistryStub(bundle)),
+        )
+
+    assert "知识向量补齐失败，下一轮重试：error_type=RuntimeError" in caplog.text
+    assert "13812345678" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_retention_summary_is_a_warning_when_a_phase_hits_the_cap(
+    monkeypatch,
+    caplog,
+) -> None:
+    """生产不输出 INFO：触达批次上限时汇总必须是 WARNING，平常仍是 INFO。"""
+    monkeypatch.setattr(application, "RETENTION_MAX_BATCHES_PER_PHASE", 1)
+    cases = (
+        ([_general_counts(jobs=2)], logging.WARNING),
+        ([_general_counts()], logging.INFO),
+    )
+    for general, expected in cases:
+        caplog.clear()
+        monkeypatch.setattr(
+            application,
+            "SQLAlchemyRetentionRepository",
+            _retention_repository(general=list(general), archived=[0], seen=[]),
+        )
+        with caplog.at_level(logging.INFO, logger="homestay_bot.application"):
+            await application._run_retention_round(
+                cast(Any, _RetentionSessionFactory()),
+                now=datetime(2026, 9, 22, tzinfo=UTC),
+            )
+        summary = [
+            record
+            for record in caplog.records
+            if record.getMessage().startswith("历史记录清理轮次结束")
+        ]
+        assert [record.levelno for record in summary] == [expected]

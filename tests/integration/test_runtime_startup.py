@@ -345,6 +345,7 @@ async def test_repair_only_first_activation_starts_runtime_without_restart(
         "_run_faq_maintenance_loop",
         "_run_retention_loop",
         "_run_context_maintenance_loop",
+        "_run_knowledge_embedding_loop",
         "_run_hostex_reconcile_loop",
     ):
         monkeypatch.setattr(application, loop_name, blocked_loop)
@@ -382,13 +383,13 @@ async def test_repair_only_first_activation_starts_runtime_without_restart(
         assert len(failures) == 1
         result = successful[0]
         for _ in range(10):
-            if started_tasks == 7:
+            if started_tasks == 8:
                 break
             await asyncio.sleep(0)
 
         registry = test_app.state.runtime_client_registry
         assert (await registry.status()).revision == result.revision
-        assert started_tasks == 7
+        assert started_tasks == 8
         health = await test_app.state.health_service.check()
         assert health["configuration"] == "ok"
         assert health["wecom_contact_sync"] == "ok"
@@ -470,6 +471,7 @@ async def test_first_runtime_start_failure_compensates_database_and_cleans_parti
         "_run_faq_maintenance_loop",
         "_run_retention_loop",
         "_run_context_maintenance_loop",
+        "_run_knowledge_embedding_loop",
         "_run_hostex_reconcile_loop",
     ):
         monkeypatch.setattr(application, loop_name, blocked_loop)
@@ -577,6 +579,7 @@ async def test_shutdown_waits_for_first_activation_and_prevents_late_publish(
         "_run_faq_maintenance_loop",
         "_run_retention_loop",
         "_run_context_maintenance_loop",
+        "_run_knowledge_embedding_loop",
         "_run_hostex_reconcile_loop",
     ):
         monkeypatch.setattr(application, loop_name, finished_loop)
@@ -970,6 +973,7 @@ async def test_corrupt_startup_health_recovers_after_current_process_swap(
         "_run_faq_maintenance_loop",
         "_run_retention_loop",
         "_run_context_maintenance_loop",
+        "_run_knowledge_embedding_loop",
         "_run_hostex_reconcile_loop",
     ):
         monkeypatch.setattr(application, loop_name, blocked_loop)
@@ -1107,6 +1111,7 @@ async def test_cancel_after_runtime_publish_keeps_database_and_registry_current(
         "_run_faq_maintenance_loop",
         "_run_retention_loop",
         "_run_context_maintenance_loop",
+        "_run_knowledge_embedding_loop",
         "_run_hostex_reconcile_loop",
     ):
         monkeypatch.setattr(application, loop_name, blocked_loop)

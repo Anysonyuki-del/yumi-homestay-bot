@@ -19,7 +19,7 @@
       {% if version.failure_code %}<p class="muted">结果码：{{ version.failure_code }}</p>{% endif %}
       {% if version.provider_results %}
       <div class="config-test-results" aria-label="接口分项测试结果">
-        {% for provider_name, provider_label in (("deepseek", "DeepSeek"), ("hostex", "百居易"), ("wecom", "企业微信")) %}
+        {% for provider_name, provider_label in (("deepseek", "DeepSeek"), ("hostex", "百居易"), ("wecom", "企业微信"), ("embedding", "语义检索")) %}
           {% set provider = version.provider_results.get(provider_name) %}
           {% if provider %}
           <div class="config-test-result">
@@ -38,6 +38,7 @@
                   {% elif check_name == "agent" %}应用 AgentId
                   {% elif check_name == "contact" %}通讯录权限
                   {% elif check_name == "callback" %}回调 Token / AESKey
+                  {% elif check_name == "embeddings" %}向量接口
                   {% endif %}
                   {% if check.succeeded %}<span>通过</span>{% else %}<span>未通过</span>{% endif %}
                   {% if check.error_code %}<small>（{{ check.error_code }}）</small>{% endif %}

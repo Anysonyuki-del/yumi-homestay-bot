@@ -589,3 +589,137 @@ async def test_real_hostex_wrapped_http_status_maps_to_auth_failure(status_code:
     }
     assert hostex.is_closed is True
     assert "must-not-leak" not in repr(result.to_safe_dict())
+
+
+class EmbeddingsResourceStub:
+    """模拟 AsyncOpenAI 的 embeddings 资源。"""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        """保存可选异常与请求。"""
+        self.error = error
+        self.requests: list[dict[str, Any]] = []
+
+    async def create(self, **kwargs: Any) -> object:
+        """记录一次向量化请求并返回一个极小向量。"""
+        from types import SimpleNamespace
+
+        self.requests.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(data=[SimpleNamespace(index=0, embedding=[0.1, 0.2])])
+
+
+class EmbeddingClientStub:
+    """模拟语义检索服务商的 SDK 客户端。"""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        """装配 embeddings 资源。"""
+        self.embeddings = EmbeddingsResourceStub(error)
+        self.closed = False
+
+    async def close(self) -> None:
+        """记录已关闭。"""
+        self.closed = True
+
+
+class SelectivePolicyStub(PolicyStub):
+    """只拒绝语义检索服务商的地址。"""
+
+    async def resolve(self, url: str) -> object:
+        """语义检索地址被拒绝，其余放行。"""
+        self.urls.append(url)
+        if "embedding" in url:
+            raise OutboundUrlRejected("blocked")
+        return object()
+
+
+def build_embedding_tester(
+    embedding: EmbeddingClientStub,
+    *,
+    policy: PolicyStub | None = None,
+) -> tuple[RuntimeConfigTester, list[int]]:
+    """装配带语义检索探针的测试器，其余三方全部使用 fake。"""
+    constructed: list[int] = []
+
+    def make_embedding_client(snapshot: RuntimeConfigSnapshot, http_client: Any) -> Any:
+        """记录客户端被构造的次数。"""
+        constructed.append(1)
+        return embedding
+
+    tester = RuntimeConfigTester(
+        url_policy=policy or PolicyStub(),
+        http_client_factory=lambda: HttpClientStub(),
+        openai_client_factory=lambda snapshot, http_client: OpenAIClientStub(),
+        anthropic_client_factory=lambda snapshot, http_client: AnthropicClientStub(),
+        hostex_client_factory=lambda snapshot: HostexClientStub(),
+        wecom_client_factory=lambda snapshot: WeComClientStub(),
+        embedding_client_factory=make_embedding_client,
+    )
+    return tester, constructed
+
+
+ENABLED = {
+    "embedding_enabled": True,
+    "embedding_base_url": "https://api.embedding.example/v1",
+    "embedding_api_key": "sk-test-embedding",
+}
+
+
+@pytest.mark.asyncio
+async def test_semantic_retrieval_off_never_contacts_the_embedding_provider() -> None:
+    """关闭语义检索时不做向量探针，结果里也没有这一项。"""
+    embedding = EmbeddingClientStub()
+    tester, constructed = build_embedding_tester(embedding)
+
+    result = await tester.test(build_snapshot())
+
+    assert result.succeeded is True
+    assert "embedding" not in result.to_safe_dict()["providers"]
+    assert constructed == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_retrieval_on_runs_one_minimal_embedding_probe() -> None:
+    """开启时用一句固定文本调用一次 embeddings，并关闭临时客户端。"""
+    embedding = EmbeddingClientStub()
+    tester, _ = build_embedding_tester(embedding)
+
+    result = await tester.test(build_snapshot(**ENABLED))
+
+    assert result.succeeded is True
+    assert result.to_safe_dict()["providers"]["embedding"] == {
+        "succeeded": True,
+        "checks": {"embeddings": {"succeeded": True}},
+    }
+    assert embedding.embeddings.requests == [
+        {"model": "BAAI/bge-m3", "input": ["连通性测试"]}
+    ]
+    assert embedding.closed is True
+
+
+@pytest.mark.asyncio
+async def test_failed_embedding_probe_blocks_activation_with_its_own_code() -> None:
+    """向量探针失败时整份候选不通过，结果码归语义检索，其余三方照常报告。"""
+    embedding = EmbeddingClientStub(httpx.ConnectTimeout("slow"))
+    tester, _ = build_embedding_tester(embedding)
+
+    result = await tester.test(build_snapshot(**ENABLED))
+    providers = result.to_safe_dict()["providers"]
+
+    assert result.succeeded is False
+    assert result.error_code == "embedding_timeout"
+    assert providers["deepseek"]["succeeded"] is True
+    assert providers["embedding"]["succeeded"] is False
+    assert embedding.closed is True
+
+
+@pytest.mark.asyncio
+async def test_blocked_embedding_url_is_rejected_before_client_creation() -> None:
+    """地址策略拒绝时不构造客户端，结果码不含地址。"""
+    embedding = EmbeddingClientStub()
+    tester, constructed = build_embedding_tester(embedding, policy=SelectivePolicyStub())
+
+    result = await tester.test(build_snapshot(**ENABLED))
+
+    assert result.error_code == "embedding_url_blocked"
+    assert constructed == []

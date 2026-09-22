@@ -264,6 +264,23 @@ class ActiveKnowledgeRepository(Protocol):
         """返回当前全部已启用且已审核的知识。"""
 
 
+class SemanticRankerPort(Protocol):
+    """按语义相似度给启用知识排序的可选组件。"""
+
+    async def rank(
+        self,
+        language: Language,
+        query: str,
+        entries: list[KnowledgeRecord],
+    ) -> list[int]:
+        """返回按相似度从高到低排列的知识编号。"""
+
+
+# 倒数排名融合的平滑常数：常用取值，使两路的前几名都能明显加分，又不让单路
+# 第一名压过两路都靠前的条目。关键词分数与向量相似度量纲不同，只融合名次。
+RRF_K = 60
+
+
 @dataclass(frozen=True)
 class KnowledgeSnippet:
     """表示交给模型的一条最小化知识。"""
@@ -290,9 +307,36 @@ class KnowledgeRetrieval:
 class KnowledgeService:
     """把已审核知识转换为指定语言的模型上下文。"""
 
-    def __init__(self, repository: ActiveKnowledgeRepository) -> None:
-        """注入只读知识仓储。"""
+    def __init__(
+        self,
+        repository: ActiveKnowledgeRepository,
+        semantic: SemanticRankerPort | None = None,
+    ) -> None:
+        """注入只读知识仓储；语义检索组件可选，缺省时只用关键词。"""
         self._repository = repository
+        self._semantic = semantic
+
+    def with_semantic(self, semantic: SemanticRankerPort | None) -> "KnowledgeService":
+        """返回共用同一仓储、附加语义检索的新服务；原服务不变。"""
+        return KnowledgeService(self._repository, semantic)
+
+    async def _semantic_ranking(
+        self,
+        language: Language,
+        query: str,
+        entries: list[KnowledgeRecord],
+    ) -> list[int]:
+        """取语义排序；任何失败都退回空列表，只记异常类型，不记问题正文。"""
+        if self._semantic is None or not entries:
+            return []
+        try:
+            return await self._semantic.rank(language, query, entries)
+        except Exception as error:
+            logger.warning(
+                "语义检索不可用，本次只用关键词：error_type=%s",
+                type(error).__name__,
+            )
+            return []
 
     @staticmethod
     def _tokens(content: str) -> set[str]:
@@ -368,22 +412,28 @@ class KnowledgeService:
         适用条件，把「需收费」截成「可以」，比不给证据更危险。因此只整条放入，
         剩余预算不够就跳过换下一条；同分时按编号排序只为结果可复现。
         """
-        entries = await self._repository.list_active()
+        entries = list(await self._repository.list_active())
         query_tokens = self._query_tokens(query)
-        ranked = sorted(
-            (
-                (self._score(query_tokens, entry, language), entry)
-                for entry in entries
-            ),
-            key=lambda item: (item[0], item[1].id),
-            reverse=True,
-        )
+        keyword_ranked = [
+            entry
+            for score, entry in sorted(
+                (
+                    (self._score(query_tokens, entry, language), entry)
+                    for entry in entries
+                ),
+                key=lambda item: (item[0], item[1].id),
+                reverse=True,
+            )
+            if score > 0
+        ]
+        semantic_ids = await self._semantic_ranking(language, query, entries)
+        ranked = self._fuse(keyword_ranked, semantic_ids, entries)
         snippets: list[KnowledgeSnippet] = []
         used_chars = 0
         budget_skipped = 0
         matched = 0
-        for score, entry in ranked:
-            if score <= 0 or len(snippets) >= max(0, limit):
+        for entry in ranked:
+            if len(snippets) >= max(0, limit):
                 break
             matched += 1
             question = (
@@ -415,3 +465,42 @@ class KnowledgeService:
             budget_skipped=budget_skipped,
             matched=matched,
         )
+
+    @staticmethod
+    def _fuse(
+        keyword_ranked: list[KnowledgeRecord],
+        semantic_ids: list[int],
+        entries: list[KnowledgeRecord],
+    ) -> list[KnowledgeRecord]:
+        """按倒数排名融合关键词与语义两路结果；没有语义结果时保持关键词顺序。
+
+        只有关键词命中或语义相似度达到下限的条目才参与；同分时关键词名次在前，
+        再按编号，保证结果可复现。
+        """
+        if not semantic_ids:
+            return keyword_ranked
+        by_id = {entry.id: entry for entry in entries}
+        keyword_rank = {entry.id: index for index, entry in enumerate(keyword_ranked)}
+        semantic_rank = {
+            entry_id: index for index, entry_id in enumerate(semantic_ids) if entry_id in by_id
+        }
+        candidates = set(keyword_rank) | set(semantic_rank)
+
+        def fused_score(entry_id: int) -> float:
+            """两路名次各自贡献 1/(k+名次)，只出现在一路的只拿该路的分。"""
+            score = 0.0
+            if entry_id in keyword_rank:
+                score += 1 / (RRF_K + keyword_rank[entry_id] + 1)
+            if entry_id in semantic_rank:
+                score += 1 / (RRF_K + semantic_rank[entry_id] + 1)
+            return score
+
+        ordered = sorted(
+            candidates,
+            key=lambda entry_id: (
+                -fused_score(entry_id),
+                keyword_rank.get(entry_id, len(keyword_rank)),
+                entry_id,
+            ),
+        )
+        return [by_id[entry_id] for entry_id in ordered]

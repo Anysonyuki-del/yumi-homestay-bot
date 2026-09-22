@@ -70,8 +70,21 @@ def build_probe_anthropic_client(
     )
 
 
+def build_probe_embedding_client(
+    snapshot: RuntimeConfigSnapshot,
+    http_client: httpx.AsyncClient,
+) -> AsyncOpenAI:
+    """构造语义检索服务商的 OpenAI 兼容客户端，禁 SDK 重试并复用受控传输层。"""
+    return AsyncOpenAI(
+        api_key=snapshot.embedding_api_key,
+        base_url=snapshot.embedding_base_url,
+        http_client=http_client,
+        max_retries=0,
+    )
+
+
 class RuntimeConfigTester:
-    """聚合 DeepSeek、百居易和企业微信的无业务写入测试。"""
+    """聚合 DeepSeek、百居易、企业微信与可选语义检索的无业务写入测试。"""
 
     def __init__(
         self,
@@ -82,6 +95,7 @@ class RuntimeConfigTester:
         anthropic_client_factory: SdkClientFactory = build_probe_anthropic_client,
         hostex_client_factory: ProviderClientFactory | None = None,
         wecom_client_factory: ProviderClientFactory | None = None,
+        embedding_client_factory: SdkClientFactory = build_probe_embedding_client,
     ) -> None:
         """注入可替换客户端工厂；单元测试默认不需要任何真实网络。"""
         self._url_policy = url_policy or OutboundUrlPolicy()
@@ -90,6 +104,7 @@ class RuntimeConfigTester:
         )
         self._openai_client_factory = openai_client_factory
         self._anthropic_client_factory = anthropic_client_factory
+        self._embedding_client_factory = embedding_client_factory
         self._hostex_client_factory = hostex_client_factory or (
             lambda snapshot: HostexClient(snapshot.hostex_access_token, timeout_seconds=5.0)
         )
@@ -123,7 +138,10 @@ class RuntimeConfigTester:
         deepseek = await self._test_deepseek(snapshot)
         hostex = await self._test_hostex(snapshot)
         wecom = await self._test_wecom(snapshot)
-        providers = (deepseek, hostex, wecom)
+        providers: tuple[RuntimeConfigProviderTestResult, ...] = (deepseek, hostex, wecom)
+        # 语义检索关闭时不联系服务商，也不要求填写 key；开启后测试不通过就不激活。
+        if snapshot.embedding_enabled:
+            providers = (*providers, await self._test_embedding(snapshot))
         first_failure = next((item.error_code for item in providers if not item.succeeded), None)
         return RuntimeConfigTestResult(
             succeeded=first_failure is None,
@@ -228,6 +246,55 @@ class RuntimeConfigTester:
                 existing_error=error_code,
             )
         return error_code
+
+    async def _test_embedding(
+        self,
+        snapshot: RuntimeConfigSnapshot,
+    ) -> RuntimeConfigProviderTestResult:
+        """用一句固定测试文本调用一次 embeddings，确认地址、key 与模型可用。"""
+        try:
+            await self._url_policy.resolve(snapshot.embedding_base_url)
+        except OutboundResolutionTimeout:
+            return self._embedding_result("embedding_timeout")
+        except OutboundUrlRejected:
+            return self._embedding_result("embedding_url_blocked")
+        http_client: Any | None = None
+        sdk_client: Any | None = None
+        error_code: str | None = None
+        try:
+            http_client = self._http_client_factory()
+            sdk_client = self._embedding_client_factory(snapshot, http_client)
+            response = await sdk_client.embeddings.create(
+                model=snapshot.embedding_model,
+                input=["连通性测试"],
+            )
+            if not response.data or not response.data[0].embedding:
+                error_code = "embedding_empty_vector"
+        except Exception as error:
+            # 地址策略类异常在通用映射里固定报 deepseek_*，这里改回本供应商前缀。
+            error_code = self._map_error("embedding", error).replace(
+                "deepseek_", "embedding_", 1
+            )
+        finally:
+            error_code = await self._close_clients(
+                "embedding",
+                sdk_client,
+                http_client,
+                existing_error=error_code,
+            )
+        return self._embedding_result(error_code)
+
+    @staticmethod
+    def _embedding_result(error_code: str | None) -> RuntimeConfigProviderTestResult:
+        """生成语义检索分项结果，结果码不含 URL、key 或正文。"""
+        return RuntimeConfigProviderTestResult(
+            "embedding",
+            error_code is None,
+            error_code,
+            checks=(
+                RuntimeConfigCheckTestResult("embeddings", error_code is None, error_code),
+            ),
+        )
 
     async def _test_hostex(
         self,

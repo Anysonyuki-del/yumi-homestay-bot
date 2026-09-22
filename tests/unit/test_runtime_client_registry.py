@@ -695,3 +695,71 @@ async def test_request_dependency_holds_bundle_lease_until_request_finishes(
     await lease_dependency.aclose()
     assert old_probe.calls == 1
     await registry.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_semantic_retrieval_client_exists_only_when_enabled(
+    monkeypatch,
+    enabled: bool,
+) -> None:
+    """只有开启语义检索时才构造 embedding 客户端，助手改用带语义召回的知识服务。"""
+    from homestay_bot.services.knowledge_embeddings import OpenAICompatibleEmbeddingClient
+    from homestay_bot.services.knowledge_service import KnowledgeService
+
+    http_client_kwargs: list[dict[str, object]] = []
+    sdk_kwargs: list[dict[str, object]] = []
+
+    def build_http_client(policy, **kwargs):
+        """记录每个受控 HTTPS 客户端的用途与超时。"""
+        http_client_kwargs.append(kwargs)
+        return CloseProbe()
+
+    def build_sdk(**kwargs):
+        """记录 SDK 构造参数。"""
+        sdk_kwargs.append(kwargs)
+        return CloseProbe()
+
+    class RepositoryStub:
+        """不需要真实知识。"""
+
+        async def list_active(self) -> list[object]:
+            """返回空知识库。"""
+            return []
+
+    monkeypatch.setattr(runtime_clients, "build_public_https_client", build_http_client)
+    monkeypatch.setattr(runtime_clients, "AsyncOpenAI", build_sdk)
+    monkeypatch.setattr(runtime_clients, "AsyncAnthropic", build_sdk)
+    knowledge = KnowledgeService(RepositoryStub())
+    snapshot = build_snapshot(
+        embedding_enabled=enabled,
+        embedding_api_key="sk-test-embedding" if enabled else None,
+    )
+
+    bundle = await runtime_clients.build_runtime_client_bundle(
+        snapshot,
+        revision=9,
+        callback_queue=object(),
+        hostex_event_recorder=object(),
+        knowledge=knowledge,
+        faq_candidate_context=object(),
+        safety_hmac_key=b"safety-key",
+        web_search_status_setter=lambda value: None,
+        knowledge_vectors=object(),
+    )
+
+    assistant_knowledge = bundle.assistant._knowledge  # noqa: SLF001 - 装配契约
+    if enabled:
+        assert isinstance(bundle.knowledge_embedder, OpenAICompatibleEmbeddingClient)
+        assert bundle.embedding_model == "BAAI/bge-m3"
+        assert http_client_kwargs[-1]["provider"] == "embedding"
+        assert sdk_kwargs[-1]["api_key"] == "sk-test-embedding"
+        assert sdk_kwargs[-1]["max_retries"] == 0
+        assert assistant_knowledge is not knowledge
+        assert assistant_knowledge._semantic is not None  # noqa: SLF001
+    else:
+        assert bundle.knowledge_embedder is None
+        assert bundle.embedding_model is None
+        assert [kwargs["provider"] for kwargs in http_client_kwargs] == ["deepseek", "deepseek"]
+        assert assistant_knowledge is knowledge
+    await bundle.aclose()

@@ -317,3 +317,40 @@ git diff --check
 | 实时问题被工具路由识别 | 0/1 |
 
 这是 C1 第一次接受独立检验：召回刚好达标，安全项有 1 条错误放行、1 条隔离失败，具体用例留到 C2 冻结后一并查看。生产知识库目前为空，证据门不会放行任何本店事实，所以这条错误放行现在在生产上触发不了。
+
+## 15. 1.37.0 上线与 C2 语义检索（2026-09-22）
+
+### 15.1 1.37.0 已部署
+
+| 项 | 结果 |
+| --- | --- |
+| 发布 | `main` = `ae754ea`，标签 `v1.37.0`，已推送 GitHub |
+| 部署前备份 | `pre-v1.37.0-20260921T195142Z`，可读性复验通过 |
+| 容器 | 包版本 1.37.0，重启 0 次，数据库容器未动，迁移仍为 `0026` |
+| 健康 | 本机与公网 `/health` 有应答（`degraded` 为百居易回调未接通的既有稳态），登录页 200，未登录审批页 401 |
+| 新版本清理 | 启动后第一轮清掉了此前 17 条到期 job，job 总数 661 → 644 |
+| 未验证 | 登录后的页面（需要管理员密码，agent 不代登） |
+
+生产应用没有配置根日志器，应用里 WARNING 以下的日志不输出；清理汇总原为 INFO，所以线上看不到。1.38.0 改为触达上限时输出 WARNING。
+
+### 15.2 C2 实现（1.38.0，默认关闭）
+
+依据 Spec §9.5.0、§9.5.1。
+
+| 层 | 文件与符号 |
+| --- | --- |
+| 配置 | `config.py::RuntimeEnvironmentSettings`、`domain/runtime_config.py::RuntimeConfigSnapshot/RuntimeConfigView`（`OPTIONAL_EMBEDDING_FIELDS` 兼容旧快照）、`services/runtime_config_service.py::UpdateRuntimeConfig/CLEARABLE_SECRETS/safe_provider_results`、`routes/runtime_config.py::activate_settings`、`templates/admin/settings.html`、`config_versions.html` |
+| 连通测试 | `services/runtime_config_tester.py::RuntimeConfigTester._test_embedding`，只在开启时执行 |
+| 数据 | `domain/models.py::KnowledgeEmbedding`、迁移 `0027_knowledge_embeddings`、`repositories/knowledge.py::list_vectors/save_current_vectors` |
+| 语义检索 | `services/knowledge_embeddings.py`：`SemanticRanker`、`KnowledgeEmbeddingSync`、`OpenAICompatibleEmbeddingClient` |
+| 融合 | `services/knowledge_service.py::KnowledgeService.with_semantic/_fuse`（RRF，k=60） |
+| 接线 | `services/runtime_clients.py::build_runtime_client_bundle`、`application.py::SessionKnowledgeVectorStore/_run_knowledge_embedding_loop` |
+| 评估 | `test_knowledge_retrieval_eval.py --semantic`，key 只从环境变量或 `~/.config/yumi/siliconflow.env` 读取 |
+
+测试：新增 29 条，全量 1737 通过；7 处关键保护的变异验证都能被测试抓到（其中 1 处补强测试后才抓到）。
+
+### 15.3 还没做的（需要 key）
+
+- **调参与验收**：`SEMANTIC_MIN_SIMILARITY = 0.5` 是未校准的初值。需要用真实 bge-m3 向量在校准集上确定下限、冻结，再对第二套留出集跑一次，对照 Spec §9.5.1 的门槛。
+- **开启**：通过验收后，在「接口设置」里填写 key 并开启。生产知识库目前为 0 条，开启后也没有向量可补。
+- C2 只改进召回，不改变证据门。说法不在别名表里的专属问题，仍会退回「尚未确认」。

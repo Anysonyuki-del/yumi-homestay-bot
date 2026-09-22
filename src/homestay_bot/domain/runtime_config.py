@@ -3,11 +3,21 @@
 from dataclasses import asdict, dataclass, fields
 from typing import Any
 
-from homestay_bot.config import RuntimeEnvironmentSettings
+from homestay_bot.config import (
+    DEFAULT_EMBEDDING_BASE_URL,
+    DEFAULT_EMBEDDING_MODEL,
+    RuntimeEnvironmentSettings,
+)
 
 # 凭据「尚未配置」的占位值。它是公开写在代码和文档里的字符串，因此任何拿它
 # 做相等比较的认证路径都必须先判定「未配置」并直接拒绝，不能让它充当密钥。
 UNCONFIGURED_SECRET = "未配置"
+
+# 语义检索是后加的可选能力。此前保存的快照没有这几个字段，读取时按默认值补齐
+# （即保持关闭），不能因为少了新字段就把整份已验证的生产配置判为无效。
+OPTIONAL_EMBEDDING_FIELDS = frozenset(
+    {"embedding_enabled", "embedding_base_url", "embedding_model", "embedding_api_key"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +39,10 @@ class RuntimeConfigView:
     wecom_contact_secret: str
     wecom_duty_userids: str
     wecom_poll_interval_seconds: float
+    embedding_enabled: bool = False
+    embedding_base_url: str = DEFAULT_EMBEDDING_BASE_URL
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    embedding_api_key: str = UNCONFIGURED_SECRET
 
     @classmethod
     def empty(cls) -> "RuntimeConfigView":
@@ -75,6 +89,10 @@ class RuntimeConfigSnapshot:
     wecom_contact_secret: str | None
     wecom_duty_userids: str
     wecom_poll_interval_seconds: float
+    embedding_enabled: bool = False
+    embedding_base_url: str = DEFAULT_EMBEDDING_BASE_URL
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    embedding_api_key: str | None = None
     schema_version: int = 1
 
     def __repr__(self) -> str:
@@ -100,13 +118,18 @@ class RuntimeConfigSnapshot:
             wecom_contact_secret=settings.wecom_contact_secret,
             wecom_duty_userids=settings.wecom_duty_userids,
             wecom_poll_interval_seconds=settings.wecom_poll_interval_seconds,
+            embedding_enabled=settings.embedding_enabled,
+            embedding_base_url=settings.embedding_base_url,
+            embedding_model=settings.embedding_model,
+            embedding_api_key=settings.embedding_api_key,
         )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "RuntimeConfigSnapshot":
-        """严格恢复固定版本结构，拒绝缺失字段和未知字段。"""
+        """严格恢复固定版本结构，拒绝未知字段；只允许缺少后加的可选语义检索字段。"""
         expected = {field.name for field in fields(cls)}
-        if set(payload) != expected:
+        keys = set(payload)
+        if keys - expected or not (expected - keys) <= OPTIONAL_EMBEDDING_FIELDS:
             raise ValueError("运行配置快照结构无效")
         try:
             snapshot = cls(**payload)
@@ -185,6 +208,29 @@ class RuntimeConfigSnapshot:
             raise ValueError("百居易对账间隔无效")
         if not 5 <= self.wecom_poll_interval_seconds <= 300:
             raise ValueError("企业微信补拉间隔无效")
+        self._validate_embedding()
+
+    def _validate_embedding(self) -> None:
+        """语义检索字段的类型与长度；只有开启时才要求 key、地址和模型齐全。"""
+        if type(self.embedding_enabled) is not bool:
+            raise ValueError("语义检索开关类型无效")
+        if type(self.embedding_base_url) is not str or type(self.embedding_model) is not str:
+            raise ValueError("语义检索文本字段类型无效")
+        if self.embedding_api_key is not None and type(self.embedding_api_key) is not str:
+            raise ValueError("语义检索 key 类型无效")
+        if (
+            len(self.embedding_base_url) > 2048
+            or len(self.embedding_model) > 256
+            or len(self.embedding_api_key or "") > 4096
+        ):
+            raise ValueError("语义检索文本字段过长")
+        if not self.embedding_enabled:
+            return
+        key = (self.embedding_api_key or "").strip()
+        if not key or key == UNCONFIGURED_SECRET:
+            raise ValueError("开启语义检索前必须填写 key")
+        if not self.embedding_base_url.strip() or not self.embedding_model.strip():
+            raise ValueError("开启语义检索前必须填写接口地址和模型")
 
     def merged(self, updates: dict[str, object | None]) -> "RuntimeConfigSnapshot":
         """只替换字典中明确存在的键；None 可用于清除唯一可选字段。"""
@@ -214,6 +260,10 @@ class RuntimeConfigSnapshot:
             wecom_contact_secret=_mask(self.wecom_contact_secret),
             wecom_duty_userids=_mask(self.wecom_duty_userids),
             wecom_poll_interval_seconds=self.wecom_poll_interval_seconds,
+            embedding_enabled=self.embedding_enabled,
+            embedding_base_url=self.embedding_base_url,
+            embedding_model=self.embedding_model,
+            embedding_api_key=_mask(self.embedding_api_key),
         )
 
 

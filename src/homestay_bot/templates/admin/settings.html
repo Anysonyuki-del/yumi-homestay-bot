@@ -51,10 +51,22 @@
       <label class="check-row"><input type="checkbox" name="clear_wecom_contact_secret" value="true">明确清除 Contact Secret（将停用客户联系标签同步）</label>
     </fieldset>
 
+    <fieldset class="config-group config-group--wide">
+      <legend>语义检索（可选）</legend>
+      <p class="muted">开启后，已审核知识的正文和客人问题会发送给下面的服务商生成向量，用于找到换了说法的相关知识；客人问题发送前会先隐藏手机号、邮箱、证件号、订单号和门牌。相似度只影响找哪些知识，不会让系统确认知识里没写的事实。</p>
+      <div class="form-grid">
+        <label class="check-row"><input type="checkbox" name="embedding_enabled" value="true" {% if page.view.embedding_enabled %}checked{% endif %}>开启语义检索</label>
+        <label>API Key <small>{{ page.view.embedding_api_key }}</small><input type="password" name="embedding_api_key" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
+        <label>接口地址<input type="url" name="embedding_base_url" maxlength="2048" value="{{ page.view.embedding_base_url }}" required></label>
+        <label>模型名称<input type="text" name="embedding_model" maxlength="256" value="{{ page.view.embedding_model }}" required></label>
+      </div>
+      <label class="check-row"><input type="checkbox" name="clear_embedding_api_key" value="true">明确清除语义检索 key（须同时关闭语义检索）</label>
+    </fieldset>
+
     <fieldset class="config-confirm config-group--wide">
       <legend>测试并保存</legend>
       <label>当前管理员密码<input type="password" name="password" maxlength="128" autocomplete="current-password" required></label>
-      <p class="muted">系统会先建立候选并测试连接，再以页面修订号安全激活。测试不发送客人消息、不修改订单；会产生两次极小模型调用，并可能保留供应商日志或产生少量费用。测试失败不会替换旧版本。</p>
+      <p class="muted">系统会先建立候选并测试连接，再以页面修订号安全激活。测试不发送客人消息、不修改订单；会产生两次极小模型调用（开启语义检索时再加一次极小向量调用），并可能保留供应商日志或产生少量费用。测试失败不会替换旧版本。</p>
       <p class="muted">企业微信回调 Token 与 EncodingAESKey 仅本地校验，未验证真实回调投递；客服、应用和可选通讯录凭据使用只读接口检查。</p>
       <button class="button" type="submit" {% if not page.writable %}disabled aria-disabled="true"{% endif %}>测试并保存新版本</button>
     </fieldset>

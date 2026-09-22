@@ -560,6 +560,36 @@ class KnowledgeEntry(TimestampMixin, Base):
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
 
 
+class KnowledgeEmbedding(TimestampMixin, Base):
+    """保存审核知识某一语言正文的向量，用于语义检索召回。
+
+    `KnowledgeEntry` 仍是审核状态与原文的唯一真相；这里只是可重建的派生数据。
+    `content_hash` 由参与向量化的规范化正文与模型名算出，检索时只使用与当前正文、
+    当前模型都一致的向量，正文改了而向量没重算时自动不用。
+    """
+
+    __tablename__ = "knowledge_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "entry_id",
+            "language",
+            "model",
+            name="uq_knowledge_embeddings_entry_language_model",
+        ),
+        Index("ix_knowledge_embeddings_model_language", "model", "language"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_entries.id", ondelete="CASCADE"), nullable=False
+    )
+    language: Mapped[str] = mapped_column(String(8), nullable=False)
+    model: Mapped[str] = mapped_column(String(256), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    vector: Mapped[list[float]] = mapped_column(JSON, nullable=False)
+
+
 class KnowledgeCandidate(TimestampMixin, Base):
     """保存尚待管理员归纳的高频 FAQ 主题和脱敏草稿。"""
 

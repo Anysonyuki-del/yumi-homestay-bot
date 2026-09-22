@@ -4,6 +4,10 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 语义检索的默认服务商：硅基流动的 OpenAI 兼容 embeddings 接口与 bge-m3 模型。
+DEFAULT_EMBEDDING_BASE_URL = "https://api.siliconflow.cn/v1"
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3"
+
 
 class BootstrapSettings(BaseSettings):
     """加载禁止网页修改且足以启动登录和配置修复页的基础参数。"""
@@ -45,6 +49,11 @@ class RuntimeEnvironmentSettings(BaseSettings):
     wecom_contact_secret: str | None = None
     wecom_duty_userids: str
     wecom_poll_interval_seconds: float = Field(default=60, ge=5, le=300)
+    # 语义检索默认关闭；开启后已审核知识与脱敏后的客人问题会发给该服务商生成向量。
+    embedding_enabled: bool = False
+    embedding_base_url: str = DEFAULT_EMBEDDING_BASE_URL
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    embedding_api_key: str | None = None
 
     @property
     def deepseek_anthropic_base_url(self) -> str:

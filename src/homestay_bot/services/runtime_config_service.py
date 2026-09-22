@@ -35,6 +35,12 @@ CLEARABLE_SECRETS: tuple[tuple[str, str, str, object | None], ...] = (
         "百居易回调密钥",
         UNCONFIGURED_SECRET,
     ),
+    (
+        "clear_embedding_api_key",
+        "embedding_api_key",
+        "语义检索 key",
+        None,
+    ),
 )
 
 
@@ -57,8 +63,13 @@ class UpdateRuntimeConfig:
     wecom_contact_secret: str | None = None
     wecom_duty_userids: str | None = None
     wecom_poll_interval_seconds: float | None = None
+    embedding_enabled: bool | None = None
+    embedding_base_url: str | None = None
+    embedding_model: str | None = None
+    embedding_api_key: str | None = None
     clear_wecom_contact_secret: bool = False
     clear_hostex_webhook_secret_token: bool = False
+    clear_embedding_api_key: bool = False
 
     @classmethod
     def from_snapshot(cls, snapshot: RuntimeConfigSnapshot) -> "UpdateRuntimeConfig":
@@ -79,6 +90,10 @@ class UpdateRuntimeConfig:
             wecom_contact_secret=snapshot.wecom_contact_secret,
             wecom_duty_userids=snapshot.wecom_duty_userids,
             wecom_poll_interval_seconds=snapshot.wecom_poll_interval_seconds,
+            embedding_enabled=snapshot.embedding_enabled,
+            embedding_base_url=snapshot.embedding_base_url,
+            embedding_model=snapshot.embedding_model,
+            embedding_api_key=snapshot.embedding_api_key,
         )
 
     def normalized_updates(self) -> dict[str, object | None]:
@@ -143,7 +158,7 @@ class RuntimeConfigProviderTestResult:
 
     def to_safe_dict(self) -> dict[str, object]:
         """把单项结果限制为持久化白名单字段。"""
-        if self.provider not in {"deepseek", "hostex", "wecom"}:
+        if self.provider not in {"deepseek", "hostex", "wecom", "embedding"}:
             raise ValueError("配置测试供应商无效")
         if self.error_code is not None and not re.fullmatch(
             r"[a-z][a-z0-9_]{0,63}", self.error_code
@@ -163,6 +178,7 @@ class RuntimeConfigProviderTestResult:
                 "deepseek": {"openai", "anthropic"},
                 "hostex": {"properties"},
                 "wecom": {"kf", "agent", "contact", "callback"},
+                "embedding": {"embeddings"},
             }[self.provider]
             check_results: dict[str, object] = {}
             for check in self.checks:
@@ -221,12 +237,12 @@ class RuntimeConfigVersionView:
 
 
 def safe_provider_results(payload: object) -> dict[str, dict[str, object]]:
-    """从历史 JSON 提取固定三方安全状态，畸形旧数据一律忽略。"""
+    """从历史 JSON 提取固定四方安全状态，畸形旧数据一律忽略。"""
     if not isinstance(payload, dict) or not isinstance(payload.get("providers"), dict):
         return {}
     providers = payload["providers"]
     safe: dict[str, dict[str, object]] = {}
-    for name in ("deepseek", "hostex", "wecom"):
+    for name in ("deepseek", "hostex", "wecom", "embedding"):
         item = providers.get(name)
         if not isinstance(item, dict) or not isinstance(item.get("succeeded"), bool):
             continue
@@ -242,6 +258,7 @@ def safe_provider_results(payload: object) -> dict[str, dict[str, object]]:
                 "deepseek": ("openai", "anthropic"),
                 "hostex": ("properties",),
                 "wecom": ("kf", "agent", "contact", "callback"),
+                "embedding": ("embeddings",),
             }[name]
             safe_checks: dict[str, object] = {}
             for check_name in ordered_checks:
