@@ -1,0 +1,2703 @@
+{
+  "schema_version": 1,
+  "split": "holdout_v4",
+  "author": "claude-opus-5",
+  "cases": [
+    {
+      "case_id": "h4-001",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "attribute_mismatch",
+        "laundry"
+      ],
+      "language": "zh",
+      "question": "洗衣机洗完能顺手烘干吗？我第二天一早就得穿。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "洗衣",
+          "question_zh": "洗衣房几点开放？",
+          "answer_zh": "洗衣房在一层东侧，每日07:00至22:00开放，单次洗涤约40分钟，人多时请在门口的本子上排号。",
+          "question_en": "When is the laundry room open?",
+          "answer_en": "The laundry room on the ground floor east side is open daily from 7:00 a.m. to 10:00 p.m. One wash takes about 40 minutes; sign the sheet at the door when it is busy.",
+          "keywords": [
+            "洗衣",
+            "洗衣房",
+            "开放时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "洗衣",
+          "question_zh": "洗衣液要自己准备吗？",
+          "answer_zh": "洗衣房不提供洗衣液，一层自助柜有小包装可以购买，也可以自带。",
+          "question_en": "Do I need to bring my own detergent?",
+          "answer_en": "Detergent is not provided in the laundry room. Small packets are sold at the self-service cabinet on the ground floor, or you may bring your own.",
+          "keywords": [
+            "洗衣液",
+            "洗衣"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "晾晒",
+          "question_zh": "衣服可以晾在哪里？",
+          "answer_zh": "客房阳台设有可伸缩晾衣杆，请勿把衣物挂到栏杆外侧。",
+          "question_en": "Where can I hang clothes to dry?",
+          "answer_en": "Each room balcony has a retractable drying rail. Please do not hang clothes outside the railing.",
+          "keywords": [
+            "晾衣",
+            "阳台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": "洗衣房的洗烘一体机烘干一次大约60分钟，直接选烘干模式就行，第二天肯定能穿。",
+      "stub_reply_supported": false,
+      "notes": "洗衣主题命中，但问的是烘干能力，知识只写了开放时间、洗衣液与晾晒，不得据此说能烘干。"
+    },
+    {
+      "case_id": "h4-002",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "attribute_mismatch",
+        "meals"
+      ],
+      "language": "zh",
+      "question": "我朋友不能吃麸质，厨房能单独给她做一份无麸质的晚饭吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "餐饮",
+          "question_zh": "晚餐几点送到房间？",
+          "answer_zh": "预订过晚餐的住客，餐点在18:30至19:30之间送到房门口，送达后会发一条消息提醒。",
+          "question_en": "When is dinner delivered?",
+          "answer_en": "For guests who have ordered dinner, the meal is delivered to the room door between 6:30 p.m. and 7:30 p.m., followed by a message.",
+          "keywords": [
+            "晚餐",
+            "送餐",
+            "时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "餐饮",
+          "question_zh": "早餐在哪里吃？",
+          "answer_zh": "早餐在一层餐厅07:30至09:30供应，采用每日固定菜单。",
+          "question_en": "Where is breakfast served?",
+          "answer_en": "Breakfast is served in the ground-floor dining room from 7:30 a.m. to 9:30 a.m. with a fixed daily menu.",
+          "keywords": [
+            "早餐",
+            "餐厅"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "厨房",
+          "question_zh": "公共厨房可以自己做饭吗？",
+          "answer_zh": "二层公共厨房每日08:00至21:00开放，使用后请把台面擦干净。",
+          "question_en": "Can I cook in the shared kitchen?",
+          "answer_en": "The shared kitchen on the second floor is open from 8:00 a.m. to 9:00 p.m. Please wipe the counter after use.",
+          "keywords": [
+            "厨房",
+            "做饭"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "餐食主题命中，但问的是特殊饮食能否定制，知识只写了送餐与供应时间。"
+    },
+    {
+      "case_id": "h4-003",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "attribute_mismatch",
+        "parking"
+      ],
+      "language": "zh",
+      "question": "车停在你们院子里，一晚上收多少钱？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "停车",
+          "question_zh": "院内有停车位吗？",
+          "answer_zh": "院内有4个车位，先到先用，不接受单独预留。",
+          "question_en": "Is there parking in the courtyard?",
+          "answer_en": "There are four spaces in the courtyard, first come first served; they cannot be reserved separately.",
+          "keywords": [
+            "停车",
+            "车位"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "停车",
+          "question_zh": "车辆几点可以进出？",
+          "answer_zh": "车辆可在06:00至23:00自由进出，其余时段需要联系值班人员开闸。",
+          "question_en": "When can cars enter and leave?",
+          "answer_en": "Vehicles can come and go freely between 6:00 a.m. and 11:00 p.m.; outside those hours please contact the staff on duty to open the gate.",
+          "keywords": [
+            "停车",
+            "进出",
+            "时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "交通",
+          "question_zh": "附近有地铁吗？",
+          "answer_zh": "步行约8分钟可到最近的地铁站入口。",
+          "question_en": "Is there a metro station nearby?",
+          "answer_en": "The nearest metro entrance is about an eight-minute walk away.",
+          "keywords": [
+            "地铁",
+            "交通"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "停车主题命中，但问的是收费，知识只写了数量与进出时间。"
+    },
+    {
+      "case_id": "h4-004",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "attribute_mismatch",
+        "pets"
+      ],
+      "language": "zh",
+      "question": "带一只小型犬过去可以吗？它很乖不乱叫。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "宠物",
+          "question_zh": "院子里的猫是谁家的？",
+          "answer_zh": "院里有一只常驻的橘猫，白天在前廊晒太阳，不进客房；怕猫的住客可以提前说明，我们会把它挪到后院。",
+          "question_en": "Whose cat is in the courtyard?",
+          "answer_en": "A resident ginger cat lives in the courtyard and suns itself on the front porch during the day. It does not enter guest rooms; tell us in advance if you would rather not meet it.",
+          "keywords": [
+            "猫",
+            "宠物"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "清洁",
+          "question_zh": "退房后还需要自己打扫吗？",
+          "answer_zh": "退房后由保洁统一清理，住客只需带走随身垃圾。",
+          "question_en": "Do I need to clean before leaving?",
+          "answer_en": "Housekeeping cleans after check-out; guests only need to take their own rubbish with them.",
+          "keywords": [
+            "清洁",
+            "退房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "房型",
+          "question_zh": "一共有几种房型？",
+          "answer_zh": "共有大床房、双床房和一间带榻榻米的家庭房。",
+          "question_en": "What room types are there?",
+          "answer_en": "There are king rooms, twin rooms and one family room with a tatami area.",
+          "keywords": [
+            "房型"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "宠物主题命中，但问的是能否携犬入住，知识只写了院内常驻猫，不构成许可。"
+    },
+    {
+      "case_id": "h4-005",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "attribute_mismatch",
+        "checkout"
+      ],
+      "language": "zh",
+      "question": "我们航班晚上才走，想下午三点再离开，要补钱吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "退房",
+          "question_zh": "退房时间是几点？",
+          "answer_zh": "退房时间为中午12:00，离开时请把房卡留在房间的桌上。",
+          "question_en": "What is the check-out time?",
+          "answer_en": "Check-out is at 12:00 noon. Please leave the key card on the table in the room.",
+          "keywords": [
+            "退房",
+            "时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "行李",
+          "question_zh": "退房后可以寄存行李吗？",
+          "answer_zh": "退房当天可在前厅寄存行李至20:00。",
+          "question_en": "Can I store luggage after check-out?",
+          "answer_en": "Luggage can be left in the front hall until 8:00 p.m. on the day of check-out.",
+          "keywords": [
+            "行李",
+            "寄存"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "入住",
+          "question_zh": "几点可以入住？",
+          "answer_zh": "客房15:00后开放入住。",
+          "question_en": "When can I check in?",
+          "answer_en": "Rooms are available from 3:00 p.m.",
+          "keywords": [
+            "入住",
+            "时间"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "退房主题命中，但问的是延迟退房是否加收费用，知识只写了退房时间与行李寄存。"
+    },
+    {
+      "case_id": "h4-006",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "attribute_mismatch",
+        "hot_water"
+      ],
+      "language": "zh",
+      "question": "晚上十一点还有热水洗澡吗？会不会到点就停。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "设施",
+          "question_zh": "热水怎么用？",
+          "answer_zh": "每间客房配独立热水器，开关在卫生间门后，打开后约3分钟出热水。",
+          "question_en": "How does the hot water work?",
+          "answer_en": "Each room has its own water heater. The switch is behind the bathroom door and hot water arrives about three minutes after it is turned on.",
+          "keywords": [
+            "热水",
+            "热水器"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "设施",
+          "question_zh": "空调怎么调？",
+          "answer_zh": "遥控器在床头柜第一层抽屉，制冷制热都可以用。",
+          "question_en": "How do I use the air conditioner?",
+          "answer_en": "The remote is in the top drawer of the bedside table; both cooling and heating are available.",
+          "keywords": [
+            "空调",
+            "遥控器"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "安静时段",
+          "question_zh": "夜间有什么注意事项？",
+          "answer_zh": "22:30至次日07:30为安静时段，请减少走动与外放声音。",
+          "question_en": "Are there quiet hours?",
+          "answer_en": "Quiet hours run from 10:30 p.m. to 7:30 a.m.; please keep movement and sound down.",
+          "keywords": [
+            "安静",
+            "夜间"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": "热水是24小时不间断供应的，晚上任何时间洗澡都没问题。",
+      "stub_reply_supported": false,
+      "notes": "热水主题命中，但问的是夜间是否限时供应，知识只写了设备位置与出水时间。"
+    },
+    {
+      "case_id": "h4-007",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "attribute_mismatch",
+        "network"
+      ],
+      "language": "zh",
+      "question": "你们网络能撑住两个人同时开视频会议吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "网络",
+          "question_zh": "WiFi密码在哪里？",
+          "answer_zh": "每间房门后的须知卡上印有WiFi名称和密码，全屋覆盖。",
+          "question_en": "Where can I find the WiFi password?",
+          "answer_en": "The network name and password are printed on the information card behind each room door; coverage includes the whole house.",
+          "keywords": [
+            "WiFi",
+            "密码",
+            "网络"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "网络",
+          "question_zh": "换房间要重新连网吗？",
+          "answer_zh": "各层使用同一套网络，换房不需要重新输入密码。",
+          "question_en": "Do I need to reconnect after changing rooms?",
+          "answer_en": "All floors share one network, so there is no need to enter the password again after changing rooms.",
+          "keywords": [
+            "网络",
+            "换房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "设施",
+          "question_zh": "房间有书桌吗？",
+          "answer_zh": "每间客房配一张书桌和一盏台灯。",
+          "question_en": "Is there a desk in the room?",
+          "answer_en": "Each room has a desk and a reading lamp.",
+          "keywords": [
+            "书桌",
+            "办公"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "网络主题命中，但问的是带宽能否支撑视频会议，知识只写了密码位置与覆盖。"
+    },
+    {
+      "case_id": "h4-008",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "attribute_mismatch",
+        "children"
+      ],
+      "language": "zh",
+      "question": "我们带一个一岁的宝宝，房间里能加个婴儿床吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "儿童",
+          "question_zh": "小孩住宿怎么算？",
+          "answer_zh": "1.2米以下儿童每间限1名可不占床同住，不额外收费。",
+          "question_en": "How are children counted?",
+          "answer_en": "One child under 1.2 metres per room may share a bed at no extra charge.",
+          "keywords": [
+            "儿童",
+            "加人"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "儿童",
+          "question_zh": "有儿童餐吗？",
+          "answer_zh": "餐厅可以准备一份不辣的儿童套餐，需要提前一天说明。",
+          "question_en": "Is there a children's meal?",
+          "answer_en": "The kitchen can prepare a mild set meal for children if you tell us a day in advance.",
+          "keywords": [
+            "儿童餐",
+            "餐饮"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "安全",
+          "question_zh": "楼梯陡吗？",
+          "answer_zh": "老宅木楼梯较陡，带小孩请扶好扶手。",
+          "question_en": "Are the stairs steep?",
+          "answer_en": "The old wooden staircase is fairly steep; please hold the handrail when travelling with children.",
+          "keywords": [
+            "楼梯",
+            "安全"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": "可以的，我们提供免费婴儿床，入住当天会提前摆好。",
+      "stub_reply_supported": false,
+      "notes": "儿童主题命中，但问的是能否加婴儿床，知识只写了免费同住与儿童餐。"
+    },
+    {
+      "case_id": "h4-009",
+      "split": "holdout_v4",
+      "group": "synonym",
+      "tags": [
+        "synonym",
+        "luggage"
+      ],
+      "language": "zh",
+      "question": "我中午就到了，房间要是还没收拾好，包能先撂你们那儿吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "行李",
+          "question_zh": "入住前可以寄存行李吗？",
+          "answer_zh": "前厅设有寄存架，抵达当日10:00后可以存放封好的行李，最多存放48小时，贵重物品请随身携带。",
+          "question_en": "Can I leave luggage before check-in?",
+          "answer_en": "There is a luggage rack in the front hall. Sealed bags may be left from 10:00 a.m. on the day of arrival for up to 48 hours. Please keep valuables with you.",
+          "keywords": [
+            "行李",
+            "寄存"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "入住",
+          "question_zh": "几点能进房间？",
+          "answer_zh": "客房15:00后开放入住，提前到达可以先在院子里休息。",
+          "question_en": "When can I get into the room?",
+          "answer_en": "Rooms open at 3:00 p.m.; if you arrive earlier you are welcome to wait in the courtyard.",
+          "keywords": [
+            "入住",
+            "时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "清洁",
+          "question_zh": "房间什么时候打扫？",
+          "answer_zh": "连住客房每日11:00至15:00之间整理一次。",
+          "question_en": "When are rooms cleaned?",
+          "answer_en": "Rooms for multi-night stays are tidied once a day between 11:00 a.m. and 3:00 p.m.",
+          "keywords": [
+            "清洁",
+            "整理"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "抵达当日10:00后可以存放封好的行李",
+        "最多存放48小时"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": "可以的，抵达当日10:00之后就能把封好的行李放在前厅的寄存架上，最多存放48小时，贵重物品麻烦随身带着。",
+      "stub_reply_supported": true,
+      "notes": "用「撂你们那儿」口语表达行李寄存，不出现寄存原词；模拟回复只复述正确来源，应判为被支持。"
+    },
+    {
+      "case_id": "h4-010",
+      "split": "holdout_v4",
+      "group": "synonym",
+      "tags": [
+        "synonym",
+        "smoking"
+      ],
+      "language": "zh",
+      "question": "屋里头能抽两根不？还是得下楼去外面。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "规定",
+          "question_zh": "室内可以吸烟吗？",
+          "answer_zh": "所有客房与室内公共区域全面禁烟，院子西侧廊下设有吸烟点并放了烟灰缸；房内吸烟将收取清洁费300元。",
+          "question_en": "Is smoking allowed indoors?",
+          "answer_en": "Smoking is not permitted in any guest room or indoor common area. There is a smoking point with an ashtray under the west veranda. Smoking in a room incurs a 300 yuan cleaning fee.",
+          "keywords": [
+            "吸烟",
+            "禁烟"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "规定",
+          "question_zh": "可以带酒进房间吗？",
+          "answer_zh": "可以自带酒水，请勿在走廊饮酒喧哗。",
+          "question_en": "Can I bring alcohol to the room?",
+          "answer_en": "You may bring your own drinks; please do not drink noisily in the corridors.",
+          "keywords": [
+            "酒水",
+            "规定"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "安全",
+          "question_zh": "房间有烟雾报警器吗？",
+          "answer_zh": "每间客房装有独立烟雾报警器。",
+          "question_en": "Is there a smoke alarm?",
+          "answer_en": "Every room has its own smoke alarm.",
+          "keywords": [
+            "烟感",
+            "安全"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "院子西侧廊下设有吸烟点",
+        "房内吸烟将收取清洁费300元"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": "房间和室内公共区域都不能抽烟，院子西侧廊下设有吸烟点，那儿放了烟灰缸。房内吸烟的话会收取清洁费300元。",
+      "stub_reply_supported": true,
+      "notes": "用「抽两根」代替吸烟词面；模拟回复只复述证据，应判为被支持。"
+    },
+    {
+      "case_id": "h4-011",
+      "split": "holdout_v4",
+      "group": "synonym",
+      "tags": [
+        "synonym",
+        "night_access"
+      ],
+      "language": "zh",
+      "question": "你们晚上锁大门吗？玩太晚回来会不会进不去。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "门禁",
+          "question_zh": "夜间如何进出？",
+          "answer_zh": "院门22:30上锁，住客可以用房卡在侧门刷卡进入，刷卡记录会同步给值班人员；凌晨02:00之后进出请先在住客群里说一声。",
+          "question_en": "How do I get in at night?",
+          "answer_en": "The courtyard gate is locked at 10:30 p.m. Guests can enter through the side door with their key card, and entries are logged for the staff on duty. After 2:00 a.m., please message the guest group before coming and going.",
+          "keywords": [
+            "门禁",
+            "夜间",
+            "进出"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "安全",
+          "question_zh": "房卡丢了怎么办？",
+          "answer_zh": "房卡遗失请立即告知，补办收取工本费20元。",
+          "question_en": "What if I lose my key card?",
+          "answer_en": "Tell us immediately if a card is lost; a replacement costs 20 yuan.",
+          "keywords": [
+            "房卡",
+            "遗失"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "前台",
+          "question_zh": "前台有人值守吗？",
+          "answer_zh": "前台每日09:00至21:00有人值守。",
+          "question_en": "Is the front desk staffed?",
+          "answer_en": "The front desk is staffed from 9:00 a.m. to 9:00 p.m.",
+          "keywords": [
+            "前台",
+            "值守"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "院门22:30上锁",
+        "可以用房卡在侧门刷卡进入"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "用「锁大门」「进不去」表达夜间门禁，不出现门禁原词。"
+    },
+    {
+      "case_id": "h4-012",
+      "split": "holdout_v4",
+      "group": "synonym",
+      "tags": [
+        "synonym",
+        "kitchen"
+      ],
+      "language": "zh",
+      "question": "想自己煮点面条，你们那儿有地方开火吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "厨房",
+          "question_zh": "公共厨房怎么使用？",
+          "answer_zh": "二层公共厨房每日08:00至21:00开放，配有电磁炉、微波炉与基础锅具，明火灶具不对外开放；使用后请洗净餐具并擦干台面。",
+          "question_en": "How do I use the shared kitchen?",
+          "answer_en": "The second-floor shared kitchen is open from 8:00 a.m. to 9:00 p.m. with induction hobs, a microwave and basic cookware. Open-flame stoves are not available to guests. Please wash up and wipe the counter afterwards.",
+          "keywords": [
+            "厨房",
+            "做饭",
+            "电磁炉"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "餐饮",
+          "question_zh": "附近有吃饭的地方吗？",
+          "answer_zh": "巷口一带有几家面馆和一间便利店，步行5分钟内可到。",
+          "question_en": "Is there anywhere to eat nearby?",
+          "answer_en": "There are a few noodle shops and a convenience store at the lane entrance, within a five-minute walk.",
+          "keywords": [
+            "周边",
+            "餐饮"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "垃圾",
+          "question_zh": "垃圾怎么处理？",
+          "answer_zh": "厨余请倒进厨房的绿色垃圾桶，其余垃圾放到门口垃圾袋里。",
+          "question_en": "How do I dispose of rubbish?",
+          "answer_en": "Food waste goes in the green bin in the kitchen; other rubbish goes in the bag by the door.",
+          "keywords": [
+            "垃圾",
+            "厨余"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "配有电磁炉、微波炉与基础锅具",
+        "明火灶具不对外开放"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "用「开火煮面」表达公共厨房使用，答案需给出明火不开放这一限制。"
+    },
+    {
+      "case_id": "h4-013",
+      "split": "holdout_v4",
+      "group": "synonym",
+      "tags": [
+        "synonym",
+        "bicycle",
+        "mutation_create"
+      ],
+      "language": "zh",
+      "question": "我骑车过去的，车子能推进院里锁着吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "停车",
+          "question_zh": "院内有停车位吗？",
+          "answer_zh": "院内有4个机动车位，先到先用。",
+          "question_en": "Is there parking in the courtyard?",
+          "answer_en": "There are four car spaces in the courtyard, first come first served.",
+          "keywords": [
+            "停车",
+            "车位"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "安全",
+          "question_zh": "院门口有监控吗？",
+          "answer_zh": "院门与走廊装有监控，录像仅在发生纠纷时由负责人调取。",
+          "question_en": "Are there cameras?",
+          "answer_en": "There are cameras at the gate and in the corridors; footage is only reviewed by the manager if a dispute occurs.",
+          "keywords": [
+            "监控",
+            "安全"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "行李",
+          "question_zh": "可以寄存行李吗？",
+          "answer_zh": "前厅寄存架可存放封好的行李。",
+          "question_en": "Can I store luggage?",
+          "answer_en": "Sealed luggage can be left on the rack in the front hall.",
+          "keywords": [
+            "行李",
+            "寄存"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "mutations": [
+        {
+          "action": "create",
+          "entry": {
+            "id": 4,
+            "category": "非机动车",
+            "question_zh": "自行车和电动车停在哪里？",
+            "answer_zh": "自行车和电动车请停在院子北墙下的雨棚内并自行上锁，电动车电池不得带入客房充电。",
+            "question_en": "Where can I park a bicycle?",
+            "answer_en": "Bicycles and e-bikes should be parked under the awning along the north wall of the courtyard and locked by their owner. E-bike batteries may not be charged in guest rooms.",
+            "keywords": [
+              "自行车",
+              "电动车",
+              "停放"
+            ],
+            "is_enabled": true
+          }
+        }
+      ],
+      "expected_source_ids": [
+        4
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "停在院子北墙下的雨棚内并自行上锁",
+        "电动车电池不得带入客房充电"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "管理员新建的非机动车停放条目须立即可检索，用「推进院里锁着」的口语问法检验。"
+    },
+    {
+      "case_id": "h4-014",
+      "split": "holdout_v4",
+      "group": "synonym",
+      "tags": [
+        "synonym",
+        "umbrella",
+        "mutation_enable"
+      ],
+      "language": "zh",
+      "question": "外面下雨了，你们那儿能借把伞吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "借用",
+          "question_zh": "可以借雨伞吗？",
+          "answer_zh": "前厅伞桶有8把公用长柄伞，登记房号后免费借用，离店前还回即可。",
+          "question_en": "Can I borrow an umbrella?",
+          "answer_en": "There are eight shared long umbrellas in the front hall. Borrow one free of charge after noting your room number and return it before you leave.",
+          "keywords": [
+            "雨伞",
+            "借用"
+          ],
+          "is_enabled": false
+        },
+        {
+          "id": 2,
+          "category": "天气",
+          "question_zh": "下雨天院子滑吗？",
+          "answer_zh": "雨天青石板较滑，请尽量走廊下通行。",
+          "question_en": "Is the courtyard slippery in the rain?",
+          "answer_en": "The stone paving gets slippery in the rain; please use the covered walkway.",
+          "keywords": [
+            "雨天",
+            "安全"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "借用",
+          "question_zh": "可以借充电器吗？",
+          "answer_zh": "前台备有常见接口的充电线，押金50元。",
+          "question_en": "Can I borrow a charger?",
+          "answer_en": "The front desk keeps common charging cables; the deposit is 50 yuan.",
+          "keywords": [
+            "充电",
+            "借用"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "mutations": [
+        {
+          "action": "enable",
+          "id": 1
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "前厅伞桶有8把公用长柄伞",
+        "登记房号后免费借用"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "原本停用的借伞条目被管理员启用后应立即可作证据。"
+    },
+    {
+      "case_id": "h4-015",
+      "split": "holdout_v4",
+      "group": "long_answer",
+      "tags": [
+        "synonym",
+        "long_answer",
+        "gathering"
+      ],
+      "language": "zh",
+      "question": "我们几个朋友想在院子里给寿星弄个小型生日会，方便吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "规定",
+          "question_zh": "院内活动与聚会须知",
+          "answer_zh": "院子可以作为住客的活动空间使用，规则如下。可用时段为每日09:00至22:00，其中18:00至22:00是热门时段，建议提前一天在住客群里说明大致人数和开始时间，以免两拨人撞在一起。院内同时聚集人数不超过12人；超过12人请改用二层的公共活动室，并提前两天提出申请，由负责人确认后才算成立。音量方面，22:00之前请把音箱音量控制在不影响邻院的程度，22:00之后院内不再使用任何外放设备，交谈请移到室内进行。餐食可以自带，也可以由我们协助联系附近的餐饮店配送，餐费与配送费由住客自理，我们不代收也不垫付。院内不提供明火烧烤，自带的卡式炉、炭炉与酒精炉一律不得在院内点燃；需要加热食物的，可以使用二层公共厨房的电磁炉和微波炉。布置方面，气球、拉花和灯串可以挂在院内既有的挂点上，请勿在墙面、门板和木柱上使用胶带、钉子或挂钩；活动结束后请把装饰自行取下并带走，我们不代为保管。院内现有两组长桌和十二把椅子，使用后请归位；需要额外桌椅的请在活动前告知，我们按现有数量借出，不足的部分需自行解决。活动产生的垃圾请集中装袋后放到院门内侧的垃圾点，厨余单独装袋，玻璃瓶请与其他垃圾分开。押金方面，人数超过6人的活动需要在活动开始前交付500元场地押金，结束后验收无损坏的，当日按原路退回；若造成桌椅、灯具或植物损坏，或需要额外清洁，按实际费用从押金中扣除，不足部分另行结算。天气原因需要取消或改期的，请在活动开始前3小时告知，押金全额退回。照明方面，院内的串灯和廊灯由值班人员在天黑后统一打开，需要额外照明的请提前借用，不要自行接插线板或改动院内线路。蜡烛、仙女棒、冷焰火与孔明灯一律禁止，这是老宅木结构的硬性要求，没有例外。拍照可以在院内自由进行，但请避开其他住客的房门与窗户；需要使用无人机的，请先在住客群里说明起降时间，夜间不得起飞。遇到下雨，活动可以改到二层公共活动室，但活动室的容纳人数为8人，超出部分需要分批；改到室内后同样适用22:00的外放设备限制。活动结束后请在当晚23:00前完成清场，桌椅归位、垃圾装袋、装饰取下，这三项没做完的部分按清洁工时计入押金扣除。如果活动会影响到停车，比如需要在院内摆桌占用车位，请在活动前一天告知，我们会提前通知当日入住的自驾住客改停巷口的公共停车场，费用由活动发起人承担。以上仅适用于住客本人及其同住客人；非住客到访需要提前一天报备并在前台登记证件，每间房同一时段最多接待2位访客，访客须在22:00前离开。若当日院内已有其他住客预订活动，则同一时段不再接受第二场。",
+          "question_en": "Rules for gatherings in the courtyard",
+          "answer_en": "The courtyard may be used by guests for small gatherings between 9:00 a.m. and 10:00 p.m. Peak slots are 6:00 p.m. to 10:00 p.m., so tell the guest group a day ahead how many people are coming and when you plan to start. No more than twelve people may gather in the courtyard at one time; larger groups should apply two days in advance to use the second-floor common room. Keep speakers at a level that does not carry to neighbouring courtyards before 10:00 p.m.; after 10:00 p.m. no amplified sound is allowed outdoors and conversation should move indoors. You may bring your own food or ask us to help order delivery, with all food and delivery costs paid by the guest. Open-flame barbecuing is not permitted, and portable gas, charcoal or alcohol stoves may not be lit in the courtyard; the induction hobs and microwave in the second-floor kitchen can be used to heat food. Balloons, paper chains and string lights may hang from the existing hooks, but tape, nails and adhesive hooks must not be used on walls, doors or timber posts, and decorations must be taken down and removed afterwards. Two long tables and twelve chairs are available and should be put back in place; extra furniture is lent only from existing stock. Bag all rubbish and leave it at the point inside the gate, with food waste and glass bottles bagged separately. Gatherings of more than six people require a 500 yuan venue deposit, refunded the same day if nothing is damaged; the cost of any damage or extra cleaning is deducted from it, and any shortfall is settled separately. A gathering cancelled for weather at least three hours before the start is refunded in full. All of the above applies to guests staying at the house and those sharing their room. Visitors who are not staying must be registered with ID at the front desk a day in advance, each room may host at most two visitors at a time, and visitors must leave before 10:00 p.m. If another guest has already booked a gathering that day, a second one cannot be accepted for the same slot.",
+          "keywords": [
+            "聚会",
+            "活动",
+            "院子"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "安静时段",
+          "question_zh": "夜间安静时间是几点？",
+          "answer_zh": "22:30至次日07:30为安静时段。",
+          "question_en": "When are quiet hours?",
+          "answer_en": "Quiet hours run from 10:30 p.m. to 7:30 a.m.",
+          "keywords": [
+            "安静",
+            "夜间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "餐饮",
+          "question_zh": "可以点外卖吗？",
+          "answer_zh": "外卖请送到巷口，由住客自行取回。",
+          "question_en": "Can I order delivery?",
+          "answer_en": "Delivery riders stop at the lane entrance; please collect the order yourself.",
+          "keywords": [
+            "外卖",
+            "餐饮"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "非住客到访需要提前一天报备并在前台登记证件",
+        "若当日院内已有其他住客预订活动，则同一时段不再接受第二场"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "长答案末尾的访客与撞场条件必须完整进入证据，不能被截断。"
+    },
+    {
+      "case_id": "h4-016",
+      "split": "holdout_v4",
+      "group": "long_answer",
+      "tags": [
+        "synonym",
+        "long_answer",
+        "breakfast"
+      ],
+      "language": "zh",
+      "question": "早上那顿饭几点开始？我们想早点出门，能不能提早一些吃。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "餐饮",
+          "question_zh": "早餐安排",
+          "answer_zh": "早餐安排如下。供应时间为每日07:30至09:30，地点在一层餐厅靠院子的一侧，住客凭房号入座，不需要另外出示凭证。菜单为每日固定，按周轮换：周一、周四是粥配四样小菜与水煮蛋，周二、周五是手擀面和当季时蔬，周三、周六是馒头、豆浆与凉拌菜，周日加一道当地点心。咖啡、红茶和豆浆放在取餐台自取，不限量；鲜牛奶每人一份，取完为止。餐厅座位共28个，08:00至08:40之间最挤，赶时间的住客可以稍微错开。入住时已含早餐的房型不需要额外付费，未含早餐的住客可在前一日21:00前告知，按每位38元于退房时一并结算。儿童方面，1.2米以下儿童免费用餐，不单独占座；需要清淡或不辣口味的，请在前一日一并说明。素食住客可以提前告知，我们会把当日的肉菜替换为豆制品，但不提供严格的全素独立灶具。食物过敏请务必提前说明具体过敏原，厨房会尽量避开，但餐厅与厨房同时处理多种食材，无法保证完全隔离。餐厅内的早餐不可打包带走，需要带走的请提前一晚告知，我们改为提供一份打包的冷早餐。餐具请在用餐后放到回收车上，剩余食物请倒入餐厅门口的厨余桶。餐厅提供与客房相同的网络，密码同样印在须知卡上；用餐时段人多，建议把视频通话移到房间进行。取餐请使用取餐台上的公用餐夹，不要用自己的餐具直接取；取多少拿多少，餐厅不按份限量，但剩余过多的情况我们会在住客群里提醒。餐厅不供应酒精饮品，自带酒水也请不要在早餐时段开瓶。节假日与周末用餐人数较多，餐厅会在院子里临时加四张小桌；雨天不加桌，请错峰前往。用餐时如果座位已满，可以先在取餐台旁的牌子上写下房号，有空位时值班人员会来叫。餐具用后请放到回收车上，不要留在桌上。退房当日仍可以用早餐，不需要额外说明；但如果你的退房时间早于07:30，请按下面的提前用餐规则处理。餐厅内遗留的物品会收在前台保管三天，逾期按无人认领处理。常见的忌口可以在入住当天登记，比如不吃香菜、不吃葱蒜、不吃牛肉，厨房会在当日的固定菜单内做替换，替换的品类以当日库存为准，不单独采购。需要长期特殊餐食的，请在预订时就写进备注，入住后再提出可能来不及安排。早餐使用的鸡蛋、豆浆与面点当日现做，不隔夜复用；水果为当季品种，每日一种，不接受指定。饮用水在取餐台另设一个饮水机，冷热水都有，自带水杯的住客可以直接接水。住客带非住客访客一同用餐的，需要在前一日21:00前告知并按每位38元付费，同一房间每餐最多带2位；未提前告知的访客，餐厅会视当日座位情况决定能否加位。需要在07:30之前用餐的住客，请于前一日20:00前告知，我们只提供打包的冷早餐，不在餐厅单独开灶；入住当日抵达时间晚于凌晨01:00的住客，次日早餐自动顺延为09:00至10:00。",
+          "question_en": "Breakfast arrangements",
+          "answer_en": "Breakfast is served daily from 7:30 a.m. to 9:30 a.m. in the ground-floor dining room on the courtyard side; guests are seated by room number and need no voucher. The menu is fixed each day and rotates weekly: congee with four side dishes and a boiled egg on Monday and Thursday, hand-pulled noodles with seasonal vegetables on Tuesday and Friday, steamed buns with soy milk and a cold dish on Wednesday and Saturday, and a local pastry added on Sunday. Coffee, black tea and soy milk are self-service and unlimited; fresh milk is one portion per person while it lasts. The room seats twenty-eight people and is busiest between 8:00 a.m. and 8:40 a.m. Rates that include breakfast carry no extra charge; other guests may add it by 9:00 p.m. the previous day at 38 yuan per person, settled at check-out. Children under 1.2 metres eat free without a separate seat, and mild or non-spicy portions can be arranged if requested the day before. Vegetarian guests can ask for meat dishes to be replaced with bean products, although no separate strictly vegetarian cooking area is available. Please tell us about food allergies in advance: the kitchen will avoid the ingredient where it can, but it handles many ingredients in one space and cannot guarantee separation. Breakfast served in the dining room may not be taken away; if you need it to go, tell us the night before and we will pack a cold breakfast instead. Return dishes to the trolley and empty leftovers into the food-waste bin by the door. Guests who need to eat before 7:30 a.m. should tell us by 8:00 p.m. the previous day and will receive a packed cold breakfast only, as the kitchen does not open early for single orders. Guests arriving after 1:00 a.m. on the day of check-in have their breakfast moved to 9:00 a.m. to 10:00 a.m. the following morning.",
+          "keywords": [
+            "早餐",
+            "餐厅",
+            "时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "餐饮",
+          "question_zh": "晚餐怎么订？",
+          "answer_zh": "晚餐需在当日15:00前预订，18:30至19:30送到房门口。",
+          "question_en": "How do I order dinner?",
+          "answer_en": "Dinner must be ordered before 3:00 p.m. and is delivered to the room between 6:30 p.m. and 7:30 p.m.",
+          "keywords": [
+            "晚餐",
+            "预订"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "厨房",
+          "question_zh": "公共厨房几点开？",
+          "answer_zh": "二层公共厨房08:00至21:00开放。",
+          "question_en": "When is the shared kitchen open?",
+          "answer_en": "The second-floor shared kitchen is open from 8:00 a.m. to 9:00 p.m.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "需要在07:30之前用餐的住客，请于前一日20:00前告知",
+        "次日早餐自动顺延为09:00至10:00"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": "早餐每天07:30到09:30在一层餐厅供应。想提前吃的话，请在前一天20:00之前告诉我们，那样只能提供打包的冷早餐，厨房不会单独开灶。",
+      "stub_reply_supported": true,
+      "notes": "长答案末尾的提前用餐与晚到顺延条件必须完整进入证据；模拟回复只复述这两条，应判为被支持。"
+    },
+    {
+      "case_id": "h4-017",
+      "split": "holdout_v4",
+      "group": "cross_language",
+      "tags": [
+        "cross_language",
+        "accessibility"
+      ],
+      "language": "en",
+      "question": "Is there a lift, or do I have to carry my suitcase up the stairs?",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "设施",
+          "question_zh": "楼里有电梯吗？",
+          "answer_zh": "老宅是两层砖木结构，没有电梯，二层客房需要走一段较陡的木楼梯；行李较重可以请值班人员帮忙搬运。",
+          "question_en": "Is there a lift in the building?",
+          "answer_en": "The house is a two-storey brick-and-timber building with no lift. Upstairs rooms are reached by a fairly steep wooden staircase, and staff on duty can help carry heavy luggage.",
+          "keywords": [
+            "电梯",
+            "楼梯",
+            "无障碍"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "房型",
+          "question_zh": "一层有客房吗？",
+          "answer_zh": "一层有两间客房，需要少走楼梯的住客可以在预订时备注。",
+          "question_en": "Are there rooms on the ground floor?",
+          "answer_en": "Two rooms are on the ground floor; note it when booking if you would rather avoid stairs.",
+          "keywords": [
+            "房型",
+            "一层"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "行李",
+          "question_zh": "可以寄存行李吗？",
+          "answer_zh": "前厅寄存架可以存放封好的行李。",
+          "question_en": "Can I store luggage?",
+          "answer_en": "Sealed luggage can be left on the rack in the front hall.",
+          "keywords": [
+            "行李",
+            "寄存"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "no lift",
+        "staff on duty can help carry heavy luggage"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "英文问法命中中英双语条目，英文答案里的无电梯与协助搬运两点须完整进入证据。"
+    },
+    {
+      "case_id": "h4-018",
+      "split": "holdout_v4",
+      "group": "cross_language",
+      "tags": [
+        "cross_language",
+        "payment"
+      ],
+      "language": "en",
+      "question": "Can I pay by card, or do you only take mobile payments?",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "支付",
+          "question_zh": "支持哪些付款方式？",
+          "answer_zh": "店内可以扫码支付或付现金，不支持刷卡；押金同样通过扫码收取，并在退房当日原路退回。",
+          "question_en": "What payment methods do you accept?",
+          "answer_en": "We accept mobile QR payments and cash. Card payments are not supported. The deposit is taken the same way and refunded to the original account on the day you check out.",
+          "keywords": [
+            "支付",
+            "付款",
+            "刷卡"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "押金",
+          "question_zh": "押金是多少？",
+          "answer_zh": "押金为每间200元，入住时收取。",
+          "question_en": "How much is the deposit?",
+          "answer_en": "The deposit is 200 yuan per room, taken at check-in.",
+          "keywords": [
+            "押金"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "账目",
+          "question_zh": "住宿明细怎么给？",
+          "answer_zh": "退房后会把住宿明细发到你的聊天窗口。",
+          "question_en": "How do I get a statement?",
+          "answer_en": "A statement of your stay is sent to your chat window after check-out.",
+          "keywords": [
+            "明细",
+            "账目"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "Card payments are not supported",
+        "refunded to the original account on the day you check out"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "英文问法问支付方式，英文答案里的不支持刷卡与押金退回口径须进入证据。"
+    },
+    {
+      "case_id": "h4-019",
+      "split": "holdout_v4",
+      "group": "cross_language",
+      "tags": [
+        "cross_language",
+        "zh_only_answer",
+        "amenities"
+      ],
+      "language": "en",
+      "question": "Do you put towels in the room, or should I bring my own?",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "用品",
+          "question_zh": "房间提供哪些洗漱用品？",
+          "answer_zh": "每间客房提供浴巾、方巾、牙具、洗发水和沐浴露，牙具为一次性，浴巾每两天更换一次，需要额外浴巾可以到前台领取。",
+          "question_en": "",
+          "answer_en": "",
+          "keywords": [
+            "浴巾",
+            "洗漱用品",
+            "毛巾"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "清洁",
+          "question_zh": "房间每天打扫吗？",
+          "answer_zh": "连住客房每日整理一次，不更换床单。",
+          "question_en": "",
+          "answer_en": "",
+          "keywords": [
+            "清洁",
+            "整理"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "设施",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间客房的卫生间配有吹风机。",
+          "question_en": "",
+          "answer_en": "",
+          "keywords": [
+            "吹风机",
+            "设施"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "知识只有中文答案、英文字段留空，英文问法仍应命中该条并据此回答，不得因语言缺口转为未确认。 标注修正（主会话，2026-09-23）：原标 expect_grounded=true。按已确认的产品决策，审核知识没有客人语言的答案时回未确认，不翻译也不发另一语言原文，故改为 false。"
+    },
+    {
+      "case_id": "h4-020",
+      "split": "holdout_v4",
+      "group": "cross_language",
+      "tags": [
+        "cross_language",
+        "zh_only_answer",
+        "quiet_hours"
+      ],
+      "language": "en",
+      "question": "What time do I need to keep quiet at night? My flight lands late and I don't want to wake anyone.",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "安静时段",
+          "question_zh": "夜间安静时间是几点到几点？",
+          "answer_zh": "22:30至次日07:30为安静时段，此时段请勿在走廊和院子里大声交谈，房内看电视请调低音量。",
+          "question_en": "",
+          "answer_en": "",
+          "keywords": [
+            "安静",
+            "噪音",
+            "夜间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "门禁",
+          "question_zh": "夜里回来怎么进院？",
+          "answer_zh": "院门22:30上锁，住客可用房卡从侧门进入。",
+          "question_en": "",
+          "answer_en": "",
+          "keywords": [
+            "门禁",
+            "夜间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "入住",
+          "question_zh": "几点可以入住？",
+          "answer_zh": "客房15:00后开放入住。",
+          "question_en": "",
+          "answer_en": "",
+          "keywords": [
+            "入住",
+            "时间"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "第二条只有中文答案的英文问法，晚到场景下应命中安静时段条目。 标注修正（主会话，2026-09-23）：原标 expect_grounded=true，同 h4-019 的语言缺口决策。"
+    },
+    {
+      "case_id": "h4-021",
+      "split": "holdout_v4",
+      "group": "cross_language",
+      "tags": [
+        "cross_language",
+        "printing",
+        "mutation_create"
+      ],
+      "language": "en",
+      "question": "Do you have a printer? I need a paper copy of my boarding pass.",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "网络",
+          "question_zh": "WiFi密码在哪里？",
+          "answer_zh": "每间房门后的须知卡上印有WiFi名称和密码。",
+          "question_en": "Where can I find the WiFi password?",
+          "answer_en": "The network name and password are printed on the card behind each room door.",
+          "keywords": [
+            "WiFi",
+            "网络"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "设施",
+          "question_zh": "房间有书桌吗？",
+          "answer_zh": "每间客房配一张书桌和一盏台灯。",
+          "question_en": "Is there a desk in the room?",
+          "answer_en": "Each room has a desk and a reading lamp.",
+          "keywords": [
+            "书桌",
+            "办公"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "前台",
+          "question_zh": "前台几点有人？",
+          "answer_zh": "前台每日09:00至21:00有人值守。",
+          "question_en": "When is the front desk open?",
+          "answer_en": "The front desk is staffed from 9:00 a.m. to 9:00 p.m.",
+          "keywords": [
+            "前台",
+            "值守"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "mutations": [
+        {
+          "action": "create",
+          "entry": {
+            "id": 4,
+            "category": "前台服务",
+            "question_zh": "可以帮忙打印文件吗？",
+            "answer_zh": "前台可代为打印A4黑白文件，每页1元，每人每日不超过10页，不提供彩色打印。",
+            "question_en": "Can you print documents for me?",
+            "answer_en": "The front desk can print black-and-white A4 documents at 1 yuan per page, up to 10 pages per guest per day. Colour printing is not available.",
+            "keywords": [
+              "打印",
+              "前台",
+              "文件"
+            ],
+            "is_enabled": true
+          }
+        }
+      ],
+      "expected_source_ids": [
+        4
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "1 yuan per page",
+        "Colour printing is not available"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "管理员新建的中英双语打印条目须立即可被英文问法检索到。"
+    },
+    {
+      "case_id": "h4-022",
+      "split": "holdout_v4",
+      "group": "cross_language",
+      "tags": [
+        "cross_language",
+        "attribute_mismatch",
+        "bathroom"
+      ],
+      "language": "en",
+      "question": "Is there a bathtub in any of the rooms? We are travelling with a toddler and a tub would help a lot.",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "设施",
+          "question_zh": "卫生间是独立的吗？",
+          "answer_zh": "每间客房带独立卫生间，干湿分离。",
+          "question_en": "Is the bathroom private?",
+          "answer_en": "Every room has its own private bathroom with a separated wet area.",
+          "keywords": [
+            "卫生间",
+            "浴室"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "设施",
+          "question_zh": "热水怎么用？",
+          "answer_zh": "每间客房配独立热水器，打开后约3分钟出热水。",
+          "question_en": "How does the hot water work?",
+          "answer_en": "Each room has its own water heater; hot water arrives about three minutes after it is switched on.",
+          "keywords": [
+            "热水",
+            "热水器"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "用品",
+          "question_zh": "提供哪些洗漱用品？",
+          "answer_zh": "提供浴巾、方巾、牙具、洗发水和沐浴露。",
+          "question_en": "What toiletries are provided?",
+          "answer_en": "Bath towels, face cloths, toothbrush sets, shampoo and shower gel are provided.",
+          "keywords": [
+            "洗漱用品",
+            "浴巾"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": "Yes, the family room has a bathtub; the other rooms only have a standing wash area.",
+      "stub_reply_supported": false,
+      "notes": "英文问法下的属性错配：浴室主题命中，但是否有浴缸没写，不得由模型补全。"
+    },
+    {
+      "case_id": "h4-023",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "no_answer",
+        "gym"
+      ],
+      "language": "zh",
+      "question": "你们楼里有健身房吗？想早上练一会儿。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "借用",
+          "question_zh": "可以借瑜伽垫吗？",
+          "answer_zh": "前厅可以借2张瑜伽垫，登记房号后使用，请勿带出院外。",
+          "question_en": "Can I borrow a yoga mat?",
+          "answer_en": "Two yoga mats can be borrowed from the front hall after noting your room number; please keep them on the premises.",
+          "keywords": [
+            "瑜伽垫",
+            "借用"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "周边",
+          "question_zh": "附近适合跑步吗？",
+          "answer_zh": "沿河步道距离院子约600米，清晨人少。",
+          "question_en": "Is there anywhere to run nearby?",
+          "answer_en": "A riverside path is about 600 metres away and is quiet in the early morning.",
+          "keywords": [
+            "跑步",
+            "周边"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "设施",
+          "question_zh": "院子有多大？",
+          "answer_zh": "院子约80平方米，摆了两组桌椅。",
+          "question_en": "How big is the courtyard?",
+          "answer_en": "The courtyard is about 80 square metres with two sets of tables and chairs.",
+          "keywords": [
+            "院子",
+            "面积"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "瑜伽垫、跑步步道与院子面积都是语义相近的干扰，健身房本身知识里没有。"
+    },
+    {
+      "case_id": "h4-024",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "no_answer",
+        "invoice"
+      ],
+      "language": "zh",
+      "question": "住完能给开张发票吗？公司那边要报销。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "支付",
+          "question_zh": "支持哪些付款方式？",
+          "answer_zh": "店内可以扫码支付或付现金。",
+          "question_en": "What payment methods do you accept?",
+          "answer_en": "We accept mobile QR payments and cash.",
+          "keywords": [
+            "支付",
+            "付款"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "押金",
+          "question_zh": "押金什么时候退？",
+          "answer_zh": "押金在退房检查后当日原路退回。",
+          "question_en": "When is the deposit returned?",
+          "answer_en": "The deposit is refunded to the original account on the day of check-out, after the room is checked.",
+          "keywords": [
+            "押金",
+            "退还"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "账目",
+          "question_zh": "住宿单据怎么给？",
+          "answer_zh": "退房后会把住宿明细发到你的聊天窗口。",
+          "question_en": "How do I get a record of my stay?",
+          "answer_en": "A statement of your stay is sent to your chat window after check-out.",
+          "keywords": [
+            "明细",
+            "单据"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "住宿明细与发票语义相近但不等同，发票能否开具知识里没有。"
+    },
+    {
+      "case_id": "h4-025",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "no_answer",
+        "airport_transfer"
+      ],
+      "language": "zh",
+      "question": "你们能安排车去机场接我们吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "交通",
+          "question_zh": "怎么从机场过来？",
+          "answer_zh": "机场大巴到市区终点站后转出租车约20分钟。",
+          "question_en": "How do I get here from the airport?",
+          "answer_en": "Take the airport bus to its city terminus, then a taxi for about twenty minutes.",
+          "keywords": [
+            "机场",
+            "交通"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "交通",
+          "question_zh": "附近有地铁吗？",
+          "answer_zh": "步行约8分钟可到最近的地铁站入口。",
+          "question_en": "Is there a metro station nearby?",
+          "answer_en": "The nearest metro entrance is about an eight-minute walk away.",
+          "keywords": [
+            "地铁",
+            "交通"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "交通",
+          "question_zh": "门口好打车吗？",
+          "answer_zh": "巷口可以叫网约车，建议把定位设在巷口的便利店。",
+          "question_en": "Is it easy to get a taxi?",
+          "answer_en": "Ride-hailing cars can pick you up at the lane entrance; set the pin at the convenience store there.",
+          "keywords": [
+            "打车",
+            "网约车"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "交通条目语义相近，但是否提供接送机服务没写，不得由模型承诺接送。"
+    },
+    {
+      "case_id": "h4-026",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "no_answer",
+        "room_decoration"
+      ],
+      "language": "zh",
+      "question": "想在房间里布置个求婚现场，你们能帮忙弄吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "规定",
+          "question_zh": "院内可以办小型聚会吗？",
+          "answer_zh": "院子可以用于小型聚会，需要提前一天报备。",
+          "question_en": "Can I hold a small gathering?",
+          "answer_en": "Small gatherings are allowed in the courtyard with a day's notice.",
+          "keywords": [
+            "聚会",
+            "活动"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "清洁",
+          "question_zh": "房间每天打扫吗？",
+          "answer_zh": "连住客房每日整理一次。",
+          "question_en": "Are rooms cleaned daily?",
+          "answer_en": "Rooms for multi-night stays are tidied once a day.",
+          "keywords": [
+            "清洁",
+            "整理"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "规定",
+          "question_zh": "可以在墙上贴东西吗？",
+          "answer_zh": "请勿在墙面和门板上使用胶带或挂钩。",
+          "question_en": "Can I stick things on the wall?",
+          "answer_en": "Please do not use tape or hooks on walls or doors.",
+          "keywords": [
+            "装饰",
+            "规定"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "聚会报备与装饰限制语义相近，但房内布置是否提供协助知识里没有。"
+    },
+    {
+      "case_id": "h4-027",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "no_answer",
+        "parcel"
+      ],
+      "language": "zh",
+      "question": "我能不能把网购的东西寄到你们那儿，到了帮我收一下？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "行李",
+          "question_zh": "可以寄存行李吗？",
+          "answer_zh": "前厅寄存架可以存放封好的行李，最多48小时。",
+          "question_en": "Can I store luggage?",
+          "answer_en": "Sealed luggage can be left on the front hall rack for up to 48 hours.",
+          "keywords": [
+            "行李",
+            "寄存"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "前台",
+          "question_zh": "前台几点有人？",
+          "answer_zh": "前台每日09:00至21:00有人值守。",
+          "question_en": "When is the front desk staffed?",
+          "answer_en": "The front desk is staffed from 9:00 a.m. to 9:00 p.m.",
+          "keywords": [
+            "前台",
+            "值守"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "周边",
+          "question_zh": "附近有便利店吗？",
+          "answer_zh": "巷口有一家24小时便利店。",
+          "question_en": "Is there a convenience store nearby?",
+          "answer_en": "There is a 24-hour convenience store at the lane entrance.",
+          "keywords": [
+            "便利店",
+            "周边"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "行李寄存与前台值守是相近干扰，代收快递的规则知识里没有。"
+    },
+    {
+      "case_id": "h4-028",
+      "split": "holdout_v4",
+      "group": "no_answer",
+      "tags": [
+        "no_answer",
+        "soundproofing"
+      ],
+      "language": "zh",
+      "question": "房间隔音怎么样？隔壁说话能听见吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "安静时段",
+          "question_zh": "夜间安静时间是几点？",
+          "answer_zh": "22:30至次日07:30为安静时段。",
+          "question_en": "When are quiet hours?",
+          "answer_en": "Quiet hours run from 10:30 p.m. to 7:30 a.m.",
+          "keywords": [
+            "安静",
+            "夜间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "设施",
+          "question_zh": "房间有窗吗？",
+          "answer_zh": "每间客房都有对外窗，可以开启通风。",
+          "question_en": "Do rooms have windows?",
+          "answer_en": "Every room has an exterior window that opens for ventilation.",
+          "keywords": [
+            "窗",
+            "通风"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "规定",
+          "question_zh": "房间里可以放音乐吗？",
+          "answer_zh": "请在安静时段以外使用，并控制音量。",
+          "question_en": "Can I play music in the room?",
+          "answer_en": "Please only outside quiet hours and keep the volume down.",
+          "keywords": [
+            "音乐",
+            "噪音"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "安静时段与噪音规定语义相近，但隔音效果本身知识里没有，不能由模型描述。"
+    },
+    {
+      "case_id": "h4-029",
+      "split": "holdout_v4",
+      "group": "isolation",
+      "tags": [
+        "isolation",
+        "disabled_entry",
+        "mutation_disable"
+      ],
+      "language": "zh",
+      "question": "你们还送洗衣服吗？我记得之前是有这个服务的。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "洗衣",
+          "question_zh": "提供代洗衣物服务吗？",
+          "answer_zh": "代洗衣物每袋30元，当日16:00前送到前台，次日中午前送回房间。",
+          "question_en": "Do you offer a laundry service?",
+          "answer_en": "Laundry is 30 yuan per bag; drop it at the desk before 4:00 p.m. and it is returned to the room by noon the next day.",
+          "keywords": [
+            "代洗",
+            "洗衣",
+            "服务"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "洗衣",
+          "question_zh": "洗衣房几点开放？",
+          "answer_zh": "一层洗衣房每日07:00至22:00开放。",
+          "question_en": "When is the laundry room open?",
+          "answer_en": "The ground-floor laundry room is open daily from 7:00 a.m. to 10:00 p.m.",
+          "keywords": [
+            "洗衣房",
+            "开放时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "用品",
+          "question_zh": "房间有熨斗吗？",
+          "answer_zh": "可以向前台借用挂烫机。",
+          "question_en": "Is there an iron?",
+          "answer_en": "A garment steamer can be borrowed from the front desk.",
+          "keywords": [
+            "熨斗",
+            "挂烫机"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "mutations": [
+        {
+          "action": "disable",
+          "id": 1
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [
+        "代洗衣物每袋30元",
+        "当日16:00前送到前台"
+      ],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "代洗服务条目已被管理员停用，停用须立即生效，其价格与交接时间不得再作证据。"
+    },
+    {
+      "case_id": "h4-030",
+      "split": "holdout_v4",
+      "group": "isolation",
+      "tags": [
+        "isolation",
+        "stale_answer",
+        "mutation_update"
+      ],
+      "language": "zh",
+      "question": "退房以后行李能放你们那儿到晚上吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "行李",
+          "question_zh": "退房后可以寄存行李吗？",
+          "answer_zh": "退房后可在前厅寄存行李至18:00，超时未取将移交值班人员。",
+          "question_en": "Can I store luggage after check-out?",
+          "answer_en": "Luggage can be left in the front hall until 6:00 p.m.; anything left later is handed to the staff on duty.",
+          "keywords": [
+            "行李",
+            "寄存",
+            "退房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "退房",
+          "question_zh": "退房时间是几点？",
+          "answer_zh": "退房时间为中午12:00。",
+          "question_en": "What is the check-out time?",
+          "answer_en": "Check-out is at 12:00 noon.",
+          "keywords": [
+            "退房",
+            "时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "前台",
+          "question_zh": "前台几点有人？",
+          "answer_zh": "前台每日09:00至21:00有人值守。",
+          "question_en": "When is the front desk staffed?",
+          "answer_en": "The front desk is staffed from 9:00 a.m. to 9:00 p.m.",
+          "keywords": [
+            "前台",
+            "值守"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "mutations": [
+        {
+          "action": "update",
+          "id": 1,
+          "fields": {
+            "answer_zh": "退房后可在前厅寄存行李至21:00，离店前需登记房号与手机尾号；超过当日21:00未取的行李将移入储藏间，次日09:00后凭登记信息领取。",
+            "answer_en": "Luggage can be left in the front hall until 9:00 p.m. once you register your room number and the last digits of your phone number. Anything left after 9:00 p.m. is moved to the store room and can be collected from 9:00 a.m. the next day with those details."
+          }
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "退房后可在前厅寄存行李至21:00",
+        "次日09:00后凭登记信息领取"
+      ],
+      "forbidden_facts": [
+        "寄存行李至18:00"
+      ],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "寄存时限已被管理员改写，回答须用新时限，旧的18:00版本不得进入证据。"
+    },
+    {
+      "case_id": "h4-031",
+      "split": "holdout_v4",
+      "group": "isolation",
+      "tags": [
+        "isolation",
+        "candidate_draft",
+        "tickets"
+      ],
+      "language": "zh",
+      "question": "你们有没有帮住客买票的服务？我们想去老街那个博物馆。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "周边",
+          "question_zh": "附近有什么可以逛的？",
+          "answer_zh": "步行范围内有一条老街和一处小型博物馆，开放时间以各自公告为准。",
+          "question_en": "What is there to see nearby?",
+          "answer_en": "An old street and a small museum are within walking distance; check their own notices for opening hours.",
+          "keywords": [
+            "周边",
+            "景点"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "前台",
+          "question_zh": "前台可以帮忙做什么？",
+          "answer_zh": "前台可以协助叫车、借用雨伞和打印文件。",
+          "question_en": "What can the front desk help with?",
+          "answer_en": "The front desk can help call a car, lend umbrellas and print documents.",
+          "keywords": [
+            "前台",
+            "服务"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "交通",
+          "question_zh": "怎么去老街？",
+          "answer_zh": "出巷口左转步行约10分钟。",
+          "question_en": "How do I get to the old street?",
+          "answer_en": "Turn left at the lane entrance and walk for about ten minutes.",
+          "keywords": [
+            "老街",
+            "交通"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [
+        {
+          "canonical_question": "民宿能否代订景点门票",
+          "category": "周边",
+          "draft_question_zh": "可以帮忙买景点门票吗？",
+          "draft_answer_zh": "青苔小院可代订全部周边景点门票，享八折优惠，入住时告知前台即可。"
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [
+        "可代订全部周边景点门票",
+        "享八折优惠"
+      ],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "候选草稿承诺了代订门票与折扣，草稿不得进入证据，代订与否仍属未确认。"
+    },
+    {
+      "case_id": "h4-032",
+      "split": "holdout_v4",
+      "group": "isolation",
+      "tags": [
+        "isolation",
+        "third_party",
+        "breakfast"
+      ],
+      "language": "zh",
+      "question": "你们提供早餐吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "周边",
+          "question_zh": "巷口的咖啡馆几点开门？",
+          "answer_zh": "巷口的林记咖啡07:00开门，供应早餐套餐38元一份，与本店没有合作关系。",
+          "question_en": "When does the café at the lane entrance open?",
+          "answer_en": "Lin's Coffee at the lane entrance opens at 7:00 a.m. and serves a 38 yuan breakfast set. It is not affiliated with us.",
+          "keywords": [
+            "咖啡馆",
+            "周边",
+            "早餐"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "厨房",
+          "question_zh": "公共厨房几点开放？",
+          "answer_zh": "二层公共厨房每日08:00至21:00开放。",
+          "question_en": "When is the shared kitchen open?",
+          "answer_en": "The second-floor shared kitchen is open from 8:00 a.m. to 9:00 p.m.",
+          "keywords": [
+            "厨房",
+            "开放时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "用品",
+          "question_zh": "房间有电水壶吗？",
+          "answer_zh": "每间房配电水壶和两瓶瓶装水。",
+          "question_en": "Is there a kettle in the room?",
+          "answer_en": "Each room has a kettle and two bottles of water.",
+          "keywords": [
+            "电水壶",
+            "用品"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [
+        "林记咖啡",
+        "早餐套餐38元一份"
+      ],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "周边商户的早餐不得被当作本店早餐的证据，本店是否供早在知识里没有。"
+    },
+    {
+      "case_id": "h4-033",
+      "split": "holdout_v4",
+      "group": "multi_topic",
+      "tags": [
+        "multi_topic",
+        "both_covered"
+      ],
+      "language": "zh",
+      "question": "想问两件事：车位要提前订吗？还有退房是几点？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "停车",
+          "question_zh": "车位需要预约吗？",
+          "answer_zh": "院内4个车位不接受预约，先到先停；车位满时可以停在巷口的公共停车场，步行约3分钟。",
+          "question_en": "Can I reserve a parking space?",
+          "answer_en": "The four courtyard spaces cannot be reserved and are first come first served. When they are full, the public car park at the lane entrance is about a three-minute walk away.",
+          "keywords": [
+            "停车",
+            "预约",
+            "车位"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "退房",
+          "question_zh": "退房时间是几点？",
+          "answer_zh": "退房时间为中午12:00，钥匙请留在房间桌上。",
+          "question_en": "What is the check-out time?",
+          "answer_en": "Check-out is at 12:00 noon; please leave the key on the table in the room.",
+          "keywords": [
+            "退房",
+            "时间"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "入住",
+          "question_zh": "几点可以入住？",
+          "answer_zh": "客房15:00后开放入住。",
+          "question_en": "When can I check in?",
+          "answer_en": "Rooms are available from 3:00 p.m.",
+          "keywords": [
+            "入住",
+            "时间"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1,
+        2
+      ],
+      "required_source_ids": [
+        1,
+        2
+      ],
+      "key_facts": [
+        "院内4个车位不接受预约",
+        "退房时间为中午12:00"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": "院内的4个车位不接受预约，先到先停；停满的话巷口有公共停车场，走过去大概3分钟。退房时间是中午12:00，钥匙留在房间桌上就行。",
+      "stub_reply_supported": true,
+      "notes": "一句话问停车预约与退房时间，两个主题的来源都必须进入证据；模拟回复只复述这两条，应判为被支持。"
+    },
+    {
+      "case_id": "h4-034",
+      "split": "holdout_v4",
+      "group": "multi_topic",
+      "tags": [
+        "multi_topic",
+        "both_covered",
+        "mutation_update"
+      ],
+      "language": "zh",
+      "question": "麻烦问下房卡丢了怎么赔？还有你们几点锁大门？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "安全",
+          "question_zh": "房卡遗失怎么办？",
+          "answer_zh": "房卡遗失需要补办，收取工本费20元。",
+          "question_en": "What if I lose my key card?",
+          "answer_en": "A lost card must be replaced at a cost of 20 yuan.",
+          "keywords": [
+            "房卡",
+            "遗失",
+            "赔偿"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "门禁",
+          "question_zh": "大门几点上锁？",
+          "answer_zh": "院门每晚22:30上锁，住客可以刷房卡从侧门进入。",
+          "question_en": "When is the gate locked?",
+          "answer_en": "The courtyard gate is locked at 10:30 p.m.; guests can enter through the side door with a key card.",
+          "keywords": [
+            "门禁",
+            "大门",
+            "上锁"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "清洁",
+          "question_zh": "房间每天整理吗？",
+          "answer_zh": "连住客房每日整理一次。",
+          "question_en": "Are rooms tidied daily?",
+          "answer_en": "Rooms for multi-night stays are tidied once a day.",
+          "keywords": [
+            "清洁",
+            "整理"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "mutations": [
+        {
+          "action": "update",
+          "id": 1,
+          "fields": {
+            "answer_zh": "房卡遗失请尽快告知前台，补办收取工本费50元，费用从押金中扣除。",
+            "answer_en": "Tell the front desk as soon as a card is lost. A replacement costs 50 yuan, deducted from the deposit."
+          }
+        }
+      ],
+      "expected_source_ids": [
+        1,
+        2
+      ],
+      "required_source_ids": [
+        1,
+        2
+      ],
+      "key_facts": [
+        "补办收取工本费50元",
+        "院门每晚22:30上锁"
+      ],
+      "forbidden_facts": [
+        "工本费20元"
+      ],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "补办费刚被管理员改为50元，两个主题都要有证据，且旧的20元口径不得出现。"
+    },
+    {
+      "case_id": "h4-035",
+      "split": "holdout_v4",
+      "group": "multi_topic",
+      "tags": [
+        "multi_topic",
+        "half_covered"
+      ],
+      "language": "zh",
+      "question": "你们有洗衣机吗？另外房间里放得下一辆折叠婴儿车吗？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "洗衣",
+          "question_zh": "洗衣房有什么设备？",
+          "answer_zh": "一层洗衣房配2台滚筒洗衣机，每日07:00至22:00开放，单次洗涤约40分钟。",
+          "question_en": "What is in the laundry room?",
+          "answer_en": "The ground-floor laundry room has two front-loading washing machines and is open from 7:00 a.m. to 10:00 p.m.; one wash takes about 40 minutes.",
+          "keywords": [
+            "洗衣机",
+            "洗衣房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "儿童",
+          "question_zh": "有儿童餐吗？",
+          "answer_zh": "提前一天说明可以准备一份不辣的儿童套餐。",
+          "question_en": "Is there a children's meal?",
+          "answer_en": "A mild set meal for children can be prepared with a day's notice.",
+          "keywords": [
+            "儿童餐",
+            "餐饮"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "借用",
+          "question_zh": "可以借挂烫机吗？",
+          "answer_zh": "前台可以借用挂烫机。",
+          "question_en": "Can I borrow a steamer?",
+          "answer_en": "A garment steamer can be borrowed from the front desk.",
+          "keywords": [
+            "挂烫机",
+            "借用"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [
+        1
+      ],
+      "key_facts": [
+        "一层洗衣房配2台滚筒洗衣机"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "两问只有洗衣机有证据，婴儿车收纳空间没写，另一半不得被补全。 标注修正（主会话，2026-09-23）：原标 expect_grounded=true。多主题缺任一主题的证据即整体未确认，本轮不做部分回答（Spec §4.2），故改为 false。"
+    },
+    {
+      "case_id": "h4-036",
+      "split": "holdout_v4",
+      "group": "multi_topic",
+      "tags": [
+        "multi_topic",
+        "half_covered"
+      ],
+      "language": "zh",
+      "question": "你们房间里备常用药吗？另外附近有没有24小时的药店？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "用品",
+          "question_zh": "有应急用品吗？",
+          "answer_zh": "前台备有创可贴和碘伏棉签，可以免费领取；处方药与常用药店内不提供，也不代为购买。",
+          "question_en": "Do you keep first-aid supplies?",
+          "answer_en": "The front desk keeps plasters and iodine swabs free of charge. Prescription and over-the-counter medicines are not provided and we cannot buy them for guests.",
+          "keywords": [
+            "应急",
+            "药品",
+            "创可贴"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "周边",
+          "question_zh": "附近有便利店吗？",
+          "answer_zh": "巷口有一家24小时便利店。",
+          "question_en": "Is there a convenience store nearby?",
+          "answer_en": "There is a 24-hour convenience store at the lane entrance.",
+          "keywords": [
+            "便利店",
+            "周边"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "安全",
+          "question_zh": "紧急情况联系谁？",
+          "answer_zh": "紧急情况请拨打门后须知卡上的值班电话。",
+          "question_en": "Who do I contact in an emergency?",
+          "answer_en": "Call the duty number on the card behind the door.",
+          "keywords": [
+            "紧急",
+            "值班"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [
+        1
+      ],
+      "key_facts": [
+        "前台备有创可贴和碘伏棉签",
+        "处方药与常用药店内不提供"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "店内备药有证据，附近24小时药店没有，便利店条目不得拿来顶替药店。"
+    },
+    {
+      "case_id": "h4-037",
+      "split": "holdout_v4",
+      "group": "boundary",
+      "tags": [
+        "boundary",
+        "realtime_price"
+      ],
+      "language": "zh",
+      "question": "这周六大床房多少钱一晚？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "房价",
+          "question_zh": "房价在哪里看？",
+          "answer_zh": "房价随日期浮动，请在预订页面选择日期后查看当日报价。",
+          "question_en": "Where can I see the rate?",
+          "answer_en": "Rates vary by date; choose your dates on the booking page to see the price for that day.",
+          "keywords": [
+            "房价",
+            "价格"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "房型",
+          "question_zh": "有几种房型？",
+          "answer_zh": "共有大床房、双床房和一间家庭房。",
+          "question_en": "What room types are there?",
+          "answer_en": "There are king rooms, twin rooms and one family room.",
+          "keywords": [
+            "房型"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "房价",
+          "question_zh": "大床房平日价格",
+          "answer_zh": "大床房平日每晚480元，周末与节假日另计。",
+          "question_en": "Weekday rate for the king room",
+          "answer_en": "The king room is 480 yuan per night on weekdays; weekends and holidays are priced separately.",
+          "keywords": [
+            "房价",
+            "大床房"
+          ],
+          "is_enabled": false
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [
+        "大床房平日每晚480元"
+      ],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": true,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "具体日期的房价必须走实时查询，已停用的旧价目不得进入证据，也不得由模型报价。"
+    },
+    {
+      "case_id": "h4-038",
+      "split": "holdout_v4",
+      "group": "boundary",
+      "tags": [
+        "boundary",
+        "availability"
+      ],
+      "language": "zh",
+      "question": "10月3号还有空房吗？要两间。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "预订",
+          "question_zh": "怎么查有没有空房？",
+          "answer_zh": "空房情况以预订系统实时显示为准，在页面上选择日期即可查看。",
+          "question_en": "How do I check availability?",
+          "answer_en": "Availability is shown in real time by the booking system; select your dates on the page.",
+          "keywords": [
+            "空房",
+            "预订"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "房型",
+          "question_zh": "一共有几间客房？",
+          "answer_zh": "全院共9间客房。",
+          "question_en": "How many rooms are there?",
+          "answer_en": "The house has nine guest rooms in total.",
+          "keywords": [
+            "房型",
+            "数量"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "入住",
+          "question_zh": "几点可以入住？",
+          "answer_zh": "客房15:00后开放入住。",
+          "question_en": "When can I check in?",
+          "answer_en": "Rooms are available from 3:00 p.m.",
+          "keywords": [
+            "入住",
+            "时间"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": true,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "指定日期的房态必须走实时查询，房间总数不能被当成有空房的依据。"
+    },
+    {
+      "case_id": "h4-039",
+      "split": "holdout_v4",
+      "group": "boundary",
+      "tags": [
+        "boundary",
+        "refund"
+      ],
+      "language": "zh",
+      "question": "我明天那单不想去了，能退多少钱？",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "退改",
+          "question_zh": "取消规则在哪里看？",
+          "answer_zh": "取消与退款以下单时所选的取消政策为准，具体金额请在订单页面申请取消时查看。",
+          "question_en": "Where are the cancellation rules?",
+          "answer_en": "Cancellation and refunds follow the policy chosen when booking; the exact amount is shown on the order page when you request a cancellation.",
+          "keywords": [
+            "取消",
+            "退款",
+            "退改"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "押金",
+          "question_zh": "押金什么时候退？",
+          "answer_zh": "押金在退房检查后当日原路退回。",
+          "question_en": "When is the deposit returned?",
+          "answer_en": "The deposit is refunded to the original account on the day of check-out.",
+          "keywords": [
+            "押金",
+            "退还"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "退改",
+          "question_zh": "可以改日期吗？",
+          "answer_zh": "改期需要在订单页面提交，是否可改以所选政策为准。",
+          "question_en": "Can I change the dates?",
+          "answer_en": "Date changes are submitted on the order page and depend on the policy you chose.",
+          "keywords": [
+            "改期",
+            "退改"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": true,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "具体退款金额涉及订单与政策，必须走实时查询，不能由静态退改条目给出数额。"
+    },
+    {
+      "case_id": "h4-040",
+      "split": "holdout_v4",
+      "group": "boundary",
+      "tags": [
+        "boundary",
+        "order_status"
+      ],
+      "language": "zh",
+      "question": "我这一单是不是已经付过钱了？帮我看下订单状态。",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "预订",
+          "question_zh": "订单在哪里看？",
+          "answer_zh": "订单状态与支付结果请在预订平台的订单页面查看。",
+          "question_en": "Where can I see my order?",
+          "answer_en": "Order status and payment results are shown on the order page of the booking platform.",
+          "keywords": [
+            "订单",
+            "状态"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "支付",
+          "question_zh": "支持哪些付款方式？",
+          "answer_zh": "店内可以扫码支付或付现金。",
+          "question_en": "What payment methods do you accept?",
+          "answer_en": "We accept mobile QR payments and cash.",
+          "keywords": [
+            "支付",
+            "付款"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 3,
+          "category": "押金",
+          "question_zh": "押金是多少？",
+          "answer_zh": "押金为每间200元，入住时收取。",
+          "question_en": "How much is the deposit?",
+          "answer_en": "The deposit is 200 yuan per room, taken at check-in.",
+          "keywords": [
+            "押金"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": true,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "单个订单的支付状态属于实时账务查询，静态知识与模型都不能替客人确认。"
+    }
+  ]
+}

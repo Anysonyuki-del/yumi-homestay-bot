@@ -45,6 +45,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -55,7 +56,7 @@ from homestay_bot.domain.enums import Language
 from homestay_bot.domain.models import Base, KnowledgeCandidate, KnowledgeEntry
 from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
 from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
-from homestay_bot.services.answer_policy import is_property_specific, is_transaction_sensitive
+from homestay_bot.services.answer_policy import is_transaction_sensitive
 from homestay_bot.services.knowledge_embeddings import (
     QUERY_EMBEDDING_TIMEOUT_SECONDS,
     SEMANTIC_MIN_SIMILARITY,
@@ -76,6 +77,9 @@ CASE_FILES = {
     # 第三套独立留出集（Codex 编写）：语义检索调参结束、代码冻结后才看逐条结果，
     # 平时只出汇总；用来在同一版本上比较纯关键词与关键词 + 语义。
     "holdout_v3": FIXTURES / "knowledge_retrieval_holdout_v3.json",
+    # 第四套独立留出集（另一会话编写，未参与证据门改动）：只在冻结后一次性检验
+    # 主题与属性核对的泛化效果，平时不看逐条结果。
+    "holdout_v4": FIXTURES / "knowledge_retrieval_holdout_v4.json",
 }
 BASELINE_FILE = FIXTURES / "knowledge_retrieval_baseline.json"
 BASELINE_V2_FILE = FIXTURES / "knowledge_retrieval_baseline_v2.json"
@@ -162,22 +166,82 @@ async def _apply_mutation(session, mutation: dict[str, Any]) -> None:
         raise ValueError(f"未知的知识变更：{action}")
 
 
-def reply_accepted(
-    question: str,
-    snippets: list[KnowledgeSnippet],
-    reply: str,
-    *,
-    grounded: bool,
-) -> bool:
-    """判断证据门是否会让这条模拟回复原样发给客人。
+class _ReplyChatStub:
+    """按固定 JSON 返回一次模型回复，并记录调用次数。"""
 
-    主题已覆盖之外，回复里的免费说法和数字还要有证据支持。
+    def __init__(self, payload: str) -> None:
+        """构造只回同一份决定的 completions 替身。"""
+        self._payload = payload
+        self.calls = 0
+        self.chat = SimpleNamespace(completions=self)
+
+    async def create(self, **request: Any) -> Any:
+        """返回构造时给定的回复内容。"""
+        self.calls += 1
+        message = SimpleNamespace(content=self._payload, tool_calls=[])
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class _FixedKnowledge:
+    """把本轮已检索到的证据直接交给 respond，不重复检索或向量化。"""
+
+    def __init__(self, snippets: list[KnowledgeSnippet]) -> None:
+        """保存本轮证据。"""
+        self._snippets = snippets
+
+    async def retrieve(self, language: Language, query: str, **kwargs: Any) -> list[Any]:
+        """返回同一批证据。"""
+        return list(self._snippets)
+
+
+class _UnusedTourism:
+    """评估不联网；真被调用时明确失败，而不是静默返回空结果。"""
+
+    async def search(self, **kwargs: Any) -> str:
+        """旅游搜索在评估里不应被调用。"""
+        raise AssertionError("评估不应触发联网旅游搜索")
+
+
+async def final_reply(
+    question: str,
+    language: Language,
+    snippets: list[KnowledgeSnippet],
+    model_reply: str,
+) -> str:
+    """走真实 respond 出口，返回客人最终会收到的文本。
+
+    只替换模型和检索，证据门、证据计划与精炼判断都用生产实现，避免评估自建一
+    套判断而与线上不一致。
     """
-    return grounded and not DeepSeekGuestAssistant._has_unsupported_property_claims(
-        reply,
-        question,
-        snippets,
+    payload = json.dumps(
+        {
+            "reply_text": model_reply,
+            "language": language.value,
+            "intent": "faq",
+            "confidence": 0.9,
+            "handoff_reason": None,
+            "booking_fields": None,
+            "knowledge_gap": False,
+            "knowledge_gap_topic": None,
+            "staff_confirmation_required": False,
+            "staff_confirmation_reason": None,
+        },
+        ensure_ascii=False,
     )
+    chat = _ReplyChatStub(payload)
+    assistant = DeepSeekGuestAssistant(
+        chat_client=chat,
+        tourism_searcher=_UnusedTourism(),
+        knowledge=_FixedKnowledge(snippets),
+        model="eval-stub",
+        safety_hmac_key=b"eval-key",
+    )
+    decision = await assistant.respond(
+        guest_identifier="eval-guest",
+        language=language,
+        messages=[{"role": "user", "content": question}],
+    )
+    return decision.reply_text
 
 
 @dataclass(frozen=True)
@@ -374,12 +438,14 @@ async def evaluate_case(
     if answerable and expected & set(retrieved_ids):
         evidence_complete = all(fact in evidence for fact in case["key_facts"])
     isolation_ok = not any(fact in evidence for fact in case["forbidden_facts"])
-    grounded = is_property_specific(
-        case["question"]
-    ) and DeepSeekGuestAssistant._has_relevant_property_knowledge(
+    language = Language(case["language"])
+    plan = DeepSeekGuestAssistant._static_evidence_plan(
         case["question"],
         snippets,
+        [{"role": "user", "content": case["question"]}],
     )
+    # 放行口径与生产一致：只有证据计划判为已覆盖，客人才会收到本店事实。
+    grounded = plan is not None and plan.status == "grounded"
     should_ground = bool(case["expect_grounded"])
     false_admit = (
         grounded and not should_ground if case["property_specific"] else None
@@ -387,13 +453,20 @@ async def evaluate_case(
     stub_accepted: bool | None = None
     stub_ok: bool | None = None
     if case.get("stub_reply"):
-        stub_accepted = reply_accepted(
+        final = await final_reply(
             case["question"],
+            language,
             snippets,
             case["stub_reply"],
-            grounded=grounded,
         )
-        stub_ok = stub_accepted == bool(case["stub_reply_supported"])
+        stub_accepted = final.strip() == str(case["stub_reply"]).strip()
+        # 受支持的回答可以原样保留，也可以被覆盖同一属性的审核答案取代；
+        # 不被支持的断言必须从最终输出消失，换成审核答案同样算消除。
+        stub_ok = (
+            stub_accepted or grounded
+            if case["stub_reply_supported"]
+            else not stub_accepted
+        )
     boundary_ok: bool | None = None
     realtime_routed: bool | None = None
     if case["realtime"]:
@@ -543,7 +616,7 @@ def _validate_case(case: dict[str, Any], split: str) -> None:
 
 @pytest.mark.parametrize(
     "split",
-    ["calibration", "calibration_v2", "holdout", "holdout_v2", "holdout_v3"],
+    ["calibration", "calibration_v2", "holdout", "holdout_v2", "holdout_v3", "holdout_v4"],
 )
 def test_eval_cases_are_well_formed(split: str) -> None:
     """用例结构完整、编号唯一，关键事实确实出自正确来源。"""

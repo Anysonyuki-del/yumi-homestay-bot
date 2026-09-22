@@ -18,6 +18,7 @@ from homestay_bot.integrations.tourism import (
 )
 from homestay_bot.services.answer_policy import (
     facility_fault_exclusion,
+    has_facility_fault_signal,
     is_booking_action_request,
     is_property_specific,
     is_service_request,
@@ -34,6 +35,14 @@ from homestay_bot.services.guest_reply_policy import (
     human_contact_reply,
     remove_ungrounded_property_claims,
     sanitize_guest_reply,
+)
+from homestay_bot.services.knowledge_evidence_policy import (
+    CLARIFY_REPLY_EN,
+    CLARIFY_REPLY_ZH,
+    EvidencePlan,
+    already_clarified,
+    build_evidence_plan,
+    compose_static_reply,
 )
 from homestay_bot.services.knowledge_service import (
     KnowledgeService,
@@ -55,7 +64,12 @@ logger = logging.getLogger(__name__)
 
 # 讲周边商户或公共设施的句子不能证明本店提供；只有客人本来就在问周边时才算数。
 _EXTERNAL_SCOPE_PATTERN = re.compile(
-    r"附近|周边|周围|楼下|街口|隔壁|对面|nearby|next\s+door|across\s+the\s+street|downstairs",
+    # 巷口、路口这类指路说法同样在讲店外商户；漏一个词，周边商户的早餐就会被
+    # 当成本店早餐的证据。明确声明与本店无关的句子也按店外处理。
+    r"附近|周边|周围|楼下|街口|巷口|巷子口|路口|隔壁|对面|不远处"
+    r"|与本店(?:没有|无)(?:合作|关系)|非本店|不是本店"
+    r"|nearby|next\s+door|across\s+the\s+street|downstairs|down\s+the\s+lane"
+    r"|around\s+the\s+corner|not\s+affiliated",
     re.IGNORECASE,
 )
 _EVIDENCE_SENTENCE_SPLIT = re.compile(r"[。！？!?；;\n]+|(?<=\.)\s+")
@@ -137,6 +151,11 @@ _DISTANCE_DESTINATION_PATTERNS = (
 )
 _PLACE_FILLER_WORDS = frozenset({"the", "and", "our", "your", "homestay", "from", "near"})
 # 标题或分类在讲价格、费用的条目；问实时房价房态时，与所问主题无关的这类条目不交给模型。
+# 金额断言：房价类问题里出现具体金额时，必须有实时工具结果支撑。
+_MONEY_CLAIM_PATTERN = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:元|块|yuan|rmb|cny)|[¥$]\s*\d",
+    re.IGNORECASE,
+)
 _PRICE_ENTRY_PATTERN = re.compile(
     r"价格|价钱|房价|房费|费用|收费|多少钱|参考价|\bprices?\b|\brates?\b|\bcosts?\b|\bfees?\b",
     re.IGNORECASE,
@@ -711,12 +730,17 @@ class DeepSeekGuestAssistant:
         property_knowledge_grounded: bool,
         faq_candidate_ids: set[int],
         knowledge_evidence: list[Any] | None = None,
+        evidence_plan: EvidencePlan | None = None,
+        tool_grounded: bool = False,
     ) -> AssistantDecision:
         """校验模型 JSON，并执行确定性风险归一化。
 
         knowledge_evidence 是本次实际交给模型的审核知识，仅在专属事实只靠知识
         （而非百居易工具）确认时传入：主题有证据不等于回复里的「免费」和数字
         也有证据，对不上就按未确认处理。
+
+        evidence_plan 只在静态本店问答分支传入：证据齐全时直接采用审核答案原文，
+        不确认时给保守回复，模型改写不参与最终事实。
         """
         decision = AssistantDecision.model_validate_json(output_text)
         local_handoff_reason = determine_handoff_reason(question_text)
@@ -778,33 +802,7 @@ class DeepSeekGuestAssistant:
             and not reply_grounded
             and decision.task_suggestion is None
         ):
-            topics = detect_property_topics(question_text)
-            topic = self._property_topic(question_text)
-            safe_reply = (
-                f"当前审核资料尚未确认{topic}信息。"
-                "建议到店前由工作人员进一步确认，"
-                "并先准备不依赖该信息的替代安排。"
-            )
-            if topic == "停车":
-                safe_reply = (
-                    "当前审核资料尚未确认民宿停车信息。"
-                    "建议先考虑附近公共停车场或合规停车位，"
-                    "到店前再请工作人员确认周边停车安排。"
-                )
-            if decision.language is Language.EN:
-                # 英文客人收到英文兜底；用词与中文一致：只说未确认，给替代建议。
-                safe_reply = (
-                    "Our reviewed information hasn't confirmed "
-                    f"{topics[0].english if topics else 'this detail about the homestay'} yet. "
-                    "Please check with our staff before you arrive, and keep a backup "
-                    "plan that doesn't depend on it."
-                )
-                if topic == "停车":
-                    safe_reply = (
-                        "Our reviewed information hasn't confirmed parking at the homestay "
-                        "yet. You may want to consider a nearby public car park or another "
-                        "legal parking spot, and ask our staff to confirm before you arrive."
-                    )
+            safe_reply = self._unconfirmed_reply(question_text, decision.language)
             updates.update(
                 {
                     "reply_text": safe_reply,
@@ -836,7 +834,49 @@ class DeepSeekGuestAssistant:
                     "staff_confirmation_reason": None,
                 }
             )
+        if (
+            transaction_sensitive
+            and not tool_grounded
+            and _MONEY_CLAIM_PATTERN.search(str(updates.get("reply_text", decision.reply_text)))
+        ):
+            # 房价、房费只能来自实时查询。没有工具结果时模型给出的金额一律不发出，
+            # 交由员工核实，避免高置信度的编造价格直接到客人手里。
+            logger.info("交易金额缺少实时依据，改为待员工确认")
+            updates.update(
+                {
+                    "reply_text": (
+                        "Prices and availability need a live check, so I can't confirm "
+                        "an amount here. A staff member will confirm it for you."
+                        if decision.language is Language.EN
+                        else "房价和房态以实时查询为准，当前无法确认具体金额，"
+                        "稍后由工作人员为您核实。"
+                    ),
+                    "knowledge_gap": False,
+                    "knowledge_gap_topic": None,
+                    "staff_confirmation_required": True,
+                    "staff_confirmation_reason": "unverified_price_claim",
+                }
+            )
         normalized = decision.model_copy(update=updates)
+        if evidence_plan is not None and self._plan_handles_reply(
+            evidence_plan,
+            normalized,
+        ):
+            normalized = self._apply_evidence_plan(
+                normalized,
+                evidence_plan,
+                question_text,
+            )
+            if evidence_plan.status == "unclear":
+                # 连问的是哪一项都没确认，不能据此沉淀 FAQ 候选。
+                return normalized.model_copy(
+                    update={
+                        "faq_candidate": False,
+                        "faq_candidate_id": None,
+                        "faq_canonical_question": None,
+                        "faq_category": None,
+                    }
+                )
         candidate_allowed = (
             normalized.knowledge_gap
             and not transaction_sensitive
@@ -986,6 +1026,132 @@ class DeepSeekGuestAssistant:
         return (
             "建议先统一预算和重点安排，再分工查询交通、景点与餐饮，"
             "用共享文档集中记录，并为每天预留机动时间。"
+        )
+
+    @staticmethod
+    def _plan_handles_reply(
+        plan: EvidencePlan | None,
+        decision: AssistantDecision,
+    ) -> bool:
+        """静态证据计划是否接管本轮回复。
+
+        本轮真的产生了服务任务或设施归属时，回复属于服务分支，静态知识不替换它。
+        """
+        return (
+            plan is not None
+            and plan.handles_reply
+            and decision.task_suggestion is None
+            and decision.facility_issue is None
+        )
+
+    @classmethod
+    def _static_evidence_plan(
+        cls,
+        question_text: str,
+        knowledge: list[Any],
+        messages: list[dict[str, str]],
+    ) -> EvidencePlan | None:
+        """只为静态本店问答建立证据计划。
+
+        设施故障与交易类问题各有既定分支和权限，静态知识不接管它们的回复；
+        房态、价格等交易事实仍由工具和既有确认流程负责。服务请求按本轮决定里
+        是否真的产生了任务来判断，不在这里用词面拦截：`is_service_request` 会把
+        「早餐几点送到？另外停车怎么收费？」这类问句也算作请求，用它跳过证据门
+        等于留了一个绕过口。
+        """
+        if has_facility_fault_signal(question_text) or is_transaction_sensitive(
+            question_text
+        ):
+            return None
+        plan = build_evidence_plan(
+            question_text,
+            knowledge,
+            supporting_for_topic=cls._supporting_knowledge,
+            is_property_question=is_property_specific(question_text),
+        )
+        if plan.status == "unclear" and already_clarified(messages):
+            # 同一会话已经澄清过一次，再问下去只会消耗客人耐心。
+            return EvidencePlan(
+                "insufficient",
+                plan.topics,
+                (),
+                "intent_unconfirmed_after_clarification",
+            )
+        return plan
+
+    @classmethod
+    def _apply_evidence_plan(
+        cls,
+        decision: AssistantDecision,
+        plan: EvidencePlan,
+        question_text: str,
+    ) -> AssistantDecision:
+        """按证据计划决定静态本店问答的最终回复。
+
+        证据齐全时用覆盖所问属性的审核答案原文，模型的改写一律不采用；证据不足
+        或问的是哪一项都没确认时给保守回复。只记录计划原因，不记录客人问题。
+        """
+        if plan.status == "grounded":
+            return decision.model_copy(
+                update={
+                    "reply_text": compose_static_reply(plan.answers),
+                    "knowledge_gap": False,
+                    "knowledge_gap_topic": None,
+                }
+            )
+        logger.info("静态知识未采用模型回复：reason=%s", plan.reason)
+        if plan.status == "unclear":
+            return decision.model_copy(
+                update={
+                    "reply_text": (
+                        CLARIFY_REPLY_EN
+                        if decision.language is Language.EN
+                        else CLARIFY_REPLY_ZH
+                    ),
+                    "knowledge_gap": False,
+                    "knowledge_gap_topic": None,
+                    "task_suggestion": None,
+                }
+            )
+        return decision.model_copy(
+            update={
+                "reply_text": cls._unconfirmed_reply(question_text, decision.language),
+                "knowledge_gap": True,
+                "knowledge_gap_topic": "property_information",
+                "staff_confirmation_required": False,
+                "staff_confirmation_reason": None,
+            }
+        )
+
+    @classmethod
+    def _unconfirmed_reply(cls, question_text: str, language: Language) -> str:
+        """审核资料不足时的保守回复：只说未确认，并给不依赖该信息的建议。"""
+        topics = detect_property_topics(question_text)
+        topic = cls._property_topic(question_text)
+        if language is Language.EN:
+            if topic == "停车":
+                return (
+                    "Our reviewed information hasn't confirmed parking at the homestay "
+                    "yet. You may want to consider a nearby public car park or another "
+                    "legal parking spot, and ask our staff to confirm before you arrive."
+                )
+            # 英文客人收到英文兜底；用词与中文一致：只说未确认，给替代建议。
+            return (
+                "Our reviewed information hasn't confirmed "
+                f"{topics[0].english if topics else 'this detail about the homestay'} yet. "
+                "Please check with our staff before you arrive, and keep a backup "
+                "plan that doesn't depend on it."
+            )
+        if topic == "停车":
+            return (
+                "当前审核资料尚未确认民宿停车信息。"
+                "建议先考虑附近公共停车场或合规停车位，"
+                "到店前再请工作人员确认周边停车安排。"
+            )
+        return (
+            f"当前审核资料尚未确认{topic}信息。"
+            "建议到店前由工作人员进一步确认，"
+            "并先准备不依赖该信息的替代安排。"
         )
 
     @staticmethod
@@ -1595,6 +1761,7 @@ class DeepSeekGuestAssistant:
             question_text,
             knowledge,
         )
+        evidence_plan = self._static_evidence_plan(question_text, knowledge, messages)
         property_tool_grounded = False
         availability_fallback: AssistantDecision | None = None
         model_calls = 0
@@ -1657,7 +1824,19 @@ class DeepSeekGuestAssistant:
                             knowledge_evidence=(
                                 None if property_tool_grounded else knowledge
                             ),
+                            # 工具已经确认事实时不走静态知识分支，避免删掉实时结果。
+                            evidence_plan=(
+                                None if property_tool_grounded else evidence_plan
+                            ),
+                            tool_grounded=property_tool_grounded,
                         )
+                        if not property_tool_grounded and self._plan_handles_reply(
+                            evidence_plan,
+                            decision,
+                        ):
+                            # 审核原文与保守回复都是确定性输出，再经精炼只会让
+                            # 温度、时段等事实重新被改写。
+                            return decision
                         refined_reply = await self._refine_reply(
                             decision.reply_text
                         )

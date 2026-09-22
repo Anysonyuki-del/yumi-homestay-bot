@@ -23,9 +23,11 @@ logger = logging.getLogger(__name__)
 EMBEDDING_INPUT_MAX_CHARS = 6_000
 # 客人等待回复时的查询向量化上限；超时直接退回关键词检索。
 QUERY_EMBEDDING_TIMEOUT_SECONDS = 3.0
-# ponytail: 以下为尚未真实校准的初值；开启前用校准集确定并冻结，再跑独立留出集。
 SEMANTIC_TOP_K = 8
-SEMANTIC_MIN_SIMILARITY = 0.5
+# ponytail: 2026-09-22 用 bge-m3 真实向量在 calibration_v2 上校准：0.35～0.50 召回同为
+# 1.000，0.55 起丢召回（0.955），取平台中段 0.45 留余量；calibration 各值均无退化。
+# 相似度只决定召回，不作证据，错误放行与隔离在各阈值下不变。换模型须重新校准。
+SEMANTIC_MIN_SIMILARITY = 0.45
 # 每小时补齐：单次请求的条数与单轮总数上限，限制单轮外发量与耗时。
 SYNC_BATCH_SIZE = 16
 SYNC_MAX_PER_ROUND = 200

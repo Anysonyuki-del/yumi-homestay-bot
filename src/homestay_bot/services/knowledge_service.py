@@ -155,12 +155,122 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
         "入住退房时间",
         _topic_pattern(
             r"(?:几点|什么时候|何时).{0,4}(?:入住|退房)|(?:入住|退房)(?:时间|几点)"
-            r"|延迟退房|晚一?点退房|退房.{0,6}晚一?点|退房.{0,4}(?:延|推迟)"
+            r"|延迟退房|晚一?点退房|退房.{0,6}晚一?点|退房.{0,4}(?:延|推迟)|办理入住"
             r"|late\s+check-?\s?out|check-?\s?(?:in|out)\s+time"
             r"|what\s+time\s+(?:is\s+|can\s+i\s+)?check-?\s?(?:in|out)"
+            # 英文客人常直接说 check in，没有 time 这个词，也要认成入住问题。
+            r"|\bcheck[\s-]?(?:in|out)\b"
         ),
         "入住 退房 check-in check-out",
         english="check-in and check-out times",
+    ),
+    # 以下主题按第三套留出集暴露的漏检补齐：问题落在清单外时证据门只能保守
+    # 拒答，客人拿不到本来有答案的信息。别名仍只收明确指向本店设施或政策的
+    # 说法，天气降温、手机没电、城市景点都不算。
+    PropertyTopic(
+        "温控",
+        _topic_pattern(
+            r"空调|暖气|制热|制冷|室温|房间.{0,4}温度|温度.{0,6}(?:调|设)|调(?:凉|暖)|闷热"
+            r"|air\s?condition(?:ing|er)?|\bheating\b|thermostat|room\s+temperature"
+        ),
+        "空调 温度 air conditioning",
+        english="room temperature control",
+    ),
+    PropertyTopic(
+        "卫浴",
+        _topic_pattern(
+            # 「还有热水吗」在问本店供水；热水壶、热水瓶属于饮用水主题，排除掉。
+            r"浴室|卫生间|洗手间|淋浴|花洒|热水器|热水(?!壶|瓶)|马桶|排风"
+            r"|bathroom|shower|toilet|hot\s+water"
+        ),
+        "卫生间 浴室 bathroom",
+        english="the bathroom",
+    ),
+    PropertyTopic(
+        "安静时段",
+        _topic_pattern(
+            r"安静时段|静音时段|噪音.{0,6}(?:规定|时间|时段|要求)|quiet\s+hours?"
+        ),
+        "安静时段 quiet hours",
+        english="quiet hours",
+    ),
+    PropertyTopic(
+        "床品",
+        _topic_pattern(
+            r"床单|被子|被褥|枕头|毛毯|床品|bedding|duvet|pillows?|blankets?|bed\s+sheets?"
+        ),
+        "床品 被子 bedding",
+        english="bedding",
+    ),
+    PropertyTopic(
+        "洗护用品",
+        _topic_pattern(
+            r"洗漱用品|洗护用品|洗发水|沐浴露|牙刷|牙膏|毛巾"
+            r"|toiletries|shampoo|body\s?wash|towels?"
+        ),
+        "洗漱用品 毛巾 toiletries",
+        english="toiletries",
+    ),
+    PropertyTopic(
+        "儿童",
+        _topic_pattern(
+            r"儿童|小孩|孩子|婴儿床|婴儿|宝宝|child(?:ren)?|\bkids?\b|\bbaby\b|infant|\bcot\b|crib"
+        ),
+        "儿童 婴儿 child",
+        english="children",
+    ),
+    PropertyTopic(
+        "客房清洁",
+        _topic_pattern(
+            r"打扫|保洁|清洁服务|换洗|housekeeping|cleaning\s+service|room\s+cleaning"
+        ),
+        "保洁 打扫 housekeeping",
+        english="housekeeping",
+    ),
+    PropertyTopic(
+        "用电",
+        _topic_pattern(
+            r"插座|电源插|用电|电压|电闸|跳闸|socket|power\s+outlet|voltage|circuit\s+breaker"
+        ),
+        "插座 电压 socket",
+        english="power outlets",
+    ),
+    PropertyTopic(
+        "饮用水",
+        _topic_pattern(
+            r"饮用水|直饮水|喝的水|烧水|热水壶|drinking\s+water|\bkettle\b"
+        ),
+        "饮用水 热水壶 drinking water",
+        english="drinking water",
+    ),
+    PropertyTopic(
+        "代收",
+        _topic_pattern(r"快递|包裹|代收|收件|parcels?|packages?|courier|deliveries"),
+        "快递 包裹 parcel",
+        english="parcel handling",
+    ),
+    PropertyTopic(
+        "电视",
+        _topic_pattern(r"电视|投影仪?|\btv\b|television|projector"),
+        "电视 投影 tv",
+        english="the television",
+    ),
+    PropertyTopic(
+        "消防安全",
+        _topic_pattern(
+            r"消防|灭火器|安全出口|逃生|fire\s+(?:exit|extinguisher|safety)|emergency\s+exit"
+        ),
+        "消防 灭火器 fire safety",
+        english="fire safety",
+    ),
+    PropertyTopic(
+        "公共区域",
+        _topic_pattern(
+            r"公共区域|公区|一楼客厅|客厅|大厅|露台|天台|观景台|阳台"
+            r"|lounge|common\s+area|terrace|rooftop|balcony"
+        ),
+        "公共区域 客厅 lounge",
+        english="the shared areas",
     ),
 )
 

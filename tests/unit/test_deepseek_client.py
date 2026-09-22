@@ -769,7 +769,8 @@ async def test_deepseek_chat_returns_structured_decision_without_raw_guest_id() 
     )
 
     request = client.chat.completions.requests[0]
-    assert decision.reply_text == "下午三点后可以入住。"
+    # 静态本店问答改发审核答案原文，模型复述的措辞不参与最终事实。
+    assert decision.reply_text == "下午三点后入住。"
     assert request["model"] == "deepseek-v4-flash"
     assert request["response_format"] == {"type": "json_object"}
     assert request["extra_body"] == {"thinking": {"type": "disabled"}}
@@ -2384,8 +2385,12 @@ async def _respond_with(
     knowledge: list[KnowledgeSnippet],
     *,
     language: Language = Language.ZH,
+    history: list[dict[str, str]] | None = None,
 ):
-    """让模型替身返回指定回复，走完真实 respond→上下文→校验链路。"""
+    """让模型替身返回指定回复，走完真实 respond→上下文→校验链路。
+
+    `history` 追加在当前问题之前，供需要上一轮澄清记录的用例使用。
+    """
     payload = decision_payload()
     payload.update({"reply_text": reply_text, "language": language.value})
     client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
@@ -2400,16 +2405,16 @@ async def _respond_with(
     decision = await assistant.respond(
         guest_identifier="wm-guest",
         language=language,
-        messages=[{"role": "user", "content": question}],
+        messages=[*(history or []), {"role": "user", "content": question}],
     )
     return decision, client
 
 
 @pytest.mark.asyncio
 async def test_synonym_parking_question_keeps_grounded_reply() -> None:
-    """「泊车」这类同义问法召回停车知识后，证据门认可，本店信息不被当宣传删掉。
+    """「泊车」这类同义问法召回停车知识后，证据门认可并返回审核答案原文。
 
-    「我们民宿门口有…」在非专属问题里会被逐句删除；这里必须原样保留。
+    本店信息不会被当作未审核宣传删掉；模型的改写不参与最终事实。
     """
     entrance_parking = KnowledgeSnippet(
         source_id=1,
@@ -2421,7 +2426,7 @@ async def test_synonym_parking_question_keeps_grounded_reply() -> None:
 
     decision, client = await _respond_with("能泊车不", reply, [entrance_parking])
 
-    assert decision.reply_text == reply
+    assert decision.reply_text == entrance_parking.answer
     assert decision.knowledge_gap is False
     request = client.chat.completions.requests[0]
     assert "2 个临时车位" in request["messages"][-1]["content"]
@@ -2429,46 +2434,53 @@ async def test_synonym_parking_question_keeps_grounded_reply() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("query", "question", "answer", "reply"),
+    ("query", "question", "answer", "reply", "grounded"),
     [
         (
             "你们提供早餐吗？", "你们提供早餐吗？",
-            "楼下早餐店提供早餐，另行收费。", "我们提供早餐，另行收费。",
+            "楼下早餐店提供早餐，另行收费。", "我们提供早餐，另行收费。", False,
         ),
         (
             "你们提供早餐吗？", "附近哪里可以买早餐？",
-            "青禾路口有早餐商户。", "我们提供早餐。",
+            "青禾路口有早餐商户。", "我们提供早餐。", False,
         ),
         (
             "你们停车收费吗？", "你们停车收费吗？",
-            "停车不免费，需要收费。", "我们提供免费停车。",
+            "停车不免费，需要收费。", "我们提供免费停车。", True,
         ),
         (
             "你们停车收费吗？", "停车是否免费？",
-            "停车收费，请参考停车场公示。", "我们提供免费停车。",
+            "停车收费，请参考停车场公示。", "我们提供免费停车。", True,
         ),
         (
             "你们停车是10元吗？", "你们停车如何收费？",
-            "停车需要收费，以停车场公示为准。", "停车收费10元。",
+            "停车需要收费，以停车场公示为准。", "停车收费10元。", True,
         ),
         (
             "你们停车收费吗？", "停车是10元吗？",
-            "停车需要收费，以停车场公示为准。", "停车收费10元。",
+            "停车需要收费，以停车场公示为准。", "停车收费10元。", True,
         ),
     ],
     ids=["question-only", "nearby-scope", "negated-free", "free-in-title",
          "number-in-query", "number-in-title"],
 )
 async def test_property_evidence_requires_reviewed_answer_facts(
-    query: str, question: str, answer: str, reply: str,
+    query: str, question: str, answer: str, reply: str, grounded: bool,
 ) -> None:
-    """问题、标题、否定词与周边信息不能为本店事实背书，真实回复链路必须拦下。"""
+    """问题、标题、否定词与周边信息不能为本店事实背书，真实回复链路必须拦下。
+
+    审核答案确实讲了所问属性时改发原文，模型的错误说法一律不发出；答案讲的是
+    周边或别的属性时仍然退回未确认。
+    """
     snippet = KnowledgeSnippet(1, "测试", question, answer)
 
     decision, _ = await _respond_with(query, reply, [snippet])
 
     assert decision.reply_text != reply
-    assert decision.reply_text.startswith("当前审核资料尚未确认")
+    if grounded:
+        assert decision.reply_text == answer
+    else:
+        assert decision.reply_text.startswith("当前审核资料尚未确认")
 
 
 @pytest.mark.asyncio
@@ -2494,10 +2506,13 @@ async def test_property_evidence_requires_reviewed_answer_facts(
 async def test_reviewed_answer_facts_remain_usable(
     query: str, question: str, answer: str, reply: str,
 ) -> None:
-    """修复证据边界后，明确否定、已审核费用与周边问题仍能正常回答。"""
+    """修复证据边界后，明确否定、已审核费用与周边问题仍能正常回答。
+
+    回答内容取自审核答案原文，不再取决于模型复述得准不准。
+    """
     decision, _ = await _respond_with(query, reply, [KnowledgeSnippet(1, "测试", question, answer)])
 
-    assert decision.reply_text == reply
+    assert decision.reply_text == answer
 
 
 @pytest.mark.asyncio
@@ -2517,7 +2532,7 @@ async def test_category_alone_does_not_prove_a_property_fact() -> None:
 
 @pytest.mark.asyncio
 async def test_free_claim_without_evidence_falls_back_to_unconfirmed() -> None:
-    """证据说收费、模型却说免费：拦下并退回未确认回复，且不当作知识缺口候选。"""
+    """证据说收费、模型却说免费：拦下错误说法，改发审核答案原文。"""
     decision, _ = await _respond_with(
         "你们能停车吗",
         "可以免费停车，直接开到门口就行。",
@@ -2525,13 +2540,13 @@ async def test_free_claim_without_evidence_falls_back_to_unconfirmed() -> None:
     )
 
     assert "免费" not in decision.reply_text
-    assert decision.reply_text.startswith("当前审核资料尚未确认民宿停车信息")
+    assert decision.reply_text == PAID_PARKING.answer
     assert decision.faq_candidate is False
 
 
 @pytest.mark.asyncio
 async def test_number_missing_from_evidence_falls_back_to_unconfirmed() -> None:
-    """回复里的金额在证据中找不到时，不能原样发给客人。"""
+    """回复里的金额在证据中找不到时，不能原样发给客人，改发审核答案原文。"""
     decision, _ = await _respond_with(
         "我家狗子能一起住吗",
         "可以带狗，每晚清洁费 30 元。",
@@ -2539,17 +2554,17 @@ async def test_number_missing_from_evidence_falls_back_to_unconfirmed() -> None:
     )
 
     assert "30 元" not in decision.reply_text
-    assert decision.reply_text.startswith("当前审核资料尚未确认宠物信息")
+    assert decision.reply_text == PET_POLICY.answer
 
 
 @pytest.mark.asyncio
 async def test_supported_numbers_and_free_claims_pass() -> None:
-    """复述证据里的数字和免费说法照常放行，列表序号不算金额。"""
+    """证据齐全时正常回答，内容取自审核答案原文，费用与条件一并保留。"""
     reply = "1. 可以携带 10 公斤以下的猫狗。\n2. 每只每晚加收清洁费 50 元。"
 
     decision, _ = await _respond_with("可以带猫吗", reply, [PET_POLICY])
 
-    assert decision.reply_text == reply
+    assert decision.reply_text == PET_POLICY.answer
 
 
 @pytest.mark.asyncio
@@ -2572,7 +2587,7 @@ async def test_policy_sentence_about_the_homestay_grounds_breakfast() -> None:
 
     decision, _ = await _respond_with("你们包早餐吗", reply, [BREAKFAST_POLICY])
 
-    assert decision.reply_text == reply
+    assert decision.reply_text == BREAKFAST_POLICY.answer
 
 
 @pytest.mark.asyncio
@@ -2606,19 +2621,19 @@ async def test_english_question_is_grounded_by_english_knowledge() -> None:
         language=Language.EN,
     )
 
-    assert decision.reply_text == reply
+    assert decision.reply_text == english_parking.answer
     assert decision.knowledge_gap is False
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("query", "question", "answer", "reply"),
+    ("query", "question", "answer", "reply", "grounded"),
     [
         (
             "几点可以入住",
             "可以带宠物入住吗？",
             "可以携带 10 公斤以下的猫狗入住，每只每晚加收清洁费 50 元。",
-            "下午两点以后就可以入住啦。",
+            "下午两点以后就可以入住啦。", False,
         ),
         (
             # 中文距离问法会先转联网旅游搜索，英文问法才走知识证据门。
@@ -2626,25 +2641,25 @@ async def test_english_question_is_grounded_by_english_knowledge() -> None:
             "Is there parking?",
             "When the spaces are full, the public car park is 300 meters down the lane "
             "and costs about 5 yuan per hour.",
-            "The metro station is about 300 meters from us.",
+            "The metro station is about 300 meters from us.", False,
         ),
         (
             "你们能停车吗",
             "民宿有停车位吗？",
             "民宿没有专属车位。附近公共停车场收费，每天约 40 元，需要自理。",
-            "不用预约也能免费停车。",
+            "不用预约也能免费停车。", True,
         ),
         (
             "可以加床吗",
             "冷了可以加被子吗？",
             "房间衣柜里备有备用被，需要的话可以加一床被子。",
-            "可以的，房间可以加一床。",
+            "可以的，房间可以加一床。", False,
         ),
     ],
     ids=["checkin-word-alone", "any-meters-as-distance", "distant-negation", "quilt-measure-word"],
 )
 async def test_topic_words_elsewhere_in_an_answer_do_not_prove_the_asked_fact(
-    query: str, question: str, answer: str, reply: str,
+    query: str, question: str, answer: str, reply: str, grounded: bool,
 ) -> None:
     """答案里顺带出现的主题字眼不能为所问事实作证。
 
@@ -2661,6 +2676,10 @@ async def test_topic_words_elsewhere_in_an_answer_do_not_prove_the_asked_fact(
     )
 
     assert decision.reply_text != reply
+    if grounded:
+        # 「没有专属车位」确实回答了能不能停车，改发这条审核答案原文。
+        assert decision.reply_text == answer
+        return
     fallback = (
         "Our reviewed information hasn't confirmed"
         if language is Language.EN
@@ -2733,7 +2752,7 @@ async def test_distance_evidence_must_name_the_asked_destination() -> None:
         language=Language.EN,
     )
 
-    assert grounded.reply_text == reply
+    assert grounded.reply_text == to_jianghan.answer
     assert elsewhere.reply_text.startswith("Our reviewed information hasn't confirmed the distance")
 
 
