@@ -8,6 +8,10 @@ _TRANSACTION_PATTERN = re.compile(
     r"房态|有房|空房|余房|剩房|满房|订满|可订|价格|房价|多少钱|参考价|退款|退多少|"
     r"取消|改期|付款|支付|到账|订单|预订状态|发票金额|"
     r"availability|room rate|price|refund|cancel|reschedule|"
+    # 英文房费问法也属于交易：限定「how much is/for/does…room」这类问价结构，
+    # 不把「how much space in the room」「room service」当房价。
+    r"\bhow\s+much\s+(?:is|are|does|do|would|will|for|to\s+(?:book|stay|rent))\b"
+    r"[^?.!\n]{0,40}\brooms?\b(?!\s+service)|"
     r"payment|reservation status|invoice amount",
     re.IGNORECASE,
 )

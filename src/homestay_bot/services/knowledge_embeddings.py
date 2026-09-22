@@ -23,8 +23,7 @@ logger = logging.getLogger(__name__)
 EMBEDDING_INPUT_MAX_CHARS = 6_000
 # 客人等待回复时的查询向量化上限；超时直接退回关键词检索。
 QUERY_EMBEDDING_TIMEOUT_SECONDS = 3.0
-# ponytail: 语义召回的候选数与相似度下限是按校准集确定的固定常量；换模型或知识库
-# 规模变化明显时，需要用校准集重新确定并冻结，再跑留出集。
+# ponytail: 以下为尚未真实校准的初值；开启前用校准集确定并冻结，再跑独立留出集。
 SEMANTIC_TOP_K = 8
 SEMANTIC_MIN_SIMILARITY = 0.5
 # 每小时补齐：单次请求的条数与单轮总数上限，限制单轮外发量与耗时。
@@ -123,12 +122,20 @@ class OpenAICompatibleEmbeddingClient:
         self._model = model
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        """按输入顺序返回向量；数量不符或出现空向量时整批作废。"""
+        """校验外部响应的索引、维度和有限非零数值，任一异常均整批作废。"""
         response = await self._client.embeddings.create(model=self._model, input=texts)
         items = sorted(response.data, key=lambda item: item.index)
+        if [item.index for item in items] != list(range(len(texts))):
+            raise EmbeddingUnavailableError("向量索引无效")
         vectors = [[float(value) for value in item.embedding] for item in items]
-        if len(vectors) != len(texts) or any(not vector for vector in vectors):
-            raise EmbeddingUnavailableError("向量数量或内容无效")
+        dimensions = 1024 if self._model == "BAAI/bge-m3" else (len(vectors[0]) if vectors else 0)
+        if any(
+            not vector or len(vector) != dimensions
+            or not all(math.isfinite(value) for value in vector)
+            or not any(vector)
+            for vector in vectors
+        ):
+            raise EmbeddingUnavailableError("向量维度或数值无效")
         return vectors
 
 

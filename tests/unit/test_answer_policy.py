@@ -127,3 +127,20 @@ def test_vacancy_wording_is_a_realtime_availability_question() -> None:
         assert is_transaction_sensitive(question), question
         assert DeepSeekGuestAssistant._should_force_availability(question), question
     assert not is_transaction_sensitive("这间房空调怎么开")
+
+
+@pytest.mark.parametrize(
+    ("question", "sensitive"),
+    [
+        ("How much is one room tonight?", True),
+        ("How much for a room tonight?", True),
+        ("How much would a double room be?", True),
+        ("How much space is in the room?", False),
+        ("How much does room service cost?", False),
+    ],
+)
+def test_english_room_price_questions_are_transactions_but_room_details_are_not(
+    question: str, sensitive: bool,
+) -> None:
+    """英文问房价归为交易；问房间空间或客房服务不算房价。"""
+    assert is_transaction_sensitive(question) is sensitive

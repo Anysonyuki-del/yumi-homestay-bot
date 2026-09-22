@@ -1,0 +1,2520 @@
+{
+  "schema_version": 1,
+  "split": "calibration_v2",
+  "author": "claude",
+  "cases": [
+    {
+      "case_id": "c2-syn-01",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "洗完澡水一会儿就凉了，正常吗",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "隔音",
+          "question_zh": "房间隔音怎么样？",
+          "answer_zh": "房间做了双层窗，夜间比较安静；临街的 101 和 102 在周末晚上可能听到街上的声音。",
+          "question_en": "How is the soundproofing?",
+          "answer_en": "Rooms have double-glazed windows and are fairly quiet at night; street-facing rooms 101 and 102 may hear street noise on weekend nights.",
+          "keywords": [
+            "隔音"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        1
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "加热约 40 分钟"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "热水场景描述"
+    },
+    {
+      "case_id": "c2-syn-02",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "晚上会不会被吵到睡不着",
+      "knowledge": [
+        {
+          "id": 2,
+          "category": "隔音",
+          "question_zh": "房间隔音怎么样？",
+          "answer_zh": "房间做了双层窗，夜间比较安静；临街的 101 和 102 在周末晚上可能听到街上的声音。",
+          "question_en": "How is the soundproofing?",
+          "answer_en": "Rooms have double-glazed windows and are fairly quiet at night; street-facing rooms 101 and 102 may hear street noise on weekend nights.",
+          "keywords": [
+            "隔音"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        2
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "比较安静"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "隔音场景描述"
+    },
+    {
+      "case_id": "c2-syn-03",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "进楼要刷卡还是输什么码",
+      "knowledge": [
+        {
+          "id": 3,
+          "category": "门禁",
+          "question_zh": "怎么进楼？",
+          "answer_zh": "楼门是密码门禁，入住当天管家会把当天有效的开门码发给您，房门用同一个码。",
+          "question_en": "How do I get into the building?",
+          "answer_en": "The building door uses a keypad; on check-in day the host sends you a code valid that day, and the same code opens your room.",
+          "keywords": [
+            "门禁"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 5,
+          "category": "快递",
+          "question_zh": "可以代收快递吗？",
+          "answer_zh": "可以代收，收件人写您的名字加「江岸小筑前台」，到件后放在一楼快递柜，入住期间凭房号领取。",
+          "question_en": "Can you receive parcels for me?",
+          "answer_en": "Yes. Address it with your name plus \"Jiang'an Xiaozhu front desk\"; parcels go into the ground-floor locker and you can collect them with your room number during your stay.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        3
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "开门码"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "门禁换说法"
+    },
+    {
+      "case_id": "c2-syn-04",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "湿衣服能挂哪儿",
+      "knowledge": [
+        {
+          "id": 4,
+          "category": "晾衣",
+          "question_zh": "衣服晾在哪里？",
+          "answer_zh": "阳台有公共晾衣架，雨天可以用一楼洗衣区的烘干机。",
+          "question_en": "Where can I dry my clothes?",
+          "answer_en": "There is a shared drying rack on the balcony; on rainy days use the dryer in the ground-floor laundry area.",
+          "keywords": [
+            "晾衣"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        4
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "公共晾衣架"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "晾衣口语"
+    },
+    {
+      "case_id": "c2-syn-05",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "网上买的东西能寄到你们这吗",
+      "knowledge": [
+        {
+          "id": 5,
+          "category": "快递",
+          "question_zh": "可以代收快递吗？",
+          "answer_zh": "可以代收，收件人写您的名字加「江岸小筑前台」，到件后放在一楼快递柜，入住期间凭房号领取。",
+          "question_en": "Can you receive parcels for me?",
+          "answer_en": "Yes. Address it with your name plus \"Jiang'an Xiaozhu front desk\"; parcels go into the ground-floor locker and you can collect them with your room number during your stay.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 15,
+          "category": "周边",
+          "question_zh": "附近哪里有快递驿站？",
+          "answer_zh": "巷口左转 100 米有一家快递驿站，营业到 20:00。",
+          "question_en": "Where is the nearest parcel station?",
+          "answer_en": "Turn left at the lane entrance; a parcel station is 100 meters away and open until 20:00.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        5
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "一楼快递柜"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "代收快递换说法"
+    },
+    {
+      "case_id": "c2-syn-06",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "带着一岁宝宝吃饭，有能坐的小椅子吗",
+      "knowledge": [
+        {
+          "id": 6,
+          "category": "儿童用品",
+          "question_zh": "有儿童餐椅吗？",
+          "answer_zh": "一楼餐区有 2 把儿童餐椅，可以借到房间用，用完请放回。",
+          "question_en": "Do you have a high chair?",
+          "answer_en": "There are 2 high chairs in the ground-floor dining area; you may borrow one for your room and please return it after use.",
+          "keywords": [
+            "儿童"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 12,
+          "category": "加床",
+          "question_zh": "可以加床吗？",
+          "answer_zh": "部分大床房可以加一张成人折叠床，每晚 80 元。",
+          "question_en": "Can I get an extra bed?",
+          "answer_en": "Some queen rooms can add one adult folding bed for 80 yuan per night.",
+          "keywords": [
+            "加床"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        6
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "2 把儿童餐椅"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "儿童餐椅描述"
+    },
+    {
+      "case_id": "c2-syn-07",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "头发湿了有吹干的东西吗",
+      "knowledge": [
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 4,
+          "category": "晾衣",
+          "question_zh": "衣服晾在哪里？",
+          "answer_zh": "阳台有公共晾衣架，雨天可以用一楼洗衣区的烘干机。",
+          "question_en": "Where can I dry my clothes?",
+          "answer_en": "There is a shared drying rack on the balcony; on rainy days use the dryer in the ground-floor laundry area.",
+          "keywords": [
+            "晾衣"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        7
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "卫生间抽屉"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "吹风机描述"
+    },
+    {
+      "case_id": "c2-syn-08",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "屋里太热了能调凉快点吗",
+      "knowledge": [
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        8
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "冷暖空调"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "空调描述"
+    },
+    {
+      "case_id": "c2-syn-09",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "晚上想在房间里看个电影有设备吗",
+      "knowledge": [
+        {
+          "id": 9,
+          "category": "投影",
+          "question_zh": "房间有投影仪吗？",
+          "answer_zh": "201 和 202 房有投影仪，可以连手机投屏看电影；其他房间没有。",
+          "question_en": "Is there a projector?",
+          "answer_en": "Rooms 201 and 202 have a projector you can cast your phone to for movies; other rooms do not.",
+          "keywords": [
+            "投影"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        9
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "投屏看电影"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "投影描述"
+    },
+    {
+      "case_id": "c2-syn-10",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "开车来车往哪搁",
+      "knowledge": [
+        {
+          "id": 10,
+          "category": "停车",
+          "question_zh": "民宿可以停车吗？",
+          "answer_zh": "门口有 2 个临时车位，先到先得。",
+          "question_en": "Is there parking at the homestay?",
+          "answer_en": "There are 2 temporary parking spaces at the entrance, first come first served.",
+          "keywords": [
+            "停车"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 11,
+          "category": "行李寄存",
+          "question_zh": "可以寄存行李吗？",
+          "answer_zh": "入住前和退房后都可以免费寄存行李，当天 22:00 前取走。",
+          "question_en": "Can I store my luggage?",
+          "answer_en": "You can store luggage for free before check-in and after check-out; please collect it by 22:00 the same day.",
+          "keywords": [
+            "行李"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        10
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "2 个临时车位"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "停车口语"
+    },
+    {
+      "case_id": "c2-syn-11",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "东西先搁你们那儿，晚上再来拿行吗",
+      "knowledge": [
+        {
+          "id": 11,
+          "category": "行李寄存",
+          "question_zh": "可以寄存行李吗？",
+          "answer_zh": "入住前和退房后都可以免费寄存行李，当天 22:00 前取走。",
+          "question_en": "Can I store my luggage?",
+          "answer_en": "You can store luggage for free before check-in and after check-out; please collect it by 22:00 the same day.",
+          "keywords": [
+            "行李"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 5,
+          "category": "快递",
+          "question_zh": "可以代收快递吗？",
+          "answer_zh": "可以代收，收件人写您的名字加「江岸小筑前台」，到件后放在一楼快递柜，入住期间凭房号领取。",
+          "question_en": "Can you receive parcels for me?",
+          "answer_en": "Yes. Address it with your name plus \"Jiang'an Xiaozhu front desk\"; parcels go into the ground-floor locker and you can collect them with your room number during your stay.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        11
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "免费寄存行李"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "寄存口语"
+    },
+    {
+      "case_id": "c2-syn-12",
+      "split": "calibration_v2",
+      "group": "synonym",
+      "tags": [],
+      "language": "zh",
+      "question": "能上去楼顶吹吹风看看江吗",
+      "knowledge": [
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        14
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "9:00–21:00 开放"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "露台描述"
+    },
+    {
+      "case_id": "c2-xl-01",
+      "split": "calibration_v2",
+      "group": "cross_language",
+      "tags": [],
+      "language": "en",
+      "question": "Can I have packages delivered to you?",
+      "knowledge": [
+        {
+          "id": 5,
+          "category": "快递",
+          "question_zh": "可以代收快递吗？",
+          "answer_zh": "可以代收，收件人写您的名字加「江岸小筑前台」，到件后放在一楼快递柜，入住期间凭房号领取。",
+          "question_en": "Can you receive parcels for me?",
+          "answer_en": "Yes. Address it with your name plus \"Jiang'an Xiaozhu front desk\"; parcels go into the ground-floor locker and you can collect them with your room number during your stay.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 15,
+          "category": "周边",
+          "question_zh": "附近哪里有快递驿站？",
+          "answer_zh": "巷口左转 100 米有一家快递驿站，营业到 20:00。",
+          "question_en": "Where is the nearest parcel station?",
+          "answer_en": "Turn left at the lane entrance; a parcel station is 100 meters away and open until 20:00.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        5
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "ground-floor locker"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "英文代收"
+    },
+    {
+      "case_id": "c2-xl-02",
+      "split": "calibration_v2",
+      "group": "cross_language",
+      "tags": [],
+      "language": "en",
+      "question": "Will street noise keep me up at night?",
+      "knowledge": [
+        {
+          "id": 2,
+          "category": "隔音",
+          "question_zh": "房间隔音怎么样？",
+          "answer_zh": "房间做了双层窗，夜间比较安静；临街的 101 和 102 在周末晚上可能听到街上的声音。",
+          "question_en": "How is the soundproofing?",
+          "answer_en": "Rooms have double-glazed windows and are fairly quiet at night; street-facing rooms 101 and 102 may hear street noise on weekend nights.",
+          "keywords": [
+            "隔音"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        2
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "fairly quiet at night"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "英文隔音"
+    },
+    {
+      "case_id": "c2-xl-03",
+      "split": "calibration_v2",
+      "group": "cross_language",
+      "tags": [],
+      "language": "en",
+      "question": "How do we get in when we arrive?",
+      "knowledge": [
+        {
+          "id": 3,
+          "category": "门禁",
+          "question_zh": "怎么进楼？",
+          "answer_zh": "楼门是密码门禁，入住当天管家会把当天有效的开门码发给您，房门用同一个码。",
+          "question_en": "How do I get into the building?",
+          "answer_en": "The building door uses a keypad; on check-in day the host sends you a code valid that day, and the same code opens your room.",
+          "keywords": [
+            "门禁"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 5,
+          "category": "快递",
+          "question_zh": "可以代收快递吗？",
+          "answer_zh": "可以代收，收件人写您的名字加「江岸小筑前台」，到件后放在一楼快递柜，入住期间凭房号领取。",
+          "question_en": "Can you receive parcels for me?",
+          "answer_en": "Yes. Address it with your name plus \"Jiang'an Xiaozhu front desk\"; parcels go into the ground-floor locker and you can collect them with your room number during your stay.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        3
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "sends you a code"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "英文门禁"
+    },
+    {
+      "case_id": "c2-xl-04",
+      "split": "calibration_v2",
+      "group": "cross_language",
+      "tags": [],
+      "language": "en",
+      "question": "Where do I hang my wet laundry?",
+      "knowledge": [
+        {
+          "id": 4,
+          "category": "晾衣",
+          "question_zh": "衣服晾在哪里？",
+          "answer_zh": "阳台有公共晾衣架，雨天可以用一楼洗衣区的烘干机。",
+          "question_en": "Where can I dry my clothes?",
+          "answer_en": "There is a shared drying rack on the balcony; on rainy days use the dryer in the ground-floor laundry area.",
+          "keywords": [
+            "晾衣"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        4
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "shared drying rack"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "英文晾衣"
+    },
+    {
+      "case_id": "c2-none-01",
+      "split": "calibration_v2",
+      "group": "no_answer",
+      "tags": [],
+      "language": "zh",
+      "question": "有婴儿床吗",
+      "knowledge": [
+        {
+          "id": 12,
+          "category": "加床",
+          "question_zh": "可以加床吗？",
+          "answer_zh": "部分大床房可以加一张成人折叠床，每晚 80 元。",
+          "question_en": "Can I get an extra bed?",
+          "answer_en": "Some queen rooms can add one adult folding bed for 80 yuan per night.",
+          "keywords": [
+            "加床"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 6,
+          "category": "儿童用品",
+          "question_zh": "有儿童餐椅吗？",
+          "answer_zh": "一楼餐区有 2 把儿童餐椅，可以借到房间用，用完请放回。",
+          "question_en": "Do you have a high chair?",
+          "answer_en": "There are 2 high chairs in the ground-floor dining area; you may borrow one for your room and please return it after use.",
+          "keywords": [
+            "儿童"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "只有成人加床和餐椅"
+    },
+    {
+      "case_id": "c2-none-02",
+      "split": "calibration_v2",
+      "group": "no_answer",
+      "tags": [],
+      "language": "zh",
+      "question": "有健身房可以锻炼吗",
+      "knowledge": [
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "露台和厨房不是健身房"
+    },
+    {
+      "case_id": "c2-none-03",
+      "split": "calibration_v2",
+      "group": "no_answer",
+      "tags": [],
+      "language": "zh",
+      "question": "有游泳池吗",
+      "knowledge": [
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "露台不是泳池"
+    },
+    {
+      "case_id": "c2-none-04",
+      "split": "calibration_v2",
+      "group": "no_answer",
+      "tags": [],
+      "language": "zh",
+      "question": "有烧烤架吗",
+      "knowledge": [
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "厨房与露台禁明火，但没讲烧烤架"
+    },
+    {
+      "case_id": "c2-none-05",
+      "split": "calibration_v2",
+      "group": "no_answer",
+      "tags": [],
+      "language": "en",
+      "question": "Do you have a sauna?",
+      "knowledge": [
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "热水不是桑拿"
+    },
+    {
+      "case_id": "c2-none-06",
+      "split": "calibration_v2",
+      "group": "no_answer",
+      "tags": [],
+      "language": "zh",
+      "question": "有儿童滑梯或者游乐区吗",
+      "knowledge": [
+        {
+          "id": 6,
+          "category": "儿童用品",
+          "question_zh": "有儿童餐椅吗？",
+          "answer_zh": "一楼餐区有 2 把儿童餐椅，可以借到房间用，用完请放回。",
+          "question_en": "Do you have a high chair?",
+          "answer_en": "There are 2 high chairs in the ground-floor dining area; you may borrow one for your room and please return it after use.",
+          "keywords": [
+            "儿童"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "儿童餐椅不是游乐区"
+    },
+    {
+      "case_id": "c2-multi-01",
+      "split": "calibration_v2",
+      "group": "multi_topic",
+      "tags": [],
+      "language": "zh",
+      "question": "能寄快递吗？另外湿衣服晾哪",
+      "knowledge": [
+        {
+          "id": 5,
+          "category": "快递",
+          "question_zh": "可以代收快递吗？",
+          "answer_zh": "可以代收，收件人写您的名字加「江岸小筑前台」，到件后放在一楼快递柜，入住期间凭房号领取。",
+          "question_en": "Can you receive parcels for me?",
+          "answer_en": "Yes. Address it with your name plus \"Jiang'an Xiaozhu front desk\"; parcels go into the ground-floor locker and you can collect them with your room number during your stay.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 4,
+          "category": "晾衣",
+          "question_zh": "衣服晾在哪里？",
+          "answer_zh": "阳台有公共晾衣架，雨天可以用一楼洗衣区的烘干机。",
+          "question_en": "Where can I dry my clothes?",
+          "answer_en": "There is a shared drying rack on the balcony; on rainy days use the dryer in the ground-floor laundry area.",
+          "keywords": [
+            "晾衣"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 1,
+          "category": "热水",
+          "question_zh": "洗澡热水够用吗？",
+          "answer_zh": "每间房是独立电热水器，满水加热约 40 分钟，两人连续洗澡时第二位可能要等一会儿。",
+          "question_en": "Is there enough hot water?",
+          "answer_en": "Each room has its own electric water heater; a full tank takes about 40 minutes to heat, so a second shower in a row may need a short wait.",
+          "keywords": [
+            "热水"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        5,
+        4
+      ],
+      "required_source_ids": [
+        5,
+        4
+      ],
+      "key_facts": [
+        "一楼快递柜",
+        "公共晾衣架"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "两个主题都有知识"
+    },
+    {
+      "case_id": "c2-multi-02",
+      "split": "calibration_v2",
+      "group": "multi_topic",
+      "tags": [],
+      "language": "zh",
+      "question": "有吹风机吗，晚上吵不吵",
+      "knowledge": [
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 2,
+          "category": "隔音",
+          "question_zh": "房间隔音怎么样？",
+          "answer_zh": "房间做了双层窗，夜间比较安静；临街的 101 和 102 在周末晚上可能听到街上的声音。",
+          "question_en": "How is the soundproofing?",
+          "answer_en": "Rooms have double-glazed windows and are fairly quiet at night; street-facing rooms 101 and 102 may hear street noise on weekend nights.",
+          "keywords": [
+            "隔音"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        7,
+        2
+      ],
+      "required_source_ids": [
+        7,
+        2
+      ],
+      "key_facts": [
+        "卫生间抽屉",
+        "比较安静"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "两个主题都有知识"
+    },
+    {
+      "case_id": "c2-multi-03",
+      "split": "calibration_v2",
+      "group": "multi_topic",
+      "tags": [],
+      "language": "zh",
+      "question": "带宝宝来有小椅子吗，有婴儿床吗",
+      "knowledge": [
+        {
+          "id": 6,
+          "category": "儿童用品",
+          "question_zh": "有儿童餐椅吗？",
+          "answer_zh": "一楼餐区有 2 把儿童餐椅，可以借到房间用，用完请放回。",
+          "question_en": "Do you have a high chair?",
+          "answer_en": "There are 2 high chairs in the ground-floor dining area; you may borrow one for your room and please return it after use.",
+          "keywords": [
+            "儿童"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 12,
+          "category": "加床",
+          "question_zh": "可以加床吗？",
+          "answer_zh": "部分大床房可以加一张成人折叠床，每晚 80 元。",
+          "question_en": "Can I get an extra bed?",
+          "answer_en": "Some queen rooms can add one adult folding bed for 80 yuan per night.",
+          "keywords": [
+            "加床"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        6
+      ],
+      "required_source_ids": [
+        6
+      ],
+      "key_facts": [
+        "2 把儿童餐椅"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "婴儿床没有知识"
+    },
+    {
+      "case_id": "c2-multi-04",
+      "split": "calibration_v2",
+      "group": "multi_topic",
+      "tags": [],
+      "language": "en",
+      "question": "Is there parking, and can I leave my bags before check-in?",
+      "knowledge": [
+        {
+          "id": 10,
+          "category": "停车",
+          "question_zh": "民宿可以停车吗？",
+          "answer_zh": "门口有 2 个临时车位，先到先得。",
+          "question_en": "Is there parking at the homestay?",
+          "answer_en": "There are 2 temporary parking spaces at the entrance, first come first served.",
+          "keywords": [
+            "停车"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 11,
+          "category": "行李寄存",
+          "question_zh": "可以寄存行李吗？",
+          "answer_zh": "入住前和退房后都可以免费寄存行李，当天 22:00 前取走。",
+          "question_en": "Can I store my luggage?",
+          "answer_en": "You can store luggage for free before check-in and after check-out; please collect it by 22:00 the same day.",
+          "keywords": [
+            "行李"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 5,
+          "category": "快递",
+          "question_zh": "可以代收快递吗？",
+          "answer_zh": "可以代收，收件人写您的名字加「江岸小筑前台」，到件后放在一楼快递柜，入住期间凭房号领取。",
+          "question_en": "Can you receive parcels for me?",
+          "answer_en": "Yes. Address it with your name plus \"Jiang'an Xiaozhu front desk\"; parcels go into the ground-floor locker and you can collect them with your room number during your stay.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        10,
+        11
+      ],
+      "required_source_ids": [
+        10,
+        11
+      ],
+      "key_facts": [
+        "2 temporary parking spaces",
+        "store luggage for free"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "英文两个主题"
+    },
+    {
+      "case_id": "c2-scope-01",
+      "split": "calibration_v2",
+      "group": "isolation",
+      "tags": [],
+      "language": "zh",
+      "question": "你们能代收快递吗",
+      "knowledge": [
+        {
+          "id": 15,
+          "category": "周边",
+          "question_zh": "附近哪里有快递驿站？",
+          "answer_zh": "巷口左转 100 米有一家快递驿站，营业到 20:00。",
+          "question_en": "Where is the nearest parcel station?",
+          "answer_en": "Turn left at the lane entrance; a parcel station is 100 meters away and open until 20:00.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [
+        "巷口左转 100 米有一家快递驿站"
+      ],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "只有周边驿站信息"
+    },
+    {
+      "case_id": "c2-scope-02",
+      "split": "calibration_v2",
+      "group": "isolation",
+      "tags": [],
+      "language": "zh",
+      "question": "你们提供早餐吗",
+      "knowledge": [
+        {
+          "id": 16,
+          "category": "周边",
+          "question_zh": "附近有什么早餐推荐？",
+          "answer_zh": "巷口有热干面和豆皮，早上 6:30 开门。",
+          "question_en": "Any breakfast spots nearby?",
+          "answer_en": "At the lane entrance there are hot dry noodle and doupi stalls opening at 6:30 am.",
+          "keywords": [
+            "早餐"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [],
+      "required_source_ids": [],
+      "key_facts": [],
+      "forbidden_facts": [
+        "巷口有热干面和豆皮"
+      ],
+      "property_specific": true,
+      "expect_grounded": false,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "只有周边早餐推荐"
+    },
+    {
+      "case_id": "c2-direct-01",
+      "split": "calibration_v2",
+      "group": "cross_language",
+      "tags": [
+        "direct"
+      ],
+      "language": "zh",
+      "question": "房间有吹风机吗？",
+      "knowledge": [
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 4,
+          "category": "晾衣",
+          "question_zh": "衣服晾在哪里？",
+          "answer_zh": "阳台有公共晾衣架，雨天可以用一楼洗衣区的烘干机。",
+          "question_en": "Where can I dry my clothes?",
+          "answer_en": "There is a shared drying rack on the balcony; on rainy days use the dryer in the ground-floor laundry area.",
+          "keywords": [
+            "晾衣"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 8,
+          "category": "空调",
+          "question_zh": "房间有空调吗？",
+          "answer_zh": "每间房都有冷暖空调，遥控器在床头柜抽屉里，温度可以自己调。",
+          "question_en": "Is there air conditioning?",
+          "answer_en": "Every room has heating and cooling air conditioning; the remote is in the bedside drawer and you can set the temperature yourself.",
+          "keywords": [
+            "空调"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        7
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "卫生间抽屉"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "直接问法"
+    },
+    {
+      "case_id": "c2-direct-02",
+      "split": "calibration_v2",
+      "group": "cross_language",
+      "tags": [
+        "direct"
+      ],
+      "language": "zh",
+      "question": "可以代收快递吗？",
+      "knowledge": [
+        {
+          "id": 5,
+          "category": "快递",
+          "question_zh": "可以代收快递吗？",
+          "answer_zh": "可以代收，收件人写您的名字加「江岸小筑前台」，到件后放在一楼快递柜，入住期间凭房号领取。",
+          "question_en": "Can you receive parcels for me?",
+          "answer_en": "Yes. Address it with your name plus \"Jiang'an Xiaozhu front desk\"; parcels go into the ground-floor locker and you can collect them with your room number during your stay.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 15,
+          "category": "周边",
+          "question_zh": "附近哪里有快递驿站？",
+          "answer_zh": "巷口左转 100 米有一家快递驿站，营业到 20:00。",
+          "question_en": "Where is the nearest parcel station?",
+          "answer_en": "Turn left at the lane entrance; a parcel station is 100 meters away and open until 20:00.",
+          "keywords": [
+            "快递"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 7,
+          "category": "吹风机",
+          "question_zh": "房间有吹风机吗？",
+          "answer_zh": "每间房卫生间抽屉里都有一台吹风机。",
+          "question_en": "Is there a hair dryer?",
+          "answer_en": "Every room has a hair dryer in the bathroom drawer.",
+          "keywords": [
+            "吹风机"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 13,
+          "category": "厨房",
+          "question_zh": "可以用厨房吗？",
+          "answer_zh": "公共厨房每天 8:00–21:00 开放，有电磁炉和基础锅具。",
+          "question_en": "Can I use the kitchen?",
+          "answer_en": "The shared kitchen is open daily 8:00–21:00 with an induction cooker and basic cookware.",
+          "keywords": [
+            "厨房"
+          ],
+          "is_enabled": true
+        },
+        {
+          "id": 14,
+          "category": "露台",
+          "question_zh": "楼顶可以上去吗？",
+          "answer_zh": "楼顶露台 9:00–21:00 开放，可以喝茶看江景，禁止明火。",
+          "question_en": "Can I go up to the rooftop?",
+          "answer_en": "The rooftop terrace is open 9:00–21:00 for tea and river views; no open flames.",
+          "keywords": [
+            "露台"
+          ],
+          "is_enabled": true
+        }
+      ],
+      "candidates": [],
+      "mutations": [],
+      "expected_source_ids": [
+        5
+      ],
+      "required_source_ids": [],
+      "key_facts": [
+        "一楼快递柜"
+      ],
+      "forbidden_facts": [],
+      "property_specific": true,
+      "expect_grounded": true,
+      "realtime": false,
+      "stub_reply": null,
+      "stub_reply_supported": null,
+      "notes": "直接问法"
+    }
+  ]
+}

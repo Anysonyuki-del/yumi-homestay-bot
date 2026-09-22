@@ -24,6 +24,8 @@
 读取，不打印；向量缓存在系统临时目录，调参时同一文本不重复计费）：
     PYTHONPATH=src:tests .venv/bin/python \
         tests/unit/test_knowledge_retrieval_eval.py --report --semantic [--min-similarity 0.5]
+延迟验收另加 --latency，查询不使用缓存，知识向量仍复用缓存。缓存模式耗时不代表
+生产；失败与超时也计入总体 P95，同时单列无缓存成功 P95 和超时率。
 
 记录基线或查看报告（在仓库根目录执行，`--show-holdout` 才列出留出集逐条失败；
 `--record-baseline-v2` 只把第二套留出集写进独立基线文件）：
@@ -55,6 +57,7 @@ from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
 from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
 from homestay_bot.services.answer_policy import is_property_specific, is_transaction_sensitive
 from homestay_bot.services.knowledge_embeddings import (
+    QUERY_EMBEDDING_TIMEOUT_SECONDS,
     SEMANTIC_MIN_SIMILARITY,
     KnowledgeEmbeddingSync,
     OpenAICompatibleEmbeddingClient,
@@ -65,8 +68,10 @@ from homestay_bot.services.knowledge_service import KnowledgeService, KnowledgeS
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 CASE_FILES = {
     "calibration": FIXTURES / "knowledge_retrieval_cases.json",
+    # 语义检索专用校准集：换说法、语义相近的无答案干扰、多主题与周边范围；只用于调参。
+    "calibration_v2": FIXTURES / "knowledge_retrieval_calibration_v2.json",
     "holdout": FIXTURES / "knowledge_retrieval_holdout.json",
-    # 第二套留出集：调参结束、代码冻结后才看逐条结果，平时只出汇总。
+    # 第二套已于 2026-09-22 揭示失败并用于修复，现仅作回归，不再是独立留出。
     "holdout_v2": FIXTURES / "knowledge_retrieval_holdout_v2.json",
 }
 BASELINE_FILE = FIXTURES / "knowledge_retrieval_baseline.json"
@@ -116,6 +121,9 @@ class CaseOutcome:
     boundary_ok: bool | None
     realtime_routed: bool | None
     elapsed_ms: float
+    semantic_status: str = "disabled"
+    query_requests: int = 0
+    query_cache_hits: int = 0
 
 
 def _knowledge_entry(raw: dict[str, Any]) -> KnowledgeEntry:
@@ -176,6 +184,8 @@ class SemanticEvalConfig:
     embedder: Any
     model: str
     min_similarity: float
+    query_embedder: Any = None
+    sdk: Any = None
 
 
 class CachedEmbedder:
@@ -186,6 +196,8 @@ class CachedEmbedder:
         self._inner = inner
         self._model = model
         self._path = path
+        self.hits = 0
+        self.requests = 0
         self._cache: dict[str, list[float]] = (
             json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         )
@@ -197,16 +209,58 @@ class CachedEmbedder:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """先查缓存，缺的一次性请求后写回。"""
         missing = [text for text in texts if self._key(text) not in self._cache]
+        self.hits += len(texts) - len(missing)
         if missing:
+            self.requests += 1
             for text, vector in zip(missing, await self._inner.embed(missing), strict=True):
                 self._cache[self._key(text)] = vector
             self._path.write_text(json.dumps(self._cache), encoding="utf-8")
         return [self._cache[self._key(text)] for text in texts]
 
 
+class EvaluatedRanker(SemanticRanker):
+    """仅供评估：在生产回退吞掉异常前记录原因，查询缓存与网络请求分开计数。"""
+
+    def __init__(self, config: SemanticEvalConfig, store: Any) -> None:
+        """质量模式复用缓存，延迟模式使用独立的无缓存查询客户端。"""
+        self.client = (
+            config.query_embedder if config.query_embedder is not None else config.embedder
+        )
+        self.status = "no_vectors"
+        self.requests = 0
+        self.cache_hits = 0
+        self.queried = False
+        super().__init__(self, store, config.model, min_similarity=config.min_similarity,
+                         timeout_seconds=QUERY_EMBEDDING_TIMEOUT_SECONDS)
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """只统计查询，不把建索引的请求算进查询时延和调用数。"""
+        self.queried = True
+        cached = isinstance(self.client, CachedEmbedder)
+        before_hits = self.client.hits if cached else 0
+        before_requests = self.client.requests if cached else 0
+        try:
+            return await self.client.embed(texts)
+        finally:
+            self.cache_hits += self.client.hits - before_hits if cached else 0
+            self.requests += self.client.requests - before_requests if cached else 1
+
+    async def rank(self, language, query, entries) -> list[int]:
+        """沿用生产排序和回退，另记成功、无候选、超时及其他异常。"""
+        try:
+            result = await super().rank(language, query, entries)
+        except Exception as error:
+            self.status = "timeout" if isinstance(error, TimeoutError) else "error"
+            raise
+        self.status = ("success" if result else "no_candidates") if self.queried else "no_vectors"
+        return result
+
+
 def _load_semantic_config(argv: list[str]) -> SemanticEvalConfig | None:
     """解析 --semantic；key 只从环境变量或本机私有文件读取。"""
     if "--semantic" not in argv:
+        if "--latency" in argv:
+            raise SystemExit("--latency 必须与 --semantic 一起使用")
         return None
     key = os.environ.get("YUMI_EMBEDDING_API_KEY")
     key_file = Path.home() / ".config" / "yumi" / "siliconflow.env"
@@ -223,16 +277,26 @@ def _load_semantic_config(argv: list[str]) -> SemanticEvalConfig | None:
     minimum = SEMANTIC_MIN_SIMILARITY
     if "--min-similarity" in argv:
         minimum = float(argv[argv.index("--min-similarity") + 1])
-    client = AsyncOpenAI(api_key=key, base_url=DEFAULT_EMBEDDING_BASE_URL, max_retries=2)
+    from homestay_bot.services.outbound_url_policy import (
+        OutboundUrlPolicy,
+        build_public_https_client,
+    )
+
+    transport = build_public_https_client(OutboundUrlPolicy(), timeout_seconds=30.0)
+    client = AsyncOpenAI(api_key=key, base_url=DEFAULT_EMBEDDING_BASE_URL,
+                         http_client=transport, max_retries=0)
+    raw = OpenAICompatibleEmbeddingClient(client, DEFAULT_EMBEDDING_MODEL)
     cache = Path(tempfile.gettempdir()) / "yumi-embedding-eval-cache.json"
     return SemanticEvalConfig(
         embedder=CachedEmbedder(
-            OpenAICompatibleEmbeddingClient(client, DEFAULT_EMBEDDING_MODEL),
+            raw,
             DEFAULT_EMBEDDING_MODEL,
             cache,
         ),
         model=DEFAULT_EMBEDDING_MODEL,
         min_similarity=minimum,
+        query_embedder=raw if "--latency" in argv else None,
+        sdk=client,
     )
 
 
@@ -281,16 +345,9 @@ async def evaluate_case(
         async with factory() as session:
             repository = SQLAlchemyKnowledgeRepository(session)
             service = KnowledgeService(repository)
-            if semantic is not None:
-                service = service.with_semantic(
-                    SemanticRanker(
-                        semantic.embedder,
-                        repository,
-                        semantic.model,
-                        min_similarity=semantic.min_similarity,
-                        timeout_seconds=30.0,
-                    )
-                )
+            ranker = EvaluatedRanker(semantic, repository) if semantic is not None else None
+            if ranker is not None:
+                service = service.with_semantic(ranker)
             started = time.perf_counter()
             retrieved = await service.retrieve(Language(case["language"]), case["question"])
             # 与生产一致：剔除后的才是交给模型的证据。
@@ -359,6 +416,9 @@ async def evaluate_case(
         boundary_ok=boundary_ok,
         realtime_routed=realtime_routed,
         elapsed_ms=elapsed_ms,
+        semantic_status=ranker.status if ranker else "disabled",
+        query_requests=ranker.requests if ranker else 0,
+        query_cache_hits=ranker.cache_hits if ranker else 0,
     )
 
 
@@ -375,9 +435,27 @@ def _rate(values: list[bool]) -> float | None:
 def summarize(outcomes: list[CaseOutcome]) -> dict[str, Any]:
     """把用例结果汇总为互不混用的指标。"""
     latencies = sorted(item.elapsed_ms for item in outcomes)
+    queried = [item for item in outcomes if item.query_requests or item.query_cache_hits]
+    live_success = sorted(
+        item.elapsed_ms for item in outcomes
+        if item.query_requests and not item.query_cache_hits
+        and item.semantic_status in {"success", "no_candidates"}
+    )
     unsupported = [item for item in outcomes if item.stub_ok is not None and not item.stub_accepted]
     return {
         "cases": len(outcomes),
+        "query_requests": sum(item.query_requests for item in outcomes),
+        "query_cache_hits": sum(item.query_cache_hits for item in outcomes),
+        "semantic_success": sum(item.semantic_status == "success" for item in outcomes),
+        "semantic_no_vectors": sum(item.semantic_status == "no_vectors" for item in outcomes),
+        "semantic_no_candidates": sum(item.semantic_status == "no_candidates" for item in outcomes),
+        "semantic_timeouts": sum(item.semantic_status == "timeout" for item in outcomes),
+        "semantic_errors": sum(item.semantic_status == "error" for item in outcomes),
+        "query_cache_hit_rate": _rate([item.query_cache_hits > 0 for item in queried]),
+        "query_timeout_rate": _rate([item.semantic_status == "timeout" for item in queried]),
+        "uncached_success_p95_ms": (
+            live_success[max(0, round(0.95 * len(live_success)) - 1)] if live_success else None
+        ),
         "recall_at_3": _rate([item.top3_hit for item in outcomes if item.top3_hit is not None]),
         "multi_coverage": _rate(
             [item.multi_complete for item in outcomes if item.multi_complete is not None]
@@ -460,14 +538,14 @@ def _validate_case(case: dict[str, Any], split: str) -> None:
         assert isinstance(case["stub_reply_supported"], bool), case["case_id"]
 
 
-@pytest.mark.parametrize("split", ["calibration", "holdout", "holdout_v2"])
+@pytest.mark.parametrize("split", ["calibration", "calibration_v2", "holdout", "holdout_v2"])
 def test_eval_cases_are_well_formed(split: str) -> None:
     """用例结构完整、编号唯一，关键事实确实出自正确来源。"""
     cases = load_cases(split)
     if split != "calibration" and not cases:
         pytest.skip(f"{split} 尚未提供")
-    assert len(cases) == 40
-    assert len({case["case_id"] for case in cases}) == 40
+    assert len(cases) == (30 if split == "calibration_v2" else 40)
+    assert len({case["case_id"] for case in cases}) == len(cases)
     for case in cases:
         _validate_case(case, split)
 
@@ -480,7 +558,7 @@ def _split_outcomes(split: str) -> list[CaseOutcome]:
 
 
 # 第一套留出集已公开并用于回归（2026-09-21），这里只作回归，不再代表泛化效果。
-@pytest.mark.parametrize("split", ["calibration", "holdout"])
+@pytest.mark.parametrize("split", ["calibration", "holdout", "holdout_v2"])
 def test_retrieval_meets_preregistered_targets(split: str) -> None:
     """Spec 9.2 事先登记的目标：召回达标，隔离、边界与回复断言安全项全部通过。"""
     outcomes = _split_outcomes(split)
@@ -580,7 +658,7 @@ def _print_report(outcomes: list[CaseOutcome], *, show_holdout: bool) -> None:
         print(f"== {split}")
         for key, value in summarize(selected).items():
             print(f"  {key}: {value:.3f}" if isinstance(value, float) else f"  {key}: {value}")
-        if split != "calibration" and not show_holdout:
+        if not split.startswith("calibration") and not show_holdout:
             continue
         for item in selected:
             if kinds := failure_kinds(item):
@@ -590,17 +668,115 @@ def _print_report(outcomes: list[CaseOutcome], *, show_holdout: bool) -> None:
                 )
 
 
+
+
+@pytest.mark.asyncio
+async def test_latency_mode_bypasses_query_cache_and_counts_fallback(tmp_path) -> None:
+    """质量模式允许缓存；延迟模式必须查询真实客户端，失败须单独计数。"""
+    from unittest.mock import AsyncMock
+
+    case = load_cases('calibration')[0]
+    raw = AsyncMock()
+    raw.embed.side_effect = lambda texts: [[1.0, 0.0] for _ in texts]
+    cached = CachedEmbedder(raw, 'test-model', tmp_path / 'vectors.json')
+    quality = SemanticEvalConfig(cached, 'test-model', 0.5)
+    await evaluate_case(case, quality)
+    warm = await evaluate_case(case, quality)
+    assert warm.query_cache_hits == 1
+    assert warm.query_requests == 0
+    latency = SemanticEvalConfig(cached, 'test-model', 0.5, query_embedder=raw)
+    measured = await evaluate_case(case, latency)
+    assert measured.query_requests == 1
+    assert measured.query_cache_hits == 0
+    assert measured.semantic_status == 'success'
+    raw.embed.side_effect = TimeoutError
+    failed = await evaluate_case(case, latency)
+    assert failed.semantic_status == 'timeout'
+    assert failed.retrieved_ids
+    report = summarize([warm, measured, failed])
+    assert report['semantic_timeouts'] == 1
+    assert report['query_requests'] == 2
+    assert report['query_cache_hits'] == 1
+
+
+@pytest.mark.asyncio
+async def test_eval_uses_production_deadline_and_reports_empty_vectors(monkeypatch) -> None:
+    """评估沿用生产三秒截止；空向量库不请求服务，不冒充语义成功。"""
+    from unittest.mock import AsyncMock
+
+    from homestay_bot.services.knowledge_embeddings import StoredVector, content_hash
+
+    case = load_cases('calibration')[0]
+    entry = _knowledge_entry(case['knowledge'][0])
+    config = SemanticEvalConfig(AsyncMock(), 'test-model', 0.5)
+    config.embedder.embed.return_value = [[1.0, 0.0]]
+    store = AsyncMock()
+    store.list_vectors.return_value = []
+    ranker = EvaluatedRanker(config, store)
+    assert await ranker.rank(Language.ZH, '停车', [entry]) == []
+    assert ranker.status == 'no_vectors'
+    assert ranker.requests == 0
+    from homestay_bot.services.knowledge_embeddings import embedding_text
+
+    store.list_vectors.return_value = [StoredVector(
+        entry.id, 'zh', content_hash(embedding_text(entry, Language.ZH), 'test-model'),
+        [1.0, 0.0],
+    )]
+    original = asyncio.wait_for
+    deadlines = []
+
+    async def checked_wait_for(awaitable, timeout):
+        """捕获实际查询截止，同时执行原协程，不等待真实网络。"""
+        deadlines.append(timeout)
+        return await original(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, 'wait_for', checked_wait_for)
+    await ranker.rank(Language.ZH, '停车', [entry])
+    assert deadlines == [3.0]
+
+
+def test_eval_sdk_matches_production_transport(monkeypatch) -> None:
+    """真实评估只能用受控 HTTPS transport、零重试；构造测试不联网。"""
+    from unittest.mock import Mock
+
+    import openai
+
+    from homestay_bot.services import outbound_url_policy
+
+    transport = Mock()
+    builder = Mock(return_value=transport)
+    sdk = Mock()
+    monkeypatch.setenv('YUMI_EMBEDDING_API_KEY', 'synthetic-test-key')
+    monkeypatch.setattr(outbound_url_policy, 'build_public_https_client', builder)
+    monkeypatch.setattr(openai, 'AsyncOpenAI', sdk)
+    config = _load_semantic_config(['--semantic', '--latency'])
+    assert config is not None and config.query_embedder is not None
+    assert sdk.call_args.kwargs['max_retries'] == 0
+    assert sdk.call_args.kwargs['http_client'] is transport
+    assert builder.call_args.kwargs['timeout_seconds'] == 30.0
+
+
+async def _main(argv: list[str]) -> None:
+    """整个评估共用一个事件循环；结束时关闭 SDK，避免连接泄漏。"""
+    config = _load_semantic_config(argv)
+    try:
+        splits = [name for name in CASE_FILES
+                  if "--only" not in argv or name == argv[argv.index("--only") + 1]]
+        if config is not None:
+            print("mode: uncached-query latency" if "--latency" in argv
+                  else "mode: cached quality; latency is NOT production evidence")
+        outcomes = []
+        for name in splits:
+            outcomes.extend(await evaluate_split(name, config))
+        if "--record-baseline" in argv:
+            _record_baseline(outcomes)
+        if "--record-baseline-v2" in argv:
+            _record_blind_baseline(outcomes)
+        _print_report(outcomes, show_holdout="--show-holdout" in argv)
+    finally:
+        if config is not None and config.sdk is not None:
+            await config.sdk.close()
+
+
 if __name__ == "__main__":
-    all_outcomes: list[CaseOutcome] = []
-    semantic_config = _load_semantic_config(sys.argv)
-    splits = [
-        name for name in CASE_FILES
-        if "--only" not in sys.argv or name == sys.argv[sys.argv.index("--only") + 1]
-    ]
-    for split_name in splits:
-        all_outcomes.extend(asyncio.run(evaluate_split(split_name, semantic_config)))
-    if "--record-baseline" in sys.argv:
-        _record_baseline(all_outcomes)
-    if "--record-baseline-v2" in sys.argv:
-        _record_blind_baseline(all_outcomes)
-    _print_report(all_outcomes, show_holdout="--show-holdout" in sys.argv)
+    asyncio.run(_main(sys.argv))

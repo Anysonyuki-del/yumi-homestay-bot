@@ -2747,3 +2747,53 @@ async def test_unconfirmed_fallback_follows_the_reply_language() -> None:
 
     assert english.reply_text.startswith("Our reviewed information hasn't confirmed parking")
     assert chinese.reply_text.startswith("当前审核资料尚未确认民宿停车信息")
+
+
+@pytest.mark.asyncio
+async def test_laundry_hours_do_not_confirm_fee_policy() -> None:
+    """同主题的开放时间和用品位置不能证明收费规则；收费答案仍可正常使用。"""
+    query = '洗衣机可以免费使用吗？'
+    unrelated = [KnowledgeSnippet(1, '洗衣', '洗衣区开放到几点？', '洗衣区开放到晚上九点。'),
+                 KnowledgeSnippet(2, '洗衣', '洗衣液在哪里？', '洗衣液放在洗衣机旁的盒子里。')]
+    assert not DeepSeekGuestAssistant._has_relevant_property_knowledge(query, unrelated)
+    decision, _ = await _respond_with(query, '洗衣机可以使用。', unrelated)
+    assert decision.reply_text.startswith('当前审核资料尚未确认')
+    answer = '洗衣机每次收费10元。'
+    decision, _ = await _respond_with(
+        query, answer, [KnowledgeSnippet(3, '洗衣', '收费规则', answer)]
+    )
+    assert decision.reply_text == answer
+
+
+@pytest.mark.asyncio
+async def test_english_room_cost_excludes_historical_price_context() -> None:
+    """英文房费问法与中文一样进入交易边界，历史价不能进入模型上下文。"""
+    from homestay_bot.services.answer_policy import is_transaction_sensitive
+
+    query = 'How much is one room tonight?'
+    assert is_transaction_sensitive(query)
+    historical = KnowledgeSnippet(1, 'pricing', 'What is the usual reference room rate?',
+                                  'The historical rate was CNY 399 per night.')
+    _, client = await _respond_with(query, 'Please check live booking prices.', [historical],
+                                   language=Language.EN)
+    context = client.chat.completions.requests[0]['messages'][-1]['content']
+    assert '399 per night' not in context
+
+
+@pytest.mark.parametrize(
+    ("question", "title", "answer", "grounded"),
+    [
+        ("停车收费吗", "民宿可以停车吗？", "门口有 2 个车位。每天 20 元。", True),
+        ("How much is parking?", "Is there parking?", "Parking spaces are 20 yuan per day.", True),
+        ("洗衣收费吗", "公共区域有什么？", "一楼有洗衣机。停车每天 20 元。", False),
+        ("你们停车收费吗", "民宿可以停车吗？", "门口有车位。楼下停车场每天 40 元。", False),
+    ],
+    ids=["fee-in-next-sentence", "english-yuan", "fee-for-another-topic", "nearby-fee-only"],
+)
+def test_fee_evidence_may_sit_in_another_sentence_of_the_same_answer(
+    question: str, title: str, answer: str, grounded: bool,
+) -> None:
+    """费用可以写在同一条问答的另一句；但点名别的主题或只讲周边价格的句子不能作证。"""
+    snippet = KnowledgeSnippet(1, "测试", title, answer)
+
+    assert DeepSeekGuestAssistant._has_relevant_property_knowledge(question, [snippet]) is grounded

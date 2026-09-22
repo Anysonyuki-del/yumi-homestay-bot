@@ -343,3 +343,54 @@ async def test_reenabled_entry_reuses_its_vectors_without_new_calls() -> None:
     assert report.pending == 0
     assert len(embedder.calls) == 1
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'defect', ['duplicate', 'offset', 'dimensions', 'nan', 'inf', 'zero', 'model_dimensions'],
+)
+async def test_embedding_response_rejects_invalid_batch(defect: str) -> None:
+    """外部响应的索引、维度和数值必须有效，不能将错配向量存入正式索引。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from homestay_bot.services.knowledge_embeddings import (
+        EmbeddingUnavailableError,
+        OpenAICompatibleEmbeddingClient,
+    )
+
+    rows = [SimpleNamespace(index=0, embedding=[1.0, 0.0]),
+            SimpleNamespace(index=1, embedding=[0.0, 1.0])]
+    model = 'test-model'
+    if defect == 'duplicate':
+        rows[1].index = 0
+    elif defect == 'offset':
+        rows[1].index = 2
+    elif defect == 'dimensions':
+        rows[1].embedding = [1.0]
+    elif defect in ('nan', 'inf'):
+        rows[1].embedding = [float(defect), 1.0]
+    elif defect == 'zero':
+        rows[1].embedding = [0.0, 0.0]
+    else:
+        model = MODEL
+    sdk = SimpleNamespace(embeddings=SimpleNamespace(create=AsyncMock(
+        return_value=SimpleNamespace(data=rows))))
+    with pytest.raises(EmbeddingUnavailableError):
+        await OpenAICompatibleEmbeddingClient(sdk, model).embed(['a', 'b'])
+
+
+@pytest.mark.asyncio
+async def test_embedding_response_restores_valid_order() -> None:
+    """服务商允许乱序返回，完整有效的索引按输入顺序恢复。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from homestay_bot.services.knowledge_embeddings import OpenAICompatibleEmbeddingClient
+
+    rows = [SimpleNamespace(index=1, embedding=[0.0, 1.0]),
+            SimpleNamespace(index=0, embedding=[1.0, 0.0])]
+    sdk = SimpleNamespace(embeddings=SimpleNamespace(create=AsyncMock(
+        return_value=SimpleNamespace(data=rows))))
+    assert await OpenAICompatibleEmbeddingClient(sdk, 'test-model').embed(['a', 'b']) == [
+        [1.0, 0.0], [0.0, 1.0]]

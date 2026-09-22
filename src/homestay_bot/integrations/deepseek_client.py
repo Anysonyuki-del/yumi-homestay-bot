@@ -72,6 +72,16 @@ _FREE_NEGATION_PATTERN = re.compile(
     r"|(?:\bnot|\bnever|\bno\s+longer|n['’]t)\s+$",
     re.IGNORECASE,
 )
+# 费用问题需要同主题答案明确讲费用；设施存在、开放时间或用品位置不证明收费。
+_FEE_QUESTION_PATTERN = re.compile(
+    r"免费|收费|费用|多少钱|付费|\bfree\b|\bcost\b|\bfee\b|\bcharge\b|how\s+much",
+    re.IGNORECASE,
+)
+_FEE_EVIDENCE_PATTERN = re.compile(
+    r"免费|收费|费用|付费|不要钱|\d+(?:\.\d+)?\s*(?:元|块|yuan|rmb|cny)|[¥$]\s*\d|"
+    r"\bfree\b|\bcosts?\b|\bfees?\b|\bcharg(?:e[ds]?|ing)\b|complimentary",
+    re.IGNORECASE,
+)
 _NUMBER_PATTERN = re.compile(r"\d+(?:[.:]\d+)?")
 _LIST_MARKER_PATTERN = re.compile(r"(?m)^\s*\d{1,2}[.、)）]\s*")
 # 钟点表达：14:00、3 点、三点、中午、3 pm。单独的数字（如「10 公斤」）不算。
@@ -1073,25 +1083,59 @@ class DeepSeekGuestAssistant:
         destination = (
             cls._distance_destination(question_text) if topic.name == "距离" else None
         )
+        # 多主题问句按分句限定费用对象；单主题允许“洗衣机在哪，收费吗”承接。
+        single_topic = len(detect_property_topics(question_text)) == 1
+        asks_fee = any(
+            _FEE_QUESTION_PATTERN.search(part)
+            and (single_topic or topic.aliases.search(part))
+            for part in re.split(r"[，,。；;！？!?]", question_text)
+        )
         supporting: list[Any] = []
         for item in knowledge:
             if not asks_nearby and _EXTERNAL_SCOPE_PATTERN.search(normalize_text(item.question)):
                 continue
-            passages = _EVIDENCE_SENTENCE_SPLIT.split(item.answer)
-            for passage in passages:
-                normalized = normalize_text(passage)
-                if not asks_nearby and _EXTERNAL_SCOPE_PATTERN.search(normalized):
-                    # “本店不提供早餐，楼下有早餐店”保留明确的本店前句；不能把
-                    # “楼下有商店，提供早餐”的后句抽出来，丢失其周边主体。
-                    normalized = re.split(r"[，,]", normalized, maxsplit=1)[0]
-                    if _LOCAL_POLICY_PATTERN.search(normalized) is None:
-                        continue
-                if not cls._passage_states_topic(topic, normalized, destination):
-                    continue
-                if asks_nearby or _EXTERNAL_SCOPE_PATTERN.search(normalized) is None:
-                    supporting.append(item)
-                    break
+            scoped = cls._in_scope_passages(item.answer, asks_nearby)
+            if not any(
+                cls._passage_states_topic(topic, passage, destination) for passage in scoped
+            ):
+                continue
+            # 问费用时，同一条问答里还要有一句本店范围内的费用说明。费用常写在设施
+            # 的下一句（「门口有车位。每天 20 元。」），所以不要求同句；但那句若点名
+            # 了别的主题（「停车每天 20 元」），不能拿来证明洗衣收费。
+            if asks_fee and not any(
+                cls._passage_states_fee(topic, passage) for passage in scoped
+            ):
+                continue
+            supporting.append(item)
         return supporting
+
+    @staticmethod
+    def _in_scope_passages(answer: str, asks_nearby: bool) -> list[str]:
+        """把答案拆句并规范化，去掉讲周边商户、不属于本店范围的句子。
+
+        「本店不提供早餐，楼下有早餐店」保留明确的本店前半句；不能把「楼下有商店，
+        提供早餐」的后半句抽出来，丢失其周边主体。客人本来就在问周边时全部保留。
+        """
+        scoped: list[str] = []
+        for passage in _EVIDENCE_SENTENCE_SPLIT.split(answer):
+            normalized = normalize_text(passage)
+            if not asks_nearby and _EXTERNAL_SCOPE_PATTERN.search(normalized):
+                normalized = re.split(r"[，,]", normalized, maxsplit=1)[0]
+                if (
+                    _LOCAL_POLICY_PATTERN.search(normalized) is None
+                    or _EXTERNAL_SCOPE_PATTERN.search(normalized) is not None
+                ):
+                    continue
+            scoped.append(normalized)
+        return scoped
+
+    @staticmethod
+    def _passage_states_fee(topic: PropertyTopic, passage: str) -> bool:
+        """判断一句话能否作为该主题的费用说明：有费用字眼，且没有点名别的主题。"""
+        if _FEE_EVIDENCE_PATTERN.search(passage) is None:
+            return False
+        named = {item.name for item in detect_property_topics(passage)}
+        return topic.name in named or not named - {topic.name}
 
     @classmethod
     def _has_relevant_property_knowledge(
