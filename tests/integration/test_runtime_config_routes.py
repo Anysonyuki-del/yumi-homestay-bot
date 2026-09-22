@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 from types import SimpleNamespace
 
 from admin_auth_helpers import configure_admin_auth, login_admin
@@ -502,3 +503,31 @@ def test_unchecked_semantic_retrieval_box_turns_it_off() -> None:
     )
 
     assert service.activation_calls[0]["command"].embedding_enabled is False
+
+
+def _settings_page_with_embedding(*, enabled: bool, key: str) -> str:
+    """按给定的语义检索开关与 key 状态渲染设置页。"""
+    client, service = build_client()
+    service.page = RuntimeConfigPage(
+        view=replace(masked_view(), embedding_enabled=enabled, embedding_api_key=key),
+        revision=6,
+        active_version_id=12,
+        previous_version_id=11,
+        source="database",
+    )
+    login_admin(client, next_path="/employee/admin/settings")
+    return client.get("/employee/admin/settings").text
+
+
+def test_semantic_retrieval_status_separates_saved_key_from_switch() -> None:
+    """key 已保存不等于已开启：没勾开关时要写明未开启、key 尚未测试。"""
+    no_key = _settings_page_with_embedding(enabled=False, key="未配置")
+    saved_only = _settings_page_with_embedding(enabled=False, key="已配置 ····abcd")
+    enabled = _settings_page_with_embedding(enabled=True, key="已配置 ····abcd")
+
+    assert '<span class="badge badge--neutral">未开启</span> 未填写 key' in no_key
+    assert '<span class="badge badge--warning">未开启</span> key 已保存，尚未测试' in saved_only
+    assert "勾选下方开关并保存后才会测试并生效" in saved_only
+    assert '<span class="badge badge--success">已开启</span> key 已通过连接测试' in enabled
+    assert "已保存 ····abcd" in saved_only
+    assert "开启语义检索（保存时测试 key，通过才生效）" in saved_only

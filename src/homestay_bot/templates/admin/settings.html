@@ -53,10 +53,21 @@
 
     <fieldset class="config-group config-group--wide">
       <legend>语义检索（可选）</legend>
+      {# key 已保存和功能已开启是两件事：没勾开关时保存，key 不会被测试，也不会生效。 #}
+      {% set embedding_key_saved = page.view.embedding_api_key != "未配置" %}
+      <p class="config-status">
+        {% if page.view.embedding_enabled %}
+        {{ ui.badge("已开启", "success") }} key 已通过连接测试，客人提问会同时用关键词和语义查找知识。
+        {% elif embedding_key_saved %}
+        {{ ui.badge("未开启", "warning") }} key 已保存，尚未测试。勾选下方开关并保存后才会测试并生效。
+        {% else %}
+        {{ ui.badge("未开启") }} 未填写 key。
+        {% endif %}
+      </p>
       <p class="muted">开启后，已审核知识的正文和客人问题会发送给下面的服务商生成向量，用于找到换了说法的相关知识；客人问题发送前会先隐藏手机号、邮箱、证件号、订单号和门牌。相似度只影响找哪些知识，不会让系统确认知识里没写的事实。</p>
       <div class="form-grid">
-        <label class="check-row"><input type="checkbox" name="embedding_enabled" value="true" {% if page.view.embedding_enabled %}checked{% endif %}>开启语义检索</label>
-        <label>API Key <small>{{ page.view.embedding_api_key }}</small><input type="password" name="embedding_api_key" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
+        <label class="check-row"><input type="checkbox" name="embedding_enabled" value="true" {% if page.view.embedding_enabled %}checked{% endif %}>开启语义检索（保存时测试 key，通过才生效）</label>
+        <label>API Key <small>{{ page.view.embedding_api_key | replace("已配置", "已保存") }}</small><input type="password" name="embedding_api_key" maxlength="4096" autocomplete="new-password" placeholder="留空保留原值…"></label>
         <label>接口地址<input type="url" name="embedding_base_url" maxlength="2048" value="{{ page.view.embedding_base_url }}" required></label>
         <label>模型名称<input type="text" name="embedding_model" maxlength="256" value="{{ page.view.embedding_model }}" required></label>
       </div>
