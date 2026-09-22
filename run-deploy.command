@@ -31,7 +31,7 @@ HEAD_SHA=$(git rev-parse HEAD)
 # HEAD 必须正好带着本版本的标签，杜绝「版本号没跟着代码走」
 TAG_SHA=$(git rev-parse "$TAG^{commit}" 2>/dev/null || echo "")
 [ "$TAG_SHA" = "$HEAD_SHA" ] \
-  || fail "HEAD 不是 $TAG（pyproject=$VERSION，HEAD=$(git rev-parse --short HEAD)）。先打标签或切到正确提交。"
+  || fail "HEAD 不是 ${TAG}（pyproject=$VERSION，HEAD=$(git rev-parse --short HEAD)）。先打标签或切到正确提交。"
 
 # 发布包携带的是 refs/heads/main，而 TARGET 取自 HEAD；分离头指针下两者可能不是
 # 同一个提交，会导致服务器快进到 main 的位置后与 TARGET 不符而中止。
@@ -89,7 +89,7 @@ ssh "${SSH_OPTS[@]}" \
 echo "SSH_EXIT=${PIPESTATUS[0]}" >> "$LOG"
 echo
 if grep -q "DEPLOY_OK" "$LOG"; then
-  echo "✓ 部署完成（$TAG）。完整输出见 .stage/deploy.log"
+  echo "✓ 部署完成（${TAG}）。完整输出见 .stage/deploy.log"
 else
   echo "✗ 未见 DEPLOY_OK，请检查 .stage/deploy.log"
   exit 1
