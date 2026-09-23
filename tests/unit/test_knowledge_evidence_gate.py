@@ -243,7 +243,7 @@ async def test_single_long_audited_answer_is_sent_in_full() -> None:
         source_id=9,
         category="客房温控",
         question="房间能调节温度吗？",
-        answer="空调可在18至30摄氏度之间调节。" + "另有若干使用条件。" * 200,
+        answer="空调可在18至30摄氏度之间调节。" + "另有若干使用条件。" * 100,
     )
 
     decision, _ = await _respond_with(

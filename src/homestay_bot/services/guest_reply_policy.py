@@ -579,6 +579,142 @@ _INLINE_BULLET_AFTER_TEXT = re.compile(r"(?<=\S)[ \t]*•[ \t]+")
 _INLINE_BULLET_AFTER_PUNCTUATION = re.compile(r"(?<=[：:。；;！？!?])•")
 
 
+# 企业微信文本消息 text.content 的上限，按 UTF-8 字节计；超出会被接口拒绝。
+WECOM_TEXT_MAX_BYTES = 2048
+_EVIDENCE_FOOTER_TAIL = re.compile(
+    r"(?:这是我今天（\d{1,2}月\d{1,2}日）帮您查到的|I checked this latest ).*\Z", re.DOTALL
+)
+_CUT_BOUNDARY = "。！？!?\n"
+# 句末离截断点太远时宁可按字符截断，免得为了句子完整丢掉一大段。
+_MIN_KEPT_RATIO_AT_BOUNDARY = 0.6
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """截到不超过指定字节数，且不切开任何一个字符。"""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[: max(0, max_bytes)].decode("utf-8", errors="ignore")
+
+
+def fit_wecom_text(content: str, max_bytes: int = WECOM_TEXT_MAX_BYTES) -> str:
+    """把机器人回复压到企业微信文本上限以内，只在超限时截断。
+
+    优先在句末或换行处截断；离截断点太远时按字符截断并以省略号标明。结尾的时效
+    说明（「这是我今天……查到的」）整段保留，客人仍能看到信息可能变化的提醒。
+    审核知识原文不走这里截断：超过上限时由证据计划改为未确认，见
+    `knowledge_evidence_policy.build_evidence_plan`。
+    """
+    if len(content.encode("utf-8")) <= max_bytes:
+        return content
+    body, footer = content, ""
+    match = _EVIDENCE_FOOTER_TAIL.search(content)
+    if match is not None and len(match.group(0).encode("utf-8")) <= max_bytes // 4:
+        body, footer = content[: match.start()].rstrip(), match.group(0).strip()
+    tail = f"\n\n{footer}" if footer else ""
+    ellipsis = "…"
+    budget = max_bytes - len(tail.encode("utf-8")) - len(ellipsis.encode("utf-8"))
+    cut = _truncate_utf8(body, budget)
+    boundary = max(cut.rfind(mark) for mark in _CUT_BOUNDARY)
+    if boundary >= 0 and boundary + 1 >= len(cut) * _MIN_KEPT_RATIO_AT_BOUNDARY:
+        return f"{cut[: boundary + 1].rstrip()}{tail}"
+    return f"{cut.rstrip()}{ellipsis}{tail}"
+
+
+# 超长回复拆成多条发送：单段比企业微信 2048 字节上限留出余量，给序号前缀使用。
+GUEST_REPLY_PART_MAX_BYTES = 1800
+GUEST_REPLY_MAX_PARTS = 3
+# 机器人回复的总长上限（字符），会话出口与知识证据计划共用同一个数。
+MAX_GUEST_REPLY_CHARS = 1500
+# 句末切点：中文句末标点、分号，英文句号后跟空白。英文句号不单独作切点，避免切开小数。
+_PIECE_BOUNDARY = re.compile(r"(?<=[。！？；;!?])|(?<=\.\s)")
+
+
+def _byte_len(text: str) -> int:
+    """按企业微信口径计算 UTF-8 字节数。"""
+    return len(text.encode("utf-8"))
+
+
+def _pieces(paragraph: str, budget: int) -> list[str]:
+    """把超长段落切成不超过预算的小块：先按句子，单句仍超长时按字符。"""
+    pieces: list[str] = []
+    for sentence in _PIECE_BOUNDARY.split(paragraph):
+        while _byte_len(sentence) > budget:
+            head = _truncate_utf8(sentence, budget)
+            pieces.append(head)
+            sentence = sentence[len(head):]
+        if sentence:
+            pieces.append(sentence)
+    return pieces
+
+
+def _split_parts(content: str, budget: int = GUEST_REPLY_PART_MAX_BYTES) -> list[str]:
+    """按段落、句子、字符的优先级切段，不限段数，也不加序号。
+
+    段落尽量整段放进同一条；放不下的段落再按句子拼。结尾的时效说明是最后一段，
+    因此总会落在最后一条里。
+    """
+    parts: list[str] = []
+    current = ""
+
+    def flush() -> None:
+        """把当前累积的内容收成一段。"""
+        nonlocal current
+        if current.strip():
+            parts.append(current.strip())
+        current = ""
+
+    for paragraph in content.split("\n\n"):
+        candidate = f"{current}\n\n{paragraph}" if current else paragraph
+        if _byte_len(candidate) <= budget:
+            current = candidate
+            continue
+        flush()
+        if _byte_len(paragraph) <= budget:
+            current = paragraph
+            continue
+        for piece in _pieces(paragraph, budget):
+            if _byte_len(current + piece) <= budget:
+                current += piece
+            else:
+                flush()
+                current = piece
+    flush()
+    return parts
+
+
+def fits_guest_reply_parts(content: str) -> bool:
+    """判断一段回复能否在段数上限内完整发出，不需要截断任何内容。"""
+    if len(content) > MAX_GUEST_REPLY_CHARS:
+        return False
+    if _byte_len(content) <= WECOM_TEXT_MAX_BYTES:
+        return True
+    return len(_split_parts(content)) <= GUEST_REPLY_MAX_PARTS
+
+
+def _part_label(index: int, total: int, language: Language) -> str:
+    """段序号前缀：异步投递失败的重发一定会打乱顺序，序号让客人能自己对上。"""
+    return f"({index}/{total}) " if language is Language.EN else f"（{index}/{total}）"
+
+
+def split_guest_reply(content: str, language: Language) -> list[str]:
+    """把机器人回复拆成若干条可发送的文本，每条都在企业微信上限以内。
+
+    放得进一条时原样返回。超过段数上限只可能出现在普通回复（审核知识在证据计划
+    阶段已按 `fits_guest_reply_parts` 拦下），此时最后一段按字节收口并保留时效说明。
+    """
+    if _byte_len(content) <= WECOM_TEXT_MAX_BYTES:
+        return [content]
+    parts = _split_parts(content)
+    if len(parts) > GUEST_REPLY_MAX_PARTS:
+        kept = parts[: GUEST_REPLY_MAX_PARTS - 1]
+        rest = "\n\n".join(parts[GUEST_REPLY_MAX_PARTS - 1 :])
+        kept.append(fit_wecom_text(rest, max_bytes=GUEST_REPLY_PART_MAX_BYTES))
+        parts = kept
+    total = len(parts)
+    return [f"{_part_label(index, total, language)}{part}" for index, part in enumerate(parts, 1)]
+
+
 def layout_guest_reply(content: str, language: Language) -> str:
     """只调整换行的确定性排版：小节标题与时效说明另起一段，列表项各占一行。
 

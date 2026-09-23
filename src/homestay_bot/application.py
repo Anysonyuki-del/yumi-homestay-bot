@@ -312,12 +312,115 @@ async def _guest_reply_is_stale(
     )
     if conversation_id is None:
         return False
+    if _reply_chain_index(payload) > 1:
+        # 长回复已经发出前面几段：客人追问不打断，同一个答案只发一半更糟；
+        # 员工一旦发言就停止，不能插话打断人工。
+        return bool(
+            await repository.has_newer_servicer_activity(conversation_id, str(boundary))
+        )
     return bool(
         await repository.has_newer_conversation_activity(
             conversation_id,
             str(boundary),
         )
     )
+
+
+def _reply_chain_index(payload: dict[str, Any]) -> int:
+    """返回长回复分段的序号；不是分段回复时为 1。"""
+    chain = payload.get("reply_chain")
+    if not isinstance(chain, dict):
+        return 1
+    try:
+        return int(chain.get("index", 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+async def _enqueue_guest_reply_continuation(
+    session: AsyncSession,
+    payload: dict[str, Any],
+) -> str | None:
+    """在当前段发送成功的同一事务里登记下一段，返回其 outbox 编号。
+
+    编号由分组与段序号确定，同一段重复处理时去重，不会重复发送。
+    """
+    chain = payload.get("reply_chain")
+    if not isinstance(chain, dict):
+        return None
+    continuation = [item for item in chain.get("continuation", []) if isinstance(item, str)]
+    if not continuation:
+        return None
+    next_index = _reply_chain_index(payload) + 1
+    group = str(chain.get("group", ""))
+    raw_key = f"{group}:part:{next_index}"
+    outbox_id = f"outbox:{hashlib.sha256(raw_key.encode()).hexdigest()}"
+    repository = SQLAlchemyJobRepository(session)
+    if await repository.exists_dedupe_key(outbox_id):
+        return None
+    next_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"outbox_id", "content", "reply_chain", "retry_of_message_id"}
+    }
+    next_payload.update(
+        {
+            "outbox_id": outbox_id,
+            "content": continuation[0],
+            "delivery_retry_count": 0,
+            "reply_chain": {
+                "group": group,
+                "index": next_index,
+                "total": chain.get("total"),
+                "continuation": continuation[1:],
+            },
+        }
+    )
+    await repository.enqueue("wecom_send_text", next_payload, dedupe_key=outbox_id)
+    return outbox_id
+
+
+def reply_chain_undelivered_payload(
+    job_type: str,
+    failed_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """长回复某段发送终态失败时，返回员工通知所需的最小载荷；其余情况返回 None。"""
+    if job_type != "wecom_send_text":
+        return None
+    chain = failed_payload.get("reply_chain")
+    if not isinstance(chain, dict) or not failed_payload.get("open_kfid"):
+        return None
+    return {
+        "group": str(chain.get("group", "")),
+        "index": _reply_chain_index(failed_payload),
+        "total": chain.get("total"),
+    }
+
+
+async def _notify_undelivered_reply_chain(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    agent_id: int,
+    employee_userids: list[str],
+) -> bool:
+    """通知值班员工：某条长回复从第几段起没有送达，后续段已停止发送。"""
+    if not employee_userids:
+        return False
+    outbox = TransactionalOutboxWeCom(
+        session,
+        source_message_id=f"reply-chain-undelivered:{payload.get('group', '')}",
+        delivery_phase="guest",
+    )
+    await outbox.send_internal_text(
+        agent_id=agent_id,
+        employee_userids=employee_userids,
+        content=(
+            f"有一条分 {payload.get('total')} 段发送的客人回复，从第 "
+            f"{payload.get('index')} 段起未成功送达，后续段已停止发送，请管家人工跟进。"
+        ),
+    )
+    return True
 
 
 class TransactionalOutboxWeCom:
@@ -360,6 +463,52 @@ class TransactionalOutboxWeCom:
         retry_of_message_id: str | None = None,
     ) -> str | None:
         """事务内登记客人回复，真实发送由 worker 在提交后执行。"""
+        return await self._enqueue_guest_text(
+            open_kfid,
+            external_userid,
+            content,
+            message_type=message_type,
+            delivery_retry_count=delivery_retry_count,
+            retry_of_message_id=retry_of_message_id,
+        )
+
+    async def send_text_chain(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        parts: list[str],
+        *,
+        message_type: str = "text",
+    ) -> str | None:
+        """登记多段回复：只入队第一段，其余段随载荷保存，由前一段发送成功后续发。
+
+        worker 支持并发取任务，失败重试也会推迟某一段；若一次性入队全部段，后一段
+        可能先于前一段送达。逐段接力入队后，任何时刻同一条回复只有一段在队列里。
+        """
+        return await self._enqueue_guest_text(
+            open_kfid,
+            external_userid,
+            parts[0],
+            message_type=message_type,
+            chain={
+                "index": 1,
+                "total": len(parts),
+                "continuation": list(parts[1:]),
+            },
+        )
+
+    async def _enqueue_guest_text(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        content: str,
+        *,
+        message_type: str = "text",
+        delivery_retry_count: int = 0,
+        retry_of_message_id: str | None = None,
+        chain: dict[str, Any] | None = None,
+    ) -> str | None:
+        """登记一条客人回复发送任务；同一 outbox 编号只登记一次。"""
         outbox_id = self._outbox_id("guest")
         if await self._repository.exists_dedupe_key(outbox_id):
             return None
@@ -377,6 +526,9 @@ class TransactionalOutboxWeCom:
             payload["source_guest_message_id"] = self._source_guest_message_id
         if self._conversation_id is not None:
             payload["conversation_id"] = self._conversation_id
+        if chain is not None:
+            # 分组编号取第一段的 outbox 编号：稳定、唯一，续发各段都能据此去重。
+            payload["reply_chain"] = {"group": outbox_id, **chain}
         await self._repository.enqueue(
             "wecom_send_text",
             payload,
@@ -2579,6 +2731,13 @@ async def _run_worker_loop(
                             metadata["source_guest_message_id"] = str(
                                 source_guest_message_id
                             )
+                        chain = payload.get("reply_chain")
+                        if isinstance(chain, dict):
+                            metadata["reply_part"] = {
+                                "group": str(chain.get("group", "")),
+                                "index": _reply_chain_index(payload),
+                                "total": chain.get("total"),
+                            }
                         await MessageService(SQLAlchemyMessageRepository(session)).record_bot(
                             conversation.id,
                             real_message_id,
@@ -2588,6 +2747,8 @@ async def _run_worker_loop(
                         )
                         # 这一条若是重试，原消息的「重试在途」到此为止。
                         await _settle_retry_origin(session, metadata)
+                    # 与本段发送结果同一事务登记下一段，保证逐段有序。
+                    await _enqueue_guest_reply_continuation(session, payload)
 
                 async def send_internal(
                     payload: dict[str, Any],
@@ -2676,6 +2837,16 @@ async def _run_worker_loop(
                 ) -> None:
                     """为改写或二次发送终态失败登记一次人工补偿任务。"""
                     if getattr(job, "status", None) is not JobStatus.FAILED:
+                        return
+                    undelivered = reply_chain_undelivered_payload(
+                        job.job_type, failed_payload
+                    )
+                    if undelivered is not None:
+                        await job_repository.enqueue(
+                            "guest_reply_chain_undelivered",
+                            undelivered,
+                            dedupe_key=f"reply-chain-undelivered:{undelivered['group']}",
+                        )
                         return
                     raw_message_id: object | None = None
                     if job.job_type == "guest_delivery_rewrite":
@@ -3918,6 +4089,23 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return handle
 
+    def build_reply_chain_undelivered_handler(
+        session: AsyncSession,
+        bundle: RuntimeClientBundle,
+    ) -> JobHandler:
+        """为长回复中途未送达创建员工通知处理器。"""
+
+        async def handle(payload: dict[str, Any]) -> None:
+            """登记一条去重的员工通知。"""
+            await _notify_undelivered_reply_chain(
+                session,
+                payload,
+                agent_id=bundle.agent_id,
+                employee_userids=list(bundle.duty_userids),
+            )
+
+        return handle
+
     async def record_external_call(record: Any) -> None:
         """把一次外部调用结果写入独立短事务。
 
@@ -3954,6 +4142,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             ),
             "guest_delivery_failure_compensate": (
                 build_delivery_compensation_handler(session, bundle)
+            ),
+            "guest_reply_chain_undelivered": build_reply_chain_undelivered_handler(
+                session,
+                bundle,
             ),
             "customer_context_refresh": build_context_refresh_handler(
                 session,

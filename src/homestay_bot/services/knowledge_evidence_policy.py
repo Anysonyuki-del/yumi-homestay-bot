@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from homestay_bot.services.guest_reply_policy import fits_guest_reply_parts
 from homestay_bot.services.knowledge_service import (
     PropertyTopic,
     detect_property_topics,
@@ -430,6 +431,10 @@ def build_evidence_plan(
     if any(_INSTRUCTION_INJECTION.search(item) for item in chosen):
         # 需要人工复核的条目不原样转发，也不让模型改写后发出。
         return EvidencePlan("insufficient", topics, (), "answer_needs_review")
+    if not fits_guest_reply_parts(compose_static_reply(chosen)):
+        # 审核原文绝不截断条件与例外：超长时拆成多条发送，拆到段数上限仍放不下才
+        # 请客人细化，并提示管理员缩短这条知识。
+        return EvidencePlan("insufficient", topics, (), "reply_exceeds_message_limit")
     if len(chosen) > 1 and sum(len(item) for item in chosen) > STATIC_REPLY_MAX_CHARS:
         # 单条审核问答是最小证据单元，再长也整条发出，绝不截掉尾部的条件与例外；
         # 只有需要拼接多条时才可能超出预算，这时请客人把问题问得更具体。

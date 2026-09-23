@@ -176,6 +176,24 @@ class SQLAlchemyMessageRepository:
         )
         return bool(await self._session.scalar(statement))
 
+    async def has_newer_servicer_activity(
+        self,
+        conversation_id: int,
+        external_message_id: str,
+    ) -> bool:
+        """判断来源边界后是否出现人工客服发言；长回复续发段只因此停止。"""
+        boundary = select(Message.id).where(
+            Message.external_message_id == external_message_id
+        ).scalar_subquery()
+        statement = select(
+            exists().where(
+                Message.conversation_id == conversation_id,
+                Message.id > boundary,
+                Message.origin == MessageOrigin.SERVICER,
+            )
+        )
+        return bool(await self._session.scalar(statement))
+
     async def replace_external_message_id(
         self, temporary_id: str, external_message_id: str
     ) -> None:

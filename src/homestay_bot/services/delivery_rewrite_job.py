@@ -13,6 +13,7 @@ from homestay_bot.integrations.tourism import split_tourism_reply
 from homestay_bot.repositories.conversations import DeliveryRewriteContext
 from homestay_bot.services.guest_reply_policy import (
     contains_sensitive_guest_text,
+    fit_wecom_text,
     redact_sensitive_guest_text,
     remove_ungrounded_property_claims,
     sanitize_guest_reply,
@@ -302,6 +303,8 @@ class GuestDeliveryRewriteJobService:
                 context.conversation.language,
             )
 
+        # 改写后的重发同样受企业微信文本上限约束。
+        reply = fit_wecom_text(reply)
         outbox = self._outbox_factory(
             context.failed_bot.id,
             context.source_guest.external_message_id,

@@ -2282,12 +2282,36 @@ async def test_ai_task_failure_does_not_rollback_guest_reply(caplog) -> None:
 
 
 @pytest.mark.asyncio
-async def test_deepseek_reply_at_1500_characters_is_not_changed() -> None:
-    """恰好一千五百个字符的精简回复必须完整发送。"""
+async def test_deepseek_reply_at_1500_characters_is_sent_in_order_as_parts() -> None:
+    """一千五百字的回复超过企业微信单条上限：按顺序拆成多条，正文一字不少。"""
     content = "汉" * 1500
+    messages = MessageServiceStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text=content,
+            language=Language.ZH,
+            intent="faq",
+            confidence=0.98,
+        )
+    )
+    service, _, _, wecom = build_service(assistant=assistant, messages=messages)
+
+    await service.handle_message(incoming())
+
+    assert len(wecom.guest_messages) == 3
+    assert [part[:5] for part in wecom.guest_messages] == ["（1/3）", "（2/3）", "（3/3）"]
+    assert all(len(part.encode("utf-8")) <= 2048 for part in wecom.guest_messages)
+    assert "".join(part[5:] for part in wecom.guest_messages) == content
+    # 直接发送的发送器逐条记录，入库内容与实际发送一致。
+    assert [row[2] for row in messages.bot_messages] == wecom.guest_messages
+
+
+@pytest.mark.asyncio
+async def test_deepseek_reply_over_1500_characters_is_truncated_before_recording() -> None:
+    """超过总长上限的回复先截到一千五百字并以省略号结尾，再拆段发送。"""
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="汉" * 1501,
             language=Language.ZH,
             intent="faq",
             confidence=0.98,
@@ -2297,32 +2321,42 @@ async def test_deepseek_reply_at_1500_characters_is_not_changed() -> None:
 
     await service.handle_message(incoming())
 
-    assert wecom.guest_messages == [content]
+    joined = "".join(part[5:] for part in wecom.guest_messages)
+    assert joined == "汉" * 1499 + "…"
 
 
 @pytest.mark.asyncio
-async def test_deepseek_reply_over_1500_characters_is_truncated_before_recording() -> None:
-    """超长 DeepSeek 回复应以省略号结尾，并按实际发送内容入库。"""
-    messages = MessageServiceStub()
+async def test_outbox_sender_receives_the_parts_as_one_ordered_chain() -> None:
+    """生产 outbox 支持链式发送时，多段回复整体交给它按序续发，不逐条入队。"""
+
+    class ChainWeComStub(WeComStub):
+        """记录链式登记的分段。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.chains: list[list[str]] = []
+
+        async def send_text_chain(self, open_kfid, external_userid, parts, *, message_type="text"):
+            """只登记，不代表已发送。"""
+            self.chains.append(list(parts))
+            return "outbox:chain-1"
+
+    wecom = ChainWeComStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="汉" * 1501,
+            reply_text="汉" * 1500,
             language=Language.ZH,
             intent="faq",
             confidence=0.98,
         )
     )
-    service, _, _, wecom = build_service(
-        assistant=assistant,
-        messages=messages,
-    )
+    service, _, _, _ = build_service(assistant=assistant, wecom=wecom)
 
     await service.handle_message(incoming())
 
-    expected = "汉" * 1499 + "…"
-    assert wecom.guest_messages == [expected]
-    assert len(wecom.guest_messages[0]) == 1500
-    assert messages.bot_messages == [(1, "bot-1", expected)]
+    assert len(wecom.chains) == 1
+    assert len(wecom.chains[0]) == 3
+    assert wecom.guest_messages == []
 
 
 @pytest.mark.asyncio

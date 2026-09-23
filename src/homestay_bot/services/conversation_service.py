@@ -4,7 +4,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -44,13 +44,16 @@ from homestay_bot.services.emergency_service import (
     EmergencyService,
 )
 from homestay_bot.services.guest_reply_policy import (
+    MAX_GUEST_REPLY_CHARS,
     prepare_facility_advice_reply,
     prepare_guest_reply,
+    split_guest_reply,
 )
 from homestay_bot.services.message_service import GuestMessageBatch, IncomingMessage
 from homestay_bot.worker import DeferredRetryJobError
 
-_MAX_ASSISTANT_REPLY_CHARACTERS = 1500
+# 与知识证据计划共用同一上限，见 guest_reply_policy.MAX_GUEST_REPLY_CHARS。
+_MAX_ASSISTANT_REPLY_CHARACTERS = MAX_GUEST_REPLY_CHARS
 _GUEST_MESSAGE_DEBOUNCE_SECONDS = 3
 logger = logging.getLogger(__name__)
 
@@ -167,6 +170,21 @@ class WeComMessagingPort(Protocol):
         content: str,
     ) -> None:
         """通知值班员工处理人工会话。"""
+
+
+@runtime_checkable
+class ChainedGuestSenderPort(Protocol):
+    """能按顺序链式发送多段客人消息的发送器（生产事务 outbox）。"""
+
+    async def send_text_chain(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        parts: list[str],
+        *,
+        message_type: str = "text",
+    ) -> str | None:
+        """只登记第一段，后续段在前一段发送成功后才入队，保证顺序。"""
 
 
 class WeComIdentityPort(Protocol):
@@ -1111,8 +1129,18 @@ class ConversationService:
         *,
         message_type: str = "text",
     ) -> GuestReplyReceipt:
-        """发送已经过统一客人侧策略处理的文本，并记录真实消息编号。"""
+        """发送已经过统一客人侧策略处理的文本，并记录真实消息编号。
 
+        超过企业微信单条上限的回复拆成多条：生产 outbox 链式入队，保证逐段有序；
+        直接发送的发送器按顺序逐条发出。
+        """
+        parts = split_guest_reply(content, conversation.language)
+        if len(parts) > 1:
+            return await self._send_guest_reply_parts(
+                conversation,
+                parts,
+                message_type=message_type,
+            )
         message_id = await self._wecom.send_text(
             conversation.open_kfid,
             conversation.external_userid,
@@ -1131,6 +1159,43 @@ class ConversationService:
                 message_type=message_type,
             )
         return GuestReplyReceipt(content=content, message_id=message_id)
+
+    async def _send_guest_reply_parts(
+        self,
+        conversation: Conversation,
+        parts: list[str],
+        *,
+        message_type: str,
+    ) -> GuestReplyReceipt:
+        """按顺序发出多段回复，回执记录第一段的编号与完整正文。"""
+        full_content = "\n\n".join(parts)
+        if isinstance(self._wecom, ChainedGuestSenderPort):
+            first_id = await self._wecom.send_text_chain(
+                conversation.open_kfid,
+                conversation.external_userid,
+                parts,
+                message_type=message_type,
+            )
+            return GuestReplyReceipt(content=full_content, message_id=first_id)
+        first_id = None
+        for part in parts:
+            message_id = await self._wecom.send_text(
+                conversation.open_kfid,
+                conversation.external_userid,
+                part,
+                message_type=message_type,
+            )
+            if first_id is None:
+                first_id = message_id
+            if message_id is None or message_id.startswith("outbox:"):
+                continue
+            await self._messages.record_bot(
+                conversation.id,
+                message_id,
+                part,
+                message_type=message_type,
+            )
+        return GuestReplyReceipt(content=full_content, message_id=first_id)
 
     @staticmethod
     def _clean_guest_reply_topics(content: str, *, question: str = "") -> str:
