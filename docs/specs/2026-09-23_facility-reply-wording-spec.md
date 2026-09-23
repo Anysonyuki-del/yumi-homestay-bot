@@ -92,5 +92,5 @@ R1 只针对一种语病打补丁。用户要求泛用修复，并把旅游与�
 - A2：`layout_guest_reply` 接在 `prepare_guest_reply` 最后。小节标题只在句末标点或冒号之后、且不超过 8 字时才另起一段，句中的【名称】不动。
 - B：`AssistantDecision.facility_advice`（格式异常只丢弃该字段）；`prepare_facility_advice_reply` 逐条检查并组装；原 `prepare_facility_issue_reply` 删除，其全部安全用例迁移到新函数。一条建议含多句时拆开逐句检查。「X 分钟内到」这类时间承诺只在设施建议里拦截，不加进共用承诺过滤，以免误删「步行 10 分钟到地铁站」。
 - 超长回复：客人回复只按 1500 字符截断，未按企业微信 2048 字节保护，按 §3 约定单列给用户决定。
-- 验证：新增 24 项测试（含 3 条生产真实样本）；全量 1837 passed / 24 skipped；Ruff、mypy、diff-check 通过。
+- 验证：新增 24 项测试（含 3 条生产真实样本）；全量 1841 passed / 24 skipped；Ruff、mypy、diff-check 通过。
 - 已知上限：路线类回复若模型本身不分段，排版步骤不会拆开行程正文（只改换行、不改文字），依赖新提示词，需上线后以真实消息验证。
