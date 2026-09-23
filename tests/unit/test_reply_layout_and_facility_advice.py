@@ -205,3 +205,58 @@ def test_decision_tolerates_malformed_facility_advice(raw, expected) -> None:
     )
 
     assert decision.facility_advice == expected
+
+
+REAL_WEATHER_WITH_HEADER = (
+    "【天气速览】我帮您看了一下，2026年9月25日（周五，中秋节）武汉白天多云，之后转小到中雨。"
+    "\n\n【实用提醒】出门随身带伞，晚归注意路面湿滑。"
+)
+
+
+def test_weather_opener_is_not_repeated_when_the_model_wrote_it_after_a_header() -> None:
+    """真实样本：模型把开场白写在【标题】之后，系统不能再补一遍。"""
+    prepared = prepare_guest_reply(
+        REAL_WEATHER_WITH_HEADER,
+        language=Language.ZH,
+        requires_human=False,
+        question="明天天气咋样",
+    )
+
+    assert prepared.count("我帮您看了一下") == 1
+    assert prepared.startswith("【天气速览】")
+
+
+def test_weather_opener_sits_on_its_own_line_before_a_header() -> None:
+    """正文以【标题】开头且没有开场白时，补的开场白单独成段，不黏在标题前。"""
+    prepared = prepare_guest_reply(
+        "【天气速览】明天多云，最高31℃。",
+        language=Language.ZH,
+        requires_human=False,
+        question="明天天气咋样",
+    )
+
+    assert prepared.startswith("我帮您看了一下：\n\n【天气速览】")
+
+
+def test_weather_opener_is_still_added_to_plain_text() -> None:
+    """普通正文没有开场白时照旧补在句首。"""
+    prepared = prepare_guest_reply(
+        "明天多云，最高31℃。",
+        language=Language.ZH,
+        requires_human=False,
+        question="明天天气咋样",
+    )
+
+    assert prepared.startswith("我帮您看了一下，明天多云")
+
+
+def test_english_weather_opener_is_not_repeated_after_a_header() -> None:
+    """英文同理：开头一段里已有开场白就不再补。"""
+    prepared = prepare_guest_reply(
+        "【Overview】I checked the forecast for you. Cloudy tomorrow, high of 31°C.",
+        language=Language.EN,
+        requires_human=False,
+        question="What's the weather tomorrow?",
+    )
+
+    assert prepared.count("I checked the forecast") == 1

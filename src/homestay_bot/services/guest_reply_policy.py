@@ -531,12 +531,34 @@ def _is_weather_question(question: str, language: Language) -> bool:
     return pattern.search(question) is not None
 
 
+def _opening_paragraph(content: str) -> str:
+    """返回正文的第一段，用于判断固定开场白是否已经出现过。"""
+    return content.lstrip().split("\n\n", 1)[0]
+
+
+def _with_opener(content: str, phrase: str, *, inline: str, standalone: str) -> str:
+    """补上固定开场白；只要第一段里已经有这句就不再补。
+
+    固定文案只核对「有没有」，不核对「是不是在句首」：模型用【标题】分节时，常把
+    开场白写在标题之后，只认句首会再补一遍。正文以【标题】开头时，补的开场白单独
+    成段，不与标题黏在一起。
+    """
+    if phrase in _opening_paragraph(content):
+        return content
+    if content.lstrip().startswith("【"):
+        return f"{standalone}\n\n{content.lstrip()}"
+    return f"{inline}{content}"
+
+
 def _warm_weather_reply(content: str, language: Language) -> str:
     """为已取得的天气事实增加简短管家表达，不改写任何查询字段。"""
     if language is Language.EN:
-        opener = "I checked the forecast for you. "
-        if not content.startswith(opener):
-            content = f"{opener}{content}"
+        content = _with_opener(
+            content,
+            "I checked the forecast",
+            inline="I checked the forecast for you. ",
+            standalone="I checked the forecast for you:",
+        )
         if re.search(
             r"\b(?:rain|shower|storm)\b",
             content,
@@ -545,9 +567,12 @@ def _warm_weather_reply(content: str, language: Language) -> str:
             content = f"{content.rstrip()} It’s a good idea to bring an umbrella."
         return content
 
-    opener = "我帮您看了一下，"
-    if not content.startswith("我帮您看了一下"):
-        content = f"{opener}{content}"
+    content = _with_opener(
+        content,
+        "我帮您看了一下",
+        inline="我帮您看了一下，",
+        standalone="我帮您看了一下：",
+    )
     if re.search(r"下雨|降雨|阵雨|雷雨", content) and not _ZH_UMBRELLA_PATTERN.search(
         content
     ):
