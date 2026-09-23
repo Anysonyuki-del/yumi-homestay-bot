@@ -841,7 +841,8 @@ async def test_facility_scope_and_reply_share_the_existing_model_response() -> N
     assert "私人物品" in system_prompt
     assert "外部场所" in system_prompt
     assert "不追问" in system_prompt
-    assert "一至两条" in system_prompt
+    assert "facility_advice" in system_prompt
+    assert "条件句" in system_prompt
     assert "无法正常使用" in system_prompt
     assert "住宿环境异常" in system_prompt
     assert "影响当前入住" in system_prompt

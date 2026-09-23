@@ -3,7 +3,7 @@ import pytest
 from homestay_bot.domain.enums import Language
 from homestay_bot.services.guest_reply_policy import (
     human_contact_reply,
-    prepare_facility_issue_reply,
+    prepare_facility_advice_reply,
     prepare_guest_reply,
     remove_ungrounded_property_claims,
     sanitize_guest_reply,
@@ -11,7 +11,7 @@ from homestay_bot.services.guest_reply_policy import (
 
 
 @pytest.mark.parametrize(
-    ("model_reply", "advice"),
+    ("model_advice", "advice"),
     [
         ("收到，**请先停止使用洗衣机，不要自行拆卸。**", "停止使用洗衣机"),
         ("请先确认房间开关是否已开启。", "确认房间开关是否已开启"),
@@ -20,11 +20,11 @@ from homestay_bot.services.guest_reply_policy import (
     ],
 )
 def test_facility_issue_reply_keeps_model_advice_and_manual_submission(
-    model_reply: str,
+    model_advice: str,
     advice: str,
 ) -> None:
     """普通设施故障应保留模型的针对性安全建议并声明人工已提交。"""
-    reply = prepare_facility_issue_reply(model_reply, Language.ZH)
+    reply = prepare_facility_advice_reply([model_advice], Language.ZH)
 
     assert advice in reply
     assert "**" not in reply
@@ -36,7 +36,7 @@ def test_facility_issue_reply_keeps_model_advice_and_manual_submission(
 
 
 @pytest.mark.parametrize(
-    "unsafe_reply",
+    "unsafe_advice",
     [
         "请拆开洗衣机后盖检查线路。",
         "请接触电线确认是否通电。",
@@ -48,9 +48,9 @@ def test_facility_issue_reply_keeps_model_advice_and_manual_submission(
         "已经提交管家人工处理。",
     ],
 )
-def test_unsafe_or_follow_up_facility_reply_falls_back(unsafe_reply: str) -> None:
+def test_unsafe_or_follow_up_facility_reply_falls_back(unsafe_advice: str) -> None:
     """危险操作和追问不得发给客人，只能使用通用安全降级。"""
-    reply = prepare_facility_issue_reply(unsafe_reply, Language.ZH)
+    reply = prepare_facility_advice_reply([unsafe_advice], Language.ZH)
 
     assert reply == (
         "收到，请先停止使用该设施，不要拆卸或强行操作。"
@@ -59,9 +59,9 @@ def test_unsafe_or_follow_up_facility_reply_falls_back(unsafe_reply: str) -> Non
 
 
 def test_facility_reply_removes_promise_but_keeps_safe_advice() -> None:
-    """模型夹带人员与结果承诺时，应只保留低风险排查建议。"""
-    reply = prepare_facility_issue_reply(
-        "请先长按童锁键三秒试试看；师傅稍后会上门并彻底修好。",
+    """同一条建议里夹带人员与结果承诺时，只删承诺那一句，保留低风险排查建议。"""
+    reply = prepare_facility_advice_reply(
+        ["请先长按童锁键三秒试试看；师傅稍后会上门并彻底修好。"],
         Language.ZH,
     )
 
@@ -73,12 +73,12 @@ def test_facility_reply_removes_promise_but_keeps_safe_advice() -> None:
 
 def test_english_facility_reply_uses_same_safety_boundary() -> None:
     """英文设施回复也必须保留安全建议并拦截危险操作。"""
-    safe_reply = prepare_facility_issue_reply(
-        "Please stop flushing to avoid overflow.",
+    safe_reply = prepare_facility_advice_reply(
+        ["Please stop flushing to avoid overflow."],
         Language.EN,
     )
-    unsafe_reply = prepare_facility_issue_reply(
-        "Please restart the room router.",
+    unsafe_reply = prepare_facility_advice_reply(
+        ["Please restart the room router."],
         Language.EN,
     )
 

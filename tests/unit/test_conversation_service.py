@@ -786,6 +786,7 @@ async def test_merged_equipment_fault_gets_advice_and_manual_task() -> None:
             intent="facility_fault",
             confidence=0.96,
             facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=["收到，请先停止使用洗衣机，不要自行拆卸。"],
         )
     )
     service, conversations, assistant, wecom = build_service(
@@ -1853,6 +1854,11 @@ async def test_washer_task_uses_model_advice_without_promising_a_technician() ->
             intent="maintenance",
             confidence=0.96,
             facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=[
+                "别急哈，我会尽快安排师傅上门帮您查看处理。",
+                "您可以先长按童锁键三秒试试看；",
+                "要是还不行，师傅到了会帮您彻底解决好。",
+            ],
             task_suggestion=TaskSuggestion(
                 task_type=BusinessTaskType.MAINTENANCE,
                 description="检查洗衣机童锁状态",
@@ -1931,6 +1937,7 @@ async def test_soft_washer_fault_gives_advice_after_submitting_manual_task() -> 
             intent="facility_fault",
             confidence=0.96,
             facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=["请先停止使用洗衣机，不要自行拆卸。"],
         )
     )
     service, _, assistant, _ = build_service(
@@ -1971,6 +1978,7 @@ async def test_equipment_task_failure_never_claims_manual_submission() -> None:
             intent="facility_fault",
             confidence=0.96,
             facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=["收到，我先给您一个安全排查建议。"],
         )
     )
     service, _, assistant, wecom = build_service(
@@ -2023,6 +2031,7 @@ async def test_new_facility_is_handled_on_first_occurrence(
             intent="facility_fault",
             confidence=0.95,
             facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=[model_reply],
         )
     )
     service, _, selected_assistant, wecom = build_service(
@@ -2068,6 +2077,7 @@ async def test_low_confidence_facility_reply_falls_back_to_generic_advice() -> N
             intent="facility_fault",
             confidence=0.4,
             facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=["可以重置路由器。"],
         )
     )
     service, _, _, wecom = build_service(
@@ -2118,6 +2128,7 @@ async def test_low_confidence_stay_issue_keeps_safe_contextual_advice(
             intent="stay_environment_issue",
             confidence=0.4,
             facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=[model_reply],
         )
     )
     service, _, _, wecom = build_service(
@@ -2146,6 +2157,7 @@ async def test_uncertain_unlisted_facility_scope_still_submits_manual_task() -> 
             intent="facility_fault",
             confidence=0.9,
             facility_issue=FacilityIssue(scope="uncertain"),
+            facility_advice=["请拆开设备检查线路。"],
         )
     )
     service, _, _, wecom = build_service(
@@ -2194,6 +2206,7 @@ async def test_private_or_external_fault_never_creates_homestay_task(content: st
             intent="facility_fault",
             confidence=0.98,
             facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=["建议联系物品或场所负责人处理。"],
         )
     )
     service, _, selected_assistant, wecom = build_service(
@@ -2221,6 +2234,7 @@ async def test_high_confidence_model_external_scope_blocks_homestay_task() -> No
             intent="facility_fault",
             confidence=0.96,
             facility_issue=FacilityIssue(scope="external"),
+            facility_advice=["建议联系书店工作人员处理。"],
         )
     )
     service, _, _, wecom = build_service(

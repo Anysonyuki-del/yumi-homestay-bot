@@ -44,7 +44,7 @@ from homestay_bot.services.emergency_service import (
     EmergencyService,
 )
 from homestay_bot.services.guest_reply_policy import (
-    prepare_facility_issue_reply,
+    prepare_facility_advice_reply,
     prepare_guest_reply,
 )
 from homestay_bot.services.message_service import GuestMessageBatch, IncomingMessage
@@ -628,9 +628,12 @@ class ConversationService:
         self,
         conversation: Conversation,
         message: IncomingMessage,
-        reply_text: str,
+        advice: list[str] | None,
     ) -> None:
-        """先登记住宿问题任务和员工通知，再发送经过安全清洗的模型建议。"""
+        """先登记住宿问题任务和员工通知，再发送由建议清单组装的回复。
+
+        `advice` 为 None 表示模型不可用或未给出清单，回复策略会使用固定兜底。
+        """
         if self._business_tasks is None or conversation.customer_id is None:
             # 生产装配必须同时提供正式客户和任务仓储；缺失时回滚入站并由 worker 重试。
             raise RuntimeError("设施故障人工任务依赖未配置")
@@ -645,14 +648,8 @@ class ConversationService:
             message,
             f"新任务待确认：ID {task.id}，类型 {task.task_type.value}",
         )
-        cleaned_reply = ""
-        if reply_text.strip():
-            # 空串是模型异常或低置信的显式信号，必须保留给回复策略触发安全降级。
-            cleaned_reply = self._clean_guest_reply_topics(
-                self._limit_assistant_reply(reply_text),
-                question=message.content,
-            )
-        reply = prepare_facility_issue_reply(cleaned_reply, conversation.language)
+        # 开头、结尾与标点全部由本地组装，模型只提供逐条检查过的短建议。
+        reply = prepare_facility_advice_reply(advice, conversation.language)
         await self._send_prepared_guest_reply(conversation, reply)
 
     async def _stage_fast_ack(
@@ -832,12 +829,12 @@ class ConversationService:
                 return
             if (
                 self._determine_handoff_reason(message.content) is None
-                and self._facility_reply_text(message.content, None) is not None
+                and self._is_facility_issue(message.content, None)
             ):
                 await self._handle_facility_issue(
                     conversation,
                     message,
-                    "",
+                    None,
                 )
                 return
             await self._escalate_assistant_failure(conversation, message)
@@ -848,16 +845,15 @@ class ConversationService:
         ):
             return
         local_handoff_reason = self._determine_handoff_reason(message.content)
-        facility_reply_text = self._facility_reply_text(message.content, decision)
         if (
             local_handoff_reason is None
             and decision.handoff_reason is None
-            and facility_reply_text is not None
+            and self._is_facility_issue(message.content, decision)
         ):
             await self._handle_facility_issue(
                 conversation,
                 message,
-                facility_reply_text,
+                decision.facility_advice,
             )
             return
         service_requested = is_service_request(message.content)
@@ -918,25 +914,21 @@ class ConversationService:
             return
 
     @staticmethod
-    def _facility_reply_text(
+    def _is_facility_issue(
         question: str,
         decision: AssistantDecision | None,
-    ) -> str | None:
-        """返回住宿设施或环境问题的模型正文，缺失时用空串触发降级。"""
+    ) -> bool:
+        """判断本轮是否走民宿设施或住宿环境问题流程。"""
         if facility_fault_exclusion(question) is not None:
-            return None
+            return False
         if decision is None:
-            return "" if has_facility_fault_signal(question) else None
+            return has_facility_fault_signal(question)
         issue = decision.facility_issue
         if issue is not None:
-            if issue.scope in {"private", "external"}:
-                return None
-            # 结构化归属负责开放语义；具体危险动作继续由逐句安全策略删除。
-            return decision.reply_text
-        if has_facility_fault_signal(question):
-            # 模型字段缺失或模型不可用时，明确本地信号仍进入确定性兜底。
-            return ""
-        return None
+            # 结构化归属负责开放语义；私人物品与外部场所不建民宿维修任务。
+            return issue.scope not in {"private", "external"}
+        # 模型字段缺失时，明确的本地故障信号仍进入流程并使用确定性兜底。
+        return has_facility_fault_signal(question)
 
     async def _discard_stale_final(
         self,

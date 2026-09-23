@@ -309,19 +309,50 @@ def _contains_soft_commitment(sentence: str) -> bool:
     return any(pattern.search(sentence) for pattern in _SOFT_COMMITMENT_PATTERNS)
 
 
+_SENTENCE_CHUNK = re.compile(r"[^。！？；;.!?]+[。！？；;.!?]*")
+
+
+def _keeps_sentence(sentence: str) -> bool:
+    """逐句过滤的唯一判定：非空，且不含执行承诺或软承诺。"""
+    return (
+        bool(sentence)
+        and not _contains_unsafe_commitment(sentence)
+        and not _contains_soft_commitment(sentence)
+    )
+
+
+def _safe_text_keeping_breaks(content: str, separator: str) -> str:
+    """与 `_safe_sentences` 的取舍完全相同，但保留句子之间原有的换行。
+
+    旧写法把每句 `strip()` 后首尾相接，紧跟句号的换行和空行全部丢失，模型分好的
+    【小节】和本地拼上的时效说明都被压成一段。这里只额外记住每句前面的换行数：
+    被删掉的句子把它的分段让给下一句，避免删句后两段粘在一起或留下空行。
+    """
+    parts: list[str] = []
+    pending_breaks = 0
+    for chunk in _SENTENCE_CHUNK.findall(content):
+        sentence = chunk.strip()
+        leading = chunk[: len(chunk) - len(chunk.lstrip())]
+        pending_breaks = max(pending_breaks, min(leading.count("\n"), 2))
+        if not _keeps_sentence(sentence):
+            continue
+        if parts:
+            parts.append("\n" * pending_breaks if pending_breaks else separator)
+        parts.append(sentence)
+        pending_breaks = 0
+    return "".join(parts).strip()
+
+
 def _safe_sentences(content: str) -> list[str]:
     """按句删除承诺，同时保留撤离提示和低风险自助建议。
 
     本函数只在 requires_human=False 时被调用，即本轮不会有任何人接手；因此除了
     既有的执行承诺，软承诺与未经记录的应允也一并删除。
     """
-    sentences = re.findall(r"[^。！？；;.!?]+[。！？；;.!?]*", content)
     return [
         sentence.strip()
-        for sentence in sentences
-        if sentence.strip()
-        and not _contains_unsafe_commitment(sentence)
-        and not _contains_soft_commitment(sentence)
+        for sentence in _SENTENCE_CHUNK.findall(content)
+        if _keeps_sentence(sentence.strip())
     ]
 
 
@@ -362,41 +393,87 @@ def _contains_facility_follow_up_or_submission(
     )
 
 
-def prepare_facility_issue_reply(
-    content: str,
+# 设施建议逐条检查用的规则。故障应急应是直接动作；带条件的建议最容易写反
+# （「如果还能用，就去别处」），整类去掉，而不是逐种说法打补丁。
+_ZH_CONDITIONAL = re.compile(r"如果|假如|假设|万一|要是|倘若|一旦|只要|的话|若(?!干)")
+_EN_CONDITIONAL = re.compile(r"\b(?:if|unless|in\s+case|whenever)\b", re.IGNORECASE)
+_FACILITY_GREETING_ONLY = re.compile(
+    r"^(?:您好|你好|hello|hi|hey)[\s，,!！。.]*$", re.IGNORECASE
+)
+# 只在设施建议里使用：共用承诺过滤若加入「X 分钟内到」，会误删「步行 10 分钟到地铁站」。
+_ZH_FACILITY_TIME_PROMISE = re.compile(
+    r"(?:分钟|小时).{0,6}(?:到|赶到|上门|修好|处理好)"
+)
+_EN_FACILITY_TIME_PROMISE = re.compile(
+    r"\b(?:minutes?|hours?)\b.{0,20}\b(?:arrive|come|fix|repair)", re.IGNORECASE
+)
+_FACILITY_ITEM_MARKER = re.compile(r"^(?:[•·\-*]|\d{1,2}[.、)）])\s*")
+_FACILITY_ITEM_ACKNOWLEDGEMENT = re.compile(r"^(?:收到|好的)[，,、\s]*")
+_FACILITY_ITEM_SPLIT = re.compile(r"(?<=[。！？；;!?])")
+_FACILITY_ITEM_END = re.compile(r"[。．.！!；;，,、\s]+$")
+FACILITY_ADVICE_MAX_ITEMS = 2
+_ZH_FACILITY_ITEM_MAX_CHARS = 40
+_EN_FACILITY_ITEM_MAX_CHARS = 120
+
+
+def _clean_facility_item(item: str, language: Language) -> str | None:
+    """规整并检查一条设施建议；不合格返回 None。"""
+    text = _plain_text_guest_reply(item).strip()
+    text = _FACILITY_ITEM_MARKER.sub("", text)
+    text = _FACILITY_ITEM_ACKNOWLEDGEMENT.sub("", text)
+    text = _FACILITY_ITEM_END.sub("", text)
+    if not text or _FACILITY_GREETING_ONLY.match(text):
+        return None
+    limit = (
+        _EN_FACILITY_ITEM_MAX_CHARS if language is Language.EN else _ZH_FACILITY_ITEM_MAX_CHARS
+    )
+    conditional = _EN_CONDITIONAL if language is Language.EN else _ZH_CONDITIONAL
+    time_promise = (
+        _EN_FACILITY_TIME_PROMISE if language is Language.EN else _ZH_FACILITY_TIME_PROMISE
+    )
+    if (
+        len(text) > limit
+        or "?" in text
+        or "？" in text
+        or conditional.search(text)
+        or time_promise.search(text)
+        or not _keeps_sentence(text)
+        or _contains_unsafe_facility_action(text, language)
+        or _contains_facility_follow_up_or_submission(text, language)
+    ):
+        return None
+    return text
+
+
+def prepare_facility_advice_reply(
+    advice: list[str] | None,
     language: Language,
 ) -> str:
-    """清洗模型的设施建议，并在任务成功后声明已提交人工。"""
-    content = _plain_text_guest_reply(content)
-    fallback = (
-        _EN_FACILITY_FALLBACK if language is Language.EN else _ZH_FACILITY_FALLBACK
-    )
-    submitted = (
-        _EN_FACILITY_SUBMITTED
-        if language is Language.EN
-        else _ZH_FACILITY_SUBMITTED
-    )
-    safe_sentences = [
-        sentence
-        for sentence in _safe_sentences(content.replace(submitted, ""))
-        if "?" not in sentence
-        and "？" not in sentence
-        and not _contains_unsafe_facility_action(sentence, language)
-        and not _contains_facility_follow_up_or_submission(sentence, language)
+    """用模型给出的建议清单组装设施故障回复，开头、结尾与标点全部由本地负责。
+
+    只在维修任务创建成功后调用，因此收尾的「已提交管家人工处理」一定为真。
+    清单缺失或逐条检查后一条不剩时，使用固定兜底，不发送空回复。
+    """
+    # 一条建议里写了几句时拆开逐句检查：夹带的承诺只删那一句，安全建议保留。
+    candidates = [
+        part
+        for item in advice or []
+        if isinstance(item, str)
+        # 先去 Markdown 再拆句：成对的 ** 跨越句号时，先拆会让它无法去掉。
+        for part in _FACILITY_ITEM_SPLIT.split(_plain_text_guest_reply(item))
     ]
-    advice = " ".join(safe_sentences) if language is Language.EN else "".join(safe_sentences)
-    if not advice:
-        advice = fallback
+    kept: list[str] = []
+    for candidate in candidates:
+        cleaned = _clean_facility_item(candidate, language)
+        if cleaned is not None and cleaned not in kept:
+            kept.append(cleaned)
+        if len(kept) >= FACILITY_ADVICE_MAX_ITEMS:
+            break
     if language is Language.EN:
-        acknowledgement = "Thanks for letting us know."
-        prefix = (
-            ""
-            if advice.lower().startswith(acknowledgement.lower())
-            else f"{acknowledgement} "
-        )
-        return f"{prefix}{advice} {submitted}"
-    prefix = "" if advice.startswith("收到") else "收到，"
-    return f"{prefix}{advice}{submitted}"
+        body = " ".join(f"{item}." for item in kept) or _EN_FACILITY_FALLBACK
+        return f"Thanks for letting us know. {body} {_EN_FACILITY_SUBMITTED}"
+    body = "".join(f"{item}。" for item in kept) or _ZH_FACILITY_FALLBACK
+    return f"收到，{body}{_ZH_FACILITY_SUBMITTED}"
 
 
 def _high_risk_reply(content: str, language: Language) -> str:
@@ -489,6 +566,34 @@ def _plain_text_guest_reply(content: str) -> str:
     return re.sub(r"(?m)^(\s*)[-*+]\s+", r"\1• ", cleaned)
 
 
+# 小节标题：紧跟在句末标点或冒号之后、不超过 8 个字的【……】。句中的【平安武汉】
+# 这类名称前面没有句末标点，不会被当成标题。
+_INLINE_SECTION_HEADER = re.compile(
+    r"(?<=[。！？；;!?：:])[ \t]*\n?(?=【[^【】\n]{1,8}】)"
+)
+# 本地拼接的时效说明（见 integrations/tourism.py 的自然收尾），固定另起一段。
+_EVIDENCE_FOOTER_LEAD = re.compile(
+    r"(?<=[^\n])[ \t]*\n?(?=这是我今天（\d{1,2}月\d{1,2}日）帮您查到的|I checked this latest )"
+)
+_INLINE_BULLET_AFTER_TEXT = re.compile(r"(?<=\S)[ \t]*•[ \t]+")
+_INLINE_BULLET_AFTER_PUNCTUATION = re.compile(r"(?<=[：:。；;！？!?])•")
+
+
+def layout_guest_reply(content: str, language: Language) -> str:
+    """只调整换行的确定性排版：小节标题与时效说明另起一段，列表项各占一行。
+
+    不增删任何文字，去掉空白后与输入逐字相同；模型输出不稳定时，版式仍由这里兜底。
+    """
+    del language  # 中英文规则相同；保留参数便于以后按语言区分
+    laid_out = _INLINE_SECTION_HEADER.sub("\n\n", content)
+    laid_out = _EVIDENCE_FOOTER_LEAD.sub("\n\n", laid_out)
+    laid_out = _INLINE_BULLET_AFTER_TEXT.sub("\n• ", laid_out)
+    laid_out = _INLINE_BULLET_AFTER_PUNCTUATION.sub("\n•", laid_out)
+    laid_out = re.sub(r"[ \t]+\n", "\n", laid_out)
+    laid_out = re.sub(r"\n{3,}", "\n\n", laid_out)
+    return laid_out.strip()
+
+
 def prepare_guest_reply(
     content: str,
     *,
@@ -508,8 +613,8 @@ def prepare_guest_reply(
         requires_human=requires_human,
     )
     if not requires_human and _is_weather_question(question, language):
-        return _warm_weather_reply(prepared, language)
-    return prepared
+        prepared = _warm_weather_reply(prepared, language)
+    return layout_guest_reply(prepared, language)
 
 
 def sanitize_guest_reply(
@@ -539,7 +644,7 @@ def sanitize_guest_reply(
             return f"{acknowledgement}{separator}{handoff}"
         return f"{safe_content}{separator}{handoff}"
     separator = " " if language is Language.EN else ""
-    safe_content = separator.join(_safe_sentences(content)).strip()
+    safe_content = _safe_text_keeping_breaks(content, separator)
     if safe_content:
         return safe_content
     if language is Language.EN:

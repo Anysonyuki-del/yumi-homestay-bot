@@ -556,21 +556,19 @@ async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
             ),
         )
 
-        reply_text = service._facility_reply_text(
-            message.content,
-            AssistantDecision(
-                reply_text="请先检查水龙头是否开启、进水管有没有折住。",
-                language=Language.ZH,
-                intent="facility_fault",
-                confidence=0.95,
-                facility_issue=FacilityIssue(scope="homestay_facility"),
-            ),
+        decision = AssistantDecision(
+            reply_text="收到。",
+            language=Language.ZH,
+            intent="facility_fault",
+            confidence=0.95,
+            facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=["请先检查水龙头是否开启、进水管有没有折住"],
         )
-        assert reply_text is not None
+        assert service._is_facility_issue(message.content, decision)
         await service._handle_facility_issue(
             conversation,
             message,
-            reply_text,
+            decision.facility_advice,
         )
         await session.commit()
 

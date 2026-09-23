@@ -252,6 +252,17 @@ class AssistantDecision(BaseModel):
     faq_category: str | None = None
     task_suggestion: TaskSuggestion | None = None
     facility_issue: FacilityIssue | None = None
+    # 设施故障时给客人的短建议清单；回复的开头、结尾与标点由本地组装。
+    facility_advice: list[str] | None = None
+
+    @field_validator("facility_advice", mode="before")
+    @classmethod
+    def ignore_invalid_facility_advice(cls, value: Any) -> list[str] | None:
+        """清单格式异常时只丢弃该字段，由本地回复策略使用固定兜底。"""
+        if not isinstance(value, list):
+            return None
+        items = [item for item in value if isinstance(item, str)]
+        return items or None
 
     @field_validator("facility_issue", mode="before")
     @classmethod
@@ -505,6 +516,16 @@ def assistant_decision_schema() -> dict[str, Any]:
                             },
                         },
                         "required": ["scope"],
+                    },
+                    {"type": "null"},
+                ]
+            },
+            "facility_advice": {
+                "anyOf": [
+                    {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 3,
                     },
                     {"type": "null"},
                 ]
@@ -1495,7 +1516,9 @@ class DeepSeekGuestAssistant:
                             "不得改动日期、温度、价格或房态，"
                             "天气回复可用“我帮您看了一下”自然开场，并且最多给一条"
                             "由原始天气事实直接支持的实用提醒。"
-                            "使用短段落或项目符号，方便旅客快速阅读。"
+                            "使用短段落或项目符号，方便旅客快速阅读；"
+                            "小节用【标题】开头并单独成段，行程按时段分行，"
+                            "每段不超过约120字。"
                             "不得新增事实，不得添加链接，不得改变原意。"
                             "只输出 JSON：{\"reply_text\":\"精简后的完整回复\"}。"
                         ),
@@ -1649,6 +1672,8 @@ class DeepSeekGuestAssistant:
             "所有客人可见内容使用温暖、简洁、可靠的民宿管家口吻，使用“您”；"
             "回复要自然、亲切、像熟悉住客的民宿老板，先给出清晰答案，再补一条"
             "确有依据的实用提醒；不得使用“亲亲”、夸张语气或堆叠表情。"
+            "较长回复要分段：小节用【标题】开头并单独成段，行程按上午、下午、晚上分行，"
+            "每段不超过约120字，不要把多个小节写进同一段。"
             "不得为了亲和而改变日期、数字、价格、房态或安全步骤；"
             "不得承诺处理结果、完成时间或人员已经出发；"
             "历史消息只用于补全当前问题缺失的代词或日期；与当前问题无关的投诉、退款、"
@@ -1686,8 +1711,10 @@ class DeepSeekGuestAssistant:
             "房间内受到外部噪音、异味等干扰并影响休息时也按 homestay_facility 处理；"
             "明确属于客人私人物品时 scope=private，明确属于景区、商场等外部场所时"
             " scope=external，确实无法判断时 scope=uncertain。"
-            "普通设施或住宿环境问题的 reply_text 不追问客人，只给一至两条与当前问题直接相关的"
-            "简单、低风险建议；不得拆卸、带电操作、接触线路、重置房间设备、反复点火"
+            "普通设施或住宿环境问题不追问客人：把建议写进 facility_advice，给一至三条"
+            "与当前问题直接相关的简单、低风险动作，按安全优先排序，每条一句、约二十字，"
+            "不写问候语，不写“如果……就……”这类条件句；reply_text 只需一句简短确认。"
+            "不得拆卸、带电操作、接触线路、重置房间设备、反复点火"
             "或使用强腐蚀药剂，不得猜测故障原因，不得承诺修复结果、人员到达时间，"
             "也不得声称已提交人工。"
             "如语义匹配已有候选，填写其编号；否则编号为 null，并给出简洁标准问题"
