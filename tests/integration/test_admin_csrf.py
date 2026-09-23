@@ -389,3 +389,40 @@ async def test_admin_nonces_reserve_capacity_for_anonymous_login() -> None:
 def _as_utc(value: datetime) -> datetime:
     """把 SQLite 读回的无时区时间统一为 UTC 以便比较。"""
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_is_active_is_read_only_and_matches_consume_rules() -> None:
+    """只读核对与消费用同一套匹配规则，且核对本身不消耗 nonce、不改配额。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 9, 23, 12, tzinfo=UTC)
+    async with factory() as session:
+        service = AdminCsrfService(
+            SQLAlchemyAdminCsrfRepository(session),
+            clock=lambda: now,
+            ttl=timedelta(minutes=5),
+        )
+        token = await service.issue("login:scope-a", admin_id=None)
+        await session.commit()
+
+        assert await service.is_active(token, "login:scope-a", admin_id=None) is True
+        assert await service.is_active(token, "login:scope-b", admin_id=None) is False
+        assert await service.is_active(token, "login:scope-a", admin_id=1) is False
+        assert await service.is_active("forged", "login:scope-a", admin_id=None) is False
+        quota = await session.scalar(select(AdminCsrfQuota.active_count))
+        assert quota == 1
+
+        assert await service.consume(token, "login:scope-a", admin_id=None) is True
+        assert await service.is_active(token, "login:scope-a", admin_id=None) is False
+
+        later = AdminCsrfService(
+            SQLAlchemyAdminCsrfRepository(session),
+            clock=lambda: now + timedelta(minutes=6),
+        )
+        other = await service.issue("login:scope-a", admin_id=None)
+        await session.commit()
+        assert await later.is_active(other, "login:scope-a", admin_id=None) is False
+    await engine.dispose()

@@ -165,6 +165,21 @@ class AdminCsrfServicePort(Protocol):
     ) -> bool:
         """原子消费匹配 nonce。"""
 
+    async def is_active(
+        self,
+        token: str,
+        purpose: str,
+        *,
+        admin_id: int | None,
+    ) -> bool:
+        """只读核对会话缓存的 nonce 是否仍可消费。"""
+
+
+# 登录表单令牌失效时的提示：说明已换发新表单，并给出反复出现时的自救办法。
+STALE_LOGIN_FORM_MESSAGE = (
+    "登录表单已失效，已为您重新生成，请重新输入账号和密码。"
+    "如果反复出现，请清除本站 Cookie 或换用无痕窗口后再试。"
+)
 
 def _clock(request: Request) -> Callable[[], datetime]:
     """读取测试可注入的 UTC 时钟，生产默认使用当前 UTC 时间。"""
@@ -278,10 +293,16 @@ async def _issue_csrf(
             expires_at = stored.get("expires_at")
             if isinstance(token, str) and isinstance(expires_at, str):
                 try:
-                    if _as_utc(datetime.fromisoformat(expires_at)) > now:
-                        return token
+                    cached_alive = _as_utc(datetime.fromisoformat(expires_at)) > now
                 except ValueError:
-                    pass
+                    cached_alive = False
+                # 会话里的记录只说明「签发过」，不代表服务端还认：令牌可能已被消费、
+                # 清理，或浏览器丢过 Cookie 导致作用域变了。不核对就复用，会让浏览器
+                # 在十五分钟内反复拿到同一个死令牌，刷新也无法恢复。
+                if cached_alive and await _get_csrf_service(request).is_active(
+                    token, purpose, admin_id=admin_id
+                ):
+                    return token
     try:
         token = await _get_csrf_service(request).issue(purpose, admin_id=admin_id)
     except AdminCsrfCapacityError as error:
@@ -464,13 +485,32 @@ async def employee_login_submit(
     next_path: str = Form(DEFAULT_NEXT_PATH, alias="next"),
 ) -> Response:
     """校验一次性令牌和账号密码，并建立最小管理员会话。"""
-    await _consume_csrf(
-        request,
-        csrf_token,
-        "login",
-        admin_id=None,
-    )
     client_ip = request.client.host if request.client is not None else "unknown"
+    try:
+        await _consume_csrf(
+            request,
+            csrf_token,
+            "login",
+            admin_id=None,
+        )
+    except HTTPException as error:
+        if error.status_code != status.HTTP_409_CONFLICT:
+            raise
+        # 令牌对不上时照常拒绝、不做认证，但直接给出带新令牌的登录页：用户按页面
+        # 重新输入即可登录，不必猜测要刷新、等待还是清 Cookie。重新渲染会签发新
+        # 令牌，因此与登录页 GET 共用同一套限速。
+        if not await _get_rate_limiter(request).allow(
+            f"page:{client_ip}",
+            _as_utc(_clock(request)()),
+            category="page",
+        ):
+            raise HTTPException(status_code=429, detail="登录页请求过于频繁") from error
+        return await _login_page(
+            request,
+            next_path=next_path,
+            error=STALE_LOGIN_FORM_MESSAGE,
+            status_code=status.HTTP_409_CONFLICT,
+        )
     now = _as_utc(_clock(request)())
     if not await _get_rate_limiter(request).allow(
         f"login:{client_ip}",

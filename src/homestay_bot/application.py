@@ -1295,6 +1295,19 @@ class SessionAdminCsrfService:
             await session.commit()
             return consumed
 
+    async def is_active(
+        self,
+        token: str,
+        purpose: str,
+        *,
+        admin_id: int | None,
+    ) -> bool:
+        """只读核对 nonce 是否仍可消费。"""
+        async with self._factory() as session:
+            return await AdminCsrfService(SQLAlchemyAdminCsrfRepository(session)).is_active(
+                token, purpose, admin_id=admin_id
+            )
+
 
 class SessionEmployeeAccessVerifier:
     """每个后台请求都联合复核唯一凭证与管理员员工身份。"""

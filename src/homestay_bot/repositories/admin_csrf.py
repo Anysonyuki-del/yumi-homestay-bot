@@ -132,6 +132,32 @@ class SQLAlchemyAdminCsrfRepository:
             await self._decrement_quota(1)
         return consumed
 
+    async def is_active(
+        self,
+        *,
+        token_hash: str,
+        purpose: str,
+        admin_id: int | None,
+        now: datetime,
+    ) -> bool:
+        """只读核对 nonce 是否仍可消费，不改动任何行或配额。"""
+        admin_condition = (
+            AdminCsrfNonce.admin_id.is_(None)
+            if admin_id is None
+            else AdminCsrfNonce.admin_id == admin_id
+        )
+        found = await self._session.scalar(
+            select(AdminCsrfNonce.id)
+            .where(
+                AdminCsrfNonce.token_hash == token_hash,
+                AdminCsrfNonce.purpose == purpose,
+                admin_condition,
+                AdminCsrfNonce.expires_at > now,
+            )
+            .limit(1)
+        )
+        return found is not None
+
     async def purge_expired(self, *, now: datetime, limit: int) -> int:
         """按过期索引有界删除最早记录，避免一次请求形成大事务。"""
         await self._ensure_quota()

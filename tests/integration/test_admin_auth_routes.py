@@ -721,3 +721,95 @@ def test_forced_password_change_page_gets_no_escape_hatch() -> None:
 
     assert "修改初始密码" in page.text
     assert "返回工作台" not in page.text
+
+
+def test_login_page_reissues_when_the_cached_nonce_is_no_longer_valid() -> None:
+    """会话里缓存的令牌已在服务端失效时，刷新登录页必须换发新令牌。
+
+    否则浏览器在最长十五分钟内反复拿到同一个死令牌，每次提交都是「表单令牌
+    无效或已使用」，刷新也无济于事。
+    """
+    client, _ = build_client()
+    stale = csrf_from(client.get("/employee/login").text)
+    # 模拟服务端已不认这个令牌（被消费、清理或作用域不再匹配）。
+    client.app.state.admin_csrf_service.pending.pop(stale)
+
+    fresh = csrf_from(client.get("/employee/login").text)
+    response = client.post(
+        "/employee/login",
+        data={
+            "username": "admin",
+            "password": "correct-password",
+            "next": "/employee/protected",
+            "csrf_token": fresh,
+        },
+        follow_redirects=False,
+    )
+
+    assert fresh != stale
+    assert response.status_code == 303
+
+
+def test_invalid_login_token_rerenders_the_form_with_a_fresh_token() -> None:
+    """令牌对不上时仍然拒绝且不调用认证，但返回带新令牌的登录页，让用户能直接重试。"""
+    client, auth = build_client()
+    client.get("/employee/login")
+
+    rejected = client.post(
+        "/employee/login",
+        data={
+            "username": "admin",
+            "password": "correct-password",
+            "next": "/employee/protected",
+            "csrf_token": "forged",
+        },
+        follow_redirects=False,
+    )
+
+    assert rejected.status_code == 409
+    assert "登录表单已失效" in rejected.text
+    assert "correct-password" not in rejected.text
+    assert auth.authenticate_calls == []
+
+    retry = client.post(
+        "/employee/login",
+        data={
+            "username": "admin",
+            "password": "correct-password",
+            "next": "/employee/protected",
+            "csrf_token": csrf_from(rejected.text),
+        },
+        follow_redirects=False,
+    )
+    assert retry.status_code == 303
+
+
+def test_login_without_the_issuing_session_can_recover_in_one_retry() -> None:
+    """浏览器丢了签发时的会话：第一次提交被拒，按返回页面重试即可登录。"""
+    client, _ = build_client()
+    token = csrf_from(client.get("/employee/login").text)
+    client.cookies.clear()
+
+    rejected = client.post(
+        "/employee/login",
+        data={
+            "username": "admin",
+            "password": "correct-password",
+            "next": "/employee/protected",
+            "csrf_token": token,
+        },
+        follow_redirects=False,
+    )
+    retry = client.post(
+        "/employee/login",
+        data={
+            "username": "admin",
+            "password": "correct-password",
+            "next": "/employee/protected",
+            "csrf_token": csrf_from(rejected.text),
+        },
+        follow_redirects=False,
+    )
+
+    assert rejected.status_code == 409
+    assert retry.status_code == 303

@@ -34,6 +34,16 @@ class AdminCsrfRepository(Protocol):
     ) -> bool:
         """原子消费匹配的有效 nonce。"""
 
+    async def is_active(
+        self,
+        *,
+        token_hash: str,
+        purpose: str,
+        admin_id: int | None,
+        now: datetime,
+    ) -> bool:
+        """只读核对 nonce 是否仍可消费。"""
+
     async def purge_expired(self, *, now: datetime, limit: int) -> int:
         """有界清理过期 nonce。"""
 
@@ -110,6 +120,22 @@ class AdminCsrfService:
     ) -> bool:
         """摘要化来令牌并原子消费，绝不持久化或记录明文。"""
         return await self._repository.consume(
+            token_hash=_hash_token(token),
+            purpose=purpose,
+            admin_id=admin_id,
+            now=self._clock(),
+        )
+
+
+    async def is_active(
+        self,
+        token: str,
+        purpose: str,
+        *,
+        admin_id: int | None,
+    ) -> bool:
+        """核对浏览器会话里缓存的令牌在服务端是否仍然有效，不消费它。"""
+        return await self._repository.is_active(
             token_hash=_hash_token(token),
             purpose=purpose,
             admin_id=admin_id,

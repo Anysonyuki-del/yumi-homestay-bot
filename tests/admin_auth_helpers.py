@@ -64,6 +64,16 @@ class MemoryAdminCsrfService:
         del self.pending[token]
         return True
 
+    async def is_active(
+        self,
+        token: str,
+        purpose: str,
+        *,
+        admin_id: int | None,
+    ) -> bool:
+        """只读核对 nonce 是否仍可消费。"""
+        return self.pending.get(token) == (purpose, admin_id)
+
 
 class RouteAdminAuthStub:
     """为既有后台路由测试提供独立账号密码认证。"""
