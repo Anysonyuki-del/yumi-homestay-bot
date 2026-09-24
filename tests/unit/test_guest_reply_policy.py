@@ -580,3 +580,31 @@ def test_a_section_heading_left_empty_by_removal_is_dropped() -> None:
     assert "玄关" not in cleaned
     assert "【天气速览】\n明天多云，23～31℃。" in cleaned
     assert "【出行提醒】\n出门记得带伞。" in cleaned
+
+
+def test_fabricated_services_are_removed_regardless_of_word_order() -> None:
+    """同一句里有需要真人去做的服务和揽下来的说法，就判为编造服务并删除。
+
+    2026-09-24 真实天气回复写了「或帮叫车、安排接送，跟我说」：没有确定性副词，
+    「我」在句尾，叫车、接送也不在软承诺的动作词表里，三道过滤全部漏过。
+    """
+    fabricated = "需改室内博物馆、美术馆，或帮叫车、安排接送，跟我说，我帮您排稳些。"
+    cleaned = remove_ungrounded_property_claims(
+        f"明天有阵雨。{fabricated}雨天江面雾蒙蒙，慢逛更有味。"
+    )
+
+    assert "叫车" not in cleaned
+    assert "接送" not in cleaned
+    assert "明天有阵雨。" in cleaned
+    assert "雨天江面雾蒙蒙，慢逛更有味。" in cleaned
+
+
+def test_travel_advice_and_information_help_are_not_mistaken_for_services() -> None:
+    """只提服务名、没有揽下来的说法，或只是帮忙查信息，都必须原样保留。"""
+    original = (
+        "可以打车前往，雨天建议提前叫车。"
+        "黄鹤楼可在官方渠道预约门票。"
+        "需要的话我帮您查一下公交路线。"
+    )
+
+    assert remove_ungrounded_property_claims(original) == original

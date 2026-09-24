@@ -306,8 +306,9 @@ async def test_knowledge_with_embedded_instruction_is_not_forwarded() -> None:
 async def test_general_question_keeps_existing_behaviour() -> None:
     """通用问题不因无关知识候选进入本店静态路径。"""
     decision, _ = await _respond_with(
-        "武汉明天会下雨吗？",
-        "明天多云，出门可以带把伞。",
+        # 不带时间词：带时间词的天气问题会走联网搜索，不再经过这条路径。
+        "武汉一般几月份下雨多？",
+        "武汉梅雨季一般在六七月，出门可以带把伞。",
         [TELEVISION],
     )
 

@@ -402,3 +402,60 @@ def test_ordinary_sentences_containing_a_source_word_are_kept() -> None:
 
     assert "东湖的水来自长江水系" in formatted
     assert "黄鹤楼的现存建筑来自1985年重建" in formatted
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # 2026-09-24 真实对比中被判为不联网、模型凭记忆作答的三问。
+        "去汉口站怎么走最快",
+        "今晚江滩有灯光秀吗",
+        "东湖樱花开了吗",
+        "今天黄鹤楼人多吗",
+        "最近武汉人多吗",
+        "明天下雨吗",
+        "今晚附近有什么好吃的",
+    ],
+)
+def test_time_sensitive_questions_are_routed_to_live_search(question: str) -> None:
+    """会变的信息、带时间词的非民宿提问都走联网，不再只认「今天去哪玩」。"""
+    assert classify_tourism_query([{"role": "user", "content": question}]) == "live"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "明天早餐几点",
+        "今天能洗衣服吗",
+        "明天几点有人打扫",
+        "明天几点能入住",
+        "今天能晚点退房吗",
+        "明天还有房吗",
+        "今天可以寄存行李吗",
+        "现在房间空调坏了",
+        "今晚楼下吵吗",
+        "今天好热啊",
+    ],
+)
+def test_homestay_and_non_questions_stay_off_live_search(question: str) -> None:
+    """问民宿本身或不是提问时，带时间词也不送去联网搜索。"""
+    assert classify_tourism_query([{"role": "user", "content": question}]) != "live"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "房间多长时间打扫一次",
+        "热水要放多长时间",
+        "洗衣房排队吗",
+        "早餐人多吗",
+        "空调开了吗",
+        "前台几点关门",
+        "今晚几点关门禁",
+        "大床房今晚多少钱",
+        "今晚7号房现在订要多少钱？",
+    ],
+)
+def test_changing_info_words_about_the_homestay_stay_off_live_search(question: str) -> None:
+    """用时、人多、开了吗这些词问的是民宿本身时，不送去联网。"""
+    assert classify_tourism_query([{"role": "user", "content": question}]) != "live"

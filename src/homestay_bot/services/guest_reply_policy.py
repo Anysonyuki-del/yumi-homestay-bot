@@ -58,6 +58,19 @@ _PROPERTY_SUPPLY_CLAIM_PATTERN = re.compile(
     r"可借|可以借|能借|借用|免费|赠送|取用|"
     r"(?:找|跟|问)我(?:拿|取|要|借)|有(?:备用|一次性|免费)"
 )
+# 编造服务：同一句里有需要真人去做的服务，又有把它揽下来的说法，不论先后。
+# 2026-09-24 真实天气回复写了「或帮叫车、安排接送，跟我说」，没有确定性副词，
+# 「我」在句尾，叫车、接送也不在软承诺的动作词表里，承诺、软承诺与设施三道
+# 过滤全部漏过。只提服务名（「可以打车前往」）或只是帮忙查信息（「我帮您查一下
+# 公交」）不算。
+_PROPERTY_SERVICE_PATTERN = re.compile(
+    r"叫车|约车|订车|派车|接送|接站|接机|送站|送机|代订|代购|代买|代取|"
+    r"订票|购票|买票|订餐|订位|订座|预约|寄存|保管|送到|送去|送餐|送水|"
+    r"跑腿|带路|陪同|陪您"
+)
+_SERVICE_OFFER_PATTERN = re.compile(
+    r"帮|替|给您|为您|跟我说|找我|告诉我|我来|我们来|交给我|我可以|我能"
+)
 _ROOM_SALES_CTA_PATTERN = re.compile(
     r"如果.{0,12}(?:我|我们).{0,16}(?:推荐|介绍).{0,24}房型|"
     r"(?:我|我们).{0,12}(?:可以|能).{0,16}(?:推荐|介绍).{0,24}房型|"
@@ -201,12 +214,16 @@ def human_contact_reply(language: Language) -> str:
 
 
 def _contains_ungrounded_property_claim(text: str) -> bool:
-    """判断一段文字是否含未经审核的民宿自述、设施断言或房型推销。"""
+    """判断一段文字是否含未经审核的民宿自述、设施或服务断言、房型推销。"""
     return bool(
         _PROPERTY_SELF_REFERENCE_PATTERN.search(text)
         or (
             _PROPERTY_SIDE_ANCHOR_PATTERN.search(text)
             and _PROPERTY_SUPPLY_CLAIM_PATTERN.search(text)
+        )
+        or (
+            _PROPERTY_SERVICE_PATTERN.search(text)
+            and _SERVICE_OFFER_PATTERN.search(text)
         )
         or _ROOM_SALES_CTA_PATTERN.search(text)
     )

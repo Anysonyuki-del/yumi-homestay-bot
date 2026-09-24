@@ -2,6 +2,8 @@ import re
 from datetime import date
 from typing import Literal
 
+from homestay_bot.services.answer_policy import is_property_specific, is_transaction_sensitive
+
 WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
 TourismQueryMode = Literal["none", "stable", "live"]
 TourismReplyCategory = Literal["weather", "event", "ticket", "tourism"]
@@ -33,6 +35,31 @@ _DATED_TOURISM_PATTERN = re.compile(
     r"(?:today|tonight|tomorrow|this week|this weekend).*?"
     r"(?:go|visit|play|tour)",
     re.IGNORECASE,
+)
+# 会变的店外信息：路线用时、现场人流、花期、临时表演。这些词也常用来问民宿本身
+# （「房间多长时间打扫一次」「早餐人多吗」），所以和带时间词的提问一样，要先排除
+# 问民宿本身的问题，不直接并入上面的词表。
+_CHANGING_INFO_PATTERN = re.compile(
+    r"怎么走|最快|多久能到|多长时间|灯光秀|表演|花期|(?:开|谢)了(?:吗|没)|"
+    r"还开着|人多吗|排队"
+)
+# 带时间词的提问问的是「那个时候的情况」，本身就会变。以前只认「今天……去哪玩」，
+# 于是「今晚江滩有灯光秀吗」「明天下雨吗」只能逐个补词表；改为时间词加提问两个
+# 条件，再排除问民宿本身的问题。
+_TIME_ANCHOR_PATTERN = re.compile(
+    r"今天|今晚|今日|明天|明晚|明早|后天|本周|这周|周末|这几天|最近|近期|"
+    r"现在|目前|当天|此刻|"
+    r"\b(?:today|tonight|tomorrow|this week(?:end)?|right now|currently)\b",
+    re.IGNORECASE,
+)
+_QUESTION_PATTERN = re.compile(
+    r"吗|么|？|\?|几点|多少|怎么|哪|是否|有没有|能不能|会不会|"
+    r"\b(?:is|are|will|what|when|how|where|does|do)\b",
+    re.IGNORECASE,
+)
+# 民宿一侧的位置与人员：问题落在这些对象上时问的是本店情况，联网搜不到。
+_HOMESTAY_SIDE_PATTERN = re.compile(
+    r"楼下|楼上|隔壁|门禁|前台|门口|院子|屋里|小区|管家"
 )
 _BOOKING_PATTERN = re.compile(
     r"有房|房态|订房|预订|入住|退房|房间价格|房价|"
@@ -121,10 +148,26 @@ def classify_tourism_query(
         if _TOURISM_BOOKING_OVERRIDE_PATTERN.search(content):
             return "live"
         return "none"
-    if _LIVE_TOURISM_PATTERN.search(content) or _DATED_TOURISM_PATTERN.search(content):
+    # 问题落在前台、门禁、楼下等民宿一侧对象上时，联网搜不到答案。
+    homestay_side = _HOMESTAY_SIDE_PATTERN.search(content) is not None
+    if not homestay_side and (
+        _LIVE_TOURISM_PATTERN.search(content) or _DATED_TOURISM_PATTERN.search(content)
+    ):
         return "live"
     if _STABLE_TOURISM_PATTERN.search(content):
         return "stable"
+    about_homestay = (
+        homestay_side
+        or _LODGING_OBJECT_PATTERN.search(content) is not None
+        or is_property_specific(content)
+        # 房价、房态、订单只信百居易实时查询，不能交给网页搜索。
+        or is_transaction_sensitive(content)
+    )
+    if not about_homestay and (
+        _CHANGING_INFO_PATTERN.search(content)
+        or (_TIME_ANCHOR_PATTERN.search(content) and _QUESTION_PATTERN.search(content))
+    ):
+        return "live"
     return "none"
 
 
