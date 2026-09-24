@@ -992,4 +992,4 @@ Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节�
   - 客诉、FAQ 草稿：最终版本各 3/3 通过校验。
   - 既有问题（前后都有）：天气联网回复会编造民宿设施（修改前 7 次中 1 次，修改后 5 次中 2 次，样本不足以判断差异），`remove_ungrounded_property_claims` 未拦住；「你们有哪些房型」前后都不调用 `list_properties`。均不在本次范围，单列。
 - [x] 联网回复编造设施、房型问题不查房源：用户回复「一起修了再发」「开始」，按 `docs/specs/2026-09-24_amenity-claims-and-room-catalog-spec.md` 实施并在生产容器复测通过。
-- [ ] 1.39.12 发布与线上核对、测试号收件验收。
+- [x] 1.39.12 发布与线上核对、测试号收件验收（用户确认三条都收到）。
