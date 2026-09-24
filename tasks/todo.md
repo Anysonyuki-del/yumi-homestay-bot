@@ -971,5 +971,5 @@ Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节�
 ### 2026-09-24 发布 1.39.11（用户「提交推送部署」）
 
 - [x] 核实线上基线、补版本号、CHANGELOG 与发布变更记录。
-- [ ] 提交前审查、提交推送与 CI。
-- [ ] 校验备份、仅部署 API、核对运行态并追加发布证据。
+- [x] 提交/推送前 Ponytail 审查通过；92cfc65 / v1.39.11 已推送，两个 CI success（含 PostgreSQL 18 passed）。
+- [x] 备份解析 366 项；首次权限错误已修复并重建 API，独立运行态验收通过；迁移 0027，PostgreSQL 未重启，健康仍为原有 degraded；完整记录见 docs/releases/1.39.11.md。
