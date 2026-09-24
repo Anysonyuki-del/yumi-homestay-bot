@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.tourism import split_tourism_reply
+from homestay_bot.services.fact_policy import FACT_SOURCE_RULE_ZH
 from homestay_bot.services.guest_reply_policy import (
     contains_sensitive_guest_text,
     redact_sensitive_guest_text,
@@ -527,7 +528,8 @@ class DeepSeekDeliveryRewriter:
                             "自然、简洁、温暖的纯文本。必须保留原有日期、地点、数字、"
                             "天气、票价、开放时间、路线和安全提醒；不得新增或猜测事实，"
                             "不得写民宿设施、服务承诺、网址、来源、查询过程或内部标签。"
-                            "不要调用工具或联网。只输出 JSON："
+                            + FACT_SOURCE_RULE_ZH
+                            + "不要调用工具或联网。只输出 JSON："
                             '{"reply_text":"改写后的完整回复"}。'
                         ),
                     },

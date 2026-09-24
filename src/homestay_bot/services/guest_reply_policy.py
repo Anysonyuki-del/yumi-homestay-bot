@@ -1,6 +1,10 @@
 import re
 
 from homestay_bot.domain.enums import Language
+from homestay_bot.services.fact_policy import (
+    is_supply_or_service_claim,
+    is_unsourced_homestay_claim,
+)
 
 _ZH_HUMAN_CONTACT_REPLY = "我会立即联系管家来处理，请您稍等。"
 _EN_HUMAN_CONTACT_REPLY = (
@@ -225,6 +229,9 @@ def _contains_ungrounded_property_claim(text: str) -> bool:
             _PROPERTY_SERVICE_PATTERN.search(text)
             and _SERVICE_OFFER_PATTERN.search(text)
         )
+        # 全局底层规则：说的是民宿、又说不出来源的句子，默认不放行。上面几条
+        # 按类型的判据保留，它们还覆盖不提民宿的服务揽活（「帮叫车，跟我说」）。
+        or is_unsourced_homestay_claim(text)
         or _ROOM_SALES_CTA_PATTERN.search(text)
     )
 
@@ -252,20 +259,22 @@ def remove_ungrounded_property_claims(content: str) -> str:
     """逐句删除未经审核的民宿自述和无关房型推销。"""
     safe_lines: list[str] = []
     for line in content.splitlines():
-        if not _contains_ungrounded_property_claim(line):
-            safe_lines.append(line)
-            continue
-        # 保护数字列表的小数点，只按中英文句末拆分命中行。
-        sentences = re.split(
-            r"(?<=[。！？!?])|(?<=\.)\s+(?=[A-Z])",
-            line,
-        )
+        # 每一行都逐句判定：新判定里「问句、祝福放行」是按句成立的，整行判定会让
+        # 同一行里的编造跟着一句「告诉我」一起放过。保护数字列表的小数点，只按
+        # 中英文句末拆分。
+        sentences = [
+            sentence
+            for sentence in re.split(r"(?<=[。！？!?])|(?<=\.)\s+(?=[A-Z])", line)
+            if sentence
+        ]
         safe_sentences = [
             sentence
             for sentence in sentences
-            if sentence and not _contains_ungrounded_property_claim(sentence)
+            if not _contains_ungrounded_property_claim(sentence)
         ]
-        if safe_sentences:
+        if len(safe_sentences) == len(sentences):
+            safe_lines.append(line)
+        elif safe_sentences:
             safe_lines.append("".join(safe_sentences).strip())
     safe_lines = _drop_emptied_headings(safe_lines)
 
@@ -410,10 +419,12 @@ def _safe_human_sentences(content: str, language: Language) -> list[str]:
     safe_pattern = (
         _EN_SAFE_HUMAN_SENTENCE if language is Language.EN else _ZH_SAFE_HUMAN_SENTENCE
     )
+    # 带「已收到」「请先」的句子也可能夹带民宿事实（「已收到，前台备有矿泉水」），
+    # 人工场景的回复同样受「不得编造事实」约束。
     return [
         sentence
         for sentence in _safe_sentences(content)
-        if safe_pattern.search(sentence)
+        if safe_pattern.search(sentence) and not is_unsourced_homestay_claim(sentence)
     ]
 
 
@@ -489,6 +500,8 @@ def _clean_facility_item(item: str, language: Language) -> str | None:
         or not _keeps_sentence(text)
         or _contains_unsafe_facility_action(text, language)
         or _contains_facility_follow_up_or_submission(text, language)
+        # 不得编造事实：建议里不能出现「前台有备用吹风机」这类供应说法。
+        or is_supply_or_service_claim(text)
     ):
         return None
     return text

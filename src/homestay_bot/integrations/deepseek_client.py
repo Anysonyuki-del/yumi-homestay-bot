@@ -29,6 +29,7 @@ from homestay_bot.services.answer_policy import (
     handoff_reason as determine_handoff_reason,
 )
 from homestay_bot.services.context_retention import CustomerModelContext
+from homestay_bot.services.fact_policy import FACT_SOURCE_RULE_EN, FACT_SOURCE_RULE_ZH
 from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
 )
@@ -578,7 +579,7 @@ class DeepSeekGuestAssistant:
             "这只是收到消息后的即时安抚，不要回答事实，不要承诺房态、价格、"
             "物品已经送达、人员已经通知、师傅已经安排或问题一定能解决；不要提"
             "模型、数据库、接口或内部任务。只能表示会立即联系管家，不能声称"
-            "管家或师傅一定上门。控制在60字以内，只输出 JSON："
+            "管家或师傅一定上门。" + FACT_SOURCE_RULE_ZH + "控制在60字以内，只输出 JSON："
             '{"reply_text":"温暖安抚"}。'
             if language is Language.ZH
             else (
@@ -586,7 +587,8 @@ class DeepSeekGuestAssistant:
                 "like a thoughtful host. This is only a quick acknowledgement: "
                 "do not answer facts or promise availability, price, delivery, "
                 "or completion. Do not mention staff, models, databases, APIs, "
-                "internal tasks, or waiting processes. Keep it under 30 words. "
+                "internal tasks, or waiting processes. " + FACT_SOURCE_RULE_EN + " "
+                "Keep it under 30 words. "
                 'Output only JSON: {"reply_text":"warm acknowledgement"}. '
             )
         )
@@ -817,9 +819,9 @@ class DeepSeekGuestAssistant:
             # 只退回保守回复。审核知识其实存在、是模型说过了头，所以下面判断
             # FAQ 候选资格时仍用原来的 property_knowledge_grounded，不生成候选。
             reply_grounded = False
-        if not property_specific:
-            # 客人未询问民宿专属信息时，删除模型主动添加的未审核宣传，
-            # 避免把房型、设施或公共空间的臆测当作本店事实发送。
+        if not property_specific and not tool_grounded:
+            # 客人未询问民宿专属信息、本轮也没有百居易工具作证时，删除说不出来源的
+            # 民宿信息（fact_policy 的全局底层规则）。工具作证的回复事实来自工具。
             updates["reply_text"] = self._remove_property_promotion(
                 decision.reply_text,
                 decision.language,
@@ -1534,7 +1536,8 @@ class DeepSeekGuestAssistant:
                             "房态、价格说明和风险提示。"
                             "不得改动日期、温度、价格或房态，"
                             "天气回复最多给一条由原始天气事实直接支持的实用提醒。"
-                            "正文只写武汉的公开信息，不写民宿自己的设施、物品或服务。"
+                            + FACT_SOURCE_RULE_ZH
+                            + "正文只写武汉的公开信息。"
                             "使用短段落或项目符号，方便旅客快速阅读；"
                             "小节用【标题】开头并单独成段，行程按时段分行，"
                             "每段不超过约120字。"
@@ -1688,6 +1691,8 @@ class DeepSeekGuestAssistant:
         standalone_availability = self._is_standalone_availability_query(question_text)
         system_prompt = (
             "你是武汉一家7间房民宿的温暖管家。请只输出 JSON，不要输出代码围栏。"
+            + FACT_SOURCE_RULE_ZH
+            +
             "所有客人可见内容使用温暖、简洁、可靠的民宿管家口吻，使用“您”；"
             "回复要自然、亲切、像熟悉住客的民宿老板，先给出清晰答案，再补一条"
             "确有依据的实用提醒；不得使用“亲亲”、夸张语气或堆叠表情。"
@@ -1886,7 +1891,9 @@ class DeepSeekGuestAssistant:
                         refined_reply = await self._refine_reply(
                             decision.reply_text
                         )
-                        if not is_property_specific(question_text):
+                        if not is_property_specific(question_text) and not (
+                            property_tool_grounded
+                        ):
                             refined_reply = self._remove_property_promotion(
                                 refined_reply,
                                 decision.language,

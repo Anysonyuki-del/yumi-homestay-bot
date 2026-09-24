@@ -608,3 +608,27 @@ def test_travel_advice_and_information_help_are_not_mistaken_for_services() -> N
     )
 
     assert remove_ungrounded_property_claims(original) == original
+
+
+
+def test_human_mode_keeps_safe_sentences_but_drops_unsourced_homestay_claims() -> None:
+    """需要人工时只留确认、歉意和安全指令；带「已收到」的句子也不能夹带民宿事实。"""
+    cleaned = sanitize_guest_reply(
+        "已收到，前台备有矿泉水。请先不要使用房间里的热水壶。",
+        language=Language.ZH,
+        requires_human=True,
+    )
+
+    assert "前台" not in cleaned
+    assert "请先不要使用房间里的热水壶。" in cleaned
+
+
+def test_facility_advice_drops_supply_claims_but_keeps_device_advice() -> None:
+    """设施建议必然提到房间设备，只拦「前台有备用吹风机」这类供应说法。"""
+    reply = prepare_facility_advice_reply(
+        ["前台有备用吹风机，可以先借用", "检查房间空调遥控器是否设为制冷模式"],
+        Language.ZH,
+    )
+
+    assert "前台" not in reply
+    assert "检查房间空调遥控器是否设为制冷模式" in reply

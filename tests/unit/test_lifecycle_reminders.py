@@ -155,9 +155,10 @@ class TaskStub:
 class WeatherStub:
     """返回固定天气摘要或模拟查询失败。"""
 
-    def __init__(self, *, error=None) -> None:
-        """保存可选异常并记录查询参数。"""
+    def __init__(self, *, error=None, summary=None) -> None:
+        """保存可选异常、可选摘要并记录查询参数。"""
         self.error = error
+        self.summary = summary
         self.calls: list[tuple[str, date]] = []
 
     async def forecast(self, district, target_date):
@@ -165,7 +166,7 @@ class WeatherStub:
         self.calls.append((district, target_date))
         if self.error is not None:
             raise self.error
-        return "入住当天有阵雨，气温约 26 至 32℃，建议带伞。"
+        return self.summary or "入住当天有阵雨，气温约 26 至 32℃，建议带伞。"
 
 
 class TourismSearchStub:
@@ -576,3 +577,25 @@ async def test_cancelled_reminder_job_finishes_without_manual_task() -> None:
     assert sender.calls == []
     assert tasks.items == []
     assert repository.manual == []
+
+
+@pytest.mark.asyncio
+async def test_pre_arrival_weather_summary_drops_unsourced_homestay_claims() -> None:
+    """天气摘要来自联网搜索，同样不得带出说不出来源的民宿信息。
+
+    过去只去链接、截三句就拼进提醒，是「不得编造事实」规则漏掉的出口。
+    """
+    now = datetime(2026, 8, 1, 9, tzinfo=UTC)
+    repository = ReminderRepositoryStub()
+    send_context(repository, last_guest_at=now - timedelta(hours=1))
+    weather = WeatherStub(
+        summary="入住当天有阵雨，建议带伞。我们备有雨伞，前台可以借用。"
+    )
+    service, _, sender, _ = build_service(repository, weather=weather, now=now)
+
+    await service.deliver(1)
+
+    content = sender.calls[0]["content"]
+    assert "入住当天有阵雨，建议带伞。" in content
+    assert "前台" not in content
+    assert "备有雨伞" not in content

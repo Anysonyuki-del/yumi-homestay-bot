@@ -12,6 +12,7 @@ from homestay_bot.integrations.tourism import (
     WebSearchStatus,
     format_tourism_reply,
 )
+from homestay_bot.services.fact_policy import FACT_SOURCE_RULE_EN, FACT_SOURCE_RULE_ZH
 
 _RECENT_PATTERN = re.compile(
     r"最近|近期|本周|本月|今天|明天|"
@@ -397,7 +398,8 @@ class DeepSeekTourismSearcher:
             "你是武汉民宿的旅游客服。必须使用 Web Search 的真实结果回答，"
             "最终正文使用温暖、简洁、可靠的民宿管家口吻，使用“您”；"
             "天气回复根据搜索结果给一条实用提醒。"
-            "正文只写武汉的公开信息，不写民宿自己的设施、物品或服务。"
+            + FACT_SOURCE_RULE_ZH
+            + "正文只写武汉的公开信息。"
             "不得为了亲和改动日期、温度、降雨、票价、开放时间、路线或来源。"
             "优先武汉政府、文旅局、景区、场馆和主办方来源。"
             f"当前日期：{queried_on.isoformat()}。"
@@ -428,6 +430,8 @@ class DeepSeekTourismSearcher:
             if language is Language.ZH
             else (
                 "You are a warm, concise, and reliable homestay host in Wuhan. "
+                + FACT_SOURCE_RULE_EN
+                + " "
                 "Use polite, natural language and address the guest as 'you' "
                 "without salesy expressions. Use Web Search evidence, prefer "
                 "official sources, and do not include URLs. Do not change dates, "

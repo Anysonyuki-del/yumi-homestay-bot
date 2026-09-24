@@ -9,6 +9,7 @@ import httpx
 
 from homestay_bot.domain.enums import Language, ReminderType
 from homestay_bot.integrations.wecom.api_client import WeComApiError
+from homestay_bot.services.guest_reply_policy import remove_ungrounded_property_claims
 from homestay_bot.worker import RetrySafeJobError
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -398,8 +399,9 @@ class LifecycleReminderService:
     @staticmethod
     def _safe_weather_summary(summary: str) -> str:
         """选取最多三句天气建议，去除链接并避免半句截断。"""
+        # 摘要来自联网搜索，同样受「不得编造事实」约束，先删说不出来源的民宿信息。
         normalized = " ".join(
-            _URL_PATTERN.sub("", summary).split()
+            remove_ungrounded_property_claims(_URL_PATTERN.sub("", summary)).split()
         ).strip()
         if not normalized:
             return ""
