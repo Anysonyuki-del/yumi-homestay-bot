@@ -296,7 +296,7 @@ async def test_weather_query_pins_wuhan_and_explicit_tomorrow_date() -> None:
     assert "明天天气如何" in user_query
     assert "天气问题必须明确回答目标日期" in request["system"]
     assert "温暖、简洁、可靠的民宿管家口吻" in request["system"]
-    assert "我帮您看了一下" in request["system"]
+    assert "我帮您看了一下" not in request["system"]
     assert "根据搜索结果给一条实用提醒" in request["system"]
 
 

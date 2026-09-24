@@ -118,9 +118,6 @@ class DeepSeekComplaintAnalyzer:
             "只输出 JSON，字段为 core_issue、customer_request、emotion_level、"
             "customer_claims、known_facts、facts_to_verify、responsibility_risk、"
             "refund_or_compensation、platform_escalation_risk、reply_tone、reply_draft。"
-            "responsibility_risk 必须输出简短文字，不得输出布尔值。"
-            "refund_or_compensation 和 platform_escalation_risk 只能输出 JSON 布尔值 "
-            "true 或 false，不得输出说明文字。"
         )
         payload = {
             "reason": reason[:64],

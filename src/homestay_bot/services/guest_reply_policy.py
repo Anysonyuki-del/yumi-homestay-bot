@@ -42,12 +42,21 @@ _PROPERTY_SELF_REFERENCE_PATTERN = re.compile(
 # 正文与改写路径，而联网搜索不可能返回本店信息，因此这条路径上出现的设施断言必然
 # 是模型自行添加的，从严删除是安全的。
 #
-# 只覆盖中文：生产证据全部是中文，英文侧没有观察到同类写法，凭印象扩正则会在没有
-# 证据的地方引入误删风险。
-_PROPERTY_AMENITY_CLAIM_PATTERN = re.compile(
-    r"(?:大堂|前台|房间|客房|楼下|楼上|院子|厨房|卫生间|浴室|阳台|公区|楼道)"
-    r"[^。！？；;!?]{0,12}"
-    r"(?:备有|备了|配有|配备|提供|放了|放着|已换|已备|可借|可以借|能借|免费)"
+# 判定用「同句共现」而不是固定词序：一句话里同时出现本店一侧的主体和供应或
+# 持有的说法，不论先后就算设施断言。2026-09-24 真实 DeepSeek 天气回复出现过
+# 「我们备有雨伞」「雨具、烘干衣架前台都备着」「玄关置物篮有备用伞」，旧判据要求
+# 场所词在前、动词紧随其后，三句全部漏过。词表仍是有限的，词表外的说法仍可能漏过。
+#
+# 只覆盖中文：英文侧没有观察到同类写法，凭印象扩正则会在没有证据的地方引入误删
+# 风险。
+_PROPERTY_SIDE_ANCHOR_PATTERN = re.compile(
+    r"我们|咱们|民宿|店里|本店|前台|大堂|玄关|门口|入户|房间|客房|屋里|"
+    r"楼下|楼上|院子|厨房|卫生间|浴室|阳台|公区|公共区域|楼道|管家"
+)
+_PROPERTY_SUPPLY_CLAIM_PATTERN = re.compile(
+    r"备有|备着|备了|备好|常备|已备|配有|配备|提供|放了|放着|放在|已换|"
+    r"可借|可以借|能借|借用|免费|赠送|取用|"
+    r"(?:找|跟|问)我(?:拿|取|要|借)|有(?:备用|一次性|免费)"
 )
 _ROOM_SALES_CTA_PATTERN = re.compile(
     r"如果.{0,12}(?:我|我们).{0,16}(?:推荐|介绍).{0,24}房型|"
@@ -195,9 +204,31 @@ def _contains_ungrounded_property_claim(text: str) -> bool:
     """判断一段文字是否含未经审核的民宿自述、设施断言或房型推销。"""
     return bool(
         _PROPERTY_SELF_REFERENCE_PATTERN.search(text)
-        or _PROPERTY_AMENITY_CLAIM_PATTERN.search(text)
+        or (
+            _PROPERTY_SIDE_ANCHOR_PATTERN.search(text)
+            and _PROPERTY_SUPPLY_CLAIM_PATTERN.search(text)
+        )
         or _ROOM_SALES_CTA_PATTERN.search(text)
     )
+
+
+_STANDALONE_HEADING = re.compile(r"^\s*【[^】]{1,12}】\s*$")
+
+
+def _drop_emptied_headings(lines: list[str]) -> list[str]:
+    """删除正文已全部被删、只剩标题的小节，避免客人看到空的【小节】。"""
+    kept: list[str] = []
+    for index, line in enumerate(lines):
+        if _STANDALONE_HEADING.match(line):
+            following = next(
+                (item for item in lines[index + 1 :] if item.strip()),
+                None,
+            )
+            # 标题后直到下一个标题或结尾都没有正文，这个小节已经空了。
+            if following is None or _STANDALONE_HEADING.match(following):
+                continue
+        kept.append(line)
+    return kept
 
 
 def remove_ungrounded_property_claims(content: str) -> str:
@@ -219,6 +250,7 @@ def remove_ungrounded_property_claims(content: str) -> str:
         ]
         if safe_sentences:
             safe_lines.append("".join(safe_sentences).strip())
+    safe_lines = _drop_emptied_headings(safe_lines)
 
     numbered_line = re.compile(
         r"^(?P<indent>\s*)(?P<number>\d{1,2})[.、．）)]\s*(?P<body>.+)$"

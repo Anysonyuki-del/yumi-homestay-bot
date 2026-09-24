@@ -533,3 +533,50 @@ def test_a_disclaimer_is_not_mistaken_for_a_commitment() -> None:
     )
 
     assert cleaned == sentence
+
+
+@pytest.mark.parametrize(
+    "fabricated",
+    [
+        # 2026-09-24 真实 DeepSeek 天气回复中的三种写法：主语是「我们」、场所词在
+        # 物品之后、场所与动词都不在旧词表里。旧判据要求「场所词在前、动词在后」，
+        # 三句全部漏过。
+        "我们备有雨伞、拖鞋和热茶。",
+        "雨具、烘干衣架前台都备着，需要随时找我拿。",
+        "玄关置物篮有备用伞和一次性雨衣，随手取用。",
+    ],
+)
+def test_amenity_claims_are_removed_regardless_of_word_order(fabricated: str) -> None:
+    """同一句里出现本店一侧的主体和供应说法就删除，不依赖先后顺序。"""
+    cleaned = remove_ungrounded_property_claims(
+        f"明天有阵雨，气温23～31℃。{fabricated}出门记得带伞。"
+    )
+
+    assert fabricated not in cleaned
+    assert "明天有阵雨，气温23～31℃。" in cleaned
+    assert "出门记得带伞。" in cleaned
+
+
+def test_public_venue_facts_are_not_mistaken_for_amenity_claims() -> None:
+    """店外场所的免费、提供等说法没有本店主体，必须原样保留。"""
+    original = (
+        "湖北省博物馆免费开放，周一闭馆。"
+        "江汉路步行街有很多小吃，傍晚人最多。"
+        "雨大时可以先回去休息，等雨小再出门。"
+    )
+
+    assert remove_ungrounded_property_claims(original) == original
+
+
+def test_a_section_heading_left_empty_by_removal_is_dropped() -> None:
+    """小节正文全部被删时，标题一并删除，不留下空的【客房服务】。"""
+    cleaned = remove_ungrounded_property_claims(
+        "【天气速览】\n明天多云，23～31℃。\n\n"
+        "【客房服务】\n玄关置物篮有备用伞和一次性雨衣，随手取用。\n\n"
+        "【出行提醒】\n出门记得带伞。"
+    )
+
+    assert "客房服务" not in cleaned
+    assert "玄关" not in cleaned
+    assert "【天气速览】\n明天多云，23～31℃。" in cleaned
+    assert "【出行提醒】\n出门记得带伞。" in cleaned

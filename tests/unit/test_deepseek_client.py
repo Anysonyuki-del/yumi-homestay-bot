@@ -679,7 +679,7 @@ async def test_invalid_stay_dates_do_not_call_hostex(tool_name: str) -> None:
 async def test_room_introduction_forces_hostex_property_catalog_tool() -> None:
     """房间介绍必须调用百居易房源目录，不能只依赖审核知识或模型猜测。"""
     client = PropertyCatalogClientStub()
-    executor = ToolExecutorStub()
+    executor = RecordingExecutor(HostexReadOnlyToolExecutor(HostexCatalogStub()))
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
         tourism_searcher=TourismStub(),
@@ -1325,6 +1325,9 @@ async def test_general_prompt_requires_homestay_host_tone_without_promises() -> 
     assert "不得使用“亲亲”" in prompt
     assert "不得为了亲和而改变日期、数字、价格、房态或安全步骤" in prompt
     assert "不得承诺处理结果、完成时间或人员已经出发" in prompt
+    # 联网搜索在调用主模型之前已按时效分流，主模型没有该工具，提示词不能要求调用它。
+    assert "旅游联网搜索" not in prompt
+    assert "本轮没有查询结果时不给出具体数值或安排" in prompt
 
 
 @pytest.mark.asyncio
@@ -1749,10 +1752,13 @@ async def test_deepseek_executes_read_only_tool_and_replays_result() -> None:
         "type": "function",
         "function": {"name": "search_availability"},
     }
-    assert (
-        "房态只能以 stay_available 为准"
-        in client.chat.completions.requests[0]["messages"][0]["content"]
+    availability_tool = next(
+        item["function"]
+        for item in client.chat.completions.requests[0]["tools"]
+        if item["function"]["name"] == "search_availability"
     )
+    # 房态判读规则属于工具契约，随工具一起出现，而不是写在系统提示词里。
+    assert "stay_available" in availability_tool["description"]
 
 
 @pytest.mark.asyncio
@@ -2817,3 +2823,87 @@ def test_fee_evidence_may_sit_in_another_sentence_of_the_same_answer(
     snippet = KnowledgeSnippet(1, "测试", title, answer)
 
     assert DeepSeekGuestAssistant._has_relevant_property_knowledge(question, [snippet]) is grounded
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "你们有哪些房型",
+        "都有什么房间",
+        "房间类型有哪些",
+        "有几种房",
+        "有什么样的房间",
+        "介绍一下这间房",
+        "房源列表",
+        "你们家都有哪些户型",
+        "What room types do you have?",
+        "which rooms are there",
+    ],
+)
+def test_questions_about_the_room_lineup_open_the_property_catalog(question: str) -> None:
+    """问本店有哪些、哪几种房，都要开放并强制房源目录，不能只认「介绍」字眼。"""
+    assert DeepSeekGuestAssistant._should_force_property_catalog(question)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "明天还有房吗",
+        "有房间吗",
+        "今晚还有空房吗",
+        "房间里有空调吗",
+        "房间有什么设施",
+        "房间几点打扫",
+        "房价多少",
+        "房间太热了",
+        "能加床吗",
+        "退房时间",
+    ],
+)
+def test_availability_and_in_room_questions_do_not_open_the_catalog(question: str) -> None:
+    """房态、房内设施与服务问题不属于房型列表，不强制房源目录。"""
+    assert not DeepSeekGuestAssistant._should_force_property_catalog(question)
+
+
+@pytest.mark.asyncio
+async def test_room_lineup_question_answers_from_the_property_catalog() -> None:
+    """「你们有哪些房型」走真实回复链路时调用房源目录，并以工具结果作答。"""
+    client = PropertyCatalogClientStub()
+    # 用真实执行器包装房源替身：房态替身收到 list_properties 会因缺日期报错，
+    # 工具失败后模型只能回尚未确认，测试就测不到工具作证这一步。
+    executor = RecordingExecutor(HostexReadOnlyToolExecutor(HostexCatalogStub()))
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=executor,
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "你们有哪些房型"}],
+    )
+
+    assert client.chat.completions.requests[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "list_properties"},
+    }
+    assert executor.calls == [("list_properties", {})]
+    assert decision.reply_text == "百居易房间名称是江景大床房。"
+
+
+class RecordingExecutor:
+    """记录调用并转交真实执行器，验证工具成功执行后的回复链路。"""
+
+    def __init__(self, inner: HostexReadOnlyToolExecutor) -> None:
+        """保存被包装的执行器。"""
+        self.inner = inner
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    async def execute(self, name: str, arguments: dict[str, str]) -> list[dict[str, object]]:
+        """记录后执行。"""
+        self.calls.append((name, arguments))
+        return await self.inner.execute(name, arguments)
