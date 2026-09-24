@@ -35,6 +35,7 @@ from homestay_bot.domain.enums import (
 )
 from homestay_bot.domain.models import (
     AdminCredential,
+    AuditLog,
     BookingApproval,
     Conversation,
     Employee,
@@ -290,6 +291,21 @@ class SessionHostexEventRecorder:
             return created
 
 
+async def _latest_conversation_handoff_id(session: AsyncSession, conversation_id: int) -> int:
+    """复用接管审计编号作为分段边界，避免把旧人工模式误当作新接管。"""
+    latest_id = await session.scalar(
+        select(AuditLog.id)
+        .where(
+            AuditLog.action == "conversation_handoff",
+            AuditLog.target_type == "conversation",
+            AuditLog.target_id == str(conversation_id),
+        )
+        .order_by(AuditLog.id.desc())
+        .limit(1)
+    )
+    return int(latest_id or 0)
+
+
 async def _guest_reply_is_stale(
     session: AsyncSession,
     payload: dict[str, Any],
@@ -314,7 +330,12 @@ async def _guest_reply_is_stale(
         return False
     if _reply_chain_index(payload) > 1:
         # 长回复已经发出前面几段：客人追问不打断，同一个答案只发一半更糟；
-        # 员工一旦发言就停止，不能插话打断人工。
+        # 新接管或员工发言即停止；旧任务没有审计边界时保留原判定。
+        handoff_id = payload["reply_chain"].get("handoff_id")
+        if handoff_id is not None and (
+            await _latest_conversation_handoff_id(session, conversation_id) > handoff_id
+        ):
+            return True
         return bool(
             await repository.has_newer_servicer_activity(conversation_id, str(boundary))
         )
@@ -369,6 +390,7 @@ async def _enqueue_guest_reply_continuation(
             "content": continuation[0],
             "delivery_retry_count": 0,
             "reply_chain": {
+                **chain,
                 "group": group,
                 "index": next_index,
                 "total": chain.get("total"),
@@ -390,11 +412,14 @@ def reply_chain_undelivered_payload(
     chain = failed_payload.get("reply_chain")
     if not isinstance(chain, dict) or not failed_payload.get("open_kfid"):
         return None
-    return {
+    payload = {
         "group": str(chain.get("group", "")),
         "index": _reply_chain_index(failed_payload),
         "total": chain.get("total"),
     }
+    if failed_payload.get("conversation_id") is not None:
+        payload["conversation_id"] = failed_payload["conversation_id"]
+    return payload
 
 
 async def _notify_undelivered_reply_chain(
@@ -404,7 +429,7 @@ async def _notify_undelivered_reply_chain(
     agent_id: int,
     employee_userids: list[str],
 ) -> bool:
-    """通知值班员工：某条长回复从第几段起没有送达，后续段已停止发送。"""
+    """用内部会话编号定位失败回复；不携带客人正文或外部联系人身份。"""
     if not employee_userids:
         return False
     outbox = TransactionalOutboxWeCom(
@@ -416,6 +441,7 @@ async def _notify_undelivered_reply_chain(
         agent_id=agent_id,
         employee_userids=employee_userids,
         content=(
+            f"会话编号：{payload.get('conversation_id', '未知（旧任务未记录，请查投递诊断）')}\n"
             f"有一条分 {payload.get('total')} 段发送的客人回复，从第 "
             f"{payload.get('index')} 段起未成功送达，后续段已停止发送，请管家人工跟进。"
         ),
@@ -436,6 +462,7 @@ class TransactionalOutboxWeCom:
         conversation_id: int | None = None,
     ) -> None:
         """绑定来源消息及可选发送阶段，确保分阶段回复分别保持幂等。"""
+        self._session = session
         self._repository = SQLAlchemyJobRepository(session)
         # 会话编号随出站载荷保留：真实发送发生在提交之后，届时必须能回到同一
         # 会话复核「排队期间是否又来了新消息」。
@@ -508,7 +535,7 @@ class TransactionalOutboxWeCom:
         retry_of_message_id: str | None = None,
         chain: dict[str, Any] | None = None,
     ) -> str | None:
-        """登记一条客人回复发送任务；同一 outbox 编号只登记一次。"""
+        """幂等登记回复，分段时保存已有接管边界，让后续新接管能中断续发。"""
         outbox_id = self._outbox_id("guest")
         if await self._repository.exists_dedupe_key(outbox_id):
             return None
@@ -529,6 +556,10 @@ class TransactionalOutboxWeCom:
         if chain is not None:
             # 分组编号取第一段的 outbox 编号：稳定、唯一，续发各段都能据此去重。
             payload["reply_chain"] = {"group": outbox_id, **chain}
+            if self._conversation_id is not None:
+                payload["reply_chain"]["handoff_id"] = await _latest_conversation_handoff_id(
+                    self._session, self._conversation_id
+                )
         await self._repository.enqueue(
             "wecom_send_text",
             payload,

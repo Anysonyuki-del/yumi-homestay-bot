@@ -532,8 +532,9 @@ def _is_weather_question(question: str, language: Language) -> bool:
 
 
 def _opening_paragraph(content: str) -> str:
-    """返回正文的第一段，用于判断固定开场白是否已经出现过。"""
-    return content.lstrip().split("\n\n", 1)[0]
+    """跳过开头独占一行的标题，只检查首个正文段，避免后文或引用干扰。"""
+    body = re.sub(r"\A(?:【[^】\r\n]+】[ \t]*\r?\n\s*)+", "", content.lstrip())
+    return body.split("\n\n", 1)[0]
 
 
 def _with_opener(content: str, phrase: str, *, inline: str, standalone: str) -> str:

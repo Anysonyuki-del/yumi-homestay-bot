@@ -17,6 +17,14 @@ from homestay_bot import application
 from homestay_bot.application import TransactionalOutboxWeCom
 from homestay_bot.domain.enums import ConversationMode, JobStatus, Language, MessageOrigin
 from homestay_bot.domain.models import Base, Conversation, Job, Message
+from homestay_bot.repositories.conversations import (
+    SQLAlchemyConversationRepository,
+    SQLAlchemyMessageRepository,
+)
+from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
+from homestay_bot.services.conversation_service import ConversationService
+from homestay_bot.services.emergency_service import EmergencyService
+from homestay_bot.services.message_service import IncomingMessage, MessageService
 
 PARTS = ["（1/3）第一段。", "（2/3）第二段。", "（3/3）第三段。"]
 
@@ -55,7 +63,7 @@ class FakeWeCom:
         self.internal.append(content)
 
 
-async def _setup(tmp_path) -> tuple[Any, int]:
+async def _setup(tmp_path, *, already_human: bool = False) -> tuple[Any, int]:
     """建库、建会话与来源客人消息，并以链式方式登记三段回复。"""
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'chain.db'}")
     async with engine.begin() as connection:
@@ -81,6 +89,8 @@ async def _setup(tmp_path) -> tuple[Any, int]:
             )
         )
         await session.flush()
+        if already_human:
+            await _takeover(session, conversation)
         outbox = TransactionalOutboxWeCom(
             session,
             source_message_id="guest-1",
@@ -91,6 +101,68 @@ async def _setup(tmp_path) -> tuple[Any, int]:
         await outbox.send_text_chain("wk-chain", "wm-chain", PARTS)
         await session.commit()
         return factory, conversation.id
+
+
+async def _takeover(session, conversation, *, through_message: bool = False) -> None:
+    """调用生产共用的接管入口，真实保存模式与审计，不用 SQL 伪造状态。"""
+    service = ConversationService(
+        conversations=SQLAlchemyConversationRepository(session),
+        messages=MessageService(SQLAlchemyMessageRepository(session)),
+        assistant=object(), emergency_service=EmergencyService(),
+        wecom=FakeWeCom(), agent_id=1, duty_employee_userids=[],
+        audit_events=SQLAlchemyOperationsRepository(session),
+    )
+    if through_message:
+        await service.handle_message(IncomingMessage(
+            msgid="request-human", open_kfid=conversation.open_kfid,
+            external_userid=conversation.external_userid, origin=MessageOrigin.GUEST,
+            msgtype="text", content="转人工", sent_at=datetime.now(UTC),
+        ))
+    else:
+        await service._switch_to_human(conversation, "requested_human")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_human", [False, True])
+async def test_new_handoff_without_staff_message_stops_chain(
+    tmp_path, monkeypatch, already_human
+) -> None:
+    """发送途中重新交给人工，即使还没有员工消息，也不续发原答案。"""
+    factory, conversation_id = await _setup(tmp_path, already_human=already_human)
+
+    async def takeover_after_first(content: str) -> None:
+        """首段发出后走实际接管保存链路。"""
+        if content == PARTS[0]:
+            async with factory() as session:
+                conversation = await session.get(Conversation, conversation_id)
+                await _takeover(session, conversation, through_message=not already_human)
+                await session.commit()
+
+    client = FakeWeCom(after_send=takeover_after_first)
+    await _run_until_idle(factory, client, monkeypatch)
+    assert client.sent == [PARTS[0]]
+
+
+@pytest.mark.asyncio
+async def test_old_handoff_and_other_conversation_handoff_do_not_stop_chain(
+    tmp_path, monkeypatch
+) -> None:
+    """保留旧人工模式下独立回答，其他会话的新接管也不能误伤本会话。"""
+    factory, _ = await _setup(tmp_path, already_human=True)
+
+    async def other_handoff(content: str) -> None:
+        """第一段后为另一会话登记接管。"""
+        if content == PARTS[0]:
+            async with factory() as session:
+                conversation = Conversation(open_kfid="other", external_userid="other")
+                session.add(conversation)
+                await session.flush()
+                await _takeover(session, conversation)
+                await session.commit()
+
+    client = FakeWeCom(after_send=other_handoff)
+    await _run_until_idle(factory, client, monkeypatch)
+    assert client.sent == PARTS
 
 
 async def _run_until_idle(factory, client: FakeWeCom, monkeypatch) -> None:
@@ -231,7 +303,7 @@ async def test_a_staff_reply_stops_the_remaining_parts(tmp_path, monkeypatch) ->
 @pytest.mark.asyncio
 async def test_a_failed_part_stops_the_chain_and_alerts_staff(tmp_path, monkeypatch) -> None:
     """第二段终态失败：第三段不发，并登记注明段号的员工通知任务。"""
-    factory, _ = await _setup(tmp_path)
+    factory, conversation_id = await _setup(tmp_path)
     client = FakeWeCom(fail_on={PARTS[1]: RuntimeError("rejected")})
 
     await _run_until_idle(factory, client, monkeypatch)
@@ -250,6 +322,8 @@ async def test_a_failed_part_stops_the_chain_and_alerts_staff(tmp_path, monkeypa
     assert len(alerts) == 1
     assert alerts[0].payload["index"] == 2
     assert alerts[0].payload["total"] == 3
+    assert alerts[0].payload["conversation_id"] == conversation_id
+    assert set(alerts[0].payload) == {"group", "index", "total", "conversation_id"}
 
 
 @pytest.mark.asyncio
@@ -257,7 +331,7 @@ async def test_undelivered_alert_names_the_part(tmp_path) -> None:
     """员工通知写明从第几段起未送达，且只登记一次。"""
     factory, _ = await _setup(tmp_path)
     async with factory() as session:
-        payload = {"group": "g-1", "index": 2, "total": 3}
+        payload = {"group": "g-1", "index": 2, "total": 3, "conversation_id": 1}
         assert await application._notify_undelivered_reply_chain(
             session, payload, agent_id=1000002, employee_userids=["staff-1"]
         )
@@ -267,6 +341,7 @@ async def test_undelivered_alert_names_the_part(tmp_path) -> None:
         )
     assert len(jobs) == 1
     assert "从第 2 段起未成功送达" in jobs[0].payload["content"]
+    assert "会话编号：1" in jobs[0].payload["content"]
 
 
 def test_failure_payload_only_matches_reply_chains() -> None:

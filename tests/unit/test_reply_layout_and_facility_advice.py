@@ -260,3 +260,24 @@ def test_english_weather_opener_is_not_repeated_after_a_header() -> None:
     )
 
     assert prepared.count("I checked the forecast") == 1
+
+
+@pytest.mark.parametrize(
+    ("language", "phrase", "question", "body"),
+    [
+        (Language.ZH, "我帮您看了一下", "明天天气", "明天晴，20至25℃。"),
+        (Language.EN, "I checked the forecast", "Weather tomorrow?", "Sunny tomorrow."),
+    ],
+)
+def test_weather_opener_after_standalone_heading(language, phrase, question, body) -> None:
+    """独立标题之后已有开场白时，不应重复；不扫描后续段落。"""
+    prepared = prepare_guest_reply(
+        f"【天气】\n\n{phrase}，{body}",
+        language=language, requires_human=False, question=question,
+    )
+    assert prepared.count(phrase) == 1
+    later = prepare_guest_reply(
+        f"【天气】\n\n{body}\n\n{phrase}",
+        language=language, requires_human=False, question=question,
+    )
+    assert later.count(phrase) == 2
