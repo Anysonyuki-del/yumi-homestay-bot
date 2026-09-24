@@ -27,7 +27,7 @@ from homestay_bot.integrations.deepseek_client import (
     AssistantUnavailableError,
     TaskSuggestion,
 )
-from homestay_bot.integrations.tourism import TourismSearchError
+from homestay_bot.integrations.tourism import TourismSearchError, classify_tourism_query
 from homestay_bot.services.answer_policy import (
     facility_fault_exclusion,
     has_facility_fault_signal,
@@ -55,6 +55,12 @@ from homestay_bot.worker import DeferredRetryJobError
 # 与知识证据计划共用同一上限，见 guest_reply_policy.MAX_GUEST_REPLY_CHARS。
 _MAX_ASSISTANT_REPLY_CHARACTERS = MAX_GUEST_REPLY_CHARS
 _GUEST_MESSAGE_DEBOUNCE_SECONDS = 3
+# 联网查询要等十几秒，先让客人知道在查。固定话术不调用模型，不增加等待；
+# 不传问题原文，出口不会补天气开场白，也不标记人工，不会追加转人工收尾。
+_LIVE_SEARCH_ACK = {
+    Language.ZH: "我帮您查一下最新信息，稍等片刻。",
+    Language.EN: "Let me check the latest information for you. One moment, please.",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -680,10 +686,10 @@ class ConversationService:
         if jobs is None:
             return
         fast_ack_sha256: str | None = None
-        if (
-            not has_facility_fault_signal(message.content)
-            and self._should_send_fast_ack(message.content)
-        ):
+        sent_ack: GuestReplyReceipt | None = None
+        if has_facility_fault_signal(message.content):
+            pass
+        elif self._should_send_fast_ack(message.content):
             ack = await self._assistant.respond_ack(
                 guest_identifier=message.external_userid,
                 language=conversation.language,
@@ -695,6 +701,17 @@ class ConversationService:
                 message_type="ack",
                 requires_human=True,
             )
+        elif (
+            classify_tourism_query([{"role": "user", "content": message.content}])
+            == "live"
+        ):
+            # 1.39.13 测试号验收：联网问题分别等了约 30 秒和 21 秒，期间没有任何回复。
+            sent_ack = await self._send_guest_reply(
+                conversation,
+                _LIVE_SEARCH_ACK.get(conversation.language, _LIVE_SEARCH_ACK[Language.ZH]),
+                message_type="ack",
+            )
+        if sent_ack is not None:
             # 最终阶段只携带摘要，避免在任务载荷中复制一份安抚正文。
             fast_ack_sha256 = hashlib.sha256(
                 sent_ack.content.encode("utf-8")
@@ -714,7 +731,11 @@ class ConversationService:
         )
         if merged_guest_count.isdigit() and int(merged_guest_count) > 1:
             payload["merged_guest_count"] = int(merged_guest_count)
-        if fast_ack_sha256 is not None and sent_ack.message_id is not None:
+        if (
+            fast_ack_sha256 is not None
+            and sent_ack is not None
+            and sent_ack.message_id is not None
+        ):
             payload["fast_ack_sha256"] = fast_ack_sha256
             if sent_ack.message_id and sent_ack.message_id.startswith("outbox:"):
                 payload["fast_ack_outbox_id"] = sent_ack.message_id

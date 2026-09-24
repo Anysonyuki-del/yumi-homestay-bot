@@ -257,12 +257,15 @@ async def test_deepseek_tourism_uses_native_search_and_removes_links() -> None:
         {"role": "user", "content": "武汉近期有什么好玩的？"}
     ]
     assert request["tools"][0]["type"] == "web_search_20250305"
-    assert request["tools"][0]["max_uses"] == 2
+    # 2026-09-24 生产实测（Spec live-reply-latency §6）：搜索 1 次、关闭思考、
+    # 推荐正文 400 至 600 字，联网搜索中位数从 14.6 秒降到 3.4 秒，质量底线全部满足。
+    assert request["tools"][0]["max_uses"] == 1
+    assert request["thinking"] == {"type": "disabled"}
     assert "当前日期：2026-07-30" in request["system"]
     assert "优先时间窗口：2026-07-30 至 2026-08-14" in request["system"]
     assert "每项活动日期必须注明完整年份" in request["system"]
     assert "优先选出最值得推荐的3项" in request["system"]
-    assert "700至900字" in request["system"]
+    assert "400至600字" in request["system"]
     assert request["max_tokens"] == 3000
     assert "帮您查到的" in result
     # v1.28.0 起页脚不再列举来源：拿到的只是搜索结果标题，且带这句的回复

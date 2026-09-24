@@ -2633,3 +2633,35 @@ async def test_missing_dates_clarification_does_not_create_gap_alert() -> None:
     assert "入住日期" in wecom.guest_messages[0]
     assert wecom.internal_messages == []
     assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_live_search_question_gets_an_instant_fixed_ack() -> None:
+    """联网问题要等十几秒，先发一句固定话术；不调模型，不带天气开场白和转人工收尾。
+
+    1.39.13 测试号验收：两条联网问题分别等了约 30 秒和 21 秒，期间客人没收到任何回复。
+    """
+    jobs = DeferredJobStub()
+    service, _, assistant, wecom = build_service(jobs=jobs, defer_model=True)
+
+    await service.handle_message(incoming(content="明天天气咋样"))
+    await service.process_debounced_message(incoming(content="明天天气咋样"))
+
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == ["我帮您查一下最新信息，稍等片刻。"]
+    assert jobs.jobs[-1][1]["phase"] == "final"
+    assert len(str(jobs.jobs[-1][1]["fast_ack_sha256"])) == 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", ["几点可以退房？", "空调坏了", "你们有哪些房型"])
+async def test_non_live_questions_still_get_no_generic_ack(question: str) -> None:
+    """普通问题、设施故障和房源问题不发联网安抚，行为与之前相同。"""
+    jobs = DeferredJobStub()
+    service, _, assistant, wecom = build_service(jobs=jobs, defer_model=True)
+
+    await service.handle_message(incoming(content=question))
+    await service.process_debounced_message(incoming(content=question))
+
+    assert assistant.ack_calls == 0
+    assert all("最新信息" not in text for text in wecom.guest_messages)

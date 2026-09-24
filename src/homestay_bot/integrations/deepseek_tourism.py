@@ -407,7 +407,7 @@ class DeepSeekTourismSearcher:
             "并明确标注“半个月后”。不得把已经结束的活动当作近期推荐。"
             "每项活动日期必须注明完整年份。"
             "简单推荐要精简选优，优先选出最值得推荐的3项，正文控制在"
-            "700至900字；规划问题给出半日或一日路线。"
+            "400至600字；规划问题给出半日或一日路线。"
             + (
                 "距离问题必须直接回答起点和终点、约距离及可行交通方式；"
                 "如果房源名称无法从可靠来源确认位置，要明确说明正在核实，"
@@ -456,9 +456,12 @@ class DeepSeekTourismSearcher:
             try:
                 response = await self._client.messages.create(
                     model=self._model,
-                    # 保留 DeepSeek 思考块与原生搜索过程；只对已有证据但遗漏正文
-                    # 的间歇响应做一次有限重试。
+                    # 只对已有证据但遗漏正文的间歇响应做一次有限重试。
                     max_tokens=3000,
+                    # 2026-09-24 生产实测：关闭思考、只搜一次、推荐正文 400 至 600 字，
+                    # 联网搜索中位数从 14.6 秒降到 3.4 秒，四类问题的质量底线全部
+                    # 满足（docs/specs/2026-09-24_live-reply-latency-spec.md §6）。
+                    thinking={"type": "disabled"},
                     system=(
                         system
                         + "完成搜索后，结束前必须输出一段客人可见的最终正文。"
@@ -468,7 +471,7 @@ class DeepSeekTourismSearcher:
                         {
                             "type": "web_search_20250305",
                             "name": "web_search",
-                            "max_uses": 2,
+                            "max_uses": 1,
                             "user_location": {
                                 "type": "approximate",
                                 "country": "CN",
