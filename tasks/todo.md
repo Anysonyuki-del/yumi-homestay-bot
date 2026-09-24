@@ -997,7 +997,7 @@ Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节�
 ### 编造服务与时效分流（2026-09-24，用户回复「23修复」「开始」）
 
 - [x] 按 `docs/specs/2026-09-24_service-claims-and-live-routing-spec.md` 实施；全量 1929 passed / 24 skipped；生产容器真实 DeepSeek 复测通过。
-- [ ] 1.39.13 发布与线上核对、测试号收件验收。
+- [x] 1.39.13 发布与线上核对、测试号收件验收（用户确认收到）。
 
 ### 待办：联网结果缓存按意图共享（用户 2026-09-24 提出设计，未立项）
 
