@@ -23,8 +23,10 @@ _FICTIONAL_NUMBERS = frozenset(
         "420106199001011234",
     }
 )
-_MOBILE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
-_IDENTITY = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
+# 前后都不能紧挨字母或数字：提交哈希这类十六进制串里常有一段像手机号的数字
+# （1.41.0 发版记录里的 96ba14285116300e… 曾误报），真实号码前后是标点、空白或汉字。
+_MOBILE = re.compile(r"(?<![0-9A-Za-z])1[3-9]\d{9}(?![0-9A-Za-z])")
+_IDENTITY = re.compile(r"(?<![0-9A-Za-z])\d{17}[\dXx](?![0-9A-Za-z])")
 # 二进制资源，以及依赖锁文件：锁文件里的哈希值常有连续数字，且不可能含客人数据。
 _SKIPPED_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".pdf", ".lock"
@@ -60,3 +62,9 @@ def test_database_log_backup_and_export_files_are_ignored() -> None:
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     for pattern in ("*.db", "*.sqlite", "*.log", ".backups/", ".stage/", "*.dump"):
         assert pattern in ignored, pattern
+
+
+def test_hex_hashes_are_not_mistaken_for_phone_numbers() -> None:
+    """提交哈希中的数字段不算号码；中文里夹着的真实形态号码仍能扫出。"""
+    assert not _MOBILE.search("发布提交 96ba14285116300e051daff99176423d0af424f5")
+    assert _MOBILE.search("客人电话13512345000，请回电")
