@@ -61,6 +61,13 @@ _LIVE_SEARCH_ACK = {
     Language.ZH: "我帮您查一下最新信息，稍等片刻。",
     Language.EN: "Let me check the latest information for you. One moment, please.",
 }
+# 客诉即时通知里的中文原因与风险等级，对应 ComplaintService.classify 的取值。
+_COMPLAINT_REASON_LABELS = {
+    "refund": "退款或赔偿诉求",
+    "complaint": "平台投诉或差评",
+    "agitated": "客人情绪激动",
+}
+_COMPLAINT_RISK_LABELS = {"critical": "严重", "high": "高", "normal": "一般"}
 logger = logging.getLogger(__name__)
 
 
@@ -165,8 +172,13 @@ class WeComMessagingPort(Protocol):
         content: str,
         *,
         message_type: str = "text",
+        stale_exempt: bool = False,
     ) -> str | None:
-        """发送客人文本并返回消息编号；重复阶段返回空值。"""
+        """发送客人文本并返回消息编号；重复阶段返回空值。
+
+        `stale_exempt` 表示安全与承诺类回复：排队期间来了新消息也必须送达，
+        出站过时判定不能跳过它。没有排队的直接发送器可以忽略这个参数。
+        """
 
     async def send_internal_text(
         self,
@@ -189,6 +201,7 @@ class ChainedGuestSenderPort(Protocol):
         parts: list[str],
         *,
         message_type: str = "text",
+        stale_exempt: bool = False,
     ) -> str | None:
         """只登记第一段，后续段在前一段发送成功后才入队，保证顺序。"""
 
@@ -629,6 +642,15 @@ class ConversationService:
                 requires_human=True,
                 high_risk=True,
             )
+        # 客人刚收到「会立即联系管家」：员工通知不能等后台模型分析成功才发，模型不可用
+        # 时那会是员工唯一的入口。分析卡片仍由 complaint_review_generate 成功后补发。
+        await self._notify_employee(
+            conversation,
+            message,
+            f"客诉待处理：{_COMPLAINT_REASON_LABELS.get(classification.reason, '客人投诉')}"
+            f"（风险：{_COMPLAINT_RISK_LABELS.get(classification.risk_level, '高')}），"
+            "分析卡片生成后另发",
+        )
         if self._complaint_reviews is None:
             return
         review = await self._complaint_reviews.create_or_get(
@@ -1141,6 +1163,10 @@ class ConversationService:
             conversation,
             content,
             message_type=message_type,
+            # 以高风险口径发出的正是紧急安全提示、客诉首响和转人工确认：客人连发
+            # 「燃气味好重」「我们现在该怎么办」时，第一条的撤离提示曾因排队期间来了
+            # 第二条而被整条跳过。普通问答仍按过时处理，新消息会重新生成答案。
+            stale_exempt=high_risk,
         )
 
     async def _send_prepared_guest_reply(
@@ -1149,6 +1175,7 @@ class ConversationService:
         content: str,
         *,
         message_type: str = "text",
+        stale_exempt: bool = False,
     ) -> GuestReplyReceipt:
         """发送已经过统一客人侧策略处理的文本，并记录真实消息编号。
 
@@ -1161,12 +1188,14 @@ class ConversationService:
                 conversation,
                 parts,
                 message_type=message_type,
+                stale_exempt=stale_exempt,
             )
         message_id = await self._wecom.send_text(
             conversation.open_kfid,
             conversation.external_userid,
             content,
             message_type=message_type,
+            stale_exempt=stale_exempt,
         )
         if message_id is None or message_id.startswith("outbox:"):
             return GuestReplyReceipt(content=content, message_id=message_id)
@@ -1187,6 +1216,7 @@ class ConversationService:
         parts: list[str],
         *,
         message_type: str,
+        stale_exempt: bool = False,
     ) -> GuestReplyReceipt:
         """按顺序发出多段回复，回执记录第一段的编号与完整正文。"""
         full_content = "\n\n".join(parts)
@@ -1196,6 +1226,7 @@ class ConversationService:
                 conversation.external_userid,
                 parts,
                 message_type=message_type,
+                stale_exempt=stale_exempt,
             )
             return GuestReplyReceipt(content=full_content, message_id=first_id)
         first_id = None
@@ -1205,6 +1236,7 @@ class ConversationService:
                 conversation.external_userid,
                 part,
                 message_type=message_type,
+                stale_exempt=stale_exempt,
             )
             if first_id is None:
                 first_id = message_id

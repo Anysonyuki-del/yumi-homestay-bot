@@ -63,8 +63,14 @@ class FakeWeCom:
         self.internal.append(content)
 
 
-async def _setup(tmp_path, *, already_human: bool = False) -> tuple[Any, int]:
-    """建库、建会话与来源客人消息，并以链式方式登记三段回复。"""
+async def _setup(
+    tmp_path, *, already_human: bool = False, with_conversation_id: bool = True
+) -> tuple[Any, int]:
+    """建库、建会话与来源客人消息，并以链式方式登记三段回复。
+
+    `with_conversation_id=False` 按生产装配构造出站：生产的会话服务在会话建立前
+    就创建了出站对象，拿不到会话编号。1.39.11 的修复只在测试自行传入编号时生效。
+    """
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'chain.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -96,7 +102,7 @@ async def _setup(tmp_path, *, already_human: bool = False) -> tuple[Any, int]:
             source_message_id="guest-1",
             delivery_phase="final",
             source_guest_message_id="guest-1",
-            conversation_id=conversation.id,
+            conversation_id=conversation.id if with_conversation_id else None,
         )
         await outbox.send_text_chain("wk-chain", "wm-chain", PARTS)
         await session.commit()
@@ -124,11 +130,16 @@ async def _takeover(session, conversation, *, through_message: bool = False) -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("already_human", [False, True])
+@pytest.mark.parametrize("with_conversation_id", [True, False])
 async def test_new_handoff_without_staff_message_stops_chain(
-    tmp_path, monkeypatch, already_human
+    tmp_path, monkeypatch, already_human, with_conversation_id
 ) -> None:
     """发送途中重新交给人工，即使还没有员工消息，也不续发原答案。"""
-    factory, conversation_id = await _setup(tmp_path, already_human=already_human)
+    factory, conversation_id = await _setup(
+        tmp_path,
+        already_human=already_human,
+        with_conversation_id=with_conversation_id,
+    )
 
     async def takeover_after_first(content: str) -> None:
         """首段发出后走实际接管保存链路。"""
@@ -301,9 +312,14 @@ async def test_a_staff_reply_stops_the_remaining_parts(tmp_path, monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_a_failed_part_stops_the_chain_and_alerts_staff(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("with_conversation_id", [True, False])
+async def test_a_failed_part_stops_the_chain_and_alerts_staff(
+    tmp_path, monkeypatch, with_conversation_id
+) -> None:
     """第二段终态失败：第三段不发，并登记注明段号的员工通知任务。"""
-    factory, conversation_id = await _setup(tmp_path)
+    factory, conversation_id = await _setup(
+        tmp_path, with_conversation_id=with_conversation_id
+    )
     client = FakeWeCom(fail_on={PARTS[1]: RuntimeError("rejected")})
 
     await _run_until_idle(factory, client, monkeypatch)
@@ -382,3 +398,64 @@ async def test_async_failure_of_a_part_resends_only_that_part(tmp_path, monkeypa
     assert client.sent == [*PARTS, PARTS[0]]
     # 三段原始发送加一次重发；已完成任务的载荷按隐私规则清空，只核对任务数。
     assert len(await _guest_send_jobs(factory)) == 4
+
+
+async def _handle_with_production_outbox(factory, msgid: str, content: str) -> None:
+    """按生产装配处理一条客人消息：出站对象不带会话编号，业务与入队同一事务提交。"""
+    async with factory() as session:
+        service = ConversationService(
+            conversations=SQLAlchemyConversationRepository(session),
+            messages=MessageService(SQLAlchemyMessageRepository(session)),
+            assistant=object(), emergency_service=EmergencyService(),
+            wecom=TransactionalOutboxWeCom(
+                session,
+                source_message_id=msgid,
+                source_guest_message_id=msgid,
+            ),
+            agent_id=1, duty_employee_userids=[],
+            audit_events=SQLAlchemyOperationsRepository(session),
+        )
+        await service.handle_message(IncomingMessage(
+            msgid=msgid, open_kfid="wk-chain", external_userid="wm-chain",
+            origin=MessageOrigin.GUEST, msgtype="text", content=content,
+            sent_at=datetime.now(UTC),
+        ))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_emergency_safety_reply_is_sent_even_if_the_guest_writes_again(
+    tmp_path, monkeypatch
+) -> None:
+    """客人连发「燃气味好重」「我们现在该怎么办」：排队中的撤离提示仍须送达。
+
+    以前出站前的过时判定对所有回复一视同仁，第二条消息入库后第一条的安全提示
+    被整条跳过，而第二条又不命中紧急词表。
+    """
+    factory, conversation_id = await _setup(tmp_path)
+    async with factory() as session:
+        await session.execute(update(Job).values(status=JobStatus.COMPLETED))
+        await session.commit()
+    await _handle_with_production_outbox(factory, "guest-gas", "房间里燃气味好重")
+    await _add_message(factory, conversation_id, MessageOrigin.GUEST, "guest-what-now")
+    client = FakeWeCom()
+
+    await _run_until_idle(factory, client, monkeypatch)
+
+    # 三段旧回复已标记完成，队列里唯一的客人消息就是这条安全提示。
+    assert len(client.sent) == 1
+    assert "开窗通风并离开房间" in client.sent[0]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_reply_is_still_skipped_when_the_guest_writes_again(
+    tmp_path, monkeypatch
+) -> None:
+    """对照：普通回复排队期间客人又发了消息，仍按过时跳过，由新消息重新生成答案。"""
+    factory, conversation_id = await _setup(tmp_path)
+    await _add_message(factory, conversation_id, MessageOrigin.GUEST, "guest-2")
+    client = FakeWeCom()
+
+    await _run_until_idle(factory, client, monkeypatch)
+
+    assert client.sent == []

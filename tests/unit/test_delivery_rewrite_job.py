@@ -642,3 +642,33 @@ async def test_a_successful_rewrite_records_no_fallback_reason() -> None:
     assert repository.saved is not None
     assert repository.saved["delivery_rewrite_fallback_used"] is False
     assert repository.saved["delivery_rewrite_fallback_reason"] == ""
+
+
+@pytest.mark.asyncio
+async def test_fallback_keeps_the_reviewed_answer_to_a_homestay_question() -> None:
+    """客人问本店专属问题时，原文是证据门放行的审核知识，本地兜底不能把它删空。
+
+    天气等非专属问题仍按原来的口径过滤，见上一条用例。
+    """
+    context = rewrite_context()
+    context.source_guest.content = "你们网速怎么样？"
+    context.failed_bot.content = (
+        "全楼是300M光纤宽带，每个房间一台独立路由器，视频会议和看高清视频一般没问题；"
+        "四楼401信号稍弱，可以用房间里的有线网口。"
+    )
+    outbox = OutboxStub()
+    service = GuestDeliveryRewriteJobService(
+        repository=RepositoryStub(context),
+        rewriter=RewriterStub(DeliveryRewriteUnavailableError("invalid")),
+        outbox_factory=lambda _message_id, _guest_message_id: outbox,
+        before_model=no_op_checkpoint,
+        on_unavailable=lambda _message_id: no_op_checkpoint(),
+        agent_id=1000002,
+        duty_employee_userids=["staff-1"],
+    )
+
+    await service.handle({"message_id": 11})
+
+    content = str(outbox.guest_sends[0][0][2])
+    assert "300M光纤宽带" in content
+    assert "正在为您核实" not in content

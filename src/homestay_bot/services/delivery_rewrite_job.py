@@ -11,6 +11,7 @@ from homestay_bot.integrations.deepseek_delivery_rewriter import (
 )
 from homestay_bot.integrations.tourism import split_tourism_reply
 from homestay_bot.repositories.conversations import DeliveryRewriteContext
+from homestay_bot.services.answer_policy import is_property_specific
 from homestay_bot.services.guest_reply_policy import (
     contains_sensitive_guest_text,
     fit_wecom_text,
@@ -163,7 +164,11 @@ def _deterministic_fact_fallback(
     body = re.sub(r"[\r\n]+", "；", body)
     body = re.sub(r"；{2,}", "；", body).strip("； ")
     body = re.sub(r"([。！？!?])；", r"\1", body)
-    body = remove_ungrounded_property_claims(body)
+    # 与生成阶段同一口径：客人问本店专属问题时，原文的本店事实来自证据门放行的审核
+    # 知识，兜底只从中抽句子、不产生新文字，再过滤只会把它删空（1.39.15 起 47 条虚构
+    # 审核答案有 11 条被删空）；其余问题（天气、路线等联网内容）没有本店依据，照旧过滤。
+    if not is_property_specific(question):
+        body = remove_ungrounded_property_claims(body)
     sentences = [
         sentence.strip()
         for sentence in re.findall(r"[^。！？!?]+[。！？!?]*", body)

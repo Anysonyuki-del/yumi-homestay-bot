@@ -2907,3 +2907,77 @@ class RecordingExecutor:
         """记录后执行。"""
         self.calls.append((name, arguments))
         return await self.inner.execute(name, arguments)
+
+
+NEARBY_STORE = KnowledgeSnippet(
+    source_id=47,
+    category="周边",
+    question="附近有便利店和早餐店吗？",
+    answer=(
+        "民宿附近的芸栖路上有一家24小时便利店，步行约2分钟；巷口的“芸记热干面”早上6:30开门。"
+        "这些都是周边商户，与本店无关，营业时间以商户当天为准。"
+    ),
+)
+
+
+@pytest.mark.asyncio
+async def test_reviewed_knowledge_given_to_the_model_is_not_removed_as_fabrication() -> None:
+    """「附近有便利店吗」：审核知识里的原句不能被当成没出处的民宿自述删掉。
+
+    2026-09-25 虚构房源回归里，这一问只剩下「它属于周边商户……」一个孤句。依据里
+    没有的本店事实仍然删除。
+    """
+    decision, _ = await _respond_with(
+        "附近有便利店吗？",
+        "民宿附近芸栖路上有家24小时便利店，走路2分钟左右。民宿楼下还有自助洗衣房，24小时开放。",
+        [NEARBY_STORE],
+    )
+
+    assert "24小时便利店" in decision.reply_text
+    assert "洗衣房" not in decision.reply_text
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # 2026-09-25 候选代码的真实模型回归：分流修好后不再联网，但房态工具没有开放，
+        # 模型只能追问人数或说查不到。分流与工具开放必须认同一批住宿说法。
+        "明晚301能住吗？",
+        "今晚4个人住，有合适的房吗？",
+        "今晚还有空房吗？",
+        "明天住两晚还有房吗",
+    ],
+)
+def test_availability_tool_opens_for_every_stay_intent_the_router_keeps(question: str) -> None:
+    """路由判为住宿意图、又带日期的问题，必须能调用百居易房态查询。"""
+    assert "search_availability" in DeepSeekGuestAssistant._allowed_tool_names(question, "")
+
+
+@pytest.mark.parametrize("question", ["附近有什么好吃的", "明天天气怎么样", "301在几楼"])
+def test_availability_tool_stays_closed_without_stay_intent(question: str) -> None:
+    """没有问能不能住、有没有房时，不开放房态查询。"""
+    assert "search_availability" not in DeepSeekGuestAssistant._allowed_tool_names(question, "")
+
+
+def test_availability_tool_opens_for_a_dated_follow_up_about_a_room() -> None:
+    """「那301今晚还有吗」：承接上一轮的房号，但本句自带日期和住宿意图，必须能查房态。
+
+    2026-09-25 候选代码回归中，这句不再联网，却因为以「那」开头、上一轮没有日期范围
+    而没有开放房态工具，三次都转了人工。
+    """
+    allowed = DeepSeekGuestAssistant._allowed_tool_names(
+        "那301今晚还有吗",
+        "房间有浴缸吗\n只有301浴缸大床房有浴缸，其他房间都是淋浴。",
+    )
+
+    assert "search_availability" in allowed
+
+
+def test_availability_tool_opens_for_an_english_dated_stay_question() -> None:
+    """英文问房态同样要查百居易。
+
+    虚构房源回归中「Any rooms available tomorrow night?」没有调用工具。
+    """
+    allowed = DeepSeekGuestAssistant._allowed_tool_names("Any rooms available tomorrow night?", "")
+
+    assert "search_availability" in allowed

@@ -8,6 +8,10 @@
    提示词都引用它们（`tests/unit/test_fact_policy.py` 有架构测试守住）。
 2. 确定性层：`is_unsourced_homestay_claim` 按「这句话说的是谁」判定，只用于没有
    民宿依据的回复——提到民宿一侧却说不出来源的句子，默认不放行。
+3. 出处核对：`is_supported_by` 判断一句话能否在本轮依据（交给模型的审核知识、
+   被改写的原文）里找到出处。有出处的本店事实不再被第 2 层删掉——1.39.15 起
+   审核知识的原句在改写重发和非专属问题里被当成编造删空，就是因为过滤时不知道
+   本轮有哪些依据。
 
 过去按说法类型逐条补规则（1.39.12 设施、1.39.13 服务），下一类说法照样漏；
 1.39.14 验收又漏了「您住的是江汉路附近的话」这种位置编造。判定改为看主体，
@@ -149,3 +153,34 @@ def is_supply_or_service_claim(sentence: str) -> bool:
     if _ZH_HOMESTAY_ANCHOR.search(text) and _ZH_SUPPLY_OR_SERVICE.search(text):
         return True
     return bool(_EN_HOMESTAY_ANCHOR.search(text) and _EN_SUPPLY_OR_SERVICE.search(text))
+
+
+# 出处核对的两条标准：句子的字符二元组至少六成出现在依据里，且每个数字都在依据里。
+# 原型实测：审核原文换说法后的覆盖率约 0.65 至 0.87，依据里没有的编造句约 0.27。
+_SUPPORT_MIN_COVERAGE = 0.6
+_SUPPORT_NOISE = re.compile(r"[\W_]+")
+_SUPPORT_NUMBER = re.compile(r"\d+(?:[.:：]\d+)?")
+
+
+def _support_bigrams(text: str) -> set[str]:
+    """去掉空白与标点后取相邻两字，作为与说法无关的字面指纹。"""
+    compact = _SUPPORT_NOISE.sub("", text.lower())
+    return {compact[index : index + 2] for index in range(len(compact) - 1)}
+
+
+def is_supported_by(sentence: str, source: str) -> bool:
+    """判断一句话能否在依据文本中找到出处：字面覆盖足够，且数字全部出现在依据里。
+
+    ponytail: 二元组覆盖只看字面，看不出语义——「有 24 小时便利店」和「没有 24 小时
+    便利店」几乎一样。改写路径另有 `_validate_facts` 的否定核对，生成路径没有；
+    依据条数多时判定也会变宽。真实模型回归出现依据内的语义篡改时，换成逐句蕴含判定。
+    """
+    if not source.strip():
+        return False
+    grams = _support_bigrams(sentence)
+    if not grams:
+        return _SUPPORT_NOISE.sub("", sentence) in _SUPPORT_NOISE.sub("", source)
+    coverage = len(grams & _support_bigrams(source)) / len(grams)
+    if coverage < _SUPPORT_MIN_COVERAGE:
+        return False
+    return set(_SUPPORT_NUMBER.findall(sentence)) <= set(_SUPPORT_NUMBER.findall(source))

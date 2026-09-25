@@ -3,6 +3,7 @@ import re
 from homestay_bot.domain.enums import Language
 from homestay_bot.services.fact_policy import (
     is_supply_or_service_claim,
+    is_supported_by,
     is_unsourced_homestay_claim,
 )
 
@@ -255,8 +256,13 @@ def _drop_emptied_headings(lines: list[str]) -> list[str]:
     return kept
 
 
-def remove_ungrounded_property_claims(content: str) -> str:
-    """逐句删除未经审核的民宿自述和无关房型推销。"""
+def remove_ungrounded_property_claims(content: str, *, grounded_in: str = "") -> str:
+    """逐句删除未经审核的民宿自述和无关房型推销。
+
+    `grounded_in` 是本轮的依据文本：交给模型的审核知识，或被改写的原文。能在其中
+    找到出处的句子保留（`fact_policy.is_supported_by`），其余照删；不传时一律按
+    没有依据处理。
+    """
     safe_lines: list[str] = []
     for line in content.splitlines():
         # 每一行都逐句判定：新判定里「问句、祝福放行」是按句成立的，整行判定会让
@@ -271,6 +277,7 @@ def remove_ungrounded_property_claims(content: str) -> str:
             sentence
             for sentence in sentences
             if not _contains_ungrounded_property_claim(sentence)
+            or (grounded_in and is_supported_by(sentence, grounded_in))
         ]
         if len(safe_sentences) == len(sentences):
             safe_lines.append(line)

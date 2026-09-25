@@ -294,6 +294,7 @@ class WeComStub:
     def __init__(self) -> None:
         self.guest_messages: list[str] = []
         self.internal_messages: list[str] = []
+        self.stale_exempt_flags: list[bool] = []
 
     async def send_text(
         self,
@@ -302,9 +303,11 @@ class WeComStub:
         content: str,
         *,
         message_type: str = "text",
+        stale_exempt: bool = False,
     ) -> str:
         """记录客人消息并返回企业微信消息编号。"""
         self.guest_messages.append(content)
+        self.stale_exempt_flags.append(stale_exempt)
         return f"bot-{len(self.guest_messages)}"
 
     async def send_internal_text(
@@ -324,9 +327,11 @@ class OutboxWeComStub(WeComStub):
         content: str,
         *,
         message_type: str = "text",
+        stale_exempt: bool = False,
     ) -> str:
         """记录待发送正文并返回稳定 outbox 编号。"""
         self.guest_messages.append(content)
+        self.stale_exempt_flags.append(stale_exempt)
         return "outbox:fast-ack"
 
 
@@ -1293,6 +1298,52 @@ async def test_complaint_enters_human_mode_and_skips_final_model_reply() -> None
     assert reviews.calls == [(1, "msg-1", "refund", "critical")]
     assert jobs.jobs[0][0] == "complaint_review_generate"
     assert jobs.jobs[0][1]["review_id"] == 17
+
+
+@pytest.mark.asyncio
+async def test_complaint_notifies_staff_at_once_without_waiting_for_the_model() -> None:
+    """客人已收到「会立即联系管家」，员工通知不能等模型分析成功才发。
+
+    分析卡片由后台任务在模型成功后补发；模型不可用时，这条即时通知是员工唯一的入口。
+    """
+    jobs = DeferredJobStub()
+    service, _, assistant, wecom = build_service(
+        jobs=jobs,
+        complaint_service=ComplaintService(),
+        complaint_reviews=ComplaintReviewStub(),
+    )
+
+    await service.handle_message(incoming(content="我要退款，不处理我就投诉平台"))
+
+    assert assistant.calls == 0
+    assert len(wecom.internal_messages) == 1
+    assert wecom.internal_messages[0].startswith("客诉待处理：退款或赔偿诉求（风险：严重）")
+    assert "我要退款，不处理我就投诉平台" in wecom.internal_messages[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("房间里燃气味好重", True),
+        ("我要退款，不处理我就投诉平台", True),
+        ("转人工", True),
+        ("附近有什么好吃的", False),
+    ],
+)
+async def test_only_safety_and_commitment_replies_are_exempt_from_staleness(
+    content: str, expected: bool
+) -> None:
+    """紧急提示、客诉首响、转人工确认即使排队期间来了新消息也要送达；普通回复不豁免。"""
+    service, _, _, wecom = build_service(
+        complaint_service=ComplaintService(),
+        complaint_reviews=ComplaintReviewStub(),
+    )
+
+    await service.handle_message(incoming(content=content))
+
+    assert wecom.stale_exempt_flags
+    assert all(flag is expected for flag in wecom.stale_exempt_flags)
 
 
 @pytest.mark.asyncio
@@ -2336,7 +2387,9 @@ async def test_outbox_sender_receives_the_parts_as_one_ordered_chain() -> None:
             super().__init__()
             self.chains: list[list[str]] = []
 
-        async def send_text_chain(self, open_kfid, external_userid, parts, *, message_type="text"):
+        async def send_text_chain(
+            self, open_kfid, external_userid, parts, *, message_type="text", stale_exempt=False
+        ):
             """只登记，不代表已发送。"""
             self.chains.append(list(parts))
             return "outbox:chain-1"

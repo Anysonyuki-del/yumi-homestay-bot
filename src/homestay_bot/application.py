@@ -316,6 +316,9 @@ async def _guest_reply_is_stale(
     版本系统。只有带来源客人消息的回复才参与判定：重试、客诉投递和员工通知各有
     自己的幂等与审批边界，不该被这条规则拦下。
     """
+    if payload.get("stale_exempt"):
+        # 紧急安全提示、客诉首响、转人工确认：排队期间来了新消息也必须送达。
+        return False
     boundary = payload.get("source_guest_message_id")
     open_kfid = payload.get("open_kfid")
     external_userid = payload.get("external_userid")
@@ -488,6 +491,7 @@ class TransactionalOutboxWeCom:
         message_type: str = "text",
         delivery_retry_count: int = 0,
         retry_of_message_id: str | None = None,
+        stale_exempt: bool = False,
     ) -> str | None:
         """事务内登记客人回复，真实发送由 worker 在提交后执行。"""
         return await self._enqueue_guest_text(
@@ -497,6 +501,7 @@ class TransactionalOutboxWeCom:
             message_type=message_type,
             delivery_retry_count=delivery_retry_count,
             retry_of_message_id=retry_of_message_id,
+            stale_exempt=stale_exempt,
         )
 
     async def send_text_chain(
@@ -506,6 +511,7 @@ class TransactionalOutboxWeCom:
         parts: list[str],
         *,
         message_type: str = "text",
+        stale_exempt: bool = False,
     ) -> str | None:
         """登记多段回复：只入队第一段，其余段随载荷保存，由前一段发送成功后续发。
 
@@ -517,6 +523,7 @@ class TransactionalOutboxWeCom:
             external_userid,
             parts[0],
             message_type=message_type,
+            stale_exempt=stale_exempt,
             chain={
                 "index": 1,
                 "total": len(parts),
@@ -534,11 +541,19 @@ class TransactionalOutboxWeCom:
         delivery_retry_count: int = 0,
         retry_of_message_id: str | None = None,
         chain: dict[str, Any] | None = None,
+        stale_exempt: bool = False,
     ) -> str | None:
         """幂等登记回复，分段时保存已有接管边界，让后续新接管能中断续发。"""
         outbox_id = self._outbox_id("guest")
         if await self._repository.exists_dedupe_key(outbox_id):
             return None
+        if self._conversation_id is None:
+            # 生产的会话服务在会话建立前就创建了出站对象，构造时拿不到编号；
+            # 1.39.11 的「新接管停发剩余段」和失败通知里的会话编号都依赖它，
+            # 所以在所有客人出站的汇合处按客服账号与客人补查一次。
+            self._conversation_id = await SQLAlchemyMessageRepository(
+                self._session
+            ).find_conversation_id(open_kfid, external_userid)
         payload: dict[str, Any] = {
             "outbox_id": outbox_id,
             "source_message_id": self._source_message_id,
@@ -551,6 +566,9 @@ class TransactionalOutboxWeCom:
         }
         if self._source_guest_message_id:
             payload["source_guest_message_id"] = self._source_guest_message_id
+        if stale_exempt:
+            # 随载荷保存，续发段复制载荷时一并带上。
+            payload["stale_exempt"] = True
         if self._conversation_id is not None:
             payload["conversation_id"] = self._conversation_id
         if chain is not None:

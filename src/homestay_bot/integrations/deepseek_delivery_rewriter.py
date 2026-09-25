@@ -570,7 +570,9 @@ class DeepSeekDeliveryRewriter:
             raise DeliveryRewriteUnavailableError("改写含联系方式或地址")
         if contains_sensitive_guest_text(rewritten):
             raise DeliveryRewriteUnavailableError("改写含敏感身份或订单信息")
-        rewritten = remove_ungrounded_property_claims(rewritten)
+        # 被拦截的原文已在生成阶段过了事实闸门，是本次改写的依据：原文已有的本店
+        # 事实保留，改写新冒出来的照删；数字、日期、否定和实体由 _validate_facts 核对。
+        rewritten = remove_ungrounded_property_claims(rewritten, grounded_in=original_body)
         if not rewritten:
             raise DeliveryRewriteUnavailableError("改写只剩未经审核的民宿自述")
         rewritten = sanitize_guest_reply(

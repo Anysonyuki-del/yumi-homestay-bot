@@ -1016,3 +1016,10 @@ Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节�
 - [x] 按 `docs/specs/2026-09-24_fact-source-rule-spec.md` 实施；全量 1968 passed / 24 skipped；固定话术改动前后逐字相同；生产历史只读评估与真实 DeepSeek 复测通过。
 - [x] 1.39.15 发布与线上核对、测试号收件验收（用户确认收到）。
 - [ ] 待决：回复中出现「（来源：历史查询）」这类内部说法，是否处理由用户决定。
+
+### 安全类回复送达与两处回归修复（2026-09-25，用户回复「直接做完」）
+
+- [x] 按 `docs/specs/2026-09-25_safety-delivery-and-regressions-spec.md` 实施 F1 至 F5；29 条新增修复用例在 main 上失败、修改后通过；全量 2012 passed / 24 skipped。
+- [x] 部署前真实模型回归发现房态工具未开放：住宿意图收成 `answer_policy.asks_stay_availability` 一处定义。
+- [x] 部署前真实模型回归：四轮，发现并修复住宿意图五处词表不一致、人数误判为房态、英文与带日期追问不开放工具；结果见 `docs/releases/1.39.16.md`。
+- [ ] 1.39.16 发布与线上核对、测试号收件验收。

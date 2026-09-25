@@ -472,3 +472,45 @@ async def test_rewriter_degrades_unprovable_multiclaim_reorder(
             blocked_reply=original,
             language=language,
         )
+
+
+
+@pytest.mark.asyncio
+async def test_rewriter_keeps_the_reviewed_facts_of_the_blocked_reply() -> None:
+    """被拦截的原文是依据：改写保留下来的本店事实不能被当成编造删空。
+
+    1.39.15 起这句会被删空并报「改写只剩未经审核的民宿自述」。多子句的本店答案通常
+    过不了改写器的实体核对，会转入本地兜底，兜底一侧的保护见 test_delivery_rewrite_job。
+    """
+    client = ClientStub(json.dumps({"reply_text": "吹风机每个房间都有。"}, ensure_ascii=False))
+    rewriter = DeepSeekDeliveryRewriter(client=client, model="deepseek-v4-flash")
+
+    reply = await rewriter.rewrite(
+        guest_question="有吹风机吗？",
+        blocked_reply="每个房间都有吹风机。",
+        language=Language.ZH,
+    )
+
+    assert reply == "吹风机每个房间都有。"
+
+
+@pytest.mark.asyncio
+async def test_rewriter_still_drops_a_homestay_fact_the_original_never_had() -> None:
+    """改写只能保留原文已有的事实：新冒出来的本店供应说法仍然不能发出。"""
+    client = ClientStub(
+        json.dumps(
+            {"reply_text": "吹风机每个房间都有。前台还备有卷发棒，可以随时来借。"},
+            ensure_ascii=False,
+        )
+    )
+    rewriter = DeepSeekDeliveryRewriter(client=client, model="deepseek-v4-flash")
+
+    try:
+        reply = await rewriter.rewrite(
+            guest_question="有吹风机吗？",
+            blocked_reply="每个房间都有吹风机。",
+            language=Language.ZH,
+        )
+    except DeliveryRewriteUnavailableError:
+        return
+    assert "卷发棒" not in reply

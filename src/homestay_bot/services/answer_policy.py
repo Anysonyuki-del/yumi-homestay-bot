@@ -3,9 +3,24 @@ from typing import Literal
 
 from homestay_bot.services.knowledge_service import detect_property_topics
 
-_TRANSACTION_PATTERN = re.compile(
+# 住宿意图：问能不能住、有没有房。联网分流、房态工具开放和交易判定共用这一处定义。
+# 以前各处各有一份词表，1.39.16 只在分流处补了「能住」「几个人住」，房态工具那几处
+# 没跟上：问题不再被送去联网，却也调不到百居易，模型只能追问或说查不到。
+_STAY_INTENT_PATTERN = re.compile(
     # 「还有空房吗」「订满了吗」与「有房」同义，都要走实时房态，不能由模型猜。
-    r"房态|有房|空房|余房|剩房|满房|订满|可订|价格|房价|多少钱|参考价|退款|退多少|"
+    r"有房|空房|余房|剩房|满房|订满|几间房|房态|可订|可用房|能住|可以住|住得下|"
+    # 「今晚4个人住，有合适的房吗」问的是有没有房；单说「三个人住」只是人数，
+    # 不算——否则加床、早餐这类问题会被当成房态交易，审核知识被剔除。
+    r"有[^，。？?！!\s]{0,4}的房|"
+    # 三位房号后几个字内问「还有、空着」；「还有票」问的是演出门票。
+    r"(?<!\d)[1-9]\d{2}(?!\d)(?:号房|房)?[^\d，。？?！!]{0,6}(?:还有(?!票)|空着)|"
+    r"availability|vacanc|\brooms?\b[^.?!\n]{0,20}\bavailable\b|"
+    r"\bavailable\b[^.?!\n]{0,12}\brooms?\b",
+    re.IGNORECASE,
+)
+
+_TRANSACTION_PATTERN = re.compile(
+    r"价格|房价|多少钱|参考价|退款|退多少|"
     r"取消|改期|付款|支付|到账|订单|预订状态|发票金额|"
     r"availability|room rate|price|refund|cancel|reschedule|"
     # 英文房费问法也属于交易：限定「how much is/for/does…room」这类问价结构，
@@ -148,9 +163,14 @@ _BOOKING_CONFIRMATION_PATTERN = re.compile(
 )
 
 
+def asks_stay_availability(text: str) -> bool:
+    """判断客人是否在问能不能住、有没有房；这类事实只能来自百居易实时查询。"""
+    return _STAY_INTENT_PATTERN.search(text) is not None
+
+
 def is_transaction_sensitive(text: str) -> bool:
     """判断文本是否涉及不能依靠模型猜测的交易事实。"""
-    return _TRANSACTION_PATTERN.search(text) is not None
+    return _TRANSACTION_PATTERN.search(text) is not None or asks_stay_availability(text)
 
 
 def is_property_specific(text: str) -> bool:
@@ -235,8 +255,8 @@ def is_booking_action_request(text: str) -> bool:
 
 def is_static_service_fee(text: str) -> bool:
     """识别可用审核知识回答的服务收费；明确订单、房价、退款仍保持交易边界。"""
-    if _LODGING_PRICE_PATTERN.search(text) or re.search(
-        r"房价|房费|房态|有房|空房|余房|剩房|满房|订满|可订|订房|预订|订单"
+    if _LODGING_PRICE_PATTERN.search(text) or asks_stay_availability(text) or re.search(
+        r"房价|房费|订房|预订|订单"
         r"|退款|退费|退多少|取消|改期|支付|付款|到账|发票金额|availability|reschedule"
         r"|room\s+(?:rate|price)|reservation|booking|refund|cancel|payment|invoice\s+amount"
         r"|how\s+much.{0,45}\brooms?\b",

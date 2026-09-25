@@ -10,6 +10,7 @@ from homestay_bot.integrations.tourism import (
     latest_user_question,
     split_tourism_reply,
 )
+from homestay_bot.services.answer_policy import asks_stay_availability, is_transaction_sensitive
 
 
 @pytest.mark.parametrize(
@@ -459,3 +460,46 @@ def test_homestay_and_non_questions_stay_off_live_search(question: str) -> None:
 def test_changing_info_words_about_the_homestay_stay_off_live_search(question: str) -> None:
     """用时、人多、开了吗这些词问的是民宿本身时，不送去联网。"""
     assert classify_tourism_query([{"role": "user", "content": question}]) != "live"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # 2026-09-25 虚构房源真实模型回归：这 4 个房态问题被送去联网，答成了天气。
+        "明晚301能住吗？",
+        "今晚4个人住，有合适的房吗？",
+        "那301今晚还有吗",
+        "明天天气怎么样？还有空房吗？",
+        "今晚两个人住得下吗",
+    ],
+)
+def test_stay_intent_always_goes_to_live_availability_not_web_search(question: str) -> None:
+    """住宿意图（能住、空房、几个人住、房号还有吗）优先于天气与时间词，交给百居易查询。"""
+    assert classify_tourism_query([{"role": "user", "content": question}]) == "none"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "黄鹤楼今天几点关门",
+        "帮我预订黄鹤楼门票",
+        "今晚的演唱会还有票吗",
+        "我住在光谷，打车过来多久？",
+    ],
+)
+def test_stay_intent_words_do_not_capture_tourism_questions(question: str) -> None:
+    """补进来的住宿说法不能把门票、演出、路程这类店外时效问题截走。"""
+    assert classify_tourism_query([{"role": "user", "content": question}]) == "live"
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["我们三个人住201，能再加一张床不", "两个人住，早餐要另外付钱吗"],
+)
+def test_party_size_alone_is_not_a_stay_availability_question(question: str) -> None:
+    """「几个人住」只是说明人数：不能因此判成房态交易，否则加床、早餐的审核知识被剔除。
+
+    2026-09-25 最终候选回归中，「我们三个人住201，能再加一张床不」因此答成了尚未确认。
+    """
+    assert not asks_stay_availability(question)
+    assert not is_transaction_sensitive(question)

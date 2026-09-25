@@ -11,8 +11,10 @@ import pytest
 from homestay_bot.services.fact_policy import (
     FACT_SOURCE_RULE_EN,
     FACT_SOURCE_RULE_ZH,
+    is_supported_by,
     is_unsourced_homestay_claim,
 )
+from homestay_bot.services.guest_reply_policy import remove_ungrounded_property_claims
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "homestay_bot"
 
@@ -135,3 +137,63 @@ def test_rule_text_covers_every_fact_category() -> None:
         assert category in FACT_SOURCE_RULE_ZH
     for category in ("location", "facilities", "services", "prices", "availability", "staff"):
         assert category in FACT_SOURCE_RULE_EN
+
+
+# 虚构的审核答案（芸栖小楼是测试用的虚构民宿）。1.39.15 起，这类答案在投递改写和
+# 非专属问题的回复里会被当成「说不出来源的民宿自述」删掉：47 条里 35 条被改、11 条被删空。
+REVIEWED_ANSWERS = {
+    "便利店": "民宿附近的芸栖路上有一家24小时便利店，步行约2分钟；巷口的“芸记热干面”早上6:30开门。"
+    "这些都是周边商户，与本店无关，营业时间以商户当天为准。",
+    "消防": "每层楼梯口都有灭火器，每个房间都装有烟雾报警器。安全出口是一楼正门和通往院子的后门，"
+    "房门背面贴有逃生路线图。",
+    "网络": "全楼是300M光纤宽带，每个房间一台独立路由器，视频会议和看高清视频一般没问题；"
+    "四楼401信号稍弱，可以用房间里的有线网口。",
+    "停车": "民宿没有自有停车位，可以停在芸栖路公共停车场，入口在芸栖路20号，走到民宿约3分钟。"
+    "民宿门口只能临时停车10分钟上下行李，不能过夜停放。",
+    "禁烟": "房间、楼道、露台和阳台都禁止吸烟，包括电子烟。需要吸烟请到一楼院子门口的吸烟点，"
+    "那里有烟灰缸。在室内吸烟需要支付300元深度清洁费。",
+    "电器": "房间插座是220V国标两孔和三孔，床头有USB充电口。请不要使用1500W以上的大功率电器，"
+    "例如电煮锅、电暖器。",
+}
+
+
+@pytest.mark.parametrize("topic", sorted(REVIEWED_ANSWERS))
+def test_a_reviewed_answer_is_never_removed_when_it_is_its_own_source(topic: str) -> None:
+    """不变量：以审核答案本身为依据时，过滤不得删掉其中任何一句。"""
+    answer = REVIEWED_ANSWERS[topic]
+
+    assert remove_ungrounded_property_claims(answer, grounded_in=answer) == answer
+
+
+def test_a_reworded_fact_from_the_source_is_kept() -> None:
+    """换了说法、数字都对得上的本店事实有出处，保留。"""
+    source = REVIEWED_ANSWERS["便利店"]
+    reply = "民宿附近芸栖路上有家24小时便利店，走路2分钟左右。"
+
+    assert is_supported_by(reply, source)
+    assert remove_ungrounded_property_claims(reply, grounded_in=source) == reply
+
+
+def test_a_changed_number_is_not_supported() -> None:
+    """数字改了就不算有出处：2 分钟写成 5 分钟照删。"""
+    source = REVIEWED_ANSWERS["便利店"]
+    reply = "民宿附近芸栖路上有家24小时便利店，走路5分钟左右。"
+
+    assert not is_supported_by(reply, source)
+    assert remove_ungrounded_property_claims(reply, grounded_in=source) == ""
+
+
+def test_a_homestay_fact_missing_from_the_source_is_still_removed() -> None:
+    """依据里没有的本店事实照删，与不传依据时一致。"""
+    source = REVIEWED_ANSWERS["便利店"]
+    reply = "附近有24小时便利店，步行约2分钟。民宿楼下还有自助洗衣房，24小时开放。"
+
+    assert (
+        remove_ungrounded_property_claims(reply, grounded_in=source)
+        == "附近有24小时便利店，步行约2分钟。"
+    )
+
+
+def test_an_empty_source_supports_nothing() -> None:
+    """没有依据时不放行任何本店断言。"""
+    assert not is_supported_by("民宿楼下有便利店。", "")

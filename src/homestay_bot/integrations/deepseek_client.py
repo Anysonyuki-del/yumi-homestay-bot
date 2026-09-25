@@ -17,6 +17,7 @@ from homestay_bot.integrations.tourism import (
     split_tourism_reply,
 )
 from homestay_bot.services.answer_policy import (
+    asks_stay_availability,
     facility_fault_exclusion,
     has_facility_fault_signal,
     is_booking_action_request,
@@ -64,6 +65,14 @@ from homestay_bot.services.stay_date_range import (
 
 logger = logging.getLogger(__name__)
 
+# 问题本身带着的入住日期：独立房态问题与带日期的追问共用。
+_EXPLICIT_STAY_DATE_PATTERN = re.compile(
+    r"今天|今晚|今日|明天|明晚|明日|后天|"
+    r"本周[一二三四五六日天]|这周[一二三四五六日天]|周末|"
+    r"\d{1,2}月\d{1,2}[日号]|\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2}|"
+    r"\b(?:today|tonight|tomorrow)\b",
+    re.IGNORECASE,
+)
 # 讲周边商户或公共设施的句子不能证明本店提供；只有客人本来就在问周边时才算数。
 _EXTERNAL_SCOPE_PATTERN = re.compile(
     # 巷口、路口这类指路说法同样在讲店外商户；漏一个词，周边商户的早餐就会被
@@ -821,10 +830,12 @@ class DeepSeekGuestAssistant:
             reply_grounded = False
         if not property_specific and not tool_grounded:
             # 客人未询问民宿专属信息、本轮也没有百居易工具作证时，删除说不出来源的
-            # 民宿信息（fact_policy 的全局底层规则）。工具作证的回复事实来自工具。
+            # 民宿信息（fact_policy 的全局底层规则）。工具作证的回复事实来自工具；
+            # 本轮交给模型的审核知识是依据，能找到出处的句子保留。
             updates["reply_text"] = self._remove_property_promotion(
                 decision.reply_text,
                 decision.language,
+                grounded_in=self._knowledge_grounding(knowledge_evidence),
             )
         if not property_specific and not transaction_sensitive:
             updates.update(
@@ -1025,7 +1036,7 @@ class DeepSeekGuestAssistant:
             request_context is not None
             and request_context.check_in_date is not None
             and request_context.check_out_date is not None
-            and re.search(r"有房|空房|房态|可订|availability", question_text)
+            and asks_stay_availability(question_text)
         ):
             # 后台调试入口的日期已经本地校验，可补足简短房态问题。
             allowed.add("search_availability")
@@ -1040,15 +1051,24 @@ class DeepSeekGuestAssistant:
         return allowed
 
     @staticmethod
+    def _knowledge_grounding(knowledge: list[Any] | None) -> str:
+        """把本轮交给模型的审核知识答案拼成事实过滤的依据文本。"""
+        return "\n".join(str(getattr(item, "answer", "") or "") for item in knowledge or [])
+
+    @staticmethod
     def _remove_property_promotion(
         reply_text: str,
         language: Language,
         *,
         fallback_on_empty: bool = True,
+        grounded_in: str = "",
     ) -> str:
-        """逐句移除模型主动添加的本店事实，避免误删同段有效信息。"""
+        """逐句移除模型主动添加的本店事实，避免误删同段有效信息。
+
+        `grounded_in` 为本轮交给模型的审核知识答案；联网搜索回复没有审核依据，不传。
+        """
         body, evidence_footer = split_tourism_reply(reply_text)
-        cleaned = remove_ungrounded_property_claims(body)
+        cleaned = remove_ungrounded_property_claims(body, grounded_in=grounded_in)
         if cleaned:
             if evidence_footer:
                 return f"{cleaned}\n\n{evidence_footer}"
@@ -1414,6 +1434,13 @@ class DeepSeekGuestAssistant:
         """完整房态问题或承接日期的房源追问必须调用百居易。"""
         if DeepSeekGuestAssistant._is_standalone_availability_query(question_text):
             return True
+        if (
+            asks_stay_availability(question_text)
+            and _EXPLICIT_STAY_DATE_PATTERN.search(question_text) is not None
+        ):
+            # 「那301今晚还有吗」承接上一轮的房号，但本句自带日期：追问前缀只影响是否
+            # 隔离上一轮话题，不影响必须查实时房态。
+            return True
         asks_current_status = re.search(
             r"(?:当前|现在|今日|今天).*"
             r"(?:预订状况|预订情况|房态|入住状况|入住情况)",
@@ -1422,11 +1449,7 @@ class DeepSeekGuestAssistant:
         if asks_current_status is not None:
             return True
 
-        asks_availability = re.search(
-            r"有房|空房|余房|剩房|满房|订满|几间房|房态|可订|availability",
-            question_text,
-            re.IGNORECASE,
-        )
+        asks_availability = asks_stay_availability(question_text)
         has_stay_range = (
             ("入住" in question_text and "退房" in question_text)
             or (
@@ -1435,7 +1458,7 @@ class DeepSeekGuestAssistant:
             )
             or len(re.findall(r"\d{4}-\d{2}-\d{2}", question_text)) >= 2
         )
-        if asks_availability is not None and has_stay_range:
+        if asks_availability and has_stay_range:
             return True
 
         # “房源列表”等短追问应沿用上一轮已明确的入住退房日期，
@@ -1462,7 +1485,7 @@ class DeepSeekGuestAssistant:
             >= 2
         )
         return (
-            (asks_room_followup is not None or asks_availability is not None)
+            (asks_room_followup is not None or asks_availability)
             and previous_asks_availability is not None
             and previous_has_stay_range
         )
@@ -1476,19 +1499,9 @@ class DeepSeekGuestAssistant:
         )
         if follows_previous_turn is not None:
             return False
-        asks_availability = re.search(
-            # 「空房」「订满」等同义说法与「有房」一样是在问实时房态。
-            r"有房|空房|余房|剩房|满房|订满|几间房|房态|可订|可用房|availability",
-            question_text,
-            re.IGNORECASE,
-        )
-        has_explicit_date = re.search(
-            r"今天|今晚|今日|明天|明日|后天|"
-            r"本周[一二三四五六日天]|这周[一二三四五六日天]|周末|"
-            r"\d{1,2}月\d{1,2}[日号]|\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2}",
-            question_text,
-        )
-        return asks_availability is not None and has_explicit_date is not None
+        asks_availability = asks_stay_availability(question_text)
+        has_explicit_date = _EXPLICIT_STAY_DATE_PATTERN.search(question_text)
+        return asks_availability and has_explicit_date is not None
 
     @staticmethod
     def _should_force_property_catalog(question_text: str) -> bool:
@@ -1897,6 +1910,7 @@ class DeepSeekGuestAssistant:
                             refined_reply = self._remove_property_promotion(
                                 refined_reply,
                                 decision.language,
+                                grounded_in=self._knowledge_grounding(knowledge),
                             )
                         return decision.model_copy(
                             update={"reply_text": refined_reply}

@@ -2,7 +2,11 @@ import re
 from datetime import date
 from typing import Literal
 
-from homestay_bot.services.answer_policy import is_property_specific, is_transaction_sensitive
+from homestay_bot.services.answer_policy import (
+    asks_stay_availability,
+    is_property_specific,
+    is_transaction_sensitive,
+)
 
 WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
 TourismQueryMode = Literal["none", "stable", "live"]
@@ -62,8 +66,8 @@ _HOMESTAY_SIDE_PATTERN = re.compile(
     r"楼下|楼上|隔壁|门禁|前台|门口|院子|屋里|小区|管家"
 )
 _BOOKING_PATTERN = re.compile(
-    r"有房|房态|订房|预订|入住|退房|房间价格|房价|"
-    r"availability|book|booking|check[- ]?in|check[- ]?out|room rate",
+    r"订房|预订|入住|退房|房间价格|房价|"
+    r"book|booking|check[- ]?in|check[- ]?out|room rate",
     re.IGNORECASE,
 )
 _LODGING_OBJECT_PATTERN = re.compile(
@@ -141,7 +145,10 @@ def classify_tourism_query(
 ) -> TourismQueryMode:
     """按信息时效分类旅游问题，并始终让预订查询优先。"""
     content = latest_user_question(messages)["content"]
-    if _BOOKING_PATTERN.search(content):
+    # 住宿意图优先于天气词和时间词：「明晚301能住吗」「今晚4个人住」「那301今晚还有吗」
+    # 「明天天气怎么样？还有空房吗？」都曾被送去联网答成天气。房态答错的代价大于天气
+    # 没答，混问时本轮只查房态；一句多问分别作答属于回复计划的范围。
+    if _BOOKING_PATTERN.search(content) or asks_stay_availability(content):
         if _LODGING_OBJECT_PATTERN.search(content):
             return "none"
         # “预订门票/演出”属于旅游时效信息，不能被民宿预订关键词截走。
