@@ -159,3 +159,64 @@ def test_english_safety_replies_are_not_glued_together() -> None:
         assert not re.search(r"[a-z][.!?][A-Z]", reply), f"{category} 句子粘连：{reply}"
         assert "; " not in reply.replace("; call", "; call"), f"{category} 有悬空分号：{reply}"
         assert ";" not in reply, f"{category} 残留分号：{reply}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["我们现在该怎么办", "然后呢", "要不要报警", "还要做什么", "好的", "收到", "我们已经出来了"],
+)
+def test_help_seeking_follow_ups_are_recognized(text: str) -> None:
+    """紧急情况进行中，这些后续消息给固定处置答复，不交给模型或联网。"""
+    from homestay_bot.services.emergency_service import is_emergency_follow_up
+
+    assert is_emergency_follow_up(text)
+
+
+@pytest.mark.parametrize("text", ["早餐几点开始", "附近有药店吗？营业到几点", "可以延迟退房吗"])
+def test_independent_questions_are_not_follow_ups(text: str) -> None:
+    """独立问题照常回答（边界 Spec A07），不被固定答复挡住。"""
+    from homestay_bot.services.emergency_service import is_emergency_follow_up
+
+    assert not is_emergency_follow_up(text)
+
+
+class _Entry:
+    """最小审核知识条目。"""
+
+    def __init__(self, category: str, keywords: list[str], zh: str, en: str) -> None:
+        """保存字段。"""
+        self.category = category
+        self.keywords = keywords
+        self.answer_zh = zh
+        self.answer_en = en
+
+
+def test_follow_up_reply_prefers_reviewed_emergency_knowledge() -> None:
+    """有「紧急处置」审核知识时原样使用；本店专属位置信息由管家维护在知识里。"""
+    from homestay_bot.services.emergency_service import emergency_follow_up_reply
+
+    entries = [
+        _Entry(
+            "紧急处置",
+            ["gas", "燃气"],
+            "燃气总阀在一楼厨房门后，请关闭后到院子等候。",
+            "Close the gas valve.",
+        ),
+        _Entry("停车", ["parking"], "无关", "unrelated"),
+    ]
+
+    zh = emergency_follow_up_reply("gas", Language.ZH, entries)
+    en = emergency_follow_up_reply("gas", Language.EN, entries)
+    assert "燃气总阀在一楼厨房门后" in zh
+    assert "值班管家" in zh
+    assert "Close the gas valve." in en
+    assert not re.search(r"[一-鿿]", en)
+
+
+def test_follow_up_reply_falls_back_to_the_category_template() -> None:
+    """没有对应审核知识时回退为该类别的固定安全提示，中英两版。"""
+    from homestay_bot.services.emergency_service import emergency_follow_up_reply
+
+    assert "开窗通风" in emergency_follow_up_reply("gas", Language.ZH, [])
+    assert "120" in emergency_follow_up_reply("medical", Language.ZH, [])
+    assert "open the windows" in emergency_follow_up_reply("gas", Language.EN, [])

@@ -14,7 +14,8 @@
     python reply_regression.py baseline \\
         --fixture guest_reply_scenarios.json --runs 3 --out base.json
 
-只使用 1.39.16 起就存在的公开符号，保证同一份文件能测线上版本。
+1.40.0 起依赖 emergency_service 的紧急后续函数与线上工具执行器，只能测 1.40.0 及以后的
+版本；1.39.16 的首次基线已用 1.39.17 时的版本测得。
 
 ponytail: 路由前的判定是对 ConversationService 的近似（紧急 → 客诉 → 转人工 → 无关 → 模型），
 不经过合并等待、出站队列、过时判定和企业微信投递；这些由集成测试和测试号收件兜底。
@@ -46,6 +47,8 @@ REGRESSION_FAILURES = 2
 _SCENARIO_TIMEOUT_SECONDS = 180
 # 与 ConversationService._send_unrelated_reply 的固定话术一致。
 _UNRELATED_REPLY = "我主要协助民宿入住或武汉旅行相关问题，这类问题暂时无法回答。"
+# ponytail: 与 ConversationService._send_unrelated_reply 的文本各写一份；那边改文案时这里要同步，
+# 只影响无关问题场景的正文比对（这类场景只判路由），不影响门禁结论。
 _CONCURRENCY = 3
 
 
@@ -62,6 +65,9 @@ def observed_route(record: dict[str, Any]) -> str:
     route = str(record.get("route"))
     if route != "model":
         return route
+    if record.get("staff_confirmation_required"):
+        # 模型判为需要人工时，线上最终回复就是转人工话术，与直接转人工同一结果。
+        return "handoff"
     tools = record.get("tools") or []
     if "tourism_search" in (record.get("traces") or []):
         return "live_search"
@@ -260,62 +266,177 @@ class _MemoryKnowledge:
         return list(self._entries)
 
 
-class FakeHostexTools:
-    """按虚构房态返回与 HostexReadOnlyToolExecutor 归一化后相同的结构，不访问百居易。"""
+class FakeHostexClient:
+    """按共用资料返回百居易客户端的线上数据模型，不访问百居易。
+
+    只替换最底层的客户端，房态整理、参考价换算都走线上的 HostexReadOnlyToolExecutor，
+    这样执行器本身也在门禁覆盖范围内。以前的替身直接返回房间名，比线上宽松，
+    测不出「参考价只有渠道编号、对不上房间」的问题（1.40.0）。
+    """
 
     def __init__(self, data: dict[str, Any], today: date) -> None:
-        """保存房源、满房偏移（相对测试日的天数）与参考价。"""
-        self._properties = data["properties"]
-        full_nights = data.get("full_nights") or {}
-        prices = data.get("reference_prices") or {}
-        self._full = {str(key): set(value) for key, value in full_nights.items()}
-        self._prices = {str(key): value for key, value in prices.items()}
+        """保存房源、渠道编号、满房偏移（相对测试日的天数）、房态备注与参考价。"""
+        self._data = data
         self._today = today
+
+    def _offset(self, night: date) -> int:
+        """某晚相对测试日的天数。"""
+        return (night - self._today).days
+
+    def _is_full(self, property_id: int, night: date) -> bool:
+        """该房该晚是否满房。"""
+        full = (self._data.get("full_nights") or {}).get(str(property_id), [])
+        return self._offset(night) in set(full)
+
+    @staticmethod
+    def _dates(start: date | str, end: date | str) -> list[date]:
+        """百居易按闭区间返回日期，含退房日。"""
+        first, last = date.fromisoformat(str(start)), date.fromisoformat(str(end))
+        return [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
+
+    async def list_properties(self) -> list[Any]:
+        """房源及其直订渠道。"""
+        from homestay_bot.integrations.hostex_client import Channel, Property
+
+        listing_ids = self._data.get("listing_ids") or {}
+        channel_type = str(self._data.get("channel_type") or "booking_site")
+        return [
+            Property(
+                id=int(item["id"]),
+                title=item["title"],
+                address=item.get("address"),
+                channels=[
+                    Channel(channel_type=channel_type, listing_id=listing_ids[str(item["id"])])
+                ]
+                if str(item["id"]) in listing_ids
+                else [],
+            )
+            for item in self._data["properties"]
+        ]
+
+    async def list_availabilities(
+        self, property_ids: list[int], start_date: date | str, end_date: date | str
+    ) -> list[Any]:
+        """每间房每天的可用状态与内部备注（备注不应出现在客人回复里）。"""
+        from homestay_bot.integrations.hostex_client import AvailabilityDay, PropertyAvailability
+
+        remarks = self._data.get("remarks") or {}
+        return [
+            PropertyAvailability(
+                property_id=property_id,
+                days=[
+                    AvailabilityDay(
+                        date=night,
+                        available=not self._is_full(property_id, night),
+                        remarks=(remarks.get(str(property_id)) or {}).get(
+                            str(self._offset(night)), ""
+                        ),
+                    )
+                    for night in self._dates(start_date, end_date)
+                ],
+            )
+            for property_id in property_ids
+        ]
+
+    async def list_reference_prices(
+        self, start_date: date | str, end_date: date | str
+    ) -> list[Any]:
+        """渠道参考价：只有渠道编号，没有房间；另含资料里对应不上任何房间的渠道。"""
+        from homestay_bot.integrations.hostex_client import ListingCalendarDay
+
+        channel_type = str(self._data.get("channel_type") or "booking_site")
+        prices = self._data.get("reference_prices") or {}
+        listings: list[tuple[str, Any, int | None]] = [
+            (listing_id, prices.get(property_id), int(property_id))
+            for property_id, listing_id in (self._data.get("listing_ids") or {}).items()
+        ]
+        listings += [
+            (listing_id, price, None)
+            for listing_id, price in (self._data.get("orphan_listings") or {}).items()
+        ]
+        return [
+            ListingCalendarDay(
+                listing_id=listing_id,
+                channel_type=channel_type,
+                date=night,
+                price=float(price),
+                inventory=0 if property_id is not None and self._is_full(property_id, night) else 1,
+            )
+            for listing_id, price, property_id in listings
+            if price is not None
+            for night in self._dates(start_date, end_date)
+        ]
+
+
+class _RecordingExecutor:
+    """记录模型调用了哪些工具，再交给线上执行器。"""
+
+    def __init__(self, inner: Any) -> None:
+        """保存被包装的执行器。"""
+        self._inner = inner
         self.calls: list[str] = []
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> list[dict[str, Any]]:
-        """执行白名单只读工具。"""
+        """记录后执行。"""
         self.calls.append(name)
-        if name == "list_properties":
-            return [dict(item) for item in self._properties]
-        check_in = date.fromisoformat(arguments["check_in_date"])
-        check_out = date.fromisoformat(arguments["check_out_date"])
-        nights = [
-            check_in + timedelta(days=offset) for offset in range((check_out - check_in).days)
-        ]
-        if name == "search_reference_price":
-            return [
-                {
-                    "property_id": item["id"],
-                    "property_title": item["title"],
-                    "date": night.isoformat(),
-                    "price": self._prices.get(str(item["id"])),
-                }
-                for item in self._properties
-                for night in nights
-            ]
-        result = []
-        for item in self._properties:
-            full = self._full.get(str(item["id"]), set())
-            days = [
-                {
-                    "date": night.isoformat(),
-                    "available": (night - self._today).days not in full,
-                    "remarks": "",
-                }
-                for night in nights
-            ]
-            result.append(
-                {
-                    "property_id": item["id"],
-                    "property_title": item["title"],
-                    "check_in_date": check_in.isoformat(),
-                    "check_out_date": check_out.isoformat(),
-                    "stay_available": bool(days) and all(day["available"] for day in days),
-                    "days": days,
-                }
-            )
+        result: list[dict[str, Any]] = await self._inner.execute(name, arguments)
         return result
+
+
+def pre_route(
+    scenario: dict[str, Any],
+    entries: list[Any],
+    language: Any,
+) -> dict[str, Any] | None:
+    """模型之前的确定性分流，与线上同序：紧急 → 紧急后续 → 客诉 → 转人工 → 无关。
+
+    客人连发的多条消息逐条回放：前面某条命中紧急时，紧急状态延续到最后一条，最后一条
+    若是求助类后续，就用线上同一个函数给出固定处置答复。返回空值表示交给模型。
+    """
+    from homestay_bot.services.answer_policy import is_homestay_related
+    from homestay_bot.services.complaint_service import ComplaintService
+    from homestay_bot.services.conversation_service import ConversationService
+    from homestay_bot.services.emergency_service import (
+        EmergencyService,
+        emergency_follow_up_reply,
+        is_emergency_follow_up,
+    )
+    from homestay_bot.services.guest_reply_policy import prepare_guest_reply
+
+    messages = [item for item in scenario["messages"] if item.get("role") in {"user", "assistant"}]
+    tail: list[str] = []
+    for item in reversed(messages):
+        if item["role"] != "user":
+            break
+        tail.insert(0, item["content"])
+    question = tail[-1]
+    emergency = EmergencyService()
+    active: str | None = None
+    for earlier in tail[:-1]:
+        found_earlier = emergency.classify(earlier)
+        if found_earlier.is_emergency:
+            active = found_earlier.category
+    found = emergency.classify(question)
+    if found.is_emergency:
+        return {"route": "emergency", "final": emergency.safety_reply(found, language)}
+    if active is not None and is_emergency_follow_up(question):
+        return {
+            "route": "emergency",
+            "final": emergency_follow_up_reply(active, language, entries),
+        }
+    if ComplaintService.classify(question).is_complaint:
+        return {
+            "route": "complaint",
+            "final": prepare_guest_reply(
+                ComplaintService.guest_acknowledgement(), language=language, requires_human=True
+            ),
+        }
+    if ConversationService._handoff_pattern.search(question):
+        # 转人工与无关问题走固定话术，正文与模型无关，只判路由；占位与草稿区探针同一口径。
+        return {"route": "handoff", "final": "<转人工固定话术>"}
+    if not is_homestay_related(question):
+        return {"route": "unrelated", "final": _UNRELATED_REPLY}
+    return None
 
 
 async def _load_runtime_snapshot() -> Any:
@@ -383,12 +504,12 @@ class _Runner:
     async def _respond(self, scenario: dict[str, Any]) -> dict[str, Any]:
         """按线上同一套确定性规则分流，再调用模型并经客人侧出口处理。"""
         from homestay_bot.domain.enums import Language
-        from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+        from homestay_bot.integrations.deepseek_client import (
+            DeepSeekGuestAssistant,
+            HostexReadOnlyToolExecutor,
+        )
         from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
-        from homestay_bot.services.answer_policy import is_homestay_related
-        from homestay_bot.services.complaint_service import ComplaintService
         from homestay_bot.services.conversation_service import ConversationService
-        from homestay_bot.services.emergency_service import EmergencyService
         from homestay_bot.services.guest_reply_policy import (
             prepare_facility_advice_reply,
             prepare_guest_reply,
@@ -400,23 +521,15 @@ class _Runner:
         ]
         question = next(item["content"] for item in reversed(messages) if item["role"] == "user")
         language = ConversationService._detect_language(question, Language.ZH)
-        emergency = EmergencyService()
-        found = emergency.classify(question)
-        if found.is_emergency:
-            return {"route": "emergency", "final": emergency.safety_reply(found, language)}
-        if ComplaintService.classify(question).is_complaint:
-            return {
-                "route": "complaint",
-                "final": prepare_guest_reply(
-                    ComplaintService.guest_acknowledgement(), language=language, requires_human=True
-                ),
-            }
-        if ConversationService._handoff_pattern.search(question):
-            # 转人工与无关问题走固定话术，正文与模型无关，只判路由；占位与草稿区探针同一口径。
-            return {"route": "handoff", "final": "<转人工固定话术>"}
-        if not is_homestay_related(question):
-            return {"route": "unrelated", "final": _UNRELATED_REPLY}
-        tools = FakeHostexTools(self._fixture["hostex"], self._today)
+        routed = pre_route(scenario, self._entries, language)
+        if routed is not None:
+            return routed
+        tools = _RecordingExecutor(
+            HostexReadOnlyToolExecutor(
+                FakeHostexClient(self._fixture["hostex"], self._today),
+                local_date_provider=lambda: self._today,
+            )
+        )
         traces: list[str] = []
         assistant = DeepSeekGuestAssistant(
             chat_client=self._chat,

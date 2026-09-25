@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.services.guest_reply_policy import prepare_guest_reply
@@ -55,6 +56,59 @@ _EN_SAFETY_TEXTS = {
     ),
     "violence": "Please move to a safe place and call the police immediately.",
 }
+
+
+# 紧急情况进行中的求助类后续：给固定处置答复，不交给模型、不联网（1.40.0）。
+# 独立问题（早餐几点、附近药店）不在其中，照常回答（边界 Spec A07）。
+_FOLLOW_UP_PATTERN = re.compile(
+    r"怎么办|怎么处理|该怎么|怎么做|然后呢|接下来|要不要|需不需要|需要报警|报警吗|"
+    r"叫救护车|还要做什么|还需要做|还能做什么|出来了|已经出来|到外面了|在外面了|"
+    r"\bwhat\s+(?:should|do|can)\s+(?:i|we)\b|\bnow\s+what\b|\bshould\s+(?:i|we)\b|"
+    r"\bwe(?:'re|\s+are)\s+out(?:side)?\b",
+    re.IGNORECASE,
+)
+# 单独一句的确认也算后续；只做整句匹配，避免「好吃吗」这类句子被误认。
+_ACKNOWLEDGEMENT_PATTERN = re.compile(
+    r"^\s*(?:好的?|好吧|收到|知道了|明白了?|嗯+|行|ok(?:ay)?|got\s+it|thanks?)\s*[。.!！~～]*\s*$",
+    re.IGNORECASE,
+)
+EMERGENCY_KNOWLEDGE_CATEGORY = "紧急处置"
+_ZH_FOLLOW_UP_HANDOFF = "值班管家已收到通知，正在处理，请保持联系方式畅通。"
+_EN_FOLLOW_UP_HANDOFF = (
+    "Our on-duty host has been notified and is handling it. Please keep your phone available."
+)
+
+
+def is_emergency_follow_up(text: str) -> bool:
+    """判断紧急情况进行中的一条消息是否为求助类后续（怎么办、然后呢、好的）。"""
+    return bool(_FOLLOW_UP_PATTERN.search(text) or _ACKNOWLEDGEMENT_PATTERN.match(text))
+
+
+def emergency_follow_up_reply(category: str, language: Language, entries: Any) -> str:
+    """返回紧急情况后续的固定处置答复：优先审核知识，缺失时回退为该类别安全提示。
+
+    审核知识取类别为「紧急处置」、关键词含危险类别代码（fire、gas 等）的已启用条目，
+    原样使用，本店专属的位置信息由管家维护在知识里。会话服务与回归工具共用本函数。
+    """
+    for entry in entries or []:
+        keywords = {str(item).strip().lower() for item in (getattr(entry, "keywords", None) or [])}
+        if getattr(entry, "category", "") == EMERGENCY_KNOWLEDGE_CATEGORY and category in keywords:
+            answer = str(
+                getattr(entry, "answer_en" if language is Language.EN else "answer_zh", "") or ""
+            ).strip()
+            if answer:
+                break
+    else:
+        answer = ""
+    if not answer:
+        table = _EN_SAFETY_TEXTS if language is Language.EN else _ZH_SAFETY_TEXTS
+        answer = table.get(
+            category,
+            _EN_GENERIC_SAFETY_TEXT if language is Language.EN else _ZH_GENERIC_SAFETY_TEXT,
+        )
+    handoff = _EN_FOLLOW_UP_HANDOFF if language is Language.EN else _ZH_FOLLOW_UP_HANDOFF
+    separator = " " if language is Language.EN else ""
+    return f"{answer}{separator}{handoff}"
 
 
 class EmergencyService:

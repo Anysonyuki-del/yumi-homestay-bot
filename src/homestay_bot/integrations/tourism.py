@@ -62,6 +62,13 @@ _QUESTION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 # 民宿一侧的位置与人员：问题落在这些对象上时问的是本店情况，联网搜不到。
+# 求助说法问的是「我该做什么」，不是店外会变的信息：燃气紧急之后的「我们现在该怎么办」
+# 曾因带「现在」又是提问被送去联网，回了活动推荐（1.40.0）。
+_HELP_SEEKING_PATTERN = re.compile(
+    r"怎么办|怎么处理|怎么弄|该怎么做|怎么做才好|如何处理|"
+    r"\bwhat\s+(?:should|do|can)\s+(?:i|we)\s+do\b|\bnow\s+what\b",
+    re.IGNORECASE,
+)
 _HOMESTAY_SIDE_PATTERN = re.compile(
     r"楼下|楼上|隔壁|门禁|前台|门口|院子|屋里|小区|管家"
 )
@@ -170,7 +177,8 @@ def classify_tourism_query(
         # 房价、房态、订单只信百居易实时查询，不能交给网页搜索。
         or is_transaction_sensitive(content)
     )
-    if not about_homestay and (
+    help_seeking = _HELP_SEEKING_PATTERN.search(content) is not None
+    if not about_homestay and not help_seeking and (
         _CHANGING_INFO_PATTERN.search(content)
         or (_TIME_ANCHOR_PATTERN.search(content) and _QUESTION_PATTERN.search(content))
     ):

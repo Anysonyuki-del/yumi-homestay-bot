@@ -503,3 +503,16 @@ def test_party_size_alone_is_not_a_stay_availability_question(question: str) -> 
     """
     assert not asks_stay_availability(question)
     assert not is_transaction_sensitive(question)
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["我们现在该怎么办", "现在怎么办", "停电了现在怎么办", "那现在该怎么处理"],
+)
+def test_asking_for_help_is_never_sent_to_web_search(question: str) -> None:
+    """求助类说法问的是「我该做什么」，不是店外会变的信息。
+
+    2026-09-26 诊断：燃气紧急之后客人问「我们现在该怎么办」，因为带「现在」又是提问，
+    被送去联网，3 次都回了烟花秀、艺术季等活动推荐。
+    """
+    assert classify_tourism_query([{"role": "user", "content": question}]) != "live"

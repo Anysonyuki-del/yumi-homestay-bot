@@ -74,6 +74,20 @@ _LODGING_PRICE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# 问房价：联网分流、参考价工具开放与强制调用共用这一处定义（1.40.0）。以前工具开放只认
+# 中文与 room rate，英文问价开不出参考价工具，交易判定却认得出，结果一律转人工。
+_ROOM_PRICE_PATTERN = re.compile(
+    r"房价|房费|参考价|住宿价格|民宿价格|房型价格|最低价|最便宜|多少钱|几多钱|价格|价钱|"
+    r"\bhow\s+much\b|\bprices?\b|\brates?\b|\bcosts?\b|\bcheapest\b",
+    re.IGNORECASE,
+)
+# 讨价还价、折扣与最终成交价属于经营决定，仍交人工；单纯问参考价不再转人工。
+_BARGAIN_PATTERN = re.compile(
+    r"优惠|打折|折扣|几折|便宜点|便宜一点|便宜些|能不能便宜|可以便宜|砍价|讲价|少点|少一点|"
+    r"最低能|底价|\bdiscounts?\b|\bcheaper\b|\bbest\s+price\b|\bdeal\b",
+    re.IGNORECASE,
+)
+
 _HOMESTAY_RELATED_PATTERN = re.compile(
     r"民宿|住宿|房间|房源|房型|有房|入住|退房|续住|预订|订单|"
     r"价格|房价|退款|取消|改期|投诉|停车|门锁|密码|二维码|"
@@ -192,9 +206,14 @@ def handoff_reason(text: str) -> str | None:
     for reason, pattern in _HIGH_RISK_PATTERNS:
         if pattern.search(text) is not None:
             return reason
-    if _LODGING_PRICE_PATTERN.search(text) is not None:
+    if _BARGAIN_PATTERN.search(text) is not None:
         return "price"
     return None
+
+
+def asks_room_price(text: str) -> bool:
+    """判断客人是否在问房价；早餐、停车、洗衣这类服务收费由审核知识回答，不算。"""
+    return _ROOM_PRICE_PATTERN.search(text) is not None and not is_static_service_fee(text)
 
 
 def is_homestay_related(text: str) -> bool:

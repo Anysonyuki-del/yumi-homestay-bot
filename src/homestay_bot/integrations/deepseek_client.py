@@ -17,6 +17,7 @@ from homestay_bot.integrations.tourism import (
     split_tourism_reply,
 )
 from homestay_bot.services.answer_policy import (
+    asks_room_price,
     asks_stay_availability,
     facility_fault_exclusion,
     has_facility_fault_signal,
@@ -365,6 +366,17 @@ class HostexReadOnlyClient(Protocol):
         """返回渠道日历参考价。"""
 
 
+_REFERENCE_PRICE_NOTE = "参考价，以实际下单为准；是否可住以 stay_available 为准"
+
+
+def _stay_nights(check_in_date: date, check_out_date: date) -> list[date]:
+    """本次住宿的每一晚：入住日起，到退房日前一天为止。"""
+    return [
+        check_in_date + timedelta(days=offset)
+        for offset in range((check_out_date - check_in_date).days)
+    ]
+
+
 class HostexReadOnlyToolExecutor:
     """把 DeepSeek 工具映射到百居易只读查询。"""
 
@@ -385,38 +397,33 @@ class HostexReadOnlyToolExecutor:
         if name == "list_properties":
             result = await self._hostex.list_properties()
             return [item.model_dump(mode="json") for item in result]
-        if name == "search_availability":
-            check_in_date, check_out_date = validate_stay_date_range(
-                arguments["check_in_date"],
-                arguments["check_out_date"],
-                today_provider=self._local_date_provider,
-            )
-            properties = await self._hostex.list_properties()
-            property_titles = {item.id: item.title for item in properties}
-            result = await self._hostex.list_availabilities(
-                [item.id for item in properties],
-                check_in_date.isoformat(),
-                check_out_date.isoformat(),
-            )
-        elif name == "search_reference_price":
-            check_in_date, check_out_date = validate_stay_date_range(
-                arguments["check_in_date"],
-                arguments["check_out_date"],
-                today_provider=self._local_date_provider,
-            )
-            result = await self._hostex.list_reference_prices(
-                check_in_date.isoformat(),
-                check_out_date.isoformat(),
-            )
-            return [item.model_dump(mode="json") for item in result]
-        else:
+        if name not in {"search_availability", "search_reference_price"}:
             raise ValueError(f"不允许执行工具: {name}")
-        stay_dates: list[date] = []
-        current_date = check_in_date
-        while current_date < check_out_date:
-            stay_dates.append(current_date)
-            current_date += timedelta(days=1)
+        check_in_date, check_out_date = validate_stay_date_range(
+            arguments["check_in_date"],
+            arguments["check_out_date"],
+            today_provider=self._local_date_provider,
+        )
+        properties = await self._hostex.list_properties()
+        availability = await self._stay_availability(properties, check_in_date, check_out_date)
+        if name == "search_availability":
+            return availability
+        return await self._reference_prices(properties, availability, check_in_date, check_out_date)
 
+    async def _stay_availability(
+        self,
+        properties: list[Any],
+        check_in_date: date,
+        check_out_date: date,
+    ) -> list[dict[str, Any]]:
+        """按房间整理本次住宿每晚的房态与整段是否可住。"""
+        property_titles = {item.id: item.title for item in properties}
+        result = await self._hostex.list_availabilities(
+            [item.id for item in properties],
+            check_in_date.isoformat(),
+            check_out_date.isoformat(),
+        )
+        stay_dates = _stay_nights(check_in_date, check_out_date)
         normalized: list[dict[str, Any]] = []
         for item in result:
             payload = item.model_dump(mode="json")
@@ -442,6 +449,54 @@ class HostexReadOnlyToolExecutor:
             )
         return normalized
 
+    async def _reference_prices(
+        self,
+        properties: list[Any],
+        availability: list[dict[str, Any]],
+        check_in_date: date,
+        check_out_date: date,
+    ) -> list[dict[str, Any]]:
+        """把渠道参考价换算到房间，附上整段是否可住，不向模型暴露渠道编号。
+
+        百居易参考价只按渠道房源编号返回（ListingCalendarDay 没有房间），以前原样交给
+        模型，模型对不上是哪间房。这里用房源资料里的渠道对照表换算；对应不上房间的
+        价格行丢弃。同一间房有多个渠道时取第一个渠道的价格（客户端已优先直订渠道）。
+        """
+        owners = {
+            channel.listing_id: item
+            for item in properties
+            for channel in getattr(item, "channels", []) or []
+        }
+        stay_dates = set(_stay_nights(check_in_date, check_out_date))
+        nightly: dict[int, dict[date, float]] = {}
+        channel_of: dict[int, str] = {}
+        for row in await self._hostex.list_reference_prices(
+            check_in_date.isoformat(),
+            check_out_date.isoformat(),
+        ):
+            owner = owners.get(row.listing_id)
+            if owner is None or row.date not in stay_dates:
+                continue
+            if channel_of.setdefault(owner.id, row.listing_id) != row.listing_id:
+                continue
+            nightly.setdefault(owner.id, {})[row.date] = float(row.price)
+        available = {item["property_id"]: item["stay_available"] for item in availability}
+        return [
+            {
+                "property_id": item.id,
+                "property_title": item.title,
+                "check_in_date": check_in_date.isoformat(),
+                "check_out_date": check_out_date.isoformat(),
+                "stay_available": available.get(item.id, False),
+                "nightly_reference_prices": [
+                    {"date": night.isoformat(), "price": price}
+                    for night, price in sorted(nightly[item.id].items())
+                ],
+                "note": _REFERENCE_PRICE_NOTE,
+            }
+            for item in properties
+            if item.id in nightly
+        ]
 
 def assistant_decision_schema() -> dict[str, Any]:
     """返回供模型提示和本地校验共享的扁平 JSON 结构。"""
@@ -696,10 +751,10 @@ class DeepSeekGuestAssistant:
                 "function": {
                     "name": "search_reference_price",
                     "description": (
-                        "客人询问房价、多少钱或参考价时调用，查询指定入住和退房日期的"
-                        "渠道日历参考价。结果不是最终成交价，"
-                        "也不代表可住；对客人只能作为参考价说明，是否可住以"
-                        "search_availability 为准。"
+                        "客人询问房价、多少钱或参考价时调用，查询指定入住和退房日期"
+                        "每间房每晚的参考价，并附带该房整段是否可住（stay_available）。"
+                        "参考价不是最终成交价，回复时必须说明以实际下单为准；"
+                        "stay_available 为 false 的房间不能说可订。"
                     ),
                     "parameters": date_parameters,
                 },
@@ -1052,13 +1107,26 @@ class DeepSeekGuestAssistant:
             allowed.add("search_availability")
         if cls._should_force_property_catalog(question_text):
             allowed.add("list_properties")
-        if re.search(
-            r"房价|参考价|价格|多少钱|room rate|reference price",
-            question_text,
-            re.IGNORECASE,
-        ):
+        if asks_room_price(question_text):
             allowed.add("search_reference_price")
         return allowed
+
+    @staticmethod
+    def _price_question_needs_dates(
+        question_text: str,
+        messages: list[dict[str, str]],
+        request_context: AssistantRequestContext | None,
+    ) -> bool:
+        """问房价、但本句、上文和调试入口都没有入住日期时返回真。"""
+        if not asks_room_price(question_text):
+            return False
+        if request_context is not None and request_context.check_in_date is not None:
+            return False
+        earlier = "\n".join(str(item.get("content", "")) for item in messages[:-1])
+        return not (
+            _EXPLICIT_STAY_DATE_PATTERN.search(question_text)
+            or _EXPLICIT_STAY_DATE_PATTERN.search(earlier)
+        )
 
     @staticmethod
     def _knowledge_grounding(knowledge: list[Any] | None) -> str:
@@ -1701,6 +1769,19 @@ class DeepSeekGuestAssistant:
                 confidence=0.95,
             )
 
+        if self._price_question_needs_dates(question_text, messages, request_context):
+            # 问价没有日期时查不了参考价：直接问住哪天，不回「尚未确认」，也不调用模型。
+            return AssistantDecision(
+                reply_text=(
+                    "Which dates would you like to stay? I'll check the reference price for you."
+                    if language is Language.EN
+                    else "请问您计划哪天入住、住几晚？我帮您查一下参考价。"
+                ),
+                language=language,
+                intent="price",
+                confidence=1.0,
+            )
+
         # 剔除在检索之后、构建上下文与证据门之前统一完成：模型看不到的内容，
         # 证据门也不会拿来作证。
         knowledge = self._scope_knowledge(
@@ -1820,8 +1901,15 @@ class DeepSeekGuestAssistant:
         }
         if tool_definitions:
             request["tools"] = tool_definitions
+            # 问价必须先查参考价（它已合并返回整段是否可住），再按房态、房源目录兜底；
+            # 以前问价不强制，模型经常跳过工具，结果一律转人工。
             request["tool_choice"] = (
                 {
+                    "type": "function",
+                    "function": {"name": "search_reference_price"},
+                }
+                if "search_reference_price" in allowed_tool_names
+                else {
                     "type": "function",
                     "function": {"name": "search_availability"},
                 }
@@ -1988,9 +2076,12 @@ class DeepSeekGuestAssistant:
                                     **trace_dates,
                                 )
                             )
+                        # 参考价查询也是回复金额的依据：以前只有房源列表与房态查询
+                        # 算数，查到了参考价，金额照样被拦下（8 月 29 日开放参考价时漏改）。
                         if call.function.name in {
                             "list_properties",
                             "search_availability",
+                            "search_reference_price",
                         }:
                             property_tool_grounded = True
                         if call.function.name == "search_availability":

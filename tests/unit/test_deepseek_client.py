@@ -3036,3 +3036,203 @@ def test_an_emptied_reply_falls_back_to_a_neutral_line(language: Language, expec
 
     assert decision.reply_text == expected
     assert "预算" not in decision.reply_text
+
+
+class _PricedHostexStub:
+    """按线上数据模型返回房源、渠道、房态与渠道参考价；含一个对应不上房间的渠道。"""
+
+    async def list_properties(self):
+        """两间房，各一个直订渠道。"""
+        from homestay_bot.integrations.hostex_client import Channel, Property
+
+        return [
+            Property(
+                id=101,
+                title="庭院大床房",
+                channels=[Channel(channel_type="booking_site", listing_id="L-101")],
+            ),
+            Property(
+                id=201,
+                title="城景大床房",
+                channels=[Channel(channel_type="booking_site", listing_id="L-201")],
+            ),
+        ]
+
+    async def list_availabilities(self, property_ids, start_date, end_date):
+        """201 当晚满房。"""
+        from homestay_bot.integrations.hostex_client import PropertyAvailability
+
+        return [
+            PropertyAvailability(property_id=101, days=[{"date": start_date, "available": True}]),
+            PropertyAvailability(property_id=201, days=[{"date": start_date, "available": False}]),
+        ]
+
+    async def list_reference_prices(self, start_date, end_date):
+        """渠道参考价只有渠道编号，没有房间；L-999 不属于任何房间。"""
+        from homestay_bot.integrations.hostex_client import ListingCalendarDay
+
+        return [
+            ListingCalendarDay(listing_id=listing, channel_type="booking_site", date=start_date,
+                               price=price, inventory=1)
+            for listing, price in (("L-101", 368), ("L-201", 428), ("L-999", 99))
+        ]
+
+
+@pytest.mark.asyncio
+async def test_reference_prices_are_mapped_to_rooms_without_channel_ids() -> None:
+    """线上参考价只有渠道编号：执行器换算成房间、附上是否整段可住，不向模型暴露渠道编号。"""
+    executor = HostexReadOnlyToolExecutor(
+        _PricedHostexStub(), local_date_provider=lambda: date(2026, 9, 25)
+    )
+
+    rows = await executor.execute(
+        "search_reference_price", {"check_in_date": "2026-09-26", "check_out_date": "2026-09-27"}
+    )
+
+    assert [(row["property_title"], row["stay_available"]) for row in rows] == [
+        ("庭院大床房", True),
+        ("城景大床房", False),
+    ]
+    assert rows[0]["nightly_reference_prices"] == [{"date": "2026-09-26", "price": 368.0}]
+    assert "以实际下单为准" in rows[0]["note"]
+    text = json.dumps(rows, ensure_ascii=False)
+    assert "L-101" not in text and "listing" not in text and "99" not in text
+
+
+def test_price_questions_open_the_price_tool_in_chinese_and_english() -> None:
+    """问价由统一判定开放参考价工具，英文同样开放。"""
+    assert "search_reference_price" in DeepSeekGuestAssistant._allowed_tool_names(
+        "How much is a room for tomorrow night?", ""
+    )
+    assert "search_reference_price" in DeepSeekGuestAssistant._allowed_tool_names(
+        "明晚住一晚，201多少钱？", ""
+    )
+    assert "search_reference_price" not in DeepSeekGuestAssistant._allowed_tool_names(
+        "早餐多少钱？", ""
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dated_price_question_forces_the_price_tool() -> None:
+    """带日期问价必须先查参考价，不能让模型跳过工具。"""
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=RecordingExecutor(HostexReadOnlyToolExecutor(_PricedHostexStub())),
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "明晚住一晚，201多少钱？"}],
+    )
+
+    assert client.chat.completions.requests[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "search_reference_price"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_price_question_without_dates_asks_for_dates_without_calling_the_model() -> None:
+    """没有日期时先问住哪天，不回「尚未确认」，也不调用模型。"""
+    client = ChatClientStub([])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "你们房间一晚多少钱？"}],
+    )
+
+    assert "哪天入住" in decision.reply_text
+    assert "尚未确认" not in decision.reply_text
+    assert client.chat.completions.requests == []
+
+
+class _PriceToolCompletionsStub:
+    """首轮调用参考价工具，第二轮按工具结果报价。"""
+
+    def __init__(self, reply_text: str) -> None:
+        """保存第二轮回复。"""
+        self.requests: list[dict[str, object]] = []
+        self._reply_text = reply_text
+
+    async def create(self, **kwargs):
+        """模拟 OpenAI 兼容的工具调用往返。"""
+        self.requests.append(kwargs)
+        if len(self.requests) == 1:
+            arguments = json.dumps(
+                {"check_in_date": "2026-09-26", "check_out_date": "2026-09-27"}
+            )
+            call = SimpleNamespace(
+                id="call-price",
+                type="function",
+                function=SimpleNamespace(name="search_reference_price", arguments=arguments),
+            )
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[call],
+                model_dump=lambda **_: {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call-price",
+                            "type": "function",
+                            "function": {"name": "search_reference_price", "arguments": arguments},
+                        }
+                    ],
+                },
+            )
+        else:
+            payload = decision_payload()
+            payload.update({"reply_text": self._reply_text, "intent": "price", "confidence": 0.9})
+            message = SimpleNamespace(
+                content=json.dumps(payload, ensure_ascii=False), tool_calls=None
+            )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+@pytest.mark.asyncio
+async def test_a_reference_price_result_grounds_the_amount_in_the_reply() -> None:
+    """参考价查询成功后，回复里的金额有依据，不再被换成「尚未确认」或转人工。
+
+    main 上只有房源列表与房态查询算作依据：查到了参考价，金额照样被拦下。
+    """
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=_PriceToolCompletionsStub(
+                "明晚庭院大床房参考价368元一晚，以实际下单为准。"
+            )
+        )
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=HostexReadOnlyToolExecutor(
+            _PricedHostexStub(), local_date_provider=lambda: date(2026, 9, 25)
+        ),
+        local_date_provider=lambda: date(2026, 9, 25),
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "明晚住一晚，房间多少钱？"}],
+    )
+
+    assert "368元" in decision.reply_text
+    assert decision.staff_confirmation_required is False

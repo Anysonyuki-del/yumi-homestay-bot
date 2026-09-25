@@ -512,6 +512,15 @@ class ConversationAuditStub:
         """记录最小接管元数据。"""
         self.calls.append(kwargs)
 
+    async def latest_handoff_reason(self, conversation_id: int) -> str | None:
+        """返回本会话最近一次接管原因，与生产审计仓储同一语义。"""
+        reasons = [
+            str(call["reason"])
+            for call in self.calls
+            if call.get("conversation_id") == conversation_id
+        ]
+        return reasons[-1] if reasons else None
+
 
 def incoming(
     *,
@@ -2718,3 +2727,36 @@ async def test_non_live_questions_still_get_no_generic_ack(question: str) -> Non
 
     assert assistant.ack_calls == 0
     assert all("最新信息" not in text for text in wecom.guest_messages)
+
+
+@pytest.mark.asyncio
+async def test_help_seeking_after_an_emergency_gets_the_fixed_guidance() -> None:
+    """燃气紧急后客人问「我们现在该怎么办」：回固定处置答复并再次通知员工，不调模型、不联网。
+
+    2026-09-26 诊断：这句曾被送去联网，回了烟花秀、艺术季等活动推荐。
+    """
+    audit = ConversationAuditStub()
+    service, conversations, assistant, wecom = build_service(audit_events=audit)
+
+    await service.handle_message(incoming(content="房间里燃气味好重", msgid="gas-1"))
+    await service.handle_message(incoming(content="我们现在该怎么办", msgid="gas-2"))
+
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert assistant.calls == 0
+    assert "开窗通风" in wecom.guest_messages[-1]
+    assert wecom.stale_exempt_flags[-1] is True
+    assert len(wecom.internal_messages) == 2
+    assert "我们现在该怎么办" in wecom.internal_messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_independent_questions_during_an_emergency_are_still_answered() -> None:
+    """紧急情况进行中的独立问题照常回答（A07），不被固定答复挡住。"""
+    audit = ConversationAuditStub()
+    service, _, assistant, wecom = build_service(audit_events=audit)
+
+    await service.handle_message(incoming(content="房间里燃气味好重", msgid="gas-1"))
+    await service.handle_message(incoming(content="早餐几点开始", msgid="q-2"))
+
+    assert assistant.calls == 1
+    assert "开窗通风" not in wecom.guest_messages[-1]

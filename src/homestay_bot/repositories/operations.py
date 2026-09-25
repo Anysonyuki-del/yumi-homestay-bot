@@ -1494,6 +1494,23 @@ class SQLAlchemyOperationsRepository:
         await self._session.flush()
         return True
 
+    async def latest_handoff_reason(self, conversation_id: int) -> str | None:
+        """读取本会话最近一次接管审计的原因代码，不读取聊天正文。"""
+        details = await self._session.scalar(
+            select(AuditLog.details)
+            .where(
+                AuditLog.action == "conversation_handoff",
+                AuditLog.target_type == "conversation",
+                AuditLog.target_id == str(conversation_id),
+            )
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+        if not isinstance(details, dict):
+            return None
+        reason = details.get("reason")
+        return str(reason) if reason else None
+
     async def record_handoff(
         self,
         *,

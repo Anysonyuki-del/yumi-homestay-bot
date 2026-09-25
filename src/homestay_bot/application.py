@@ -3843,6 +3843,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 identity_resolver=bundle.wecom,
                 complaint_service=ComplaintService(),
                 complaint_reviews=SQLAlchemyComplaintRepository(session),
+                # 紧急情况后续的固定处置答复取「紧急处置」审核知识，缺失时回退为安全提示。
+                emergency_knowledge=SQLAlchemyKnowledgeRepository(session),
                 defer_model=not deferred,
                 commit_boundary=session.commit if not deferred else None,
             )

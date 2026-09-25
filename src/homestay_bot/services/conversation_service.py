@@ -42,6 +42,8 @@ from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.emergency_service import (
     EmergencyClassification,
     EmergencyService,
+    emergency_follow_up_reply,
+    is_emergency_follow_up,
 )
 from homestay_bot.services.guest_reply_policy import (
     MAX_GUEST_REPLY_CHARS,
@@ -68,6 +70,15 @@ _COMPLAINT_REASON_LABELS = {
     "agitated": "客人情绪激动",
 }
 _COMPLAINT_RISK_LABELS = {"critical": "严重", "high": "高", "normal": "一般"}
+# 紧急类别的中文名，用于员工通知，对应 EmergencyService 的类别代码。
+_EMERGENCY_CATEGORY_LABELS = {
+    "fire": "火情或烟雾",
+    "gas": "燃气气味",
+    "electric": "漏电或触电",
+    "medical": "身体不适或受伤",
+    "violence": "人身安全威胁",
+    "access": "无法进门",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -301,6 +312,16 @@ class ConversationAuditPort(Protocol):
     ) -> None:
         """只记录内部主键和原因代码。"""
 
+    async def latest_handoff_reason(self, conversation_id: int) -> str | None:
+        """返回本会话最近一次接管的原因代码；没有接管记录时返回空值。"""
+
+
+class EmergencyKnowledgePort(Protocol):
+    """读取已启用的审核知识，供紧急情况后续的固定处置答复使用。"""
+
+    async def list_active(self) -> list[Any]:
+        """返回全部已启用且已审核的知识条目。"""
+
 
 class ConversationJobPort(Protocol):
     """定义会话阶段任务的持久化入口。"""
@@ -407,6 +428,7 @@ class ConversationService:
         customer_notification: CustomerNotificationPort | None = None,
         complaint_service: ComplaintClassifierPort | None = None,
         complaint_reviews: ComplaintReviewPort | None = None,
+        emergency_knowledge: EmergencyKnowledgePort | None = None,
         defer_model: bool = False,
         commit_boundary: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
@@ -430,6 +452,7 @@ class ConversationService:
         self._customer_notification = customer_notification
         self._complaint_service = complaint_service
         self._complaint_reviews = complaint_reviews
+        self._emergency_knowledge = emergency_knowledge
         self._defer_model = defer_model
         self._commit_boundary = commit_boundary
 
@@ -475,6 +498,9 @@ class ConversationService:
                     classification,
                 )
                 return
+
+        if await self._answer_emergency_follow_up(conversation, message):
+            return
 
         # 人工接管只拦截新的高风险事项；客诉处理期间出现房态、旅游等
         # 独立低风险问题时继续由机器人回答，避免一次投诉永久阻塞客服。
@@ -622,6 +648,42 @@ class ConversationService:
             mutable_metadata.pop("fast_ack_sha256", None)
             return replace(message, metadata=mutable_metadata)
         return message
+
+    async def _answer_emergency_follow_up(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+    ) -> bool:
+        """紧急情况进行中，求助类后续消息给固定处置答复并再次通知员工；已处理时返回真。
+
+        进行中指会话处于人工模式、最近一次接管原因是 emergency:*，员工回复或交还前一直
+        有效。答复来自「紧急处置」审核知识或该类别的固定安全提示，不调用模型、不联网：
+        1.40.0 之前「我们现在该怎么办」会被送去联网，回了活动推荐。独立问题照常回答。
+        """
+        if (
+            conversation.mode is not ConversationMode.HUMAN_ACTIVE
+            or self._audit_events is None
+            or not is_emergency_follow_up(message.content)
+        ):
+            return False
+        reason = await self._audit_events.latest_handoff_reason(conversation.id) or ""
+        if not reason.startswith("emergency:"):
+            return False
+        category = reason.split(":", 1)[1]
+        entries = (
+            await self._emergency_knowledge.list_active()
+            if self._emergency_knowledge is not None
+            else []
+        )
+        reply = emergency_follow_up_reply(category, conversation.language, entries)
+        # 固定文本已经过审核或写死在代码里，不再经过按句筛选的出口，以免处置步骤被删。
+        await self._send_prepared_guest_reply(conversation, reply, stale_exempt=True)
+        await self._notify_employee(
+            conversation,
+            message,
+            f"紧急情况后续：{_EMERGENCY_CATEGORY_LABELS.get(category, '安全情况')}，客人追问",
+        )
+        return True
 
     async def _enter_complaint_mode(
         self,

@@ -38,8 +38,13 @@ def test_transaction_has_priority_over_property_specific() -> None:
 
 
 def test_high_risk_requests_have_deterministic_handoff_reason() -> None:
-    """价格、退款、投诉、提前入住和激烈情绪必须由本地规则要求接管。"""
-    assert handoff_reason("这个房间最低多少钱？") == "price"
+    """讨价还价、退款、投诉、提前入住和激烈情绪必须由本地规则要求接管。
+
+    1.40.0 起单纯问价（「这个房间最低多少钱」）用参考价回答、不再转人工，
+    见 docs/specs/2026-09-26_emergency-follow-up-and-price-spec.md F2。
+    """
+    assert handoff_reason("这个房间最低能便宜到多少？") == "price"
+    assert handoff_reason("这个房间最低多少钱？") is None
     assert handoff_reason("我要退款") == "refund"
     assert handoff_reason("我要投诉你们") == "complaint"
     assert handoff_reason("我想提前入住") == "early_check_in"
@@ -144,3 +149,35 @@ def test_english_room_price_questions_are_transactions_but_room_details_are_not(
 ) -> None:
     """英文问房价归为交易；问房间空间或客房服务不算房价。"""
     assert is_transaction_sensitive(question) is sensitive
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "明晚住一晚，201多少钱？",
+        "今晚入住，最便宜的房间多少钱？",
+        "How much is a room for tomorrow night?",
+        "What's the price for two nights?",
+    ],
+)
+def test_room_price_questions_are_recognized(text: str) -> None:
+    """问房价的中英文说法由一处定义识别，工具开放与交易判定共用。"""
+    from homestay_bot.services.answer_policy import asks_room_price
+
+    assert asks_room_price(text)
+
+
+@pytest.mark.parametrize("text", ["早餐多少钱？", "停车怎么收费", "洗衣机一次多少钱"])
+def test_static_service_fees_are_not_room_price(text: str) -> None:
+    """早餐、停车、洗衣这类服务收费由审核知识回答，不是房价查询。"""
+    from homestay_bot.services.answer_policy import asks_room_price
+
+    assert not asks_room_price(text)
+
+
+def test_plain_price_questions_no_longer_hand_off_but_bargaining_does() -> None:
+    """只问价格用参考价回答、不转人工；讨价还价和折扣仍交给人工决定。"""
+    assert handoff_reason("你们房间一晚多少钱？") is None
+    assert handoff_reason("明晚201多少钱") is None
+    assert handoff_reason("能便宜点吗") == "price"
+    assert handoff_reason("住三晚有折扣吗") == "price"

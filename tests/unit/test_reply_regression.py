@@ -118,15 +118,20 @@ def test_first_baseline_keeps_only_stable_passes() -> None:
 
 
 def test_fake_hostex_follows_the_fixture_calendar() -> None:
-    """替身房态按资料的满房晚计算整段可住，与生产执行器归一化后的结构一致。"""
+    """替身按资料的满房晚返回房态，经线上执行器整理后整段是否可住正确。"""
+    from homestay_bot.integrations.deepseek_client import HostexReadOnlyToolExecutor
+
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     property_id = str(fixture["hostex"]["properties"][0]["id"])
     # 满房晚以相对测试日的天数表示：第 1 晚（9月26日）满房。
     fixture["hostex"]["full_nights"][property_id] = [1]
-    tools = rr.FakeHostexTools(fixture["hostex"], date.fromisoformat(fixture["today"]))
+    today = date.fromisoformat(fixture["today"])
+    executor = HostexReadOnlyToolExecutor(
+        rr.FakeHostexClient(fixture["hostex"], today), local_date_provider=lambda: today
+    )
 
     result = asyncio.run(
-        tools.execute(
+        executor.execute(
             "search_availability",
             {"check_in_date": "2026-09-25", "check_out_date": "2026-09-27"},
         )
@@ -134,8 +139,6 @@ def test_fake_hostex_follows_the_fixture_calendar() -> None:
     first = next(item for item in result if str(item["property_id"]) == property_id)
     assert [day["available"] for day in first["days"]] == [True, False]
     assert first["stay_available"] is False
-    assert tools.calls == ["search_availability"]
-
 
 def test_the_committed_baseline_covers_every_scenario_exactly_once() -> None:
     """入库基线必须覆盖全部场景且互不重叠，否则门禁会漏判或重复判。"""
@@ -147,3 +150,52 @@ def test_the_committed_baseline_covers_every_scenario_exactly_once() -> None:
 
     assert must_pass | known | set(baseline.get("removed", {})) == ids
     assert not must_pass & known
+
+
+def test_a_model_decision_needing_staff_counts_as_handoff() -> None:
+    """模型判为需要人工、最终回复是转人工话术时记为 handoff，与线上表现一致。"""
+    record = {"route": "model", "tools": [], "staff_confirmation_required": True}
+
+    assert rr.observed_route(record) == "handoff"
+
+
+def test_back_to_back_guest_messages_carry_the_emergency_state() -> None:
+    """连发消息逐条回放：第一条命中燃气，第二条「我们现在该怎么办」拿到固定处置答复。"""
+    from homestay_bot.domain.enums import Language
+
+    scenario = {
+        "id": "EM",
+        "messages": [
+            {"role": "user", "content": "厨房好像有股煤气味"},
+            {"role": "user", "content": "我们现在该怎么办"},
+        ],
+    }
+
+    record = rr.pre_route(scenario, [], Language.ZH)
+
+    assert record is not None
+    assert record["route"] == "emergency"
+    assert "开窗通风" in record["final"]
+
+
+def test_fake_hostex_client_goes_through_the_production_executor() -> None:
+    """替身只替换百居易客户端，房态整理与参考价换算走线上执行器；无主渠道的价格被丢弃。"""
+    from homestay_bot.integrations.deepseek_client import HostexReadOnlyToolExecutor
+
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    today = date.fromisoformat(fixture["today"])
+    executor = HostexReadOnlyToolExecutor(
+        rr.FakeHostexClient(fixture["hostex"], today), local_date_provider=lambda: today
+    )
+
+    rows = asyncio.run(
+        executor.execute(
+            "search_reference_price",
+            {"check_in_date": "2026-09-25", "check_out_date": "2026-09-26"},
+        )
+    )
+    titles = {row["property_title"] for row in rows}
+    assert "芸栖·102 庭院双床房" in titles
+    text = json.dumps(rows, ensure_ascii=False)
+    assert "hx-" not in text
+    assert all(row["nightly_reference_prices"] for row in rows)
