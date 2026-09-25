@@ -1022,4 +1022,5 @@ Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节�
 - [x] 按 `docs/specs/2026-09-25_safety-delivery-and-regressions-spec.md` 实施 F1 至 F5；29 条新增修复用例在 main 上失败、修改后通过；全量 2012 passed / 24 skipped。
 - [x] 部署前真实模型回归发现房态工具未开放：住宿意图收成 `answer_policy.asks_stay_availability` 一处定义。
 - [x] 部署前真实模型回归：四轮，发现并修复住宿意图五处词表不一致、人数误判为房态、英文与带日期追问不开放工具；结果见 `docs/releases/1.39.16.md`。
-- [ ] 1.39.16 发布与线上核对、测试号收件验收。
+- [x] 1.39.16 发布与线上核对（DEPLOY_OK）。
+- [ ] 测试号收件验收。
