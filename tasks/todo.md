@@ -1049,5 +1049,5 @@ Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节�
 ### 主链分阶段耗时日志 1.40.2 与客人数据保留放开 1.41.0（2026-09-26，用户回复「开始，3补回直接授权」）
 
 - [x] 1.40.2：按 `docs/specs/2026-09-25_main-chain-stage-timing-spec.md` 实施；新增 7 条用例；全量 2087 passed / 24 skipped。
-- [ ] 1.40.2 发布（部署中执行回归门禁）。
+- [x] 1.40.2 发布：门禁通过（退步 0，新纳入 2 个），DEPLOY_OK；线上耗时日志待真实消息验证。
 - [ ] 1.41.0：按 `docs/specs/2026-09-26_guest-data-retention-spec.md` 实施；后台显示完整手机号（用户未单独答复，按建议）；部署后回填存量加密数据（用户已授权）。
