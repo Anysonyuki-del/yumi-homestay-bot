@@ -1,9 +1,11 @@
 import re
+from collections.abc import Callable
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.services.fact_policy import (
     is_supply_or_service_claim,
     is_supported_by,
+    is_unsourced_external_state_claim,
     is_unsourced_homestay_claim,
 )
 
@@ -263,6 +265,35 @@ def remove_ungrounded_property_claims(content: str, *, grounded_in: str = "") ->
     找到出处的句子保留（`fact_policy.is_supported_by`），其余照删；不传时一律按
     没有依据处理。
     """
+    return _drop_sentences(
+        content,
+        lambda sentence: _contains_ungrounded_property_claim(sentence)
+        and not (grounded_in and is_supported_by(sentence, grounded_in)),
+    )
+
+
+def remove_unsourced_external_state_claims(content: str, *, grounded_in: str = "") -> str:
+    """逐句删除没有实时依据、却断言会变化的店外状态的句子（P14）。
+
+    只用于本轮没有联网查询结果的回复。`grounded_in` 同上：审核知识里本来就有的句子
+    （例如「公共客厅今晚开放到22:00」）保留。
+    """
+    return _drop_sentences(
+        content,
+        lambda sentence: is_unsourced_external_state_claim(sentence)
+        and not (grounded_in and is_supported_by(sentence, grounded_in)),
+    )
+
+
+def unconfirmed_fallback(language: Language) -> str:
+    """回复被整段过滤删空时的中性说明；不再回退成与问题无关的建议（1.39.17 F6）。"""
+    if language is Language.EN:
+        return "I’m unable to confirm that information right now."
+    return "这项信息暂时无法确认。"
+
+
+def _drop_sentences(content: str, should_drop: Callable[[str], bool]) -> str:
+    """逐行逐句删除命中判定的句子，删空的小节标题一并删除，列表重新编号。"""
     safe_lines: list[str] = []
     for line in content.splitlines():
         # 每一行都逐句判定：新判定里「问句、祝福放行」是按句成立的，整行判定会让
@@ -273,12 +304,7 @@ def remove_ungrounded_property_claims(content: str, *, grounded_in: str = "") ->
             for sentence in re.split(r"(?<=[。！？!?])|(?<=\.)\s+(?=[A-Z])", line)
             if sentence
         ]
-        safe_sentences = [
-            sentence
-            for sentence in sentences
-            if not _contains_ungrounded_property_claim(sentence)
-            or (grounded_in and is_supported_by(sentence, grounded_in))
-        ]
+        safe_sentences = [sentence for sentence in sentences if not should_drop(sentence)]
         if len(safe_sentences) == len(sentences):
             safe_lines.append(line)
         elif safe_sentences:
@@ -878,6 +904,4 @@ def sanitize_guest_reply(
     safe_content = _safe_text_keeping_breaks(content, separator)
     if safe_content:
         return safe_content
-    if language is Language.EN:
-        return "I’m unable to confirm that information right now."
-    return "这项信息暂时无法确认。"
+    return unconfirmed_fallback(language)

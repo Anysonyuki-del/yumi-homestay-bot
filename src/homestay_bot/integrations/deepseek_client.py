@@ -37,7 +37,9 @@ from homestay_bot.services.faq_candidate_context import (
 from homestay_bot.services.guest_reply_policy import (
     human_contact_reply,
     remove_ungrounded_property_claims,
+    remove_unsourced_external_state_claims,
     sanitize_guest_reply,
+    unconfirmed_fallback,
 )
 from homestay_bot.services.knowledge_evidence_policy import (
     CLARIFY_REPLY_EN,
@@ -837,6 +839,14 @@ class DeepSeekGuestAssistant:
                 decision.language,
                 grounded_in=self._knowledge_grounding(knowledge_evidence),
             )
+        # P14：本分支没有联网查询，会变化的店外状态（天气、人流、营业）一律不能凭经验
+        # 断言。不看是否有百居易工具作证、是否本店专属问题：1.39.16 测试号验收中那句
+        # 「这几天武汉早晚偏凉」正是因为有房态工具作证而整段跳过了过滤。
+        updates["reply_text"] = self._remove_unsourced_external_state(
+            str(updates.get("reply_text", decision.reply_text)),
+            decision.language,
+            grounded_in=self._knowledge_grounding(knowledge_evidence),
+        )
         if not property_specific and not transaction_sensitive:
             updates.update(
                 {
@@ -1056,6 +1066,17 @@ class DeepSeekGuestAssistant:
         return "\n".join(str(getattr(item, "answer", "") or "") for item in knowledge or [])
 
     @staticmethod
+    def _remove_unsourced_external_state(
+        reply_text: str,
+        language: Language,
+        *,
+        grounded_in: str = "",
+    ) -> str:
+        """删除没有实时依据的店外状态断言；整段删空时回中性说明。"""
+        cleaned = remove_unsourced_external_state_claims(reply_text, grounded_in=grounded_in)
+        return cleaned or unconfirmed_fallback(language)
+
+    @staticmethod
     def _remove_property_promotion(
         reply_text: str,
         language: Language,
@@ -1075,16 +1096,9 @@ class DeepSeekGuestAssistant:
             return cleaned
         if not fallback_on_empty:
             return ""
-        if language is Language.EN:
-            return (
-                "Agree on the budget and priorities first, assign one person "
-                "to each task, keep the plan in a shared document, and leave "
-                "some flexible time each day."
-            )
-        return (
-            "建议先统一预算和重点安排，再分工查询交通、景点与餐饮，"
-            "用共享文档集中记录，并为每天预留机动时间。"
-        )
+        # 1.39.17 F6：以前回退成一段写死的「统一预算、分工查询」行程建议，与客人的
+        # 问题无关（门锁密码的问题也收到过）；改为与出口一致的中性说明。
+        return unconfirmed_fallback(language)
 
     @staticmethod
     def _plan_handles_reply(
@@ -1912,6 +1926,12 @@ class DeepSeekGuestAssistant:
                                 decision.language,
                                 grounded_in=self._knowledge_grounding(knowledge),
                             )
+                        # 精炼可能重新写进店外推测，与校验阶段同一道 P14 检查。
+                        refined_reply = self._remove_unsourced_external_state(
+                            refined_reply,
+                            decision.language,
+                            grounded_in=self._knowledge_grounding(knowledge),
+                        )
                         return decision.model_copy(
                             update={"reply_text": refined_reply}
                         )

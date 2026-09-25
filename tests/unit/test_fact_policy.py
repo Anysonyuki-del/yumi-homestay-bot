@@ -12,6 +12,7 @@ from homestay_bot.services.fact_policy import (
     FACT_SOURCE_RULE_EN,
     FACT_SOURCE_RULE_ZH,
     is_supported_by,
+    is_unsourced_external_state_claim,
     is_unsourced_homestay_claim,
 )
 from homestay_bot.services.guest_reply_policy import remove_ungrounded_property_claims
@@ -197,3 +198,37 @@ def test_a_homestay_fact_missing_from_the_source_is_still_removed() -> None:
 def test_an_empty_source_supports_nothing() -> None:
     """没有依据时不放行任何本店断言。"""
     assert not is_supported_by("民宿楼下有便利店。", "")
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # 1.39.16 测试号验收：只查了房态、没有查天气，回复却写了这句。
+        "这几天武汉早晚偏凉，带件薄外套会舒服些。",
+        "这几天早晚偏凉，建议带件外套。",
+        "最近东湖人很多，周末去要排队。",
+        "明天应该是晴天，适合出门。",
+        "It has been quite chilly these days, so bring a jacket.",
+    ],
+)
+def test_unsourced_changing_external_state_is_detected(sentence: str) -> None:
+    """带时间指向、断言会变化的店外状态，又没有本轮实时查询作依据：判为推测。"""
+    assert is_unsourced_external_state_claim(sentence)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "建议出发前看一下天气预报。",
+        "武汉明天的具体天气我这边暂时查不到。",
+        "明天下雨的话，可以改去省博物馆。",
+        "出发前留意一下明天是否下雨。",
+        "黄鹤楼在武昌区，江汉路步行街在汉口。",
+        "武汉夏天通常比较热。",
+        "明天入住、9月27日退房，还有两间房。",
+        "明天会下雨吗？",
+    ],
+)
+def test_advice_inability_conditions_and_stable_facts_are_kept(sentence: str) -> None:
+    """建议、查不到的说明、条件句、提问、稳定常识和房态事实都不算推测。"""
+    assert not is_unsourced_external_state_claim(sentence)
