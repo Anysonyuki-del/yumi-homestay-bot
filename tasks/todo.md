@@ -1051,4 +1051,6 @@ Spec 依据：`docs/specs/2026-09-12_windows-android-client-spec.md` 第 7 节�
 - [x] 1.40.2：按 `docs/specs/2026-09-25_main-chain-stage-timing-spec.md` 实施；新增 7 条用例；全量 2087 passed / 24 skipped。
 - [x] 1.40.2 发布：门禁通过（退步 0，新纳入 2 个），DEPLOY_OK；线上耗时日志待真实消息验证。
 - [x] 1.41.0：按 `docs/specs/2026-09-26_guest-data-retention-spec.md` 实施 G1 至 G6；全量 2092 passed / 24 skipped。
-- [ ] 1.41.0 发布、迁移核对、回填存量加密数据（用户已授权）。
+- [x] 1.41.0 发布：门禁首次判 `L-便利店` 退步（回复链路无改动，采样所致），重跑通过；迁移 0028 已执行；回填前另做备份，回填 0 条（生产无审批、客户无手机号）。
+- [ ] 待修：出处核对（`fact_policy.is_supported_by`）在模型改述时会误删审核事实，`L-便利店` 3 次 1 过。
+- [ ] 待验证：1.40.2 的「主链耗时」日志，需要一条真实消息。
