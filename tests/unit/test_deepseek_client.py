@@ -3236,3 +3236,87 @@ async def test_a_reference_price_result_grounds_the_amount_in_the_reply() -> Non
 
     assert "368元" in decision.reply_text
     assert decision.staff_confirmation_required is False
+
+
+@pytest.mark.asyncio
+async def test_stage_timing_sink_reports_the_plain_reply_stages_in_order() -> None:
+    """普通问答：知识检索 → FAQ 候选 → 主模型调用 → 精炼，每段一个非负毫秒数。"""
+    stages: list[tuple[str, int]] = []
+    client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "武汉有什么特色小吃？"}],
+        stage_timing_sink=lambda name, ms: stages.append((name, ms)),
+    )
+
+    assert [name for name, _ in stages] == ["knowledge", "faq_context", "main_call", "refine"]
+    assert all(ms >= 0 for _, ms in stages)
+
+
+@pytest.mark.asyncio
+async def test_stage_timing_sink_reports_each_tool_between_model_calls() -> None:
+    """带工具：两次主模型调用之间记录工具耗时，阶段名带工具名。"""
+    stages: list[str] = []
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=_PriceToolCompletionsStub("明晚庭院大床房参考价368元一晚，以实际下单为准。")
+        )
+    )
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=HostexReadOnlyToolExecutor(
+            _PricedHostexStub(), local_date_provider=lambda: date(2026, 9, 25)
+        ),
+        local_date_provider=lambda: date(2026, 9, 25),
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "明晚住一晚，房间多少钱？"}],
+        stage_timing_sink=lambda name, _ms: stages.append(name),
+    )
+
+    assert stages == [
+        "knowledge",
+        "faq_context",
+        "main_call",
+        "tool:search_reference_price",
+        "main_call",
+        "refine",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stage_timing_sink_reports_live_search_and_refine() -> None:
+    """联网问题：联网搜索 → 精炼，不经过知识检索。"""
+    stages: list[str] = []
+    assistant = DeepSeekGuestAssistant(
+        chat_client=ChatClientStub([]),
+        tourism_searcher=ShortTourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "今天东湖门票多少钱？"}],
+        stage_timing_sink=lambda name, _ms: stages.append(name),
+    )
+
+    assert stages == ["tourism_search", "refine"]

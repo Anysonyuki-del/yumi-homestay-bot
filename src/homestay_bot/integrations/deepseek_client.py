@@ -366,6 +366,16 @@ class HostexReadOnlyClient(Protocol):
         """返回渠道日历参考价。"""
 
 
+def _record_stage(
+    sink: Callable[[str, int], None] | None,
+    name: str,
+    started: float,
+) -> None:
+    """把一个阶段从 started 到现在的毫秒数交给耗时观测回调；回调为空时什么也不做。"""
+    if sink is not None:
+        sink(name, max(0, round((monotonic() - started) * 1000)))
+
+
 _REFERENCE_PRICE_NOTE = "参考价，以实际下单为准；是否可住以 stay_available 为准"
 
 
@@ -1714,8 +1724,13 @@ class DeepSeekGuestAssistant:
         customer_context: CustomerModelContext | None = None,
         request_context: AssistantRequestContext | None = None,
         tool_trace_sink: Callable[[AssistantToolTrace], None] | None = None,
+        stage_timing_sink: Callable[[str, int], None] | None = None,
     ) -> AssistantDecision:
-        """调用 DeepSeek，并把连续失败收敛为统一领域异常。"""
+        """调用 DeepSeek，并把连续失败收敛为统一领域异常。
+
+        `stage_timing_sink` 收到（阶段名, 毫秒），只用于耗时观测（1.40.2），不影响回复、
+        分支、异常或重试；为空时行为与之前完全一致。
+        """
         question_text = latest_user_question(messages)["content"]
         local_today = self._local_date_provider()
         # 经典景点、美食等稳定问题走快速模型；只有时效问题才承担联网深搜延迟。
@@ -1728,6 +1743,7 @@ class DeepSeekGuestAssistant:
                     queried_on=local_today,
                 )
             except BaseException:
+                _record_stage(stage_timing_sink, "tourism_search", started)
                 if tool_trace_sink is not None:
                     tool_trace_sink(
                         AssistantToolTrace(
@@ -1737,6 +1753,7 @@ class DeepSeekGuestAssistant:
                         )
                     )
                 raise
+            _record_stage(stage_timing_sink, "tourism_search", started)
             if tool_trace_sink is not None:
                 tool_trace_sink(
                     AssistantToolTrace(
@@ -1753,7 +1770,11 @@ class DeepSeekGuestAssistant:
             )
             if not safe_search_reply:
                 raise TourismSearchError("degraded")
-            refined_reply = await self._refine_reply(safe_search_reply, force=True)
+            refine_started = monotonic()
+            try:
+                refined_reply = await self._refine_reply(safe_search_reply, force=True)
+            finally:
+                _record_stage(stage_timing_sink, "refine", refine_started)
             reply = self._remove_property_promotion(
                 refined_reply,
                 language,
@@ -1784,11 +1805,17 @@ class DeepSeekGuestAssistant:
 
         # 剔除在检索之后、构建上下文与证据门之前统一完成：模型看不到的内容，
         # 证据门也不会拿来作证。
-        knowledge = self._scope_knowledge(
-            question_text,
-            await self._knowledge.retrieve(language, question_text),
-        )
-        faq_candidates = await self._build_faq_candidate_context()
+        knowledge_started = monotonic()
+        try:
+            retrieved_knowledge = await self._knowledge.retrieve(language, question_text)
+        finally:
+            _record_stage(stage_timing_sink, "knowledge", knowledge_started)
+        knowledge = self._scope_knowledge(question_text, retrieved_knowledge)
+        faq_started = monotonic()
+        try:
+            faq_candidates = await self._build_faq_candidate_context()
+        finally:
+            _record_stage(stage_timing_sink, "faq_context", faq_started)
         faq_candidate_ids = {
             int(item["id"])
             for item in faq_candidates
@@ -1972,9 +1999,13 @@ class DeepSeekGuestAssistant:
                         request_chars,
                         cumulative_request_chars,
                     )
-                    response = await self._chat_client.chat.completions.create(
-                        **active_request
-                    )
+                    call_started = monotonic()
+                    try:
+                        response = await self._chat_client.chat.completions.create(
+                            **active_request
+                        )
+                    finally:
+                        _record_stage(stage_timing_sink, "main_call", call_started)
                     message = response.choices[0].message
                     tool_calls = list(message.tool_calls or [])
                     if not tool_calls:
@@ -2003,9 +2034,13 @@ class DeepSeekGuestAssistant:
                             # 审核原文与保守回复都是确定性输出，再经精炼只会让
                             # 温度、时段等事实重新被改写。
                             return decision
-                        refined_reply = await self._refine_reply(
-                            decision.reply_text
-                        )
+                        refine_started = monotonic()
+                        try:
+                            refined_reply = await self._refine_reply(
+                                decision.reply_text
+                            )
+                        finally:
+                            _record_stage(stage_timing_sink, "refine", refine_started)
                         if not is_property_specific(question_text) and not (
                             property_tool_grounded
                         ):
@@ -2051,6 +2086,9 @@ class DeepSeekGuestAssistant:
                                 arguments,
                             )
                         except BaseException:
+                            _record_stage(
+                                stage_timing_sink, f"tool:{call.function.name}", started
+                            )
                             if tool_trace_sink is not None:
                                 tool_trace_sink(
                                     AssistantToolTrace(
@@ -2064,6 +2102,7 @@ class DeepSeekGuestAssistant:
                                     )
                                 )
                             raise
+                        _record_stage(stage_timing_sink, f"tool:{call.function.name}", started)
                         if tool_trace_sink is not None:
                             tool_trace_sink(
                                 AssistantToolTrace(

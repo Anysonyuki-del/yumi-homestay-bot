@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -2760,3 +2761,76 @@ async def test_independent_questions_during_an_emergency_are_still_answered() ->
 
     assert assistant.calls == 1
     assert "开窗通风" not in wecom.guest_messages[-1]
+
+
+def _stage_lines(caplog) -> list[str]:
+    """取出本次处理输出的主链耗时汇总行。"""
+    return [
+        record.getMessage() for record in caplog.records if "主链耗时：" in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_normal_reply_logs_exactly_one_stage_timing_line(caplog) -> None:
+    """正式回复输出且只输出一行汇总：结果类别、会话编号、msgid、各段耗时与阶段列表。"""
+    caplog.set_level(logging.INFO)
+    service, _, assistant, _ = build_service()
+
+    await service.handle_message(incoming(content="几点入住？", msgid="m-1"))
+
+    lines = _stage_lines(caplog)
+    assert len(lines) == 1
+    line = lines[0]
+    assert "outcome=replied" in line and "conversation_id=1" in line and "msgid=m-1" in line
+    fields = ("total_ms=", "since_sent_ms=", "context_ms=", "respond_ms=", "post_ms=", "merged=1")
+    for name in fields:
+        assert name in line
+    assert "stage_timing_sink" in assistant.last_kwargs
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_model_is_logged_as_its_own_outcome(caplog) -> None:
+    """模型不可用时同样输出一行，结果类别为 assistant_unavailable。"""
+    caplog.set_level(logging.INFO)
+    service, _, _, _ = build_service(assistant=FailingAssistantStub())
+
+    await service.handle_message(incoming(content="几点入住？", msgid="m-2"))
+
+    lines = _stage_lines(caplog)
+    assert len(lines) == 1 and "outcome=assistant_unavailable" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_a_stale_final_reply_is_logged_as_discarded(caplog) -> None:
+    """模型生成期间来了新消息、结果被丢弃时，结果类别为 stale_discarded。"""
+    caplog.set_level(logging.INFO)
+    messages = MessageServiceStub()
+    messages.activity_after_boundary = True
+    service, conversations, _, _ = build_service(messages=messages)
+    conversation = await conversations.get_or_create(incoming(msgid="m-3"))
+
+    await service._process_model_reply(conversation, incoming(msgid="m-3"), discard_if_stale=True)
+
+    lines = _stage_lines(caplog)
+    assert len(lines) == 1 and "outcome=stale_discarded" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_is_logged_and_re_raised_unchanged(caplog) -> None:
+    """意外异常照样输出汇总（结果类别为 error:<异常类型>），并原样抛出。"""
+
+    class BrokenAssistant(AssistantStub):
+        """模拟意外异常。"""
+
+        async def respond(self, **kwargs) -> AssistantDecision:
+            """抛出非领域异常。"""
+            raise RuntimeError("boom")
+
+    caplog.set_level(logging.INFO)
+    service, _, _, _ = build_service(assistant=BrokenAssistant())
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await service.handle_message(incoming(content="几点入住？", msgid="m-4"))
+
+    lines = _stage_lines(caplog)
+    assert len(lines) == 1 and "outcome=error:RuntimeError" in lines[0]

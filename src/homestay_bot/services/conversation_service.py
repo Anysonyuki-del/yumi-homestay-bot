@@ -2,8 +2,9 @@ import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
+from time import monotonic
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import ValidationError
@@ -160,8 +161,9 @@ class GuestAssistantPort(Protocol):
         language: Language,
         messages: list[dict[str, str]],
         customer_context: CustomerModelContext | None = None,
+        stage_timing_sink: Callable[[str, int], None] | None = None,
     ) -> AssistantDecision:
-        """返回经过结构校验的客服决定。"""
+        """返回经过结构校验的客服决定；stage_timing_sink 只用于耗时观测。"""
 
     async def respond_ack(
         self,
@@ -371,6 +373,20 @@ class ComplaintReviewPort(Protocol):
         risk_level: str,
     ) -> Any:
         """按来源消息幂等创建客诉记录。"""
+
+
+@dataclass
+class _ReplyTiming:
+    """一次正式回复的耗时与结果类别，只用于汇总日志（1.40.2），不参与分支判断。"""
+
+    outcome: str = "replied"
+    context_ms: int = 0
+    respond_ms: int = 0
+    stages: list[tuple[str, int]] = field(default_factory=list)
+
+    def add_stage(self, name: str, ms: int) -> None:
+        """按发生顺序记录 respond 内部的一个阶段。"""
+        self.stages.append((name, ms))
 
 
 class ConversationService:
@@ -905,9 +921,59 @@ class ConversationService:
         *,
         discard_if_stale: bool = False,
     ) -> None:
-        """执行耗时模型和业务副作用；快速安抚已在前一事务发送。"""
+        """执行耗时模型和业务副作用，并输出一行主链耗时汇总（1.40.2）。
+
+        外层只计时和记日志：主体逻辑原样不动，异常原样抛出。汇总行记结果类别、
+        会话编号、msgid 与各段毫秒数，用来决定并行检索、合并等待是否值得优化。
+        """
+        timing = _ReplyTiming()
+        started = monotonic()
+        try:
+            await self._process_model_reply_body(
+                conversation,
+                message,
+                discard_if_stale=discard_if_stale,
+                timing=timing,
+            )
+        except BaseException as error:
+            timing.outcome = f"error:{type(error).__name__}"
+            raise
+        finally:
+            total_ms = max(0, round((monotonic() - started) * 1000))
+            sent_at = message.sent_at if message.sent_at.tzinfo else message.sent_at.replace(
+                tzinfo=UTC
+            )
+            since_sent_ms = max(0, round((datetime.now(UTC) - sent_at).total_seconds() * 1000))
+            logger.info(
+                "主链耗时：outcome=%s conversation_id=%s msgid=%s total_ms=%s since_sent_ms=%s "
+                "context_ms=%s respond_ms=%s post_ms=%s merged=%s stages=%s",
+                timing.outcome,
+                conversation.id,
+                message.msgid,
+                total_ms,
+                since_sent_ms,
+                timing.context_ms,
+                timing.respond_ms,
+                max(0, total_ms - timing.context_ms - timing.respond_ms),
+                (message.metadata or {}).get("merged_guest_count", "1"),
+                ",".join(f"{name}:{ms}" for name, ms in timing.stages),
+            )
+
+    async def _process_model_reply_body(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        *,
+        discard_if_stale: bool,
+        timing: "_ReplyTiming",
+    ) -> None:
+        """执行耗时模型和业务副作用；快速安抚已在前一事务发送。
+
+        timing 只收集耗时与结果类别，不参与任何分支判断。
+        """
 
         try:
+            context_started = monotonic()
             model_context = None
             if self._customer_context is not None and conversation.customer_id is not None:
                 model_context = await self._customer_context.load_model_context(
@@ -922,26 +988,35 @@ class ConversationService:
                 if merged_guest_count_text.isdigit()
                 else 1
             )
-            decision = await self._assistant.respond(
-                guest_identifier=message.external_userid,
-                language=conversation.language,
-                messages=await self._messages.build_context(
-                    conversation.id,
-                    limit=3,
-                    through_external_message_id=message.msgid,
-                    merged_guest_content=(
-                        message.content if merged_guest_count > 1 else None
-                    ),
-                    merged_guest_count=merged_guest_count,
+            context_messages = await self._messages.build_context(
+                conversation.id,
+                limit=3,
+                through_external_message_id=message.msgid,
+                merged_guest_content=(
+                    message.content if merged_guest_count > 1 else None
                 ),
-                customer_context=model_context,
+                merged_guest_count=merged_guest_count,
             )
+            timing.context_ms = max(0, round((monotonic() - context_started) * 1000))
+            respond_started = monotonic()
+            try:
+                decision = await self._assistant.respond(
+                    guest_identifier=message.external_userid,
+                    language=conversation.language,
+                    messages=context_messages,
+                    customer_context=model_context,
+                    stage_timing_sink=timing.add_stage,
+                )
+            finally:
+                timing.respond_ms = max(0, round((monotonic() - respond_started) * 1000))
         except TourismSearchError as error:
             if discard_if_stale and await self._discard_stale_final(
                 conversation,
                 message,
             ):
+                timing.outcome = "stale_discarded"
                 return
+            timing.outcome = "tourism_failure"
             await self._escalate_tourism_failure(conversation, message, error)
             return
         except AssistantUnavailableError:
@@ -949,23 +1024,27 @@ class ConversationService:
                 conversation,
                 message,
             ):
+                timing.outcome = "stale_discarded"
                 return
             if (
                 self._determine_handoff_reason(message.content) is None
                 and self._is_facility_issue(message.content, None)
             ):
+                timing.outcome = "facility"
                 await self._handle_facility_issue(
                     conversation,
                     message,
                     None,
                 )
                 return
+            timing.outcome = "assistant_unavailable"
             await self._escalate_assistant_failure(conversation, message)
             return
         if discard_if_stale and await self._discard_stale_final(
             conversation,
             message,
         ):
+            timing.outcome = "stale_discarded"
             return
         local_handoff_reason = self._determine_handoff_reason(message.content)
         if (
@@ -973,6 +1052,7 @@ class ConversationService:
             and decision.handoff_reason is None
             and self._is_facility_issue(message.content, decision)
         ):
+            timing.outcome = "facility"
             await self._handle_facility_issue(
                 conversation,
                 message,
