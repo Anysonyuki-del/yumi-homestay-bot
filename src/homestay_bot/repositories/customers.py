@@ -1470,9 +1470,10 @@ class SQLAlchemyCustomerRepository:
         await self._merge_customer_summaries(source.id, target.id)
         await self._merge_customer_memories(source.id, target.id)
 
-        # 目标客户没有联系方式时才继承来源密文，避免覆盖管理员已确认资料。
+        # 目标客户没有联系方式时才继承来源手机号（明文与密文），避免覆盖管理员已确认资料。
         if target.phone_ciphertext is None and source.phone_ciphertext is not None:
             target.phone_ciphertext = source.phone_ciphertext
+            target.phone = source.phone
             target.phone_fingerprint = source.phone_fingerprint
         # 目标显示名始终保留；备注仅追加一次，重复确认会在上方直接返回。
         target.note = self._append_merged_text(

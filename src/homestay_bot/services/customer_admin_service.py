@@ -289,7 +289,7 @@ class CustomerAdminService:
                 customer,
                 latest_stay_note=notes.get(int(customer.id)),
             ),
-            "masked_phone": self._masked_phone(customer.phone_ciphertext),
+            "masked_phone": self._display_phone(customer),
             "active_tab": tab or "overview",
         }
         self._localize_detail(result)
@@ -490,7 +490,7 @@ class CustomerAdminService:
             id=int(customer.id),
             display_name=str(customer.display_name),
             note=str(customer.note or ""),
-            masked_phone=self._masked_phone(customer.phone_ciphertext),
+            masked_phone=self._display_phone(customer),
             latest_stay_note=latest_stay_note,
             stay_status=str(safe_facts.get("stay_status", "none")),
             stay_status_label=str(
@@ -657,14 +657,19 @@ class CustomerAdminService:
         )
         return localized.strftime("%Y年%-m月%-d日 %H:%M")
 
-    def _masked_phone(self, ciphertext: bytes | None) -> str:
-        """仅在内存解密手机号并立即转换为脱敏格式。"""
+    def _display_phone(self, customer: Any) -> str:
+        """返回后台显示的完整手机号：优先明文列，存量记录解密密文；没有时显示「未登记」。
+
+        1.41.0 起显示完整号码（用户决定可记录客人信息，只有登录员工可见）。字段名
+        `masked_phone` 沿用，避免牵动模板与路由。
+        """
+        phone = getattr(customer, "phone", None)
+        if phone:
+            return str(phone)
+        ciphertext = getattr(customer, "phone_ciphertext", None)
         if ciphertext is None:
             return "未登记"
-        phone = self._cipher.decrypt(ciphertext)
-        if len(phone) >= 7:
-            return f"{phone[:3]}****{phone[-4:]}"
-        return "已登记"
+        return self._cipher.decrypt(ciphertext)
 
     @staticmethod
     def _merge_card(customer: Any, counts: Any) -> MergeCustomerCard:

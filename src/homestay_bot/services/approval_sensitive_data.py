@@ -40,7 +40,14 @@ class ApprovalSensitiveData:
         guest_mobile: str,
         special_requests: str | None,
     ) -> None:
-        """只把审批敏感值写入用途隔离密文，并重置清理标记。"""
+        """写入明文列与用途隔离密文，并重置清理标记。
+
+        1.41.0 起同时写明文（用户决定数据库可存客人信息明文）；密文继续写一个版本，
+        回滚到只读密文的旧版本时数据仍可用，下一版删除密文列时一并去掉。
+        """
+        approval.guest_name = guest_name
+        approval.guest_mobile = guest_mobile
+        approval.special_requests = special_requests
         approval.guest_name_ciphertext = self._cipher.encrypt(
             guest_name,
             purpose=self._GUEST_NAME_PURPOSE,
@@ -60,7 +67,13 @@ class ApprovalSensitiveData:
         approval.pii_purged_at = None
 
     def read(self, approval: BookingApproval) -> ApprovalSensitiveFields:
-        """解密未清理审批；缺少必需密文时拒绝静默降级。"""
+        """读取审批客人资料：优先明文列，回填前的存量记录解密密文；缺失时拒绝静默降级。"""
+        if approval.guest_name is not None and approval.guest_mobile is not None:
+            return ApprovalSensitiveFields(
+                guest_name=approval.guest_name,
+                guest_mobile=approval.guest_mobile,
+                special_requests=approval.special_requests,
+            )
         if approval.pii_purged_at is not None:
             return ApprovalSensitiveFields(
                 guest_name=None,

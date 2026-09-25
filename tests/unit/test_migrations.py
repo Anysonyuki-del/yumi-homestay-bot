@@ -369,7 +369,11 @@ def test_sqlite_approval_pii_migration_downgrades_and_reupgrades(
 def test_sqlite_approval_pii_finalization_drops_plaintext_and_is_irreversible(
     tmp_path: Path,
 ) -> None:
-    """0023 只在密文完整时删旧列，并明确拒绝普通 Alembic 降级。"""
+    """0023 只在密文完整时删旧列，并明确拒绝普通 Alembic 降级。
+
+    检查点固定在 0023：1.41.0 的 0028 会按用户决定重新加回同名明文列（初始为空，由回填
+    工具从密文恢复），0023 删除旧明文、不可降级的语义不变。
+    """
     project_root = Path(__file__).resolve().parents[2]
     database_path = tmp_path / "approval-pii-final.db"
     environment = dict(os.environ)
@@ -413,7 +417,7 @@ def test_sqlite_approval_pii_finalization_drops_plaintext_and_is_irreversible(
         )
         connection.commit()
 
-    upgrade = run_alembic("upgrade", "head")
+    upgrade = run_alembic("upgrade", "0023_approval_pii_final")
     assert upgrade.returncode == 0, upgrade.stderr
     with sqlite3.connect(database_path) as connection:
         columns = {
@@ -439,6 +443,15 @@ def test_sqlite_approval_pii_finalization_drops_plaintext_and_is_irreversible(
     current = run_alembic("current")
     assert "0023_approval_pii_final" in current.stdout
     assert "0022_approval_pii\n" not in current.stdout
+
+    # 0028 加回的明文列是空的：0023 删掉的旧明文不会凭空回来，只能由回填工具解密恢复。
+    to_head = run_alembic("upgrade", "head")
+    assert to_head.returncode == 0, to_head.stderr
+    with sqlite3.connect(database_path) as connection:
+        plaintext = connection.execute(
+            "SELECT guest_name, guest_mobile, special_requests FROM booking_approvals"
+        ).fetchone()
+    assert plaintext == (None, None, None)
 
 
 def test_sqlite_approval_pii_finalization_rejects_missing_ciphertext(

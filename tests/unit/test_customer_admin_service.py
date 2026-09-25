@@ -211,8 +211,11 @@ class ManualMergeRepositoryStub:
 
 
 @pytest.mark.asyncio
-async def test_detail_masks_phone_and_never_returns_plaintext() -> None:
-    """CRM 页面只能得到脱敏手机号。"""
+async def test_detail_shows_the_full_phone_to_logged_in_staff() -> None:
+    """1.41.0 起 CRM 页面显示完整手机号：用户决定可记录客人信息，只有登录员工可见。
+
+    存量记录只有密文时解密显示；明文列回填后直接读明文。
+    """
     cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
     repository = CustomerAdminRepositoryStub(cipher)
     service = CustomerAdminService(
@@ -225,13 +228,12 @@ async def test_detail_masks_phone_and_never_returns_plaintext() -> None:
 
     detail = await service.get_detail(7, employee())
 
-    assert detail["masked_phone"] == "138****8000"
+    assert detail["masked_phone"] == "13800138000"
     assert detail["customer"].latest_stay_note == "8.14-8.16春和景明"
     assert detail["customer"].note == "老客户"
     assert repository.latest_stay_note_calls == [
         ([7], date(2026, 8, 14))
     ]
-    assert "13800138000" not in str(detail)
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,8 @@ __pycache__/
 htmlcov/
 data/private_uploads/
 .backups/
+# 数据库导出文件含客人资料（1.41.0 起数据库存明文），永不进入仓库。
+*.dump
 *.log
 .DS_Store
 .idea/

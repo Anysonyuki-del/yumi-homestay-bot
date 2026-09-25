@@ -80,6 +80,10 @@ async def test_page_service_returns_decrypted_view_without_orm_ciphertext() -> N
         approval.guest_name_ciphertext = None
         approval.guest_mobile_ciphertext = None
         approval.special_requests_ciphertext = None
+        # 模拟 1.41.0 之前已到期清除的旧记录：当时的明文列已被 0023 删除，0028 新列为空。
+        approval.guest_name = None
+        approval.guest_mobile = None
+        approval.special_requests = None
         approval.pii_purged_at = datetime(2026, 8, 31, tzinfo=UTC)
         await session.commit()
         purged_detail = await service.get_detail(approval.id)
@@ -87,7 +91,7 @@ async def test_page_service_returns_decrypted_view_without_orm_ciphertext() -> N
     view = detail["approval"]
     assert view.guest_name == "张三"
     assert view.special_requests == "高楼层"
-    assert detail["masked_mobile"] == "138****8000"
+    assert detail["masked_mobile"] == "13800138000"  # 1.41.0 起后台显示完整手机号
     assert not isinstance(view, BookingApproval)
     assert not hasattr(view, "guest_name_ciphertext")
     assert pending[0].guest_name == "张三"

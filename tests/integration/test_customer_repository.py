@@ -1526,6 +1526,7 @@ async def test_merge_inherits_phone_and_moves_source_only_summary() -> None:
         source = Customer(
             display_name="来源客户",
             phone_ciphertext=cipher.encrypt("13800000000"),
+            phone="13800000000",
             phone_fingerprint=cipher.fingerprint("13800000000"),
             note="来源备注",
         )
@@ -1557,6 +1558,7 @@ async def test_merge_inherits_phone_and_moves_source_only_summary() -> None:
 
         assert target.display_name == "目标客户"
         assert target.phone_ciphertext == source.phone_ciphertext
+        assert target.phone == "13800000000"  # 1.41.0 起明文手机号随合并一并继承
         assert target.phone_fingerprint == source.phone_fingerprint
         assert target.note == "来源备注"
         assert summary.customer_id == target.id

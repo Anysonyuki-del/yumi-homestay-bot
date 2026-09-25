@@ -105,7 +105,7 @@ async def test_detail_survives_any_single_reference_failure(broken: str) -> None
     detail = await service.get_detail(1)
 
     assert detail["approval"].approval_code == "AP-1"
-    assert detail["masked_mobile"] == "138****8000"
+    assert detail["masked_mobile"] == "13800138000"  # 1.41.0 起后台显示完整手机号
     # 只有失败的那一项被标记，不因为一个挂了就整体作废。
     assert len(detail["reference_unavailable"]) == 1
     # 下单依赖实时房态与价格，缺任何一项都不许确认；绝不用旧数据兜底放行。

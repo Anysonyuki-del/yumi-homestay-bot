@@ -21,15 +21,6 @@ from homestay_bot.domain.models import (
 )
 
 _SQLITE_CLAIM_LOCKS: WeakKeyDictionary[AsyncEngine, asyncio.Lock] = WeakKeyDictionary()
-_SENSITIVE_PAYLOAD_JOB_TYPES = frozenset(
-    {
-        "wecom_sync",
-        "wecom_process_message",
-        "wecom_send_text",
-        "wecom_send_internal_text",
-        "wecom_send_internal_card",
-    }
-)
 
 
 class SQLAlchemyJobRepository:
@@ -393,9 +384,8 @@ class SQLAlchemyJobRepository:
         job.status = JobStatus.COMPLETED
         job.locked_at = None
         job.last_error_code = None
-        if job.job_type in _SENSITIVE_PAYLOAD_JOB_TYPES:
-            # 完成后不再需要客人或员工通知正文，避免任务表绕过保留策略。
-            job.payload = {}
+        # 1.41.0 起完成后保留载荷供排障：用户决定服务器可以记录客人信息。作业行本身
+        # 仍按保留期清理（retention.JOB_RETENTION_DAYS）。
         await self._session.flush()
 
     async def mark_failed(
@@ -417,7 +407,5 @@ class SQLAlchemyJobRepository:
             )
         else:
             job.status = JobStatus.FAILED
-            if job.job_type in _SENSITIVE_PAYLOAD_JOB_TYPES:
-                # 失败终态只保留状态和错误码，避免任务表长期留存消息正文。
-                job.payload = {}
+            # 失败终态同样保留载荷，排障时能看到发了什么（1.41.0）。
         await self._session.flush()

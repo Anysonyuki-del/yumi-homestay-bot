@@ -110,10 +110,9 @@ class ContextRepositoryStub:
         now: datetime,
         **kwargs,
     ) -> bool:
-        """在同一次模拟事务保存长期摘要并清除原文。"""
+        """在同一次模拟事务保存长期摘要，并把原文标记为已做摘要（1.41.0 起不清空）。"""
         self.long_saved.append(result)
         for item in messages:
-            item.content = None
             item.purged_at = now
         return True
 
@@ -140,8 +139,8 @@ class SummarizerStub:
 
 
 @pytest.mark.asyncio
-async def test_messages_are_purged_only_after_long_summary_succeeds() -> None:
-    """长期摘要成功落库后才允许清除七天外原文。"""
+async def test_messages_are_marked_summarized_only_after_long_summary_succeeds() -> None:
+    """长期摘要成功落库后才把七天外原文标记为已做摘要；原文保留（1.41.0）。"""
     repository = ContextRepositoryStub()
     summarizer = SummarizerStub()
     service = ContextRetentionService(repository, summarizer)
@@ -149,7 +148,7 @@ async def test_messages_are_purged_only_after_long_summary_succeeds() -> None:
     await service.maintain_customer(customer_id=1, now=NOW)
 
     assert summarizer.calls == [("long", ["七天前的原文"])]
-    assert repository.expired[0].content is None
+    assert repository.expired[0].content == "七天前的原文"
     assert repository.expired[0].purged_at == NOW
 
 
@@ -191,8 +190,8 @@ async def test_only_messages_seen_by_summarizer_can_be_purged() -> None:
         BoundedSummarizer(),
     ).maintain_customer(1, NOW)
 
-    assert repository.expired[0].content is None
-    assert repository.expired[1].content == "第二条过期原文"
+    assert repository.expired[0].purged_at == NOW
+    assert repository.expired[1].purged_at is None
 
 
 @pytest.mark.asyncio

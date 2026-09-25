@@ -58,7 +58,7 @@ def test_write_encrypts_each_field_with_separate_purpose() -> None:
 
 
 def test_read_does_not_hide_corrupted_ciphertext() -> None:
-    """已有损坏密文时必须抛错，不能伪造或静默降级。"""
+    """需要回退读取密文（明文尚未回填）且密文损坏时必须抛错，不能伪造或静默降级。"""
     item = approval()
     service = sensitive_data()
     service.write(
@@ -67,6 +67,8 @@ def test_read_does_not_hide_corrupted_ciphertext() -> None:
         guest_mobile="13800138000",
         special_requests=None,
     )
+    item.guest_name = None
+    item.guest_mobile = None
     item.guest_name_ciphertext = b"corrupted"
 
     with pytest.raises(InvalidToken):
@@ -103,3 +105,42 @@ def test_booking_rejects_intentionally_purged_fields() -> None:
 
     with pytest.raises(ValueError, match="已清理"):
         service.require_for_booking(item)
+
+
+def test_write_also_stores_plaintext_and_read_prefers_it() -> None:
+    """1.41.0 起同时写明文列（用户决定数据库可存客人信息明文），读取优先明文。
+
+    密文仍一并写入一个版本，便于回滚到只读密文的旧版本。
+    """
+    item = approval()
+    service = sensitive_data()
+
+    service.write(item, guest_name="张三", guest_mobile="13800138000", special_requests="高楼层")
+
+    assert (item.guest_name, item.guest_mobile, item.special_requests) == (
+        "张三",
+        "13800138000",
+        "高楼层",
+    )
+    assert item.guest_name_ciphertext is not None
+    item.guest_name_ciphertext = b"not-a-valid-token"
+    item.guest_mobile_ciphertext = b"not-a-valid-token"
+    values = service.read(item)
+    assert (values.guest_name, values.guest_mobile, values.special_requests) == (
+        "张三",
+        "13800138000",
+        "高楼层",
+    )
+
+
+def test_read_falls_back_to_ciphertext_for_rows_not_yet_backfilled() -> None:
+    """回填前的存量记录只有密文：照旧解密读取。"""
+    item = approval()
+    service = sensitive_data()
+    service.write(item, guest_name="李四", guest_mobile="13900139000", special_requests=None)
+    item.guest_name = None
+    item.guest_mobile = None
+
+    values = service.read(item)
+
+    assert (values.guest_name, values.guest_mobile) == ("李四", "13900139000")

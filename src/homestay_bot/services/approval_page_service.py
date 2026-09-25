@@ -135,10 +135,10 @@ class ApprovalPageService:
             "can_confirm": needs_reference and not unavailable,
             "reference_unavailable": unavailable,
             "approval": self._to_view(approval),
+            # 1.41.0 起后台显示完整手机号（用户决定可记录客人信息，只有登录员工可见）；
+            # 模板变量沿用原名，已清除的旧记录仍显示「已清理」。
             "masked_mobile": (
-                self.mask_mobile(sensitive.guest_mobile)
-                if sensitive.guest_mobile is not None
-                else "已清理"
+                sensitive.guest_mobile if sensitive.guest_mobile is not None else "已清理"
             ),
             "properties": properties,
             "reference_prices": prices,
@@ -218,13 +218,6 @@ class ApprovalPageService:
         )
         await self._session.flush()
         return approval
-
-    @staticmethod
-    def mask_mobile(mobile: str) -> str:
-        """保留手机号首三位和末四位，短号码使用通用掩码。"""
-        if len(mobile) >= 7:
-            return f"{mobile[:3]}{'*' * (len(mobile) - 7)}{mobile[-4:]}"
-        return "*" * len(mobile)
 
     def _to_view(self, approval: BookingApproval) -> ApprovalPageView:
         """解密模板所需字段并复制到不可变视图，禁止泄露 ORM 密文字段。"""

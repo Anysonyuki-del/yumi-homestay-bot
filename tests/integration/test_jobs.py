@@ -40,7 +40,8 @@ async def test_job_status_lookup_uses_dedupe_key_without_payload() -> None:
             is JobStatus.PENDING
         )
         await repository.mark_completed(job)
-        assert job.payload == {}
+        # 1.41.0 起完成后保留载荷供排障（用户决定服务器可记录客人信息）。
+        assert job.payload == {"content": "不应依赖这段正文"}
         assert (
             await repository.status_for_dedupe_key("outbox:fast-ack")
             is JobStatus.COMPLETED
@@ -484,8 +485,11 @@ async def test_outbound_messages_are_committed_to_outbox_before_network_send() -
 
 
 @pytest.mark.asyncio
-async def test_completed_wecom_jobs_purge_content_payloads() -> None:
-    """完成的企业微信正文任务不得长期保存客人或员工通知内容。"""
+async def test_completed_wecom_jobs_keep_content_payloads() -> None:
+    """完成的企业微信正文任务保留载荷供排障（1.41.0，用户决定服务器可记录客人信息）。
+
+    作业行本身仍按保留期（30 天）清理；正文的长期副本在消息表。
+    """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -541,7 +545,7 @@ async def test_completed_wecom_jobs_purge_content_payloads() -> None:
         for job in jobs:
             await session.refresh(job)
 
-        assert all(job.payload == {} for job in jobs)
+        assert all(job.payload for job in jobs)
 
     await engine.dispose()
 
@@ -727,8 +731,8 @@ async def test_stale_recovery_marks_retryable_job_failed_at_max_attempts() -> No
 
 
 @pytest.mark.asyncio
-async def test_terminal_failed_wecom_jobs_purge_payload() -> None:
-    """企业微信任务进入失败终态后不得继续保留正文。"""
+async def test_terminal_failed_wecom_jobs_keep_payload() -> None:
+    """企业微信任务进入失败终态后保留载荷，排障时能看到发了什么（1.41.0）。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -810,7 +814,7 @@ async def test_terminal_failed_wecom_jobs_purge_payload() -> None:
             for job in [sync_job, process_job, send_job, internal_job, card_job]
         )
         assert all(
-            job.payload == {}
+            job.payload
             for job in [sync_job, process_job, send_job, internal_job, card_job]
         )
 

@@ -333,8 +333,8 @@ async def test_a_failed_part_stops_the_chain_and_alerts_staff(
         if job.job_type == "wecom_send_text" and job.status is JobStatus.FAILED
     ]
     alerts = [job for job in jobs if job.job_type == "guest_reply_chain_undelivered"]
-    # 终态失败的任务载荷按既有隐私规则清空，不留客人正文。
-    assert len(failed) == 1 and failed[0].payload == {}
+    # 1.41.0 起终态失败的任务保留载荷供排障（用户决定服务器可记录客人信息）。
+    assert len(failed) == 1 and failed[0].payload["content"] == PARTS[1]
     assert len(alerts) == 1
     assert alerts[0].payload["index"] == 2
     assert alerts[0].payload["total"] == 3

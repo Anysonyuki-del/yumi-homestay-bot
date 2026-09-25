@@ -11,8 +11,8 @@ from homestay_bot.logging import (
 )
 
 
-def test_log_filter_redacts_tokens_and_mobile_numbers() -> None:
-    """日志输出不得暴露外部密钥和完整手机号。"""
+def test_log_filter_redacts_tokens_but_keeps_guest_mobile_numbers() -> None:
+    """日志不得暴露外部密钥；客人手机号按用户 2026-09-26 决定原样记录（1.41.0）。"""
     filtered = redact_log_fields(
         {
             "hostex_access_token": "secret-token",
@@ -22,7 +22,7 @@ def test_log_filter_redacts_tokens_and_mobile_numbers() -> None:
     )
 
     assert filtered["hostex_access_token"] == "[REDACTED]"
-    assert filtered["mobile"] == "138****8000"
+    assert filtered["mobile"] == "13800138000"
     assert filtered["request_id"] == "RT-1"
 
 
@@ -116,7 +116,7 @@ def test_configure_logging_redaction_protects_child_logger_records() -> None:
 
 
 def test_log_filter_redacts_mapping_message_and_extra_fields() -> None:
-    """字典消息和 logger.extra 中的敏感字段也不得绕过过滤器。"""
+    """字典消息和 logger.extra 中的密钥也不得绕过过滤器；手机号原样保留（1.41.0）。"""
     record = logging.LogRecord(
         "homestay_bot.test",
         logging.INFO,
@@ -131,9 +131,9 @@ def test_log_filter_redacts_mapping_message_and_extra_fields() -> None:
 
     assert SensitiveDataFilter().filter(record) is True
     assert record.msg["token"] == "[REDACTED]"
-    assert record.msg["nested"]["phone"] == "138****8000"
+    assert record.msg["nested"]["phone"] == "13800138000"
     assert record.secret == "[REDACTED]"
-    assert record.guest_phone == "139****9000"
+    assert record.guest_phone == "13900139000"
 
 
 def _record_with_exception(message: str) -> logging.LogRecord:

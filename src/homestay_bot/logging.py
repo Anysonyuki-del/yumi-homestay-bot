@@ -9,7 +9,6 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     r"token|secret|password|api[_-]?key|aes[_-]?key|authorization",
     re.IGNORECASE,
 )
-_MOBILE_KEY_PATTERN = re.compile(r"mobile|phone", re.IGNORECASE)
 _TOKEN_IN_TEXT_PATTERN = re.compile(
     r"(?i)(Hostex-Access-Token|Authorization)\s*:\s*\S+"
 )
@@ -69,19 +68,14 @@ _STANDARD_RECORD_FIELDS = frozenset(
 )
 
 
-def _mask_mobile(value: str) -> str:
-    """保留号码首三位和末四位，其余字符替换为星号。"""
-    if len(value) >= 7:
-        return f"{value[:3]}{'*' * (len(value) - 7)}{value[-4:]}"
-    return "[REDACTED]"
-
-
 def _redact_value(key: str, value: Any) -> Any:
-    """根据字段名递归脱敏，不改变可安全审计的请求编号。"""
+    """根据字段名递归脱敏密钥与令牌，不改变可安全审计的请求编号。
+
+    客人手机号不再打码：用户 2026-09-26 决定服务器日志可以记录客人信息（1.41.0）。
+    密钥、令牌、密码仍然脱敏，它们泄露会导致服务器被入侵，与客人信息无关。
+    """
     if _SENSITIVE_KEY_PATTERN.search(key):
         return "[REDACTED]"
-    if _MOBILE_KEY_PATTERN.search(key) and isinstance(value, str):
-        return _mask_mobile(value)
     if isinstance(value, Mapping):
         return {item_key: _redact_value(str(item_key), item) for item_key, item in value.items()}
     if isinstance(value, list):

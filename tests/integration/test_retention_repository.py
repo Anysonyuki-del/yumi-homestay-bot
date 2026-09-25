@@ -107,7 +107,7 @@ async def test_retention_purges_only_expired_terminal_records() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retention_purges_only_expired_terminal_approval_pii() -> None:
+async def test_retention_no_longer_purges_approval_pii() -> None:
     """只清理达到期限的终态审批 PII，开放或近期审批必须完整保留。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -195,21 +195,12 @@ async def test_retention_purges_only_expired_terminal_approval_pii() -> None:
         for record in records:
             await session.refresh(record)
 
-        assert deleted["booking_approval_pii"] == 3
-        purged_codes = {
-            record.approval_code
-            for record in records
-            if record.pii_purged_at is not None
-        }
-        assert purged_codes == {"BOOKED-OLD", "REJECTED-OLD", "CONFLICT-OLD"}
-        for record in records:
-            if record.approval_code in purged_codes:
-                assert record.guest_name_ciphertext is None
-                assert record.guest_mobile_ciphertext is None
-                assert record.special_requests_ciphertext is None
-            else:
-                assert record.guest_name_ciphertext == b"encrypted-name"
-                assert record.guest_mobile_ciphertext == b"encrypted-mobile"
+        # 1.41.0 起审批客人资料不再到期清除（用户决定数据库可长期保存客人信息）；
+        # 计数键保留、恒为 0，调度与统计不用改。
+        assert deleted["booking_approval_pii"] == 0
+        assert all(record.pii_purged_at is None for record in records)
+        assert all(record.guest_name_ciphertext == b"encrypted-name" for record in records)
+        assert all(record.guest_mobile_ciphertext == b"encrypted-mobile" for record in records)
 
     await engine.dispose()
 

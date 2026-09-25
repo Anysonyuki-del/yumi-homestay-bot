@@ -2,14 +2,13 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, and_, delete, or_, select, update
+from sqlalchemy import ColumnElement, delete, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from homestay_bot.domain.enums import ApprovalStatus, JobStatus
+from homestay_bot.domain.enums import JobStatus
 from homestay_bot.domain.models import (
     AuditLog,
-    BookingApproval,
     BusinessTask,
     ExternalRequest,
     HostexWebhookEvent,
@@ -41,8 +40,6 @@ class SQLAlchemyRetentionRepository:
     EXTERNAL_REQUEST_RETENTION_DAYS = 90
     WEBHOOK_RETENTION_DAYS = 90
     AUDIT_RETENTION_DAYS = 365
-    BOOKED_APPROVAL_PII_RETENTION_DAYS = 30
-    TERMINAL_APPROVAL_PII_RETENTION_DAYS = 90
     ARCHIVED_TASK_RETENTION_DAYS = 180
     # 通用清理按每类记录计数，归档清理按父任务计数；附件行数和清理载荷不受
     # 这个上限约束。
@@ -63,52 +60,15 @@ class SQLAlchemyRetentionRepository:
 
         先按原资格条件和主键顺序选出至多 batch_size 个编号，再对这些编号执行
         修改；修改语句仍带原资格条件，快照之后状态已变化的行不会被误删。比较符
-        保持原样：审批 PII 用 `<=`，其余用 `<`。调度方依据「某类是否满批」决定
+        保持原样，均用 `<`（审批客人资料 1.41.0 起不再清除）。调度方依据「某类是否满批」决定
         是否继续下一批。
         """
         _require_positive_batch(batch_size)
         current = (now or datetime.now(UTC)).astimezone(UTC)
-        booked_pii_cutoff = (
-            current - timedelta(days=self.BOOKED_APPROVAL_PII_RETENTION_DAYS)
-        ).date()
-        terminal_pii_cutoff = current - timedelta(
-            days=self.TERMINAL_APPROVAL_PII_RETENTION_DAYS
-        )
-        approval_pii_eligible: Sequence[ColumnElement[bool]] = (
-            BookingApproval.pii_purged_at.is_(None),
-            or_(
-                and_(
-                    BookingApproval.status == ApprovalStatus.BOOKED,
-                    BookingApproval.check_out_date <= booked_pii_cutoff,
-                ),
-                and_(
-                    BookingApproval.status.in_(
-                        [ApprovalStatus.REJECTED, ApprovalStatus.CONFLICT]
-                    ),
-                    BookingApproval.updated_at <= terminal_pii_cutoff,
-                ),
-            ),
-            or_(
-                BookingApproval.guest_name_ciphertext.is_not(None),
-                BookingApproval.guest_mobile_ciphertext.is_not(None),
-                BookingApproval.special_requests_ciphertext.is_not(None),
-            ),
-        )
         deleted: dict[str, int] = {}
-        candidate_ids = await self._candidate_ids(
-            BookingApproval, approval_pii_eligible, batch_size
-        )
-        deleted["booking_approval_pii"] = await self._execute_bounded(
-            update(BookingApproval)
-            .where(BookingApproval.id.in_(candidate_ids), *approval_pii_eligible)
-            .values(
-                guest_name_ciphertext=None,
-                guest_mobile_ciphertext=None,
-                special_requests_ciphertext=None,
-                pii_purged_at=current,
-            ),
-            candidate_ids,
-        )
+        # 1.41.0 起审批客人资料不再到期清除：用户 2026-09-26 决定数据库可以长期保存客人
+        # 信息。计数键保留、恒为 0，调度方与统计不用改。
+        deleted["booking_approval_pii"] = 0
         deletions: tuple[tuple[str, Any, Sequence[ColumnElement[bool]]], ...] = (
             (
                 "jobs",

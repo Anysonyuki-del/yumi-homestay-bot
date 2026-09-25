@@ -460,7 +460,8 @@ async def test_two_customer_contexts_remain_isolated_across_seven_days() -> None
         assert first_summary is not None
         assert "客户甲" in first_summary.long_summary
         assert "客户乙" not in first_summary.long_summary
-        assert first_old.content is None
+        # 1.41.0 起长摘要后原文保留（用户决定服务器可记录客人信息），只标记已做摘要。
+        assert first_old.content is not None and first_old.purged_at is not None
         assert second_old.content == "客户乙七天前需要停车"
         assert second_summary is None
 

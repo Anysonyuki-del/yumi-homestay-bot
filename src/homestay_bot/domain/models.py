@@ -195,6 +195,8 @@ class Customer(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     phone_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # 1.41.0 起手机号存明文（用户决定数据库可存客人信息明文）；密文保留一个版本供回滚。
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     phone_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     merged_into_customer_id: Mapped[int | None] = mapped_column(
@@ -693,6 +695,10 @@ class BookingApproval(TimestampMixin, Base):
         LargeBinary,
         nullable=True,
     )
+    # 1.41.0 起审批客人资料同时存明文，读取优先明文；密文保留一个版本供回滚。
+    guest_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    guest_mobile: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    special_requests: Mapped[str | None] = mapped_column(Text, nullable=True)
     pii_purged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

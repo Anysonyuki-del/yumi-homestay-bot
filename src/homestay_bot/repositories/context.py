@@ -338,7 +338,7 @@ class SQLAlchemyContextRepository:
         customer_id: int,
         before: datetime,
     ) -> list[Message]:
-        """按处理顺序返回七天外仍有正文的消息。"""
+        """按处理顺序返回七天外、有正文且尚未并入长摘要的消息。"""
         return list(
             (
                 await self._session.scalars(
@@ -413,7 +413,12 @@ class SQLAlchemyContextRepository:
         *,
         expected_version: int | None = None,
     ) -> bool:
-        """版本一致时原子写长摘要并清除已覆盖正文。"""
+        """版本一致时原子写长摘要，并把已覆盖的原文标记为已做摘要。
+
+        1.41.0 起原文不再清空（用户决定服务器可记录客人信息）。`purged_at` 的含义随之
+        变为「已并入长摘要」，`list_expired_unpurged` 靠它避免重复摘要；模型上下文仍只取
+        最近 7 天，这一点不变。
+        """
         summary = await self._get_or_create_summary(
             customer_id,
             expected_version=expected_version,
@@ -424,7 +429,6 @@ class SQLAlchemyContextRepository:
         summary.long_cutoff_at = max(item.sent_at for item in messages)
         summary.version += 1
         for item in messages:
-            item.content = None
             item.purged_at = now
             item.memory_processed_at = now
         await self._save_memory_candidates(customer_id, result, messages, now)
