@@ -86,10 +86,17 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
     ),
     PropertyTopic(
         "电梯",
-        _topic_pattern(r"电梯|elevator"),
-        "电梯 elevator",
-        english="the elevator",
-        recall_hints=_topic_pattern(r"\blift\b"),
+        # 房号或「房间」开头问几楼、爬楼，也是在问本店楼层（「401要爬几层楼啊」）。
+        # 不收不带房号的「爬楼」「楼梯」：「黄鹤楼要爬几层」是旅游问题，误判成本店
+        # 问题会被换成「尚未确认」的保守回复。
+        _topic_pattern(
+            r"电梯|elevator|"
+            r"(?:(?<!\d)[1-9]\d{2}(?!\d|\s*(?:元|块))(?:号房|房)?|房间|客房)"
+            r"[^，。？?！!]{0,6}(?:几楼|几层|楼层|爬楼|楼梯)"
+        ),
+        "电梯 楼梯 楼层 elevator stairs",
+        english="the elevator and floors",
+        recall_hints=_topic_pattern(r"\blift\b|楼梯|楼层|爬楼|几层楼|\bstairs\b"),
     ),
     PropertyTopic(
         "厨房",

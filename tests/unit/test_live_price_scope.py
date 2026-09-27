@@ -359,3 +359,29 @@ def test_weekend_question_queries_both_stays_and_shows_both_options() -> None:
         m for m in completions.requests[1]["messages"] if m.get("role") == "tool"
     )
     assert len(json.loads(tool_message["content"])) == 2
+
+
+def test_room_floor_question_uses_reviewed_stairs_answer() -> None:
+    """「401要爬几层楼」识别为楼层问题，按审核知识答出四楼、只能走楼梯。
+
+    回归门禁 K-电梯-C（1.46.0 第一次运行）：问法里没有「电梯」，没有识别成本店话题，
+    模型自由回答时 3 次有 2 次漏了四楼、只能走楼梯。
+    """
+    import asyncio
+    import json
+
+    from homestay_bot.services.knowledge_service import KnowledgeSnippet
+    from tests.unit.test_deepseek_client import ChatClientStub, decision_payload
+    from tests.unit.test_reply_evidence_boundaries import Knowledge, make_assistant
+
+    stairs = "楼里没有电梯，一共4层，只能走楼梯。401在四楼。"
+    client = ChatClientStub([json.dumps(
+        {**decision_payload(), "reply_text": "箱子重的话上楼慢一点、扶好栏杆。"}
+    )])
+    decision = asyncio.run(make_assistant(Knowledge([
+        KnowledgeSnippet(1, "通行", "有电梯吗？房间在几楼？", stairs, scope="global")
+    ]), client=client).respond(
+        guest_identifier="synthetic", language=Language.ZH,
+        messages=[{"role": "user", "content": "401要爬几层楼啊，箱子很重"}],
+    ))
+    assert "四楼" in decision.reply_text and "楼梯" in decision.reply_text

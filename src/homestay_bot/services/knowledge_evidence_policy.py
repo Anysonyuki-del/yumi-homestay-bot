@@ -51,7 +51,8 @@ _ATTRIBUTE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "location",
         re.compile(
-            r"在哪|哪里|哪儿|放哪|位置|放在|怎么走|几楼|楼层"
+            # 「几层」「爬楼」问的是楼层位置（「401要爬几层楼」，门禁 K-电梯-C）。
+            r"在哪|哪里|哪儿|放哪|位置|放在|怎么走|几楼|楼层|几层|爬楼"
             r"|\bwhere\b|which\s+floor|how\s+do\s+i\s+get",
             re.IGNORECASE,
         ),
