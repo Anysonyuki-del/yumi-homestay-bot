@@ -10,15 +10,12 @@ from homestay_bot.services.fact_policy import (
 )
 
 _ZH_HUMAN_CONTACT_REPLY = "我会立即联系管家来处理，请您稍等。"
-_EN_HUMAN_CONTACT_REPLY = (
-    "I’ll contact our on-duty host immediately. Please wait a moment."
-)
+_EN_HUMAN_CONTACT_REPLY = "I’ll contact our on-duty host immediately. Please wait a moment."
 _ZH_HIGH_RISK_ACKNOWLEDGEMENT = "您的情况我已记录。"
 _ZH_HIGH_RISK_HANDOFF = "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
 _EN_HIGH_RISK_ACKNOWLEDGEMENT = "I’ve recorded the situation."
 _EN_HIGH_RISK_HANDOFF = (
-    "I’ll contact the on-duty host immediately to follow up. "
-    "Please keep your phone available."
+    "I’ll contact the on-duty host immediately to follow up. Please keep your phone available."
 )
 
 _ZH_WEATHER_PATTERN = re.compile(r"天气|气温|温度|下雨|降雨|阵雨|雷雨|晴天")
@@ -26,9 +23,7 @@ _EN_WEATHER_PATTERN = re.compile(
     r"\b(?:weather|temperature|rain|storm|sunny|forecast)\b",
     re.IGNORECASE,
 )
-_ZH_UMBRELLA_PATTERN = re.compile(
-    r"伞|雨衣|雨具|防雨"
-)
+_ZH_UMBRELLA_PATTERN = re.compile(r"伞|雨衣|雨具|防雨")
 _EN_UMBRELLA_PATTERN = re.compile(
     r"\b(?:umbrella|raincoat|rain[ -]?gear|waterproof)\b",
     re.IGNORECASE,
@@ -168,9 +163,7 @@ _EN_HIGH_RISK_SAFETY_SENTENCE = re.compile(
 )
 
 _ZH_FACILITY_FALLBACK = "请先停止使用该设施，不要拆卸或强行操作。"
-_EN_FACILITY_FALLBACK = (
-    "Please stop using the facility. Do not disassemble or force it."
-)
+_EN_FACILITY_FALLBACK = "Please stop using the facility. Do not disassemble or force it."
 _ZH_FACILITY_SUBMITTED = "我已提交管家人工处理，请您稍等。"
 _EN_FACILITY_SUBMITTED = (
     "I've submitted this to the host for manual handling. Please wait a moment."
@@ -188,14 +181,10 @@ _EN_UNSAFE_FACILITY_ACTION = re.compile(
     re.IGNORECASE,
 )
 _ZH_NEGATED_FACILITY_ACTION = re.compile(
-    r"(?:不要|切勿|请勿|避免|不得).{0,12}(?:"
-    + _ZH_UNSAFE_FACILITY_ACTION.pattern
-    + r")"
+    r"(?:不要|切勿|请勿|避免|不得).{0,12}(?:" + _ZH_UNSAFE_FACILITY_ACTION.pattern + r")"
 )
 _EN_NEGATED_FACILITY_ACTION = re.compile(
-    r"(?:do not|don't|never|avoid).{0,24}(?:"
-    + _EN_UNSAFE_FACILITY_ACTION.pattern
-    + r")",
+    r"(?:do not|don't|never|avoid).{0,24}(?:" + _EN_UNSAFE_FACILITY_ACTION.pattern + r")",
     re.IGNORECASE,
 )
 _ZH_FACILITY_FOLLOW_UP = re.compile(
@@ -228,10 +217,7 @@ def _contains_ungrounded_property_claim(text: str) -> bool:
             _PROPERTY_SIDE_ANCHOR_PATTERN.search(text)
             and _PROPERTY_SUPPLY_CLAIM_PATTERN.search(text)
         )
-        or (
-            _PROPERTY_SERVICE_PATTERN.search(text)
-            and _SERVICE_OFFER_PATTERN.search(text)
-        )
+        or (_PROPERTY_SERVICE_PATTERN.search(text) and _SERVICE_OFFER_PATTERN.search(text))
         # 全局底层规则：说的是民宿、又说不出来源的句子，默认不放行。上面几条
         # 按类型的判据保留，它们还覆盖不提民宿的服务揽活（「帮叫车，跟我说」）。
         or is_unsourced_homestay_claim(text)
@@ -311,9 +297,7 @@ def _drop_sentences(content: str, should_drop: Callable[[str], bool]) -> str:
             safe_lines.append("".join(safe_sentences).strip())
     safe_lines = _drop_emptied_headings(safe_lines)
 
-    numbered_line = re.compile(
-        r"^(?P<indent>\s*)(?P<number>\d{1,2})[.、．）)]\s*(?P<body>.+)$"
-    )
+    numbered_line = re.compile(r"^(?P<indent>\s*)(?P<number>\d{1,2})[.、．）)]\s*(?P<body>.+)$")
     if sum(bool(numbered_line.match(line)) for line in safe_lines) >= 2:
         sequence = 0
         renumbered: list[str] = []
@@ -323,9 +307,7 @@ def _drop_sentences(content: str, should_drop: Callable[[str], bool]) -> str:
                 renumbered.append(line)
                 continue
             sequence += 1
-            renumbered.append(
-                f"{match.group('indent')}{sequence}. {match.group('body')}"
-            )
+            renumbered.append(f"{match.group('indent')}{sequence}. {match.group('body')}")
         safe_lines = renumbered
     return "\n".join(safe_lines).strip()
 
@@ -359,11 +341,15 @@ def _contains_unsafe_commitment(sentence: str) -> bool:
 # 安排。」——本轮任务 0、审批 0、提醒 0、无管家通知，而模型手里的订单是 8 月 14 至
 # 16 日，与「明天」相差近一个月。
 _SOFT_COMMITMENT_PATTERNS = (
+    # 动作状态只能由本地登记结果追加，模型的补送、通知及后续回访不构成事实。
+    re.compile(
+        r"(?:一并|给您|给你).{0,12}(?:补上|送上|送来|安排)|我会.{0,20}(?:核对|告诉您|通知您)|已(?:提交|通知|联系|安排).{0,16}(?:员工|管家|工作人员)"
+    ),
     # 第一人称软承诺：不含确定性副词，但仍然把动作揽了下来。
     re.compile(
         r"(?:我|我们|我这边|这边)[^。！？；;!?]{0,12}"
         r"(?:帮您|给您|替您|帮你|好|先|再)[^。！？；;!?]{0,8}"
-        r"(?:安排|确认|核实|处理|跟进|准备|留意|协调|落实|对接)"
+        r"(?:安排|确认|核实|处理|跟进|准备|预留|保留|留|协调|落实|对接)"
     ),
     # 对客人提出的安排直接应允：系统没有任何记录，没人会照办。限定同句出现
     # 到店、入住、寄存一类安排词，避免误删「您这样理解没有问题」这类澄清。
@@ -449,9 +435,7 @@ def _safe_sentences(content: str) -> list[str]:
 
 def _safe_human_sentences(content: str, language: Language) -> list[str]:
     """人工场景只保留中性确认、歉意和明确的低风险安全指令。"""
-    safe_pattern = (
-        _EN_SAFE_HUMAN_SENTENCE if language is Language.EN else _ZH_SAFE_HUMAN_SENTENCE
-    )
+    safe_pattern = _EN_SAFE_HUMAN_SENTENCE if language is Language.EN else _ZH_SAFE_HUMAN_SENTENCE
     # 带「已收到」「请先」的句子也可能夹带民宿事实（「已收到，前台备有矿泉水」），
     # 人工场景的回复同样受「不得编造事实」约束。
     return [
@@ -481,8 +465,7 @@ def _contains_facility_follow_up_or_submission(
             or _EN_FACILITY_SUBMISSION_CLAIM.search(sentence)
         )
     return bool(
-        _ZH_FACILITY_FOLLOW_UP.search(sentence)
-        or _ZH_FACILITY_SUBMISSION_CLAIM.search(sentence)
+        _ZH_FACILITY_FOLLOW_UP.search(sentence) or _ZH_FACILITY_SUBMISSION_CLAIM.search(sentence)
     )
 
 
@@ -490,13 +473,9 @@ def _contains_facility_follow_up_or_submission(
 # （「如果还能用，就去别处」），整类去掉，而不是逐种说法打补丁。
 _ZH_CONDITIONAL = re.compile(r"如果|假如|假设|万一|要是|倘若|一旦|只要|的话|若(?!干)")
 _EN_CONDITIONAL = re.compile(r"\b(?:if|unless|in\s+case|whenever)\b", re.IGNORECASE)
-_FACILITY_GREETING_ONLY = re.compile(
-    r"^(?:您好|你好|hello|hi|hey)[\s，,!！。.]*$", re.IGNORECASE
-)
+_FACILITY_GREETING_ONLY = re.compile(r"^(?:您好|你好|hello|hi|hey)[\s，,!！。.]*$", re.IGNORECASE)
 # 只在设施建议里使用：共用承诺过滤若加入「X 分钟内到」，会误删「步行 10 分钟到地铁站」。
-_ZH_FACILITY_TIME_PROMISE = re.compile(
-    r"(?:分钟|小时).{0,6}(?:到|赶到|上门|修好|处理好)"
-)
+_ZH_FACILITY_TIME_PROMISE = re.compile(r"(?:分钟|小时).{0,6}(?:到|赶到|上门|修好|处理好)")
 _EN_FACILITY_TIME_PROMISE = re.compile(
     r"\b(?:minutes?|hours?)\b.{0,20}\b(?:arrive|come|fix|repair)", re.IGNORECASE
 )
@@ -517,9 +496,7 @@ def _clean_facility_item(item: str, language: Language) -> str | None:
     text = _FACILITY_ITEM_END.sub("", text)
     if not text or _FACILITY_GREETING_ONLY.match(text):
         return None
-    limit = (
-        _EN_FACILITY_ITEM_MAX_CHARS if language is Language.EN else _ZH_FACILITY_ITEM_MAX_CHARS
-    )
+    limit = _EN_FACILITY_ITEM_MAX_CHARS if language is Language.EN else _ZH_FACILITY_ITEM_MAX_CHARS
     conditional = _EN_CONDITIONAL if language is Language.EN else _ZH_CONDITIONAL
     time_promise = (
         _EN_FACILITY_TIME_PROMISE if language is Language.EN else _ZH_FACILITY_TIME_PROMISE
@@ -543,10 +520,12 @@ def _clean_facility_item(item: str, language: Language) -> str | None:
 def prepare_facility_advice_reply(
     advice: list[str] | None,
     language: Language,
+    *,
+    action_reply: str | None = None,
 ) -> str:
     """用模型给出的建议清单组装设施故障回复，开头、结尾与标点全部由本地负责。
 
-    只在维修任务创建成功后调用，因此收尾的「已提交管家人工处理」一定为真。
+    成功时使用默认收尾；任务或通知失败时必须传入实际动作结果。
     清单缺失或逐条检查后一条不剩时，使用固定兜底，不发送空回复。
     """
     # 一条建议里写了几句时拆开逐句检查：夹带的承诺只删那一句，安全建议保留。
@@ -566,9 +545,10 @@ def prepare_facility_advice_reply(
             break
     if language is Language.EN:
         body = " ".join(f"{item}." for item in kept) or _EN_FACILITY_FALLBACK
-        return f"Thanks for letting us know. {body} {_EN_FACILITY_SUBMITTED}"
+        closing = action_reply if action_reply is not None else _EN_FACILITY_SUBMITTED
+        return f"Thanks for letting us know. {body} {closing}"
     body = "".join(f"{item}。" for item in kept) or _ZH_FACILITY_FALLBACK
-    return f"收到，{body}{_ZH_FACILITY_SUBMITTED}"
+    return f"收到，{body}{action_reply if action_reply is not None else _ZH_FACILITY_SUBMITTED}"
 
 
 def _high_risk_reply(content: str, language: Language) -> str:
@@ -669,9 +649,7 @@ def _warm_weather_reply(content: str, language: Language) -> str:
         inline="我帮您看了一下，",
         standalone="我帮您看了一下：",
     )
-    if re.search(r"下雨|降雨|阵雨|雷雨", content) and not _ZH_UMBRELLA_PATTERN.search(
-        content
-    ):
+    if re.search(r"下雨|降雨|阵雨|雷雨", content) and not _ZH_UMBRELLA_PATTERN.search(content):
         content = f"{content.rstrip()}出门记得带伞。"
     return content
 
@@ -689,9 +667,7 @@ def _plain_text_guest_reply(content: str) -> str:
 
 # 小节标题：紧跟在句末标点或冒号之后、不超过 8 个字的【……】。句中的【平安武汉】
 # 这类名称前面没有句末标点，不会被当成标题。
-_INLINE_SECTION_HEADER = re.compile(
-    r"(?<=[。！？；;!?：:])[ \t]*\n?(?=【[^【】\n]{1,8}】)"
-)
+_INLINE_SECTION_HEADER = re.compile(r"(?<=[。！？；;!?：:])[ \t]*\n?(?=【[^【】\n]{1,8}】)")
 # 本地拼接的时效说明（见 integrations/tourism.py 的自然收尾），固定另起一段。
 _EVIDENCE_FOOTER_LEAD = re.compile(
     r"(?<=[^\n])[ \t]*\n?(?=这是我今天（\d{1,2}月\d{1,2}日）帮您查到的|I checked this latest )"
@@ -763,7 +739,7 @@ def _pieces(paragraph: str, budget: int) -> list[str]:
         while _byte_len(sentence) > budget:
             head = _truncate_utf8(sentence, budget)
             pieces.append(head)
-            sentence = sentence[len(head):]
+            sentence = sentence[len(head) :]
         if sentence:
             pieces.append(sentence)
     return pieces
@@ -821,17 +797,11 @@ def _part_label(index: int, total: int, language: Language) -> str:
 def split_guest_reply(content: str, language: Language) -> list[str]:
     """把机器人回复拆成若干条可发送的文本，每条都在企业微信上限以内。
 
-    放得进一条时原样返回。超过段数上限只可能出现在普通回复（审核知识在证据计划
-    阶段已按 `fits_guest_reply_parts` 拦下），此时最后一段按字节收口并保留时效说明。
+    规划阶段控制答案预算；最终追加登记结果后仍须完整分段，不能截断条件或动作状态。
     """
     if _byte_len(content) <= WECOM_TEXT_MAX_BYTES:
         return [content]
     parts = _split_parts(content)
-    if len(parts) > GUEST_REPLY_MAX_PARTS:
-        kept = parts[: GUEST_REPLY_MAX_PARTS - 1]
-        rest = "\n\n".join(parts[GUEST_REPLY_MAX_PARTS - 1 :])
-        kept.append(fit_wecom_text(rest, max_bytes=GUEST_REPLY_PART_MAX_BYTES))
-        parts = kept
     total = len(parts)
     return [f"{_part_label(index, total, language)}{part}" for index, part in enumerate(parts, 1)]
 
@@ -894,9 +864,7 @@ def sanitize_guest_reply(
         ).strip()
         if not safe_content:
             acknowledgement = (
-                "Thanks for letting us know."
-                if language is Language.EN
-                else "我已收到您的诉求。"
+                "Thanks for letting us know." if language is Language.EN else "我已收到您的诉求。"
             )
             return f"{acknowledgement}{separator}{handoff}"
         return f"{safe_content}{separator}{handoff}"

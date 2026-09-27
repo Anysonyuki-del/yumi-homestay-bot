@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 
 from homestay_bot.domain.enums import Language
+from homestay_bot.services.answer_policy import is_policy_inquiry
 from homestay_bot.services.guest_reply_policy import prepare_guest_reply
 
 
@@ -20,7 +21,7 @@ class ComplaintService:
 
     _refund = re.compile(r"退款|退钱|退费|赔偿|赔钱|补偿|refund|compensation", re.IGNORECASE)
     _platform = re.compile(
-        r"平台|介入|举报|媒体|曝光|投诉到|差评|平台投诉|投诉",
+        r"平台介入|找平台|举报|媒体曝光|曝光|投诉到|差评|平台投诉|投诉",
         re.IGNORECASE,
     )
     _agitated = re.compile(
@@ -32,7 +33,7 @@ class ComplaintService:
     @classmethod
     def classify(cls, text: str) -> ComplaintClassification:
         """按高风险优先级识别客诉类型。"""
-        refund = cls._refund.search(text) is not None
+        refund = cls._refund.search(text) is not None and not is_policy_inquiry(text)
         platform = cls._platform.search(text) is not None
         agitated = cls._agitated.search(text) is not None
         if refund and platform:
@@ -46,11 +47,11 @@ class ComplaintService:
         return ComplaintClassification(False)
 
     @staticmethod
-    def guest_acknowledgement() -> str:
+    def guest_acknowledgement(language: Language = Language.ZH) -> str:
         """返回客诉模式唯一中立话术，不包含道歉、责任或结果承诺。"""
         return prepare_guest_reply(
             "",
-            language=Language.ZH,
+            language=language,
             requires_human=True,
             high_risk=True,
         )

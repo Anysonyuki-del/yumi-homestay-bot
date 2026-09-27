@@ -8,6 +8,7 @@ from homestay_bot.domain.enums import (
     CustomerMemoryEvidenceType,
 )
 from homestay_bot.domain.models import CustomerContextSummary, Message
+from homestay_bot.services.message_service import model_message_content
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,8 @@ class CustomerModelContext:
     memories: list[dict[str, str | float]] = field(default_factory=list)
     active_orders: list[dict[str, str | int]] = field(default_factory=list)
     open_tasks: list[dict[str, str | int | None]] = field(default_factory=list)
+    stay_confirmation: dict[str, object] | None = None
+    confirmed_stay: dict[str, object] | None = None
 
 
 class ContextRepository(Protocol):
@@ -64,9 +67,7 @@ class ContextRepository(Protocol):
     async def expire_customer_memories(self, customer_id: int, now: datetime) -> None:
         """维护记忆到期、终态正文和事件保留期。"""
 
-    async def reconcile_legacy_memories(
-        self, customer_id: int, now: datetime
-    ) -> None:
+    async def reconcile_legacy_memories(self, customer_id: int, now: datetime) -> None:
         """使用本地证据规则重新核验历史候选。"""
 
     async def list_short_candidates(
@@ -74,14 +75,10 @@ class ContextRepository(Protocol):
     ) -> list[Message]:
         """返回七天内但不属于最近原文窗口的未摘要消息。"""
 
-    async def list_recent_unobserved(
-        self, customer_id: int, now: datetime
-    ) -> list[Message]:
+    async def list_recent_unobserved(self, customer_id: int, now: datetime) -> list[Message]:
         """返回七天内尚未进行结构化记忆观察的文本消息。"""
 
-    async def list_expired_unpurged(
-        self, customer_id: int, before: datetime
-    ) -> list[Message]:
+    async def list_expired_unpurged(self, customer_id: int, before: datetime) -> list[Message]:
         """返回七天外仍有正文的消息。"""
 
     async def save_short_summary(
@@ -159,9 +156,7 @@ class ContextRetentionService:
             now,
             self._raw_limit,
         )
-        recent_unobserved = await self._repository.list_recent_unobserved(
-            customer_id, now
-        )
+        recent_unobserved = await self._repository.list_recent_unobserved(customer_id, now)
         if short_candidates or recent_unobserved:
             if self._before_external is not None:
                 # 读取消息快照后提交，避免模型调用长时间占用数据库连接事务。
@@ -170,17 +165,13 @@ class ContextRetentionService:
                 tier="short" if short_candidates else "memory",
                 existing_summary=summary.short_summary if summary else "",
                 messages=self._sources(
-                    self._dedupe_messages(
-                        [*short_candidates, *recent_unobserved]
-                    ),
+                    self._dedupe_messages([*short_candidates, *recent_unobserved]),
                     summary_messages=short_candidates,
                 ),
             )
             processed_short = self._processed_messages(short_candidates, result)
             processed_recent = self._processed_messages(recent_unobserved, result)
-            processed_sources = self._dedupe_messages(
-                [*processed_short, *processed_recent]
-            )
+            processed_sources = self._dedupe_messages([*processed_short, *processed_recent])
             if processed_short:
                 saved = await self._repository.save_short_summary(
                     customer_id,
@@ -238,15 +229,13 @@ class ContextRetentionService:
     ) -> list[MemorySource]:
         """过滤空正文并保留可由仓储核验的消息身份与来源。"""
         eligible_ids = (
-            {item.id for item in summary_messages}
-            if summary_messages is not None
-            else None
+            {item.id for item in summary_messages} if summary_messages is not None else None
         )
         return [
             MemorySource(
                 message_id=item.external_message_id,
                 origin=item.origin.value,
-                content=item.content,
+                content=model_message_content(item),
                 summary_eligible=(eligible_ids is None or item.id in eligible_ids),
             )
             for item in messages
@@ -259,14 +248,10 @@ class ContextRetentionService:
         return list({item.external_message_id: item for item in messages}.values())
 
     @staticmethod
-    def _processed_messages(
-        messages: list[Message], result: ContextSummaryResult
-    ) -> list[Message]:
+    def _processed_messages(messages: list[Message], result: ContextSummaryResult) -> list[Message]:
         """只保存和清除摘要器实际接收的消息；测试桩未声明时兼容全部。"""
         if result.processed_source_ids is None:
             return messages
         return [
-            item
-            for item in messages
-            if item.external_message_id in result.processed_source_ids
+            item for item in messages if item.external_message_id in result.processed_source_ids
         ]

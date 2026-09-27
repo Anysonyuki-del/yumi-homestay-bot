@@ -25,9 +25,12 @@ def test_complaint_service_uses_fixed_neutral_acknowledgement() -> None:
     """高危客诉必须使用无道歉、无责任判断和无结果承诺的固定文案。"""
     reply = ComplaintService.guest_acknowledgement()
 
-    assert reply == (
-        "您的情况我已记录。"
-        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
-    )
+    assert reply == ("您的情况我已记录。我会立即联系值班管家跟进处理，请保持联系方式畅通。")
     assert "一定" not in reply
     assert "解决" not in reply
+
+
+def test_platform_and_refund_policy_are_not_complaints() -> None:
+    """平台和退款政策的普通咨询不触发投诉。"""
+    assert not ComplaintService.classify("在哪个平台预订房间？").is_complaint
+    assert not ComplaintService.classify("退款政策是什么？").is_complaint

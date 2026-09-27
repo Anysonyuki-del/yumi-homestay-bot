@@ -454,7 +454,8 @@ async def test_production_bundle_assistant_is_read_only_end_to_end(
         await registry.close()
         await engine.dispose()
 
-    assert result.reply_text == "生产助手只读查询完成。"
+    assert "江汉路一号房" in result.reply_text
+    assert "房态未确认" in result.reply_text
     assert result.revision == 9
     assert [trace.name for trace in result.tool_trace] == ["search_availability"]
     assert hostex.read_calls == ["list_properties", "list_availabilities"]

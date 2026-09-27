@@ -30,8 +30,11 @@
     <div><dt>入住 / 退房</dt><dd>{{ result.check_in_date or "未指定" }} / {{ result.check_out_date or "未指定" }}</dd></div>
     <div><dt>人工确认</dt><dd>{{ "需要" if result.staff_confirmation_required else "不需要" }}</dd></div>
     <div><dt>任务建议</dt><dd>{{ result.task_suggestion.description if result.task_suggestion else "无" }}</dd></div>
+    <div><dt>动作模拟</dt><dd>{{ result.simulated_action or "本轮无需登记请求；未执行外部操作。" }}</dd></div>
   </dl>
   <h3>只读工具轨迹</h3>
+  <h3>回复分项与依据</h3>
+  <ul>{% for part in result.reply_parts %}<li>{{ part.question }} · {{ part.status }}<p>{{ part.text }}</p><ul>{% for evidence in part.evidence %}<li>{{ evidence.source_kind }} · {{ evidence.source_id }}{% if evidence.property_id %} · 房源 {{ evidence.property_id }}{% endif %}{% if evidence.target_date %} · {{ evidence.target_date }}{% endif %}{% if evidence.target_end_date %} 至 {{ evidence.target_end_date }}{% endif %}</li>{% else %}<li>无事实来源</li>{% endfor %}</ul></li>{% else %}<li>本轮没有知识或工具事实分项</li>{% endfor %}</ul>
   <ul>{% for trace in result.tool_trace %}<li>{{ trace.name }} · {{ "成功" if trace.succeeded else "失败" }} · {{ trace.duration_ms }}ms</li>{% else %}<li>未调用工具</li>{% endfor %}</ul>
 </section>
 {% endif %}

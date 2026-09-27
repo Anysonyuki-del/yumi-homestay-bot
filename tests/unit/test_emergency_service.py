@@ -20,7 +20,7 @@ from homestay_bot.services.emergency_service import (
         ("冰箱有焦味", "fire"),
         ("吹风机冒火花了", "fire"),
         ("闻到燃气味", "gas"),
-        ("热水器好像漏电", "electric"),
+        ("热水器正在漏电", "electric"),
         ("有人触电了", "electric"),
         ("有人威胁要打我", "violence"),
         ("客人突然昏迷，需要急救", "medical"),
@@ -32,9 +32,7 @@ from homestay_bot.services.emergency_service import (
         ("We need a medical emergency response", "medical"),
     ],
 )
-def test_classify_emergency_in_chinese_and_english(
-    text: str, category: str
-) -> None:
+def test_classify_emergency_in_chinese_and_english(text: str, category: str) -> None:
     """确定性规则应覆盖中英文入住安全紧急事件。"""
     result = EmergencyService().classify(text)
 
@@ -52,9 +50,7 @@ def test_emergency_reply_uses_fixed_safety_message() -> None:
     en_reply = service.safety_reply(result, Language.EN)
 
     assert "119" in zh_reply
-    assert zh_reply.endswith(
-        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
-    )
+    assert zh_reply.endswith("我会立即联系值班管家跟进处理，请保持联系方式畅通。")
     assert "抱歉" not in zh_reply
     assert "leave" in en_reply.lower()
     assert "has been alerted" not in en_reply.lower()
@@ -73,9 +69,7 @@ def test_each_dangerous_category_gets_its_own_safety_instruction() -> None:
     实现停在了 fire 一类。
     """
     service = EmergencyService()
-    generic = service.safety_reply(
-        EmergencyClassification(True, "access"), Language.ZH
-    )
+    generic = service.safety_reply(EmergencyClassification(True, "access"), Language.ZH)
 
     expectations = {
         "gas": ("开窗通风", "离开"),
@@ -85,9 +79,7 @@ def test_each_dangerous_category_gets_its_own_safety_instruction() -> None:
         "fire": ("119", "离开"),
     }
     for category, required in expectations.items():
-        reply = service.safety_reply(
-            EmergencyClassification(True, category), Language.ZH
-        )
+        reply = service.safety_reply(EmergencyClassification(True, category), Language.ZH)
         assert reply != generic, f"{category} 仍在使用通用文案"
         for fragment in required:
             assert fragment in reply, f"{category} 的指令缺少「{fragment}」：{reply}"
@@ -111,8 +103,12 @@ def test_every_safety_instruction_survives_the_high_risk_whitelist() -> None:
             "fire": ("119", "离开房间"),
         },
         Language.EN: {
-            "gas": ("leave the room", "open the windows", "do not switch",
-                    "do not use an open flame"),
+            "gas": (
+                "leave the room",
+                "open the windows",
+                "do not switch",
+                "do not use an open flame",
+            ),
             "electric": ("do not touch", "power switch", "emergency services"),
             "medical": ("emergency services", "do not move"),
             "violence": ("safe place", "call the police"),
@@ -121,9 +117,7 @@ def test_every_safety_instruction_survives_the_high_risk_whitelist() -> None:
     }
     for language, per_category in expectations.items():
         for category, fragments in per_category.items():
-            reply = service.safety_reply(
-                EmergencyClassification(True, category), language
-            )
+            reply = service.safety_reply(EmergencyClassification(True, category), language)
             for fragment in fragments:
                 assert fragment.lower() in reply.lower(), (
                     f"{category}/{language.value} 丢了指令片段「{fragment}」：{reply}"
@@ -133,14 +127,10 @@ def test_every_safety_instruction_survives_the_high_risk_whitelist() -> None:
 def test_an_english_guest_also_gets_the_category_specific_instruction() -> None:
     """英文客人同样要拿到分类指令，而不是统一的兜底句。"""
     service = EmergencyService()
-    generic = service.safety_reply(
-        EmergencyClassification(True, "access"), Language.EN
-    )
+    generic = service.safety_reply(EmergencyClassification(True, "access"), Language.EN)
 
     for category in ("gas", "electric", "medical", "violence"):
-        reply = service.safety_reply(
-            EmergencyClassification(True, category), Language.EN
-        )
+        reply = service.safety_reply(EmergencyClassification(True, category), Language.EN)
         assert reply != generic, f"{category} 英文仍在使用通用文案"
 
 
@@ -153,12 +143,46 @@ def test_english_safety_replies_are_not_glued_together() -> None:
     """
     service = EmergencyService()
     for category in ("fire", "gas", "electric", "medical", "violence", "access"):
-        reply = service.safety_reply(
-            EmergencyClassification(True, category), Language.EN
-        )
+        reply = service.safety_reply(EmergencyClassification(True, category), Language.EN)
         assert not re.search(r"[a-z][.!?][A-Z]", reply), f"{category} 句子粘连：{reply}"
         assert "; " not in reply.replace("; call", "; call"), f"{category} 有悬空分号：{reply}"
         assert ";" not in reply, f"{category} 残留分号：{reply}"
+
+
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        ("他已经没有呼吸了", "medical"),
+        ("客人无呼吸", "medical"),
+        ("烟雾报警器一直在响", "fire"),
+        ("The smoke alarm is going off", "fire"),
+        ("He is not breathing", "medical"),
+        ("没有着火，但是有人昏迷了", "medical"),
+        ("如果着火怎么办？现在厨房真的冒烟了", "fire"),
+        ("不知道是不是漏电，摸上去手麻", "electric"),
+    ],
+)
+def test_current_emergency_paraphrases_keep_safety_gate(text: str, category: str) -> None:
+    """当前危险改述及不确定危险仍优先进入确定性安全门。"""
+    assert EmergencyService().classify(text) == EmergencyClassification(True, category)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "没有着火，也没有浓烟",
+        "没有人昏迷",
+        "如果着火应该怎么办？",
+        "假如发生燃气泄漏怎么办",
+        "说明书写着‘漏电时切断电源’，是什么意思？",
+        "烟雾报警器在哪里",
+        "What is the fire safety policy?",
+        "There is no fire or smoke",
+    ],
+)
+def test_policy_quotes_hypotheticals_and_denials_are_not_current_emergencies(text: str) -> None:
+    """否定、引用和假设咨询不应被当成正在发生的事故。"""
+    assert not EmergencyService().classify(text).is_emergency
 
 
 @pytest.mark.parametrize(
@@ -220,3 +244,19 @@ def test_follow_up_reply_falls_back_to_the_category_template() -> None:
     assert "开窗通风" in emergency_follow_up_reply("gas", Language.ZH, [])
     assert "120" in emergency_follow_up_reply("medical", Language.ZH, [])
     assert "open the windows" in emergency_follow_up_reply("gas", Language.EN, [])
+
+@pytest.mark.parametrize('text,expected', [
+    ('我没有呼吸困难，就是有点累', False),
+    ('我无法呼吸', True),
+    ('厨房是燃气灶吗', False),
+    ('烟雾报警器在哪', False),
+])
+def test_current_danger_does_not_confuse_denials_and_questions(text, expected):
+    """危险改述和同词否定必须同时覆盖。"""
+    assert EmergencyService().classify(text).is_emergency is expected
+
+@pytest.mark.parametrize('text', ['房间有点烟味', '刚才摔了一下', '头有点晕'])
+def test_possible_danger_has_a_separate_level(text):
+    """含糊安全情况提醒并通知，但不直接要求撤离。"""
+    result = EmergencyService().classify(text)
+    assert result.is_possible and not result.is_emergency

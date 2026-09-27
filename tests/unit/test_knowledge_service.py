@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import date
 
 import pytest
 
@@ -17,6 +18,10 @@ class KnowledgeRow:
     question_en: str
     answer_en: str
     keywords: list[str] = field(default_factory=list)
+    scope: str = "global"
+    property_id: int | None = None
+    valid_from: date | None = None
+    valid_until: date | None = None
 
 
 class KnowledgeRepositoryStub:
@@ -158,8 +163,7 @@ async def test_retrieve_skips_units_that_do_not_fit_and_counts_them() -> None:
     assert 1 not in [item.source_id for item in retrieval.snippets]
     assert len(retrieval.snippets) == 8
     assert (
-        sum(len(i.category) + len(i.question) + len(i.answer) for i in retrieval.snippets)
-        <= 6_000
+        sum(len(i.category) + len(i.question) + len(i.answer) for i in retrieval.snippets) <= 6_000
     )
 
 
@@ -176,8 +180,13 @@ async def test_retrieve_expands_known_topic_synonyms() -> None:
             question_en="Do you have a washing machine?",
             answer_en="There is a washing machine in the common area.",
         ),
-        _row(3, "可以用厨房吗？", "厨房每天开放。", category="厨房",
-             question_en="Can I use the kitchen?"),
+        _row(
+            3,
+            "可以用厨房吗？",
+            "厨房每天开放。",
+            category="厨房",
+            question_en="Can I use the kitchen?",
+        ),
     ]
     service = KnowledgeService(RowsRepositoryStub(rows))
 
@@ -192,10 +201,20 @@ async def test_retrieve_expands_known_topic_synonyms() -> None:
 async def test_question_filler_words_do_not_make_unrelated_entries_relevant() -> None:
     """「你们」「Do you have」这类虚词不算相关证据，无答案问题不硬配条目。"""
     rows = [
-        _row(1, "你们提供早餐吗？", "不提供早餐。", category="早餐",
-             question_en="Do you have breakfast?"),
-        _row(2, "你们可以开发票吗？", "可以开电子发票。", category="发票",
-             question_en="Do you have invoices?"),
+        _row(
+            1,
+            "你们提供早餐吗？",
+            "不提供早餐。",
+            category="早餐",
+            question_en="Do you have breakfast?",
+        ),
+        _row(
+            2,
+            "你们可以开发票吗？",
+            "可以开电子发票。",
+            category="发票",
+            question_en="Do you have invoices?",
+        ),
     ]
     service = KnowledgeService(RowsRepositoryStub(rows))
 

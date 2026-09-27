@@ -796,7 +796,7 @@ async def test_task_lifecycle_loop_commits_result_and_heartbeat(monkeypatch) -> 
     class ServiceStub:
         """返回固定有限扫描结果。"""
 
-        def __init__(self, repository) -> None:
+        def __init__(self, repository, **kwargs) -> None:
             """验证使用统一运营仓储。"""
             assert isinstance(repository, RepositoryStub)
 

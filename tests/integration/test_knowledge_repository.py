@@ -19,6 +19,7 @@ async def test_repository_returns_only_enabled_knowledge() -> None:
         session.add_all(
             [
                 KnowledgeEntry(
+                    scope="global",
                     category="入住",
                     question_zh="几点入住？",
                     answer_zh="下午三点后。",
@@ -27,6 +28,7 @@ async def test_repository_returns_only_enabled_knowledge() -> None:
                     is_enabled=True,
                 ),
                 KnowledgeEntry(
+                    scope="global",
                     category="旧政策",
                     question_zh="旧规则？",
                     answer_zh="不得使用。",
@@ -59,14 +61,15 @@ async def test_committed_knowledge_changes_reach_the_next_request() -> None:
     async def evidence(question: str) -> str:
         """用新会话检索并拼出交给模型的全部证据。"""
         async with factory() as session:
-            snippets = await KnowledgeService(
-                SQLAlchemyKnowledgeRepository(session)
-            ).retrieve(Language.ZH, question)
+            snippets = await KnowledgeService(SQLAlchemyKnowledgeRepository(session)).retrieve(
+                Language.ZH, question
+            )
         return "\n".join(f"{item.question}\n{item.answer}" for item in snippets)
 
     async with factory() as session:
         session.add(
             KnowledgeEntry(
+                scope="global",
                 id=1,
                 category="早餐",
                 question_zh="民宿提供早餐吗？",
@@ -112,6 +115,7 @@ async def test_committed_knowledge_changes_reach_the_next_request() -> None:
         entry.is_enabled = True
         session.add(
             KnowledgeEntry(
+                scope="global",
                 id=2,
                 category="网络",
                 question_zh="房间有 Wi-Fi 吗？",

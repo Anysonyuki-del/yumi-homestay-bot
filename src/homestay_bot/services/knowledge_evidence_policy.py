@@ -12,6 +12,7 @@ ponytail: 属性与主题都是有限的人工清单，不做语义蕴含。识�
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
 from homestay_bot.services.guest_reply_policy import fits_guest_reply_parts
@@ -20,6 +21,7 @@ from homestay_bot.services.knowledge_service import (
     detect_property_topics,
     normalize_text,
 )
+from homestay_bot.services.reply_plan import ReplyEvidence, ReplyPart
 
 # 审核答案原文直接发给客人，超过这个长度就请客人细化问题，不截断条件与例外。
 STATIC_REPLY_MAX_CHARS = 1_000
@@ -41,7 +43,7 @@ _ATTRIBUTE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "fee",
         re.compile(
-            r"收费|费用|多少钱|价格|要钱|免费|另收|加钱|押金"
+            r"收费|费用|费每|费多少|多少钱|价格|要钱|免费|另收|加钱|押金|\d+\s*元"
             r"|how\s+much|\bfee\b|\bcost\b|\bfree\b|\bcharge",
             re.IGNORECASE,
         ),
@@ -49,11 +51,14 @@ _ATTRIBUTE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "location",
         re.compile(
-            r"在哪|哪里|哪儿|位置|放在|怎么走|几楼|楼层"
+            r"在哪|哪里|哪儿|放哪|位置|放在|怎么走|几楼|楼层"
             r"|\bwhere\b|which\s+floor|how\s+do\s+i\s+get",
             re.IGNORECASE,
         ),
     ),
+    ("voltage", re.compile(r"电压|\d+\s*[vV]|多少伏")),
+    ("contents", re.compile(r"(?:有什么|有哪些)\s*$|what.+(?:contain|include)\s*$", re.I)),
+    ("distance", re.compile(r"多远|距离|how\s+far|distance", re.IGNORECASE)),
     (
         "operation",
         re.compile(
@@ -68,6 +73,41 @@ _ATTRIBUTE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # 特殊能力与限制：问题里出现这些限定词时，答案必须点名同一个限定词，
 # 同主题的其他方面（送餐时间、普通床位）都不算证据。
 _SPECIAL_QUALIFIERS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
+    (
+        "casting",
+        re.compile(r"投屏|screen\s*(?:cast|mirror)|casting", re.I),
+        re.compile(r"投屏|screen\s*(?:cast|mirror)|casting", re.I),
+    ),
+    (
+        "radiator",
+        re.compile(r"暖气|radiator", re.I),
+        re.compile(r"暖气|radiator", re.I),
+    ),
+    (
+        "kettle",
+        re.compile(r"烧水壶|热水壶|\bkettle\b", re.I),
+        re.compile(r"烧水壶|热水壶|\bkettle\b", re.I),
+    ),
+    (
+        "wheelchair_stay",
+        re.compile(r"轮椅.{0,12}住|坐轮椅|wheelchair.{0,12}stay", re.I),
+        re.compile(r"轮椅.{0,12}(?:进|通|住)|wheelchair.{0,20}(?:fit|access|enter)", re.I),
+    ),
+    (
+        "platform_invoice",
+        re.compile(r"(?:携程|美团|平台).{0,12}(?:订|订单).*发票|发票.*(?:携程|美团|平台)", re.I),
+        re.compile(r"(?:携程|美团|平台).{0,24}(?:申请|开).{0,4}发票"),
+    ),
+    (
+        "post_checkout_storage",
+        re.compile(r"退房后.{0,16}(?:行李|箱子|寄存)"),
+        re.compile(r"退房当(?:天|日).{0,24}(?:前|后|寄存)|退房后.{0,16}(?:寄存|存放)"),
+    ),
+    (
+        "spare_bedding",
+        re.compile(r"备用.{0,8}(?:被子|枕头|床品)|spare\s+(?:bedding|pillows?|blankets?)", re.I),
+        re.compile(r"备用.{0,8}(?:被子|枕头|床品)|spare\s+(?:bedding|pillows?|blankets?)", re.I),
+    ),
     (
         "gluten_free",
         re.compile(r"无麸质|不含麸质|麸质过敏|gluten[-\s]?free", re.IGNORECASE),
@@ -265,6 +305,7 @@ class EvidencePlan:
     topics: tuple[PropertyTopic, ...]
     answers: tuple[str, ...]
     reason: str
+    parts: tuple[ReplyPart, ...] = ()
 
     @property
     def handles_reply(self) -> bool:
@@ -281,7 +322,7 @@ def asked_attributes(question_text: str, topic: PropertyTopic | None = None) -> 
     clauses = [item for item in _CLAUSE_SPLIT.split(question_text) if item.strip()]
     if topic is not None:
         scoped = [item for item in clauses if topic.aliases.search(normalize_text(item))]
-        if scoped:
+        if scoped and len(detect_property_topics(question_text)) > 1:
             clauses = scoped
     attributes = {
         name
@@ -289,20 +330,64 @@ def asked_attributes(question_text: str, topic: PropertyTopic | None = None) -> 
         for clause in clauses
         if pattern.search(clause)
     }
+    if (
+        topic is not None
+        and topic.name == "网络"
+        and re.search(r"密码|蜜码|password", " ".join(clauses), re.I)
+    ):
+        attributes.add("network_password")
+    if topic is not None and topic.name == "加床":
+        attributes.update(
+            f"room:{room}" for room in re.findall(r"(?<!\d)\d{3}(?!\d)", question_text)
+        )
     attributes.update(
         f"special:{name}"
         for name, question_pattern, _ in _SPECIAL_QUALIFIERS
-        for clause in clauses
+        for clause in [" ".join(clauses)]
         if question_pattern.search(clause)
     )
-    # 没问具体属性时，只要答案讲到该主题就算覆盖（「有停车位吗」）。
-    return attributes or {"existence"}
+    # 只对去除主题后剩下的明确存在性问法放行；未知限定必须保守缺失。
+    if attributes:
+        return attributes
+    if any(
+        re.search(r"完整(?:规则|政策)|全部(?:规定|规则)|all (?:rules|policies)", clause, re.I)
+        for clause in clauses
+    ):
+        return {"existence"}
+    remainder = " ".join(clauses)
+    detected_topics = detect_property_topics(remainder)
+    for detected in detected_topics:
+        remainder = detected.aliases.sub("", remainder)
+    # 仅去除普通政策问法的连接词，不剥掉身高、饮食等事实限定。
+    if any(item.name == "宠物" for item in detected_topics):
+        remainder = re.sub(r"携带|带|入住", "", remainder)
+    if any(item.name == "行李寄存" for item in detected_topics):
+        remainder = re.sub(r"行李", "", remainder)
+    remainder = re.sub(
+        r"房间里|房费|又|开|另外|同时|以及|你们|民宿|房间|请问|是否|有没有|有无|提供|我家|一起住|附近|包|店|有|吗|呢|呀|的|可以|能|不|使用|用"
+        r"|do you (?:have|serve|provide)|is there|are there|available|the|a|an|\W",
+        "",
+        remainder,
+        flags=re.IGNORECASE,
+    )
+    return {"existence"} if not remainder.strip() else {"unknown"}
 
 
 def _covers_attribute(attribute: str, answer: str) -> bool:
     """判断一条审核答案是否覆盖某个属性。"""
     if attribute == "existence":
         return True
+    if attribute == "network_password":
+        return re.search(r"密码|password", answer, re.I) is not None
+    if attribute == "voltage":
+        return re.search(r"\d+\s*(?:V(?![a-z])|伏|volts?\b)", answer, re.I) is not None
+    if attribute == "contents":
+        return re.search(r"有|配备|配有|includes?|contains?|equipped", answer, re.I) is not None
+    if attribute == "distance":
+        return (
+            re.search(r"\d+\s*(?:米|公里|分钟|minute|meter|km)|步行|walk", answer, re.IGNORECASE)
+            is not None
+        )
     if attribute == "time":
         return _TIME_EVIDENCE.search(answer) is not None
     if attribute == "location":
@@ -310,8 +395,22 @@ def _covers_attribute(attribute: str, answer: str) -> bool:
     if attribute == "operation":
         return _OPERATION_EVIDENCE.search(answer) is not None
     if attribute == "fee":
-        # 费用证据由主题级的收费校验完成（同一条问答里要有本店费用说明）。
-        return True
+        # 再检查当前主题正文，避免调用方漏认口语费用问法后用位置资料作证。
+        return (
+            re.search(
+                r"免费|收费|费用|加收|\d+\s*(?:元|yuan|CNY)|\b(?:free|fee|cost|charge)",
+                answer,
+                re.I,
+            )
+            is not None
+        )
+    if attribute.startswith("room:"):
+        # 正文点名房号，或明确给出封闭允许清单及其他房间禁用规则，才覆盖房号限定。
+        room = attribute.split(":", 1)[1]
+        return re.search(rf"(?<!\d){re.escape(room)}(?!\d)", answer) is not None or (
+            re.search(r"只有.{0,50}可以加床", answer) is not None
+            and re.search(r"其他房间.{0,20}不能加床", answer) is not None
+        )
     if attribute.startswith("special:"):
         name = attribute.split(":", 1)[1]
         for qualifier, _, evidence_pattern in _SPECIAL_QUALIFIERS:
@@ -342,11 +441,57 @@ def _topic_attribute_text(topic: PropertyTopic, answer: str) -> str:
     passages = []
     for passage in re.split(r"[，,。！？!?；;\n]+|(?<=\.)\s+", answer):
         named = {item.name for item in detect_property_topics(passage)}
-        if named:
+        # 早餐「在公共客厅用餐」是在补充用餐地点，不会把紧随其后的每位价格改成客厅费。
+        # 公共客厅自己的开放或收费政策仍切换主题，不能拿来证明早餐价格。
+        dining_location = (
+            active == {"早餐"}
+            and named == {"公共区域"}
+            and re.search(r"用餐|就餐|\bserved\b", passage, re.I) is not None
+        )
+        if named and not dining_location:
             active = named
         if topic.name in active:
             passages.append(passage)
     return "\n".join(passages)
+
+
+def _attribute_evidence_text(
+    topic: PropertyTopic, question: str, attribute: str, answer: str
+) -> str:
+    """普通入住和退房钟点只比较对应政策，不混入提前、延迟或发密码时刻。"""
+    # 加床正文中的「含一套床品」不是政策切换；封闭房号清单与「其他房间」要一起核验。
+    if topic.name == "加床" and attribute.startswith("room:"):
+        return answer
+    text = _topic_attribute_text(topic, answer)
+    if topic.name != "入住退房时间" or attribute != "time":
+        return text
+    if asked_attributes(question, topic) & {"special:early_checkin", "special:late_checkout"}:
+        return text
+    directions = []
+    if re.search(r"入住|check[ -]?in", question, re.I):
+        directions.append(
+            r"入住(?:时间)?(?:为|是|[:：])|(?:\d|点|时).{0,12}入住|check[ -]?in\s+(?:is|time)"
+        )
+    if re.search(r"退房|check[ -]?out", question, re.I):
+        directions.append(
+            r"退房(?:时间)?(?:为|是|[:：])|(?:\d|点|时).{0,12}退房|check[ -]?out\s+(?:is|time)"
+        )
+    passages = []
+    special_policy = False
+    for passage in text.splitlines():
+        # 附加政策的后句可能省略主语；持续保留其归属，不能借后句钟点证明普通安排。
+        # 前面已经确认的普通钟点不受后面「不支持提前入住」等限制影响。
+        if re.search(
+            r"提前入住|延迟退房|early\s+check|late\s+check|check.{0,8}(?:early|late)"
+            r"|密码|door\s+code",
+            passage,
+            re.I,
+        ):
+            special_policy = True
+        if not special_policy and any(re.search(pattern, passage, re.I) for pattern in directions):
+            passages.append(passage)
+    return "\n".join(passages)
+
 
 def already_clarified(messages: Sequence[dict[str, str]]) -> bool:
     """会话里是否已经发出过澄清提问。"""
@@ -357,7 +502,100 @@ def already_clarified(messages: Sequence[dict[str, str]]) -> bool:
     )
 
 
+def _knowledge_part(question: str, entry: Any) -> ReplyPart:
+    """审核答案原文和来源绑定为不可拆散的事实单元。"""
+    return ReplyPart(
+        question=question,
+        status="grounded",
+        text=entry.answer,
+        evidence=(
+            ReplyEvidence(
+                source_kind="knowledge",
+                source_id=str(getattr(entry, "source_id", getattr(entry, "id", ""))),
+                property_id=getattr(entry, "property_id", None),
+                fetched_at=datetime.now(UTC),
+                conditions=(entry.answer,),
+            ),
+        ),
+    )
+
+
 def build_evidence_plan(
+    question_text: str,
+    knowledge: Sequence[Any],
+    *,
+    supporting_for_topic: Callable[[PropertyTopic, str, list[Any]], list[Any]],
+    is_property_question: bool,
+    target_date: date | None = None,
+    target_end_date: date | None = None,
+) -> EvidencePlan:
+    """按知识生效边界分段核验，不让跨期入住沿用单日答案。"""
+    if target_date is None:
+        return _build_evidence_plan_for_period(
+            question_text,
+            knowledge,
+            supporting_for_topic=supporting_for_topic,
+            is_property_question=is_property_question,
+        )
+    end = target_end_date or target_date
+    boundaries = {target_date, end + timedelta(days=1)}
+    for entry in knowledge:
+        start_on, end_on = getattr(entry, "valid_from", None), getattr(entry, "valid_until", None)
+        if start_on and target_date < start_on <= end:
+            boundaries.add(start_on)
+        if end_on and target_date <= end_on < end:
+            boundaries.add(end_on + timedelta(days=1))
+    ordered = sorted(boundaries)
+    plans = []
+    all_parts = []
+    for start, stop in zip(ordered, ordered[1:], strict=False):
+        entries = [
+            entry
+            for entry in knowledge
+            if (getattr(entry, "valid_from", None) is None or entry.valid_from <= start)
+            and (
+                getattr(entry, "valid_until", None) is None
+                or entry.valid_until >= stop - timedelta(days=1)
+            )
+        ]
+        plan = _build_evidence_plan_for_period(
+            question_text,
+            entries,
+            supporting_for_topic=supporting_for_topic,
+            is_property_question=is_property_question,
+        )
+        plans.append(plan)
+        for part in plan.parts:
+            text = part.text
+            if len(ordered) > 2 and text:
+                text = f"{start.isoformat()} — {(stop - timedelta(days=1)).isoformat()}：{text}"
+            all_parts.append(
+                part.model_copy(
+                    update={
+                        "text": text,
+                        "evidence": tuple(
+                            evidence.model_copy(
+                                update={
+                                    "target_date": start,
+                                    "target_end_date": stop - timedelta(days=1),
+                                }
+                            )
+                            for evidence in part.evidence
+                        ),
+                    }
+                )
+            )
+    first = plans[0]
+    return EvidencePlan(
+        "insufficient" if any(plan.status == "insufficient" for plan in plans) else first.status,
+        first.topics,
+        tuple(part.text for part in all_parts if part.status == "grounded"),
+        first.reason,
+        tuple(all_parts),
+    )
+
+
+def _build_evidence_plan_for_period(
     question_text: str,
     knowledge: Sequence[Any],
     *,
@@ -392,7 +630,13 @@ def build_evidence_plan(
                 return EvidencePlan("insufficient", (), (), "qualifier_uncovered")
             if _INSTRUCTION_INJECTION.search(covering.answer):
                 return EvidencePlan("insufficient", (), (), "answer_needs_review")
-            return EvidencePlan("grounded", (), (covering.answer,), "qualifier_covered")
+            return EvidencePlan(
+                "grounded",
+                (),
+                (covering.answer,),
+                "qualifier_covered",
+                (_knowledge_part(question_text, covering),),
+            )
         if is_property_question:
             # 明确在问本店、但主题落在有限清单之外：不放行模型的本店断言。
             return EvidencePlan("insufficient", (), (), "topic_unrecognized")
@@ -402,31 +646,50 @@ def build_evidence_plan(
         return EvidencePlan("general", (), (), "not_property_question")
 
     chosen: list[str] = []
+    parts: list[ReplyPart] = []
     for topic in topics:
         supporting = supporting_for_topic(topic, question_text, entries)
-        if not supporting:
-            return EvidencePlan("insufficient", topics, (), f"no_support:{topic.name}")
         attributes = asked_attributes(question_text, topic)
-        # 先收齐同一主题满足属性的候选，检查冲突后才选第一条，不能先丢掉反证。
-        covering_items = [
-            item for item in supporting
-            if all(_covers_attribute(attribute, _topic_attribute_text(topic, item.answer))
-                   for attribute in attributes)
-        ]
-        if _conflicting_fee_claims([
-            _topic_attribute_text(topic, item.answer) for item in covering_items
-        ]):
-            return EvidencePlan("insufficient", topics, (), "conflicting_answers")
-        covering = covering_items[0] if covering_items else None
-        if covering is None:
-            return EvidencePlan(
-                "insufficient",
-                topics,
-                (),
-                f"attribute_uncovered:{topic.name}",
-            )
-        if covering.answer not in chosen:
-            chosen.append(covering.answer)
+        for attribute in sorted(attributes):
+            covering_items = [
+                item
+                for item in supporting
+                if _covers_attribute(
+                    attribute,
+                    _attribute_evidence_text(topic, question_text, attribute, item.answer),
+                )
+                and not _INSTRUCTION_INJECTION.search(item.answer)
+            ]
+            # 房间专属覆盖只作用于同一属性，不能吞掉通用条目的互补位置等事实。
+            specific = [
+                item for item in covering_items if getattr(item, "scope", None) == "property"
+            ]
+            covering_items = specific or covering_items
+            evidence_texts = [
+                _attribute_evidence_text(topic, question_text, attribute, item.answer)
+                for item in covering_items
+            ]
+            conflict = _conflicting_fee_claims(evidence_texts)
+            times = {
+                tuple(_TIME_EVIDENCE.findall(text))
+                for text in evidence_texts
+                if _TIME_EVIDENCE.search(text)
+            }
+            conflict = conflict or (attribute == "time" and len(times) > 1)
+            fees = {
+                tuple(re.findall(r"\d+(?:\.\d+)?\s*(?:元|yuan|CNY)", text))
+                for text in evidence_texts
+                if re.search(r"\d+\s*(?:元|yuan|CNY)", text)
+            }
+            conflict = conflict or (attribute == "fee" and len(fees) > 1)
+            covering = covering_items[0] if covering_items and not conflict else None
+            label = {"time": "时间", "fee": "费用", "location": "位置"}.get(attribute, "")
+            if covering is None:
+                parts.append(ReplyPart(question=topic.name + label, status="missing", text=""))
+                continue
+            if covering.answer not in chosen:
+                chosen.append(covering.answer)
+                parts.append(_knowledge_part(topic.name, covering))
 
     if any(_INSTRUCTION_INJECTION.search(item) for item in chosen):
         # 需要人工复核的条目不原样转发，也不让模型改写后发出。
@@ -439,7 +702,14 @@ def build_evidence_plan(
         # 单条审核问答是最小证据单元，再长也整条发出，绝不截掉尾部的条件与例外；
         # 只有需要拼接多条时才可能超出预算，这时请客人把问题问得更具体。
         return EvidencePlan("insufficient", topics, (), "reply_budget_exceeded")
-    return EvidencePlan("grounded", topics, tuple(chosen), "covered")
+    missing = any(part.status == "missing" for part in parts)
+    return EvidencePlan(
+        "insufficient" if missing else "grounded",
+        topics,
+        tuple(chosen),
+        "partial" if missing else "covered",
+        tuple(parts),
+    )
 
 
 def compose_static_reply(answers: Sequence[str]) -> str:

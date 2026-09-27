@@ -12,6 +12,7 @@ class EmergencyClassification:
 
     is_emergency: bool
     category: str | None = None
+    is_possible: bool = False
 
 
 _ZH_GENERIC_SAFETY_TEXT = "请先确保自身安全，不要自行处理故障。"
@@ -20,20 +21,14 @@ _ZH_GENERIC_SAFETY_TEXT = "请先确保自身安全，不要自行处理故障�
 # 110/120」等词白名单里早已预留）。
 _ZH_SAFETY_TEXTS = {
     "fire": "请立即离开房间并前往安全区域，如有明火或浓烟请拨打119。",
-    "gas": (
-        "请立即开窗通风并离开房间，不要开关电器、不要使用明火，"
-        "到室外安全处后再联系我们。"
-    ),
+    "gas": ("请立即开窗通风并离开房间，不要开关电器、不要使用明火，到室外安全处后再联系我们。"),
     "electric": (
-        "请不要触碰漏电部位和潮湿处的电器，如能安全操作请切断电源；"
-        "有人触电请立即拨打120。"
+        "请不要触碰漏电部位和潮湿处的电器，如能安全操作请切断电源；有人触电请立即拨打120。"
     ),
     "medical": "如有生命危险请立即拨打120，急救到达前不要随意搬动伤者。",
     "violence": "如人身安全受到威胁，请立即拨打110报警并前往安全地点。",
 }
-_EN_GENERIC_SAFETY_TEXT = (
-    "Please move to a safe place and avoid handling the fault yourself."
-)
+_EN_GENERIC_SAFETY_TEXT = "Please move to a safe place and avoid handling the fault yourself."
 _EN_SAFETY_TEXTS = {
     "fire": (
         "Please leave the room and move to a safe place immediately. "
@@ -118,7 +113,7 @@ class EmergencyService:
         (
             "fire",
             re.compile(
-                r"着火|起火|火灾|浓烟|冒烟|火花|焦味|"
+                r"着火|起火|火灾|浓烟|冒烟|火花|焦味|烟雾报警器[^，。！？]{0,8}响|"
                 r"\bfire\b|smoke|sparks?|burning\s+smell",
                 re.IGNORECASE,
             ),
@@ -133,13 +128,15 @@ class EmergencyService:
         ),
         (
             "violence",
-            re.compile(r"暴力|威胁|打我|袭击|threaten|attack|violence", re.IGNORECASE),
+            re.compile(
+                r"暴力|威胁|打我|袭击|敲门.{0,12}骂人|threaten|attack|violence", re.IGNORECASE
+            ),
         ),
         (
             "medical",
             re.compile(
-                r"昏迷|急救|呼吸困难|严重受伤|医疗急症|"
-                r"medical emergency|unconscious|cannot breathe|serious injury",
+                r"昏迷|急救|呼吸困难|(?:没有|无|停止)呼吸(?!困难)|无法呼吸|喘不上气|叫不醒|头破.{0,5}流血|严重受伤|医疗急症|"
+                r"medical emergency|unconscious|cannot breathe|not breathing|serious injury",
                 re.IGNORECASE,
             ),
         ),
@@ -153,26 +150,63 @@ class EmergencyService:
         ),
     )
 
+    @staticmethod
+    def _noncurrent_mention(clause: str, match: re.Match[str]) -> bool:
+        """仅排除同一分句内明确的否定或咨询，避免全句否定掩盖另一项危险。"""
+        prefix = clause[: match.start()]
+        if re.search(r"(?:燃气|煤气|天然气)灶.*(?:吗|么|哪)|报警器.*(?:在哪|哪里)|怎么赔", clause):
+            return True
+        # 不处理任意语义否定；「不知道是否漏电」仍按可能危险处置。
+        if re.search(
+            r"(?:没有|并无|无|未)(?:发生|出现|人|任何)?$|"
+            r"\b(?:no|not|without)\s+(?:\w+\s+or\s+)?$",
+            prefix,
+            re.I,
+        ):
+            return True
+        if re.search(r"(?:如果|假如|假设|万一)|\b(?:what if|in case of)\b", prefix, re.I):
+            return True
+        if re.search(
+            r"(?:说明书|手册|政策|演练).*(?:写|说|提|要求)|"
+            r"\bwhat (?:is|are).*",
+            prefix,
+            re.I,
+        ):
+            return True
+        # 设备位置/政策咨询本身不是事故；带正在响、冒烟等现场信号仍保留。
+        return bool(
+            re.search(r"(?:在哪里|位置在哪|安全规定|安全政策)|\bsafety policy\b", clause, re.I)
+        ) and not bool(re.search(r"(?:正在|突然|已经|一直|在响|冒烟|浓烟)|going off", clause, re.I))
+
     def classify(self, text: str) -> EmergencyClassification:
-        """按高风险优先顺序匹配消息，不调用语言模型。"""
+        """按危险类别优先检查分句；模型故障不能关闭明确现场危险门。"""
+        clauses = re.split(r"[，。！？；\n.!?;]|\bbut\b|但是|但现在", text, flags=re.I)
+        possible = None
         for category, pattern in self._patterns:
-            if pattern.search(text):
-                return EmergencyClassification(True, category)
+            for clause in clauses:
+                for match in pattern.finditer(clause):
+                    if not self._noncurrent_mention(clause, match):
+                        if re.search(
+                            r"有点|不确定|不知道|好像|是否|a little|not sure", clause, re.I
+                        ) and not re.search(
+                            r"手麻|触电|烫伤|叫不醒|喘不上气|煤气味|燃气味|gas smell", text
+                        ):
+                            possible = category
+                            continue
+                        return EmergencyClassification(True, category)
+        if possible or re.search(
+            r"烟味|刚才摔|头.{0,3}晕|smell.{0,5}smoke|feel dizzy|just fell", text, re.I
+        ):
+            return EmergencyClassification(False, possible or "medical", is_possible=True)
         return EmergencyClassification(False)
 
-    def safety_reply(
-        self, emergency: EmergencyClassification, language: Language
-    ) -> str:
+    def safety_reply(self, emergency: EmergencyClassification, language: Language) -> str:
         """按危险类别返回固定安全提示，非生命危险的 access 沿用通用文案。
 
         每句必须通过 guest_reply_policy 的安全过滤，避免关键处置指令被静默删除。
         """
         table = _EN_SAFETY_TEXTS if language is Language.EN else _ZH_SAFETY_TEXTS
-        generic = (
-            _EN_GENERIC_SAFETY_TEXT
-            if language is Language.EN
-            else _ZH_GENERIC_SAFETY_TEXT
-        )
+        generic = _EN_GENERIC_SAFETY_TEXT if language is Language.EN else _ZH_GENERIC_SAFETY_TEXT
         safety_text = table.get(emergency.category or "", generic)
         return prepare_guest_reply(
             safety_text,

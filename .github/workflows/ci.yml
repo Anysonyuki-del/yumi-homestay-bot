@@ -72,7 +72,7 @@ jobs:
         # 先确认变量存在，避免用例因缺变量全部跳过却被当成通过。
         run: |
           python -c 'import os; assert os.environ.get("YUMI_TEST_POSTGRES_URL"), "需要隔离 PostgreSQL 测试库"'
-          python -m pytest -q -rs tests/integration/test_retention_postgresql.py
+          python -m pytest -q -rs tests/integration/test_retention_postgresql.py tests/integration/test_guest_reply_postgresql.py
 
       - name: 构建生产镜像
         run: docker build --tag yumi-homestay-bot:ci .

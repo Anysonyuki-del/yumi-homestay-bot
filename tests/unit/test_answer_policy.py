@@ -5,6 +5,7 @@ from homestay_bot.services.answer_policy import (
     facility_fault_exclusion,
     handoff_reason,
     has_facility_fault_signal,
+    is_booking_action_request,
     is_homestay_related,
     is_property_specific,
     is_service_request,
@@ -38,16 +39,15 @@ def test_transaction_has_priority_over_property_specific() -> None:
 
 
 def test_high_risk_requests_have_deterministic_handoff_reason() -> None:
-    """讨价还价、退款、投诉、提前入住和激烈情绪必须由本地规则要求接管。
+    """实际退款、投诉和激烈情绪保持人工门，价格与提前入住不整体接管。
 
-    1.40.0 起单纯问价（「这个房间最低多少钱」）用参考价回答、不再转人工，
-    见 docs/specs/2026-09-26_emergency-follow-up-and-price-spec.md F2。
+    问价用参考价回答，讲价仍转人工（1.40.0 F2）。
     """
     assert handoff_reason("这个房间最低能便宜到多少？") == "price"
     assert handoff_reason("这个房间最低多少钱？") is None
     assert handoff_reason("我要退款") == "refund"
     assert handoff_reason("我要投诉你们") == "complaint"
-    assert handoff_reason("我想提前入住") == "early_check_in"
+    assert handoff_reason("我想提前入住") is None
     assert handoff_reason("太离谱了，你们必须马上解决！！！") == "agitated"
     assert handoff_reason("武汉有哪些地方好玩？") is None
     assert handoff_reason("武汉地铁票价多少钱？") is None
@@ -145,12 +145,30 @@ def test_vacancy_wording_is_a_realtime_availability_question() -> None:
     ],
 )
 def test_english_room_price_questions_are_transactions_but_room_details_are_not(
-    question: str, sensitive: bool,
+    question: str,
+    sensitive: bool,
 ) -> None:
     """英文问房价归为交易；问房间空间或客房服务不算房价。"""
     assert is_transaction_sensitive(question) is sensitive
 
 
+def test_information_questions_do_not_authorize_service_or_handoff() -> None:
+    """政策与报价查询只读，明确申请才登记服务。"""
+    from homestay_bot.services.answer_policy import is_service_request
+
+    assert handoff_reason("这个房间多少钱？") is None
+    assert handoff_reason("提前入住有什么规定？") is None
+    assert handoff_reason("退款政策是什么？") is None
+    assert not is_service_request("延迟退房有什么规定？")
+    assert is_service_request("帮我申请延迟退房")
+
+
+def test_stay_confirmation_does_not_request_a_new_booking() -> None:
+    """确认已有住宿资料不会新建预订请求，只有明确订房动作才登记。"""
+    for text in ("确认无误", "入住信息都对", "订单资料确认无误", "confirmed details"):
+        assert not is_booking_action_request(text)
+    for text in ("请帮我预订", "就按这个订", "please book this room"):
+        assert is_booking_action_request(text)
 @pytest.mark.parametrize(
     "text",
     [
@@ -181,3 +199,11 @@ def test_plain_price_questions_no_longer_hand_off_but_bargaining_does() -> None:
     assert handoff_reason("明晚201多少钱") is None
     assert handoff_reason("能便宜点吗") == "price"
     assert handoff_reason("住三晚有折扣吗") == "price"
+
+@pytest.mark.parametrize('text,reason', [
+    ('我想退款，退款规则是怎样的', 'refund'),
+    ('能便宜点吗，有什么优惠政策', 'price'),
+])
+def test_explicit_request_wins_over_policy_wording(text, reason):
+    """混合问法中的退款申请、讲价不被政策咨询短路。"""
+    assert handoff_reason(text) == reason

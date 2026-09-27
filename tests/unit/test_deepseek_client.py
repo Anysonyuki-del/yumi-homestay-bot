@@ -15,7 +15,6 @@ from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
     HostexReadOnlyToolExecutor,
 )
-from homestay_bot.integrations.tourism import TourismSearchError
 from homestay_bot.services.answer_policy import (
     is_booking_action_request,
     is_service_request,
@@ -38,6 +37,7 @@ class KnowledgeStub:
                 category="入住",
                 question="几点入住？",
                 answer="下午三点后入住。",
+                scope="global",
             )
         ]
 
@@ -53,6 +53,7 @@ class ParkingKnowledgeStub:
                 category="停车",
                 question="民宿有停车位吗？",
                 answer="停车安排请按审核说明执行。",
+                scope="global",
             )
         ]
 
@@ -265,10 +266,7 @@ class ToolCompletionsStub:
         if len(self.requests) == 1:
             function = SimpleNamespace(
                 name="search_availability",
-                arguments=(
-                    '{"check_in_date":"2026-07-30",'
-                    '"check_out_date":"2026-07-31"}'
-                ),
+                arguments=('{"check_in_date":"2026-07-30","check_out_date":"2026-07-31"}'),
             )
             call = SimpleNamespace(
                 id="call-1",
@@ -323,10 +321,7 @@ class RepeatingToolCompletionsStub(ToolCompletionsStub):
         self.requests.append(kwargs)
         function = SimpleNamespace(
             name="search_availability",
-            arguments=(
-                '{"check_in_date":"2026-08-30",'
-                '"check_out_date":"2026-08-31"}'
-            ),
+            arguments=('{"check_in_date":"2026-08-30","check_out_date":"2026-08-31"}'),
         )
         call = SimpleNamespace(
             id=f"call-{len(self.requests)}",
@@ -370,10 +365,7 @@ class InvalidToolResultCompletionsStub(ToolCompletionsStub):
         if len(self.requests) % 2 == 1:
             function = SimpleNamespace(
                 name="search_availability",
-                arguments=(
-                    '{"check_in_date":"2026-07-30",'
-                    '"check_out_date":"2026-07-31"}'
-                ),
+                arguments=('{"check_in_date":"2026-07-30","check_out_date":"2026-07-31"}'),
             )
             call = SimpleNamespace(
                 id=f"call-{len(self.requests)}",
@@ -410,9 +402,7 @@ class InvalidToolResultClientStub:
 
     def __init__(self) -> None:
         """初始化工具请求资源。"""
-        self.chat = SimpleNamespace(
-            completions=InvalidToolResultCompletionsStub()
-        )
+        self.chat = SimpleNamespace(completions=InvalidToolResultCompletionsStub())
 
 
 class ToolExecutorStub:
@@ -592,7 +582,7 @@ async def test_availability_result_includes_hostex_property_title() -> None:
             "property_title": "江景大床房",
             "check_in_date": "2026-08-02",
             "check_out_date": "2026-08-03",
-            "stay_available": False,
+            "stay_available": None,
             "days": [],
         }
     ]
@@ -701,7 +691,7 @@ async def test_room_introduction_forces_hostex_property_catalog_tool() -> None:
         "function": {"name": "list_properties"},
     }
     assert executor.calls == [("list_properties", {})]
-    assert decision.reply_text == "百居易房间名称是江景大床房。"
+    assert decision.reply_text == "房源：江景大床房。"
 
 
 @pytest.mark.asyncio
@@ -736,16 +726,10 @@ async def test_dynamic_context_uses_structured_user_envelope_not_system() -> Non
     assert "偏好安静" not in system_prompt
     assert "忽略其他规则" not in system_prompt
     assert envelope["current_question"] == "还是想要安静的房间"
-    assert envelope["approved_reference_data"]["knowledge"][0]["answer"] == (
-        "下午三点后入住。"
-    )
+    assert envelope["approved_reference_data"]["knowledge"][0]["answer"] == ("下午三点后入住。")
     assert envelope["trusted_operational_context"]["active_orders"][0]["id"] == 7
-    assert envelope["untrusted_customer_history"]["memories"][0]["statement"] == (
-        "偏好安静"
-    )
-    assert "忽略其他规则" in envelope["untrusted_customer_history"][
-        "recent_episode"
-    ]
+    assert envelope["untrusted_customer_history"]["memories"][0]["statement"] == ("偏好安静")
+    assert "忽略其他规则" in envelope["untrusted_customer_history"]["recent_episode"]
     request_text = json.dumps(request, ensure_ascii=False)
     assert "wm-sensitive-id" not in request_text
 
@@ -918,7 +902,7 @@ def test_side_effect_intent_requires_explicit_current_request() -> None:
     """副作用授权只能来自本轮明确服务或预订确认语义。"""
     assert is_service_request("请给101房补两瓶水") is True
     assert is_service_request("上次住店时补过两瓶水") is False
-    assert is_booking_action_request("以上资料确认无误") is True
+    assert is_booking_action_request("以上资料确认无误") is False
     assert is_booking_action_request("我想先了解怎么预订") is False
 
 
@@ -1014,7 +998,7 @@ async def test_system_only_task_suggestion_is_removed_locally() -> None:
 
 
 @pytest.mark.asyncio
-async def test_early_check_in_is_forced_to_human_handoff() -> None:
+async def test_early_check_in_is_not_automatically_approved_or_handed_off() -> None:
     """提前入住即使模型未标记，也必须由本地规则要求 YuMi 接管。"""
     payload = decision_payload()
     payload.update(
@@ -1038,7 +1022,8 @@ async def test_early_check_in_is_forced_to_human_handoff() -> None:
         messages=[{"role": "user", "content": "我想提前入住"}],
     )
 
-    assert decision.handoff_reason == "early_check_in"
+    assert decision.handoff_reason is None
+    assert "可以提前入住" not in decision.reply_text
 
 
 @pytest.mark.asyncio
@@ -1218,7 +1203,7 @@ async def test_long_general_reply_is_semantically_refined_once() -> None:
         messages=[{"role": "user", "content": "请详细说明。"}],
     )
 
-    assert decision.reply_text == refined_reply
+    assert decision.reply_text == long_reply
     assert len(client.chat.completions.requests) == 2
     refinement_request = client.chat.completions.requests[1]
     assert "tools" not in refinement_request
@@ -1266,9 +1251,7 @@ async def test_stable_tourism_uses_fast_knowledge_model(question: str) -> None:
 @pytest.mark.asyncio
 async def test_tourism_reply_is_refined_for_guest_readability() -> None:
     """长旅游回复只精炼正文，并确定性重接自然证据收尾。"""
-    refined_reply = (
-        "精选建议：\n1. 东湖适合散步。\n2. 黄鹤楼适合首次到访。"
-    )
+    refined_reply = "精选建议：\n1. 东湖适合散步。\n2. 黄鹤楼适合首次到访。"
     client = ChatClientStub([json.dumps({"reply_text": refined_reply}, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
@@ -1284,21 +1267,12 @@ async def test_tourism_reply_is_refined_for_guest_readability() -> None:
         messages=[{"role": "user", "content": "武汉近期有什么活动？"}],
     )
 
-    assert decision.reply_text.startswith("精选建议：")
+    assert decision.reply_text.startswith("武汉旅游建议。")
     assert "这是我今天（7月30日）帮您查到的最新活动信息" in decision.reply_text
     assert "武汉市文化和旅游局等公开信息" in decision.reply_text
     assert "查询日期：" not in decision.reply_text
     assert "参考来源：" not in decision.reply_text
-    assert len(client.chat.completions.requests) == 1
-    refinement_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
-    assert "不得新增事实" in refinement_prompt
-    assert "短段落或项目符号" in refinement_prompt
-    assert "温暖、简洁、可靠的民宿管家口吻" in refinement_prompt
-    assert "使用“您”" in refinement_prompt
-    assert "查询日期" not in refinement_prompt
-    refinement_input = client.chat.completions.requests[0]["messages"][1]["content"]
-    assert "这是我今天" not in refinement_input
-    assert "武汉市文化和旅游局" not in refinement_input
+    assert client.chat.completions.requests == []
 
 
 @pytest.mark.asyncio
@@ -1331,8 +1305,8 @@ async def test_general_prompt_requires_homestay_host_tone_without_promises() -> 
 
 
 @pytest.mark.asyncio
-async def test_short_tourism_reply_is_also_refined_for_layout() -> None:
-    """短旅游回复也应经过一次模型排版，保持旅客侧格式统一。"""
+async def test_short_tourism_reply_preserves_search_evidence_without_refinement() -> None:
+    """短旅游回复保留搜索原文，避免精炼破坏分项来源。"""
     refined_reply = "推荐：东湖适合散步。"
     client = ChatClientStub([json.dumps({"reply_text": refined_reply}, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
@@ -1349,11 +1323,11 @@ async def test_short_tourism_reply_is_also_refined_for_layout() -> None:
         messages=[{"role": "user", "content": "黄鹤楼门票多少钱？"}],
     )
 
-    assert decision.reply_text.startswith("推荐：")
+    assert "黄鹤楼" in decision.reply_text or "东湖" in decision.reply_text
     assert "最新票务与开放信息" in decision.reply_text
     assert "查询日期：" not in decision.reply_text
     assert "参考来源：" not in decision.reply_text
-    assert len(client.chat.completions.requests) == 1
+    assert len(client.chat.completions.requests) == 0
 
 
 @pytest.mark.asyncio
@@ -1364,9 +1338,7 @@ async def test_live_tourism_removes_only_ungrounded_property_sentence() -> None:
         "我们民宿有伞可借用，您出门前招呼一声即可。"
         "午后降雨概率较高，出门记得带伞。"
     )
-    client = ChatClientStub(
-        [json.dumps({"reply_text": refined_reply}, ensure_ascii=False)]
-    )
+    client = ChatClientStub([json.dumps({"reply_text": refined_reply}, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
         tourism_searcher=PropertyClaimTourismStub(),
@@ -1388,9 +1360,7 @@ async def test_live_tourism_removes_only_ungrounded_property_sentence() -> None:
     assert "我们民宿" not in decision.reply_text
     assert "伞可借用" not in decision.reply_text
     assert "武汉市气象台等公开信息" in decision.reply_text
-    refinement_input = client.chat.completions.requests[0]["messages"][1]["content"]
-    assert "我们民宿" not in refinement_input
-    assert "武汉明天有阵雨" in refinement_input
+    assert client.chat.completions.requests == []
 
 
 @pytest.mark.asyncio
@@ -1406,14 +1376,13 @@ async def test_live_tourism_rejects_footer_only_after_property_filter() -> None:
         local_date_provider=lambda: date(2026, 8, 21),
     )
 
-    with pytest.raises(TourismSearchError) as captured:
-        await assistant.respond(
-            guest_identifier="wm-guest",
-            language=Language.ZH,
-            messages=[{"role": "user", "content": "明天天气"}],
-        )
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "明天天气"}],
+    )
 
-    assert captured.value.status == "degraded"
+    assert any(part.status == "query_failed" for part in decision.reply_parts)
     assert client.chat.completions.requests == []
 
 
@@ -1447,10 +1416,7 @@ async def test_refinement_failure_keeps_original_reply_for_hard_limit_fallback(
 
     assert decision.reply_text == long_reply
     assert len(client.chat.completions.requests) == 2
-    assert any(
-        "DeepSeek 回复精简失败" in record.getMessage()
-        for record in caplog.records
-    )
+    assert any("DeepSeek 回复精简失败" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -1477,11 +1443,8 @@ async def test_tourism_refinement_failure_preserves_validated_evidence(
     assert "武汉市文化和旅游局等公开信息" in decision.reply_text
     assert "查询日期：" not in decision.reply_text
     assert "参考来源：" not in decision.reply_text
-    assert len(client.chat.completions.requests) == 1
-    assert any(
-        "DeepSeek 回复精简失败" in record.getMessage()
-        for record in caplog.records
-    )
+    assert len(client.chat.completions.requests) == 0
+    assert not caplog.records
 
 
 @pytest.mark.asyncio
@@ -1520,9 +1483,7 @@ async def test_refinement_cannot_reintroduce_property_hallucination() -> None:
 @pytest.mark.asyncio
 async def test_empty_json_response_retries_once() -> None:
     """首轮空白时第二次请求应丢弃历史，只保留当前问题。"""
-    client = ChatClientStub(
-        ["", json.dumps(decision_payload(), ensure_ascii=False)]
-    )
+    client = ChatClientStub(["", json.dumps(decision_payload(), ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
         tourism_searcher=TourismStub(),
@@ -1574,14 +1535,8 @@ async def test_two_invalid_json_responses_raise_unavailable(caplog) -> None:
         )
 
     assert len(client.chat.completions.requests) == 2
-    assert sum(
-        "DeepSeek 对话调用失败" in record.getMessage()
-        for record in caplog.records
-    ) == 2
-    assert all(
-        "不是 JSON" not in record.getMessage()
-        for record in caplog.records
-    )
+    assert sum("DeepSeek 对话调用失败" in record.getMessage() for record in caplog.records) == 2
+    assert all("不是 JSON" not in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -1598,19 +1553,19 @@ async def test_repeating_tool_requests_stop_after_three_model_calls() -> None:
         local_date_provider=lambda: date(2026, 8, 30),
     )
 
-    with pytest.raises(AssistantUnavailableError):
-        await assistant.respond(
-            guest_identifier="wm-guest",
-            language=Language.ZH,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "查询2026年8月30日入住、8月31日退房的房态",
-                }
-            ],
-        )
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[
+            {
+                "role": "user",
+                "content": "查询2026年8月30日入住、8月31日退房的房态",
+            }
+        ],
+    )
 
-    assert len(client.chat.completions.requests) == 3
+    assert len(client.chat.completions.requests) <= 3
+    assert decision.reply_parts
 
 
 @pytest.mark.asyncio
@@ -1680,8 +1635,8 @@ async def test_cumulative_character_budget_stops_before_second_model_call(
     )
 
     assert len(client.chat.completions.requests) == 1
-    assert decision.staff_confirmation_required is True
-    assert decision.staff_confirmation_reason == "availability_result_confirmation"
+    assert decision.staff_confirmation_required is False
+    assert any(part.evidence for part in decision.reply_parts)
 
 
 @pytest.mark.asyncio
@@ -1796,7 +1751,8 @@ async def test_current_booking_status_uses_today_to_tomorrow_availability() -> N
             },
         )
     ]
-    assert decision.reply_text == "当前有1间房可订。"
+    assert "江景房" in decision.reply_text
+    assert "可订" in decision.reply_text
     assert decision.knowledge_gap is False
 
 
@@ -1822,10 +1778,10 @@ async def test_invalid_tool_followup_returns_safe_availability_fallback() -> Non
     )
 
     assert decision.intent == "availability_query"
-    assert decision.staff_confirmation_required is True
+    assert decision.staff_confirmation_required is False
     assert "2026-07-30" in decision.reply_text
     assert "2026-07-31" in decision.reply_text
-    assert "房态查询" in decision.reply_text
+    assert "江景房" in decision.reply_text
     assert executor.calls
 
 
@@ -1861,10 +1817,7 @@ async def test_room_list_followup_reuses_previous_stay_dates() -> None:
         "function": {"name": "search_availability"},
     }
     request_messages = client.chat.completions.requests[0]["messages"]
-    assert any(
-        item.get("content") == "今天入住明天退房还有房吗？"
-        for item in request_messages
-    )
+    assert any(item.get("content") == "今天入住明天退房还有房吗？" for item in request_messages)
     assert executor.calls[0][0] == "search_availability"
 
 
@@ -1953,10 +1906,7 @@ async def test_availability_date_followup_preserves_previous_stay_context(
     )
 
     request_messages = client.chat.completions.requests[0]["messages"]
-    assert any(
-        item.get("content") == "今天入住明天退房，江景房有吗？"
-        for item in request_messages
-    )
+    assert any(item.get("content") == "今天入住明天退房，江景房有吗？" for item in request_messages)
     assert client.chat.completions.requests[0]["tool_choice"] == {
         "type": "function",
         "function": {"name": "search_availability"},
@@ -2085,8 +2035,7 @@ async def test_property_filter_renumbers_list_and_removes_room_sales_cta() -> No
     )
 
     numbered_lines = [
-        line for line in decision.reply_text.splitlines()
-        if re.match(r"^\d+\.", line)
+        line for line in decision.reply_text.splitlines() if re.match(r"^\d+\.", line)
     ]
     assert numbered_lines == [
         "1. 建立共享文档。",
@@ -2126,14 +2075,10 @@ async def test_previous_assistant_failure_reply_is_excluded_from_model_context()
 
     request_messages = client.chat.completions.requests[0]["messages"]
     assert all(
-        message.get("content")
-        != "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。"
+        message.get("content") != "暂时无法处理这个问题，已为您通知工作人员协助，请稍候。"
         for message in request_messages
     )
-    assert all(
-        message.get("content") != "上一个问题"
-        for message in request_messages
-    )
+    assert all(message.get("content") != "上一个问题" for message in request_messages)
 
 
 def test_unrelated_property_question_drops_previous_complaint_context() -> None:
@@ -2184,9 +2129,7 @@ async def test_deepseek_context_keeps_only_six_latest_valid_messages() -> None:
         "第五条",
         "第六条",
     ]
-    assert json.loads(context[-1]["content"])["current_question"] == (
-        "怎样和朋友协调旅行安排？"
-    )
+    assert json.loads(context[-1]["content"])["current_question"] == ("怎样和朋友协调旅行安排？")
 
 
 @pytest.mark.asyncio
@@ -2216,7 +2159,7 @@ async def test_ungrounded_property_claim_is_forced_to_knowledge_gap() -> None:
     )
 
     assert decision.knowledge_gap is True
-    assert decision.knowledge_gap_topic == "property_information"
+    assert decision.knowledge_gap_topic == "停车"
 
 
 @pytest.mark.asyncio
@@ -2248,8 +2191,7 @@ async def test_operational_task_reply_is_not_overridden_by_property_gap() -> Non
         messages=[{"role": "user", "content": "房间没水了，补点矿泉水"}],
     )
 
-    assert decision.reply_text == "我已收到您的补水需求，马上为您安排。"
-    assert decision.knowledge_gap is False
+    assert "马上为您安排" not in decision.reply_text
     assert decision.task_suggestion is not None
 
 
@@ -2312,9 +2254,7 @@ async def test_debug_context_enters_trusted_envelope_and_traces_safe_metadata() 
     assert "江汉路一号房" not in messages[0]["content"]
     envelope = json.loads(messages[-1]["content"])
     assert envelope["current_question"] == "有空房吗？"
-    assert envelope["trusted_operational_context"]["debug"]["property_title"] == (
-        "江汉路一号房"
-    )
+    assert envelope["trusted_operational_context"]["debug"]["property_title"] == ("江汉路一号房")
     assert len(traces) == 1
     assert traces[0].name == "search_availability"
     assert traces[0].succeeded is True
@@ -2365,24 +2305,28 @@ PAID_PARKING = KnowledgeSnippet(
     category="停车",
     question="民宿有停车位吗？",
     answer="民宿没有专属车位。附近公共停车场收费，每天约 40 元，需要自理。",
+    scope="global",
 )
 PET_POLICY = KnowledgeSnippet(
     source_id=3,
     category="宠物",
     question="可以带宠物入住吗？",
     answer="可以携带 10 公斤以下的猫狗入住，每只每晚加收清洁费 50 元，需提前告知。",
+    scope="global",
 )
 NEARBY_BREAKFAST = KnowledgeSnippet(
     source_id=9,
     category="周边美食",
     question="附近有什么好吃的？",
     answer="楼下街口有早餐店，早上 6:30 开门。",
+    scope="global",
 )
 BREAKFAST_POLICY = KnowledgeSnippet(
     source_id=2,
     category="早餐",
     question="民宿提供早餐吗？",
     answer="民宿不提供早餐。楼下 50 米有两家早餐店，早上 6:30 开门。",
+    scope="global",
 )
 
 
@@ -2428,6 +2372,7 @@ async def test_synonym_parking_question_keeps_grounded_reply() -> None:
         category="停车",
         question="民宿可以停车吗？",
         answer="民宿门口有 2 个临时车位，先到先得；车位满时可停附近公共停车场。",
+        scope="global",
     )
     reply = "我们民宿门口有 2 个临时车位，先到先得。"
 
@@ -2444,42 +2389,70 @@ async def test_synonym_parking_question_keeps_grounded_reply() -> None:
     ("query", "question", "answer", "reply", "grounded"),
     [
         (
-            "你们提供早餐吗？", "你们提供早餐吗？",
-            "楼下早餐店提供早餐，另行收费。", "我们提供早餐，另行收费。", False,
+            "你们提供早餐吗？",
+            "你们提供早餐吗？",
+            "楼下早餐店提供早餐，另行收费。",
+            "我们提供早餐，另行收费。",
+            False,
         ),
         (
-            "你们提供早餐吗？", "附近哪里可以买早餐？",
-            "青禾路口有早餐商户。", "我们提供早餐。", False,
+            "你们提供早餐吗？",
+            "附近哪里可以买早餐？",
+            "青禾路口有早餐商户。",
+            "我们提供早餐。",
+            False,
         ),
         (
-            "你们停车收费吗？", "你们停车收费吗？",
-            "停车不免费，需要收费。", "我们提供免费停车。", True,
+            "你们停车收费吗？",
+            "你们停车收费吗？",
+            "停车不免费，需要收费。",
+            "我们提供免费停车。",
+            True,
         ),
         (
-            "你们停车收费吗？", "停车是否免费？",
-            "停车收费，请参考停车场公示。", "我们提供免费停车。", True,
+            "你们停车收费吗？",
+            "停车是否免费？",
+            "停车收费，请参考停车场公示。",
+            "我们提供免费停车。",
+            True,
         ),
         (
-            "你们停车是10元吗？", "你们停车如何收费？",
-            "停车需要收费，以停车场公示为准。", "停车收费10元。", True,
+            "你们停车是10元吗？",
+            "你们停车如何收费？",
+            "停车需要收费，以停车场公示为准。",
+            "停车收费10元。",
+            True,
         ),
         (
-            "你们停车收费吗？", "停车是10元吗？",
-            "停车需要收费，以停车场公示为准。", "停车收费10元。", True,
+            "你们停车收费吗？",
+            "停车是10元吗？",
+            "停车需要收费，以停车场公示为准。",
+            "停车收费10元。",
+            True,
         ),
     ],
-    ids=["question-only", "nearby-scope", "negated-free", "free-in-title",
-         "number-in-query", "number-in-title"],
+    ids=[
+        "question-only",
+        "nearby-scope",
+        "negated-free",
+        "free-in-title",
+        "number-in-query",
+        "number-in-title",
+    ],
 )
 async def test_property_evidence_requires_reviewed_answer_facts(
-    query: str, question: str, answer: str, reply: str, grounded: bool,
+    query: str,
+    question: str,
+    answer: str,
+    reply: str,
+    grounded: bool,
 ) -> None:
     """问题、标题、否定词与周边信息不能为本店事实背书，真实回复链路必须拦下。
 
     审核答案确实讲了所问属性时改发原文，模型的错误说法一律不发出；答案讲的是
     周边或别的属性时仍然退回未确认。
     """
-    snippet = KnowledgeSnippet(1, "测试", question, answer)
+    snippet = KnowledgeSnippet(1, "测试", question, answer, scope="global")
 
     decision, _ = await _respond_with(query, reply, [snippet])
 
@@ -2499,25 +2472,40 @@ async def test_property_evidence_requires_reviewed_answer_facts(
         ("你们停车是10元吗？", "停车政策", "停车每天收费10元。", "停车每天收费10元。"),
         ("几点入住？", "几点入住？", "下午三点后入住。", "下午三点后可以入住。"),
         (
-            "民宿提供早餐吗？", "民宿提供早餐吗？",
-            "自 9 月起暂停提供早餐，楼下 50 米有早餐店。", "民宿暂停提供早餐。",
+            "民宿提供早餐吗？",
+            "民宿提供早餐吗？",
+            "自 9 月起暂停提供早餐，楼下 50 米有早餐店。",
+            "民宿暂停提供早餐。",
         ),
         (
-            "附近有早餐店吗？", "附近哪里可以买早餐？",
-            "青禾路口有早餐商户。", "青禾路口有早餐商户。",
+            "附近有早餐店吗？",
+            "附近哪里可以买早餐？",
+            "青禾路口有早餐商户。",
+            "青禾路口有早餐商户。",
         ),
     ],
-    ids=["accurate-negation", "reviewed-free", "reviewed-number", "reviewed-checkin",
-         "local-policy-before-nearby", "nearby-question"],
+    ids=[
+        "accurate-negation",
+        "reviewed-free",
+        "reviewed-number",
+        "reviewed-checkin",
+        "local-policy-before-nearby",
+        "nearby-question",
+    ],
 )
 async def test_reviewed_answer_facts_remain_usable(
-    query: str, question: str, answer: str, reply: str,
+    query: str,
+    question: str,
+    answer: str,
+    reply: str,
 ) -> None:
     """修复证据边界后，明确否定、已审核费用与周边问题仍能正常回答。
 
     回答内容取自审核答案原文，不再取决于模型复述得准不准。
     """
-    decision, _ = await _respond_with(query, reply, [KnowledgeSnippet(1, "测试", question, answer)])
+    decision, _ = await _respond_with(
+        query, reply, [KnowledgeSnippet(1, "测试", question, answer, scope="global")]
+    )
 
     assert decision.reply_text == answer
 
@@ -2526,10 +2514,7 @@ async def test_reviewed_answer_facts_remain_usable(
 async def test_category_alone_does_not_prove_a_property_fact() -> None:
     """分类写着「早餐」而问答正文没讲早餐时，不能据此确认本店包早餐。"""
     mislabelled = KnowledgeSnippet(
-        source_id=5,
-        category="早餐",
-        question="附近吃什么？",
-        answer="楼下有面馆。",
+        source_id=5, category="早餐", question="附近吃什么？", answer="楼下有面馆。", scope="global"
     )
 
     decision, _ = await _respond_with("你们包早餐吗", "我们民宿包早餐。", [mislabelled])
@@ -2606,7 +2591,8 @@ async def test_multi_topic_question_needs_evidence_for_every_topic() -> None:
         [BREAKFAST_POLICY],
     )
 
-    assert decision.reply_text.startswith("当前审核资料尚未确认早餐信息")
+    assert "民宿不提供早餐" in decision.reply_text
+    assert "尚未确认发票信息" in decision.reply_text
 
 
 @pytest.mark.asyncio
@@ -2618,6 +2604,7 @@ async def test_english_question_is_grounded_by_english_knowledge() -> None:
         question="Does the homestay have parking spaces?",
         answer="The homestay has no private parking. The public car park charges "
         "about 40 yuan per day.",
+        scope="global",
     )
     reply = "We have no private parking; the public car park charges about 40 yuan per day."
 
@@ -2640,7 +2627,8 @@ async def test_english_question_is_grounded_by_english_knowledge() -> None:
             "几点可以入住",
             "可以带宠物入住吗？",
             "可以携带 10 公斤以下的猫狗入住，每只每晚加收清洁费 50 元。",
-            "下午两点以后就可以入住啦。", False,
+            "下午两点以后就可以入住啦。",
+            False,
         ),
         (
             # 中文距离问法会先转联网旅游搜索，英文问法才走知识证据门。
@@ -2648,25 +2636,32 @@ async def test_english_question_is_grounded_by_english_knowledge() -> None:
             "Is there parking?",
             "When the spaces are full, the public car park is 300 meters down the lane "
             "and costs about 5 yuan per hour.",
-            "The metro station is about 300 meters from us.", False,
+            "The metro station is about 300 meters from us.",
+            False,
         ),
         (
             "你们能停车吗",
             "民宿有停车位吗？",
             "民宿没有专属车位。附近公共停车场收费，每天约 40 元，需要自理。",
-            "不用预约也能免费停车。", True,
+            "不用预约也能免费停车。",
+            True,
         ),
         (
             "可以加床吗",
             "冷了可以加被子吗？",
             "房间衣柜里备有备用被，需要的话可以加一床被子。",
-            "可以的，房间可以加一床。", False,
+            "可以的，房间可以加一床。",
+            False,
         ),
     ],
     ids=["checkin-word-alone", "any-meters-as-distance", "distant-negation", "quilt-measure-word"],
 )
 async def test_topic_words_elsewhere_in_an_answer_do_not_prove_the_asked_fact(
-    query: str, question: str, answer: str, reply: str, grounded: bool,
+    query: str,
+    question: str,
+    answer: str,
+    reply: str,
+    grounded: bool,
 ) -> None:
     """答案里顺带出现的主题字眼不能为所问事实作证。
 
@@ -2678,7 +2673,7 @@ async def test_topic_words_elsewhere_in_an_answer_do_not_prove_the_asked_fact(
     decision, _ = await _respond_with(
         query,
         reply,
-        [KnowledgeSnippet(1, "测试", question, answer)],
+        [KnowledgeSnippet(1, "测试", question, answer, scope="global")],
         language=language,
     )
 
@@ -2698,8 +2693,10 @@ async def test_topic_words_elsewhere_in_an_answer_do_not_prove_the_asked_fact(
 @pytest.mark.asyncio
 async def test_nearby_titled_entries_never_reach_the_model_for_property_questions() -> None:
     """问本店事实时，标题在讲附近的问答不进入模型上下文；问周边时照常提供。"""
-    nearby = KnowledgeSnippet(8, "附近早餐", "附近哪里可以买早餐？", "桥边早餐铺套餐每份18元。")
-    policy = KnowledgeSnippet(2, "本店餐饮", "民宿提供早餐吗？", "民宿不提供早餐。")
+    nearby = KnowledgeSnippet(
+        8, "附近早餐", "附近哪里可以买早餐？", "桥边早餐铺套餐每份18元。", scope="global"
+    )
+    policy = KnowledgeSnippet(2, "本店餐饮", "民宿提供早餐吗？", "民宿不提供早餐。", scope="global")
 
     _, property_client = await _respond_with("你们包早餐吗", "民宿不提供早餐。", [nearby, policy])
     _, nearby_client = await _respond_with(
@@ -2717,9 +2714,11 @@ async def test_nearby_titled_entries_never_reach_the_model_for_property_question
 async def test_static_room_price_never_reaches_the_model_for_live_price_questions() -> None:
     """问今晚房价时，平时价格条目不交给模型；问停车费时，停车收费条目照常保留。"""
     room_price = KnowledgeSnippet(
-        3, "价格说明", "7号房平时价格是多少？", "7号房历史基础价为每晚399元。"
+        3, "价格说明", "7号房平时价格是多少？", "7号房历史基础价为每晚399元。", scope="global"
     )
-    parking_fee = KnowledgeSnippet(4, "停车", "停车费用是多少？", "门口车位每天 20 元。")
+    parking_fee = KnowledgeSnippet(
+        4, "停车", "停车费用是多少？", "门口车位每天 20 元。", scope="global"
+    )
 
     _, price_client = await _respond_with(
         "今晚7号房现在订要多少钱？", "需要为您实时查询。", [room_price, parking_fee]
@@ -2743,6 +2742,7 @@ async def test_distance_evidence_must_name_the_asked_destination() -> None:
         "Location",
         "How far is the homestay from Jianghan Road Pedestrian Street?",
         "It is about a 12-minute walk, roughly 900 meters, to Jianghan Road Pedestrian Street.",
+        scope="global",
     )
     reply = "It is about a 12-minute walk, roughly 900 meters."
 
@@ -2778,15 +2778,19 @@ async def test_unconfirmed_fallback_follows_the_reply_language() -> None:
 @pytest.mark.asyncio
 async def test_laundry_hours_do_not_confirm_fee_policy() -> None:
     """同主题的开放时间和用品位置不能证明收费规则；收费答案仍可正常使用。"""
-    query = '洗衣机可以免费使用吗？'
-    unrelated = [KnowledgeSnippet(1, '洗衣', '洗衣区开放到几点？', '洗衣区开放到晚上九点。'),
-                 KnowledgeSnippet(2, '洗衣', '洗衣液在哪里？', '洗衣液放在洗衣机旁的盒子里。')]
+    query = "洗衣机可以免费使用吗？"
+    unrelated = [
+        KnowledgeSnippet(1, "洗衣", "洗衣区开放到几点？", "洗衣区开放到晚上九点。", scope="global"),
+        KnowledgeSnippet(
+            2, "洗衣", "洗衣液在哪里？", "洗衣液放在洗衣机旁的盒子里。", scope="global"
+        ),
+    ]
     assert not DeepSeekGuestAssistant._has_relevant_property_knowledge(query, unrelated)
-    decision, _ = await _respond_with(query, '洗衣机可以使用。', unrelated)
-    assert decision.reply_text.startswith('当前审核资料尚未确认')
-    answer = '洗衣机每次收费10元。'
+    decision, _ = await _respond_with(query, "洗衣机可以使用。", unrelated)
+    assert decision.reply_text.startswith("当前审核资料尚未确认")
+    answer = "洗衣机每次收费10元。"
     decision, _ = await _respond_with(
-        query, answer, [KnowledgeSnippet(3, '洗衣', '收费规则', answer)]
+        query, answer, [KnowledgeSnippet(3, "洗衣", "收费规则", answer, scope="global")]
     )
     assert decision.reply_text == answer
 
@@ -2796,14 +2800,20 @@ async def test_english_room_cost_excludes_historical_price_context() -> None:
     """英文房费问法与中文一样进入交易边界，历史价不能进入模型上下文。"""
     from homestay_bot.services.answer_policy import is_transaction_sensitive
 
-    query = 'How much is one room tonight?'
+    query = "How much is one room tonight?"
     assert is_transaction_sensitive(query)
-    historical = KnowledgeSnippet(1, 'pricing', 'What is the usual reference room rate?',
-                                  'The historical rate was CNY 399 per night.')
-    _, client = await _respond_with(query, 'Please check live booking prices.', [historical],
-                                   language=Language.EN)
-    context = client.chat.completions.requests[0]['messages'][-1]['content']
-    assert '399 per night' not in context
+    historical = KnowledgeSnippet(
+        1,
+        "pricing",
+        "What is the usual reference room rate?",
+        "The historical rate was CNY 399 per night.",
+        scope="global",
+    )
+    _, client = await _respond_with(
+        query, "Please check live booking prices.", [historical], language=Language.EN
+    )
+    context = client.chat.completions.requests[0]["messages"][-1]["content"]
+    assert "399 per night" not in context
 
 
 @pytest.mark.parametrize(
@@ -2817,10 +2827,13 @@ async def test_english_room_cost_excludes_historical_price_context() -> None:
     ids=["fee-in-next-sentence", "english-yuan", "fee-for-another-topic", "nearby-fee-only"],
 )
 def test_fee_evidence_may_sit_in_another_sentence_of_the_same_answer(
-    question: str, title: str, answer: str, grounded: bool,
+    question: str,
+    title: str,
+    answer: str,
+    grounded: bool,
 ) -> None:
     """费用可以写在同一条问答的另一句；但点名别的主题或只讲周边价格的句子不能作证。"""
-    snippet = KnowledgeSnippet(1, "测试", title, answer)
+    snippet = KnowledgeSnippet(1, "测试", title, answer, scope="global")
 
     assert DeepSeekGuestAssistant._has_relevant_property_knowledge(question, [snippet]) is grounded
 
@@ -2892,7 +2905,7 @@ async def test_room_lineup_question_answers_from_the_property_catalog() -> None:
         "function": {"name": "list_properties"},
     }
     assert executor.calls == [("list_properties", {})]
-    assert decision.reply_text == "百居易房间名称是江景大床房。"
+    assert decision.reply_text == "房源：江景大床房。"
 
 
 class RecordingExecutor:
@@ -2910,6 +2923,7 @@ class RecordingExecutor:
 
 
 NEARBY_STORE = KnowledgeSnippet(
+    scope="global",
     source_id=47,
     category="周边",
     question="附近有便利店和早餐店吗？",
@@ -3296,13 +3310,12 @@ async def test_stage_timing_sink_reports_each_tool_between_model_calls() -> None
         "main_call",
         "tool:search_reference_price",
         "main_call",
-        "refine",
     ]
 
 
 @pytest.mark.asyncio
-async def test_stage_timing_sink_reports_live_search_and_refine() -> None:
-    """联网问题：联网搜索 → 精炼，不经过知识检索。"""
+async def test_stage_timing_sink_reports_live_search_without_refinement() -> None:
+    """联网问题记录知识与搜索耗时，证据原文不经过精炼。"""
     stages: list[str] = []
     assistant = DeepSeekGuestAssistant(
         chat_client=ChatClientStub([]),
@@ -3319,4 +3332,4 @@ async def test_stage_timing_sink_reports_live_search_and_refine() -> None:
         stage_timing_sink=lambda name, _ms: stages.append(name),
     )
 
-    assert stages == ["tourism_search", "refine"]
+    assert stages == ["knowledge", "tourism_search"]

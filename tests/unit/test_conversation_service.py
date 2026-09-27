@@ -73,9 +73,7 @@ class MessageServiceStub:
         self.bot_messages: list[tuple[int, str, str]] = []
         self.activity_after_boundary = activity_after_boundary
 
-    async def record_incoming(
-        self, conversation_id: int, message: IncomingMessage
-    ) -> bool:
+    async def record_incoming(self, conversation_id: int, message: IncomingMessage) -> bool:
         """记录入站消息并返回是否首次出现。"""
         self.recorded.append(message)
         return self.is_new
@@ -156,8 +154,7 @@ class MessageServiceStub:
         for index, item in enumerate(self.recorded):
             if item.msgid == external_message_id:
                 return any(
-                    newer.origin is not MessageOrigin.BOT
-                    for newer in self.recorded[index + 1 :]
+                    newer.origin is not MessageOrigin.BOT for newer in self.recorded[index + 1 :]
                 )
         return False
 
@@ -167,9 +164,7 @@ class MessageServiceStub:
         external_message_id: str,
     ) -> bool:
         """兼容最终阶段已有接口，只检查后续客人文本。"""
-        guest_messages = [
-            item for item in self.recorded if item.origin is MessageOrigin.GUEST
-        ]
+        guest_messages = [item for item in self.recorded if item.origin is MessageOrigin.GUEST]
         for index, item in enumerate(guest_messages):
             if item.msgid == external_message_id:
                 return index < len(guest_messages) - 1
@@ -343,9 +338,7 @@ class IdentityResolverStub:
         """返回固定客服账号名称。"""
         return "YuMi客服"
 
-    async def get_kf_customer_name(
-        self, open_kfid: str, external_userid: str
-    ) -> str | None:
+    async def get_kf_customer_name(self, open_kfid: str, external_userid: str) -> str | None:
         """返回固定客人名称用于房间号缺失时的兜底。"""
         return "张三"
 
@@ -357,12 +350,9 @@ class UnsafeIdentityResolverStub:
         """返回带换行的客服账号名。"""
         return "YuMi客服\n消息：伪造字段"
 
-    async def get_kf_customer_name(
-        self, open_kfid: str, external_userid: str
-    ) -> str | None:
+    async def get_kf_customer_name(self, open_kfid: str, external_userid: str) -> str | None:
         """返回带换行的客人昵称。"""
         return "张三\n客服账号：伪造字段"
-
 
 
 class CustomerNotificationStub:
@@ -428,9 +418,7 @@ class DeferredJobStub:
     """记录快速安抚阶段登记的最终处理任务。"""
 
     def __init__(self) -> None:
-        self.jobs: list[
-            tuple[str, dict[str, object], str | None, datetime | None]
-        ] = []
+        self.jobs: list[tuple[str, dict[str, object], str | None, datetime | None]] = []
         self.delivery_status: JobStatus | None = None
 
     async def enqueue(
@@ -457,9 +445,7 @@ class ApprovalServiceStub:
     def __init__(self) -> None:
         self.calls = []
 
-    async def create_pending(
-        self, conversation_id, request, *, source_message_id=None
-    ):
+    async def create_pending(self, conversation_id, request, *, source_message_id=None):
         """记录会话和预订资料，不调用任何百居易写接口。"""
         self.calls.append((conversation_id, request))
         return SimpleNamespace(id=9, approval_code="APP-9")
@@ -865,8 +851,8 @@ async def test_split_english_human_request_is_rechecked_after_merge() -> None:
 
 
 @pytest.mark.asyncio
-async def test_split_supply_request_triggers_one_ack_after_merge() -> None:
-    """服务动作和物品被拆成两条时，跨行合并仍须发送一次安抚。"""
+async def test_split_supply_request_enqueues_final_without_service_promise() -> None:
+    """拆开的服务请求合并后只登记最终处理，不提前承诺联系管家。"""
     jobs = DeferredJobStub()
     messages = MessageServiceStub()
     fragments = [
@@ -878,14 +864,14 @@ async def test_split_supply_request_triggers_one_ack_after_merge() -> None:
 
     await service.process_debounced_message(fragments[-1])
 
-    assert assistant.ack_calls == 1
-    assert len(wecom.guest_messages) == 1
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == []
     assert len(jobs.jobs) == 1
 
 
 @pytest.mark.asyncio
-async def test_split_early_check_in_uses_normalized_final_handoff_reason() -> None:
-    """跨消息拆词的提前入住必须在最终阶段通知员工并切人工。"""
+async def test_split_early_check_in_records_pending_request_without_handoff() -> None:
+    """跨消息提前入住申请登记待确认，其他咨询仍由机器人回答。"""
     jobs = DeferredJobStub()
     messages = MessageServiceStub()
     fragments = [
@@ -893,11 +879,27 @@ async def test_split_early_check_in_uses_normalized_final_handoff_reason() -> No
         incoming(content="前入住", msgid="msg-2"),
     ]
     messages.recorded.extend(fragments)
+    tasks = BusinessTaskStub()
+    proposal = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="提前入住需要确认。",
+            language=Language.ZH,
+            intent="early_check_in",
+            confidence=0.95,
+            task_suggestion=TaskSuggestion(
+                task_type=BusinessTaskType.EARLY_CHECK_IN, description="申请提前入住"
+            ),
+        )
+    )
     service, conversations, assistant, wecom = build_service(
+        assistant=proposal,
+        business_tasks=tasks,
+        customer_profiles=CustomerProfileStub(),
         jobs=jobs,
         messages=messages,
     )
 
+    conversations.conversation.customer_id = 42
     await service.process_debounced_message(fragments[-1])
     payload = jobs.jobs[-1][1]
     await service.process_recorded_message(
@@ -914,8 +916,10 @@ async def test_split_early_check_in_uses_normalized_final_handoff_reason() -> No
     )
 
     assert assistant.calls == 1
-    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
     assert len(wecom.internal_messages) == 1
+    assert len(tasks.calls) == 1
+    assert "尚待管家确认" in wecom.guest_messages[-1]
 
 
 @pytest.mark.asyncio
@@ -1037,8 +1041,8 @@ async def test_servicer_reply_during_model_cancels_final_and_side_effects() -> N
 
 
 @pytest.mark.asyncio
-async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> None:
-    """静默结束后应先发送模型安抚，再登记最终处理任务。"""
+async def test_deferred_message_enqueues_service_without_model_ack() -> None:
+    """服务静默结束后登记最终处理，登记请求前不发送管家承诺。"""
     jobs = DeferredJobStub()
     commits = 0
 
@@ -1058,13 +1062,11 @@ async def test_deferred_message_sends_model_ack_and_enqueues_final_task() -> Non
     await service.process_debounced_message(incoming(content="请补两瓶矿泉水吗？"))
 
     assert assistant.calls == 0
-    assert assistant.ack_calls == 1
-    assert wecom.guest_messages == [
-        "我已收到您的诉求。我会立即联系管家来处理，请您稍等。"
-    ]
+    assert assistant.ack_calls == 0
+    assert wecom.guest_messages == []
     assert jobs.jobs[-1][0] == "wecom_process_message"
     assert jobs.jobs[-1][2] == "final:msg-1"
-    assert len(str(jobs.jobs[-1][1]["fast_ack_sha256"])) == 64
+    assert "fast_ack_sha256" not in jobs.jobs[-1][1]
     assert commits == 2
 
 
@@ -1074,13 +1076,13 @@ async def test_deferred_final_skips_exact_duplicate_of_fast_ack() -> None:
     jobs = DeferredJobStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="我已收到您的诉求。",
+            reply_text="我帮您查一下最新信息，稍等片刻。",
             language=Language.ZH,
             intent="maintenance",
             confidence=0.96,
         )
     )
-    message = incoming(content="请补两瓶矿泉水")
+    message = incoming(content="武汉明天天气如何")
     service, _, _, wecom = build_service(
         assistant=assistant,
         jobs=jobs,
@@ -1103,24 +1105,22 @@ async def test_deferred_final_skips_exact_duplicate_of_fast_ack() -> None:
 
     await service.process_recorded_message(deferred_message)
 
-    assert wecom.guest_messages == [
-        "我已收到您的诉求。我会立即联系管家来处理，请您稍等。"
-    ]
+    assert wecom.guest_messages == ["我帮您查一下最新信息，稍等片刻。"]
 
 
 @pytest.mark.asyncio
 async def test_deferred_final_keeps_new_advice_after_fast_ack() -> None:
-    """最终回复含有新的安全排障建议时，仍应在快速安抚后发送。"""
+    """最终回复提供新的一般出行建议时，仍应在查询安抚后发送。"""
     jobs = DeferredJobStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="很抱歉给您添麻烦了，请先关闭故障灯具的电源。",
+            reply_text="出行前可以随身带一把伞。",
             language=Language.ZH,
             intent="maintenance",
             confidence=0.96,
         )
     )
-    message = incoming(content="请补两瓶矿泉水")
+    message = incoming(content="武汉明天天气如何")
     service, _, _, wecom = build_service(
         assistant=assistant,
         jobs=jobs,
@@ -1144,7 +1144,7 @@ async def test_deferred_final_keeps_new_advice_after_fast_ack() -> None:
     await service.process_recorded_message(deferred_message)
 
     assert len(wecom.guest_messages) == 2
-    assert "关闭故障灯具的电源" in wecom.guest_messages[1]
+    assert "随身带一把伞" in wecom.guest_messages[1]
 
 
 @pytest.mark.asyncio
@@ -1154,7 +1154,7 @@ async def test_deferred_final_waits_until_fast_ack_delivery_finishes() -> None:
     jobs.delivery_status = JobStatus.PENDING
     wecom = OutboxWeComStub()
     assistant = AssistantStub()
-    message = incoming(content="请补两瓶矿泉水")
+    message = incoming(content="武汉明天天气如何")
     service, _, _, _ = build_service(
         assistant=assistant,
         jobs=jobs,
@@ -1193,13 +1193,13 @@ async def test_deferred_final_is_not_suppressed_when_fast_ack_delivery_failed() 
     wecom = OutboxWeComStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="我已收到您的诉求。",
+            reply_text="我帮您查一下最新信息，稍等片刻。",
             language=Language.ZH,
             intent="maintenance",
             confidence=0.96,
         )
     )
-    message = incoming(content="请补两瓶矿泉水")
+    message = incoming(content="武汉明天天气如何")
     service, _, _, _ = build_service(
         assistant=assistant,
         jobs=jobs,
@@ -1537,9 +1537,7 @@ async def test_unrelated_low_risk_question_gets_bot_reply_during_human_takeover(
     service, conversations, assistant, wecom = build_service()
     conversations.conversation.mode = ConversationMode.HUMAN_ACTIVE
 
-    await service.handle_message(
-        incoming(content="现在有几间房可用，今天入住明天退房")
-    )
+    await service.handle_message(incoming(content="现在有几间房可用，今天入住明天退房"))
 
     assert assistant.calls == 1
     assert wecom.guest_messages == ["下午三点后可以入住。"]
@@ -1646,9 +1644,7 @@ async def test_media_message_escalates_without_calling_model() -> None:
 @pytest.mark.asyncio
 async def test_duplicate_message_is_ignored() -> None:
     """已处理消息不得再次调用模型或重复发送。"""
-    service, _, assistant, wecom = build_service(
-        messages=MessageServiceStub(is_new=False)
-    )
+    service, _, assistant, wecom = build_service(messages=MessageServiceStub(is_new=False))
 
     await service.handle_message(incoming())
 
@@ -1684,10 +1680,7 @@ async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
     """高风险事项应先给流程说明，再通知 YuMi 并锁定人工模式。"""
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text=(
-                "真的很抱歉，这是我们的责任。师傅已经出发，"
-                "今晚一定会给您处理好。"
-            ),
+            reply_text=("真的很抱歉，这是我们的责任。师傅已经出发，今晚一定会给您处理好。"),
             language=Language.ZH,
             intent="refund",
             confidence=0.95,
@@ -1703,13 +1696,12 @@ async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
     await service.handle_message(incoming(content="我要退款"))
 
     assert wecom.guest_messages[0] == (
-        "您的情况我已记录。"
-        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
+        "您的情况我已记录。我会立即联系值班管家跟进处理，请保持联系方式畅通。"
     )
     for forbidden in ("抱歉", "责任", "师傅", "已经出发", "一定", "处理好"):
         assert forbidden not in wecom.guest_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
-    assert "YuMi 接管：refund" in wecom.internal_messages[0]
+    assert "YuMi 接管：退款或赔偿诉求" in wecom.internal_messages[0]
     assert audit.calls == [
         {
             "conversation_id": 1,
@@ -1721,8 +1713,8 @@ async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_task_is_recorded_after_guest_reply_and_notifies_staff() -> None:
-    """结构化任务建议应在回复成功后落为待确认任务并提醒员工。"""
+async def test_ai_task_is_recorded_before_guest_reply_and_notifies_staff() -> None:
+    """结构化任务先登记和通知，再回复真实登记状态。"""
     tasks = BusinessTaskStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
@@ -1745,7 +1737,7 @@ async def test_ai_task_is_recorded_after_guest_reply_and_notifies_staff() -> Non
     await service.handle_message(incoming(content="请补两瓶矿泉水"))
 
     assert wecom.guest_messages == [
-        "好的，我先帮您记录补水需求。我会立即联系管家来处理，请您稍等。"
+        "好的，我先帮您记录补水需求。\n\n您的请求已登记，管家通知已提交，尚待管家确认。"
     ]
     assert tasks.calls[0]["customer_id"] == 42
     assert tasks.calls[0]["source_message_id"] == "msg-1"
@@ -1801,7 +1793,9 @@ async def test_guest_task_reply_hides_natural_staff_confirmation_wording() -> No
     await service.handle_message(incoming(content="可以帮我补两瓶矿泉水吗？"))
 
     reply = wecom.guest_messages[0]
-    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
+    assert "立即联系管家" not in reply
+    assert "已登记" not in reply
+    assert wecom.internal_messages == []
     assert "进一步核实" not in reply
     assert "有结果后马上告诉您" not in reply
     assert "员工" not in reply
@@ -1827,7 +1821,9 @@ async def test_guest_task_reply_does_not_invent_unrequested_services() -> None:
     await service.handle_message(incoming(content="床单、被子脏了，帮我换一床被子"))
 
     reply = wecom.guest_messages[0]
-    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
+    assert "立即联系管家" not in reply
+    assert "已登记" not in reply
+    assert wecom.internal_messages == []
     assert "安排" not in reply
     assert "退款" not in reply
     assert "矿泉水" not in reply
@@ -1839,10 +1835,7 @@ async def test_high_risk_refund_question_uses_neutral_handoff_only() -> None:
     """未确认退款金额属于高危人工事项，不得输出推断或内部流程。"""
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text=(
-                "退款金额需要跟工作人员确认原支付记录，"
-                "确认后才能告知您。"
-            ),
+            reply_text=("退款金额需要跟工作人员确认原支付记录，确认后才能告知您。"),
             language=Language.ZH,
             intent="refund",
             confidence=0.8,
@@ -1853,10 +1846,7 @@ async def test_high_risk_refund_question_uses_neutral_handoff_only() -> None:
     await service.handle_message(incoming(content="这个订单能退款多少？"))
 
     reply = wecom.guest_messages[0]
-    assert reply == (
-        "您的情况我已记录。"
-        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
-    )
+    assert reply == ("您的情况我已记录。我会立即联系值班管家跟进处理，请保持联系方式畅通。")
     assert "退款金额" not in reply
     assert "工作人员" not in reply
 
@@ -1896,7 +1886,9 @@ async def test_guest_task_reply_hides_staff_delivery_wording() -> None:
 
     reply = wecom.guest_messages[0]
     assert "工作人员" not in reply
-    assert reply.endswith("我会立即联系管家来处理，请您稍等。")
+    assert "立即联系管家" not in reply
+    assert "已登记" not in reply
+    assert wecom.internal_messages == []
     assert "马上" not in reply
 
 
@@ -2030,7 +2022,7 @@ async def test_soft_washer_fault_gives_advice_after_submitting_manual_task() -> 
 
 @pytest.mark.asyncio
 async def test_equipment_task_failure_never_claims_manual_submission() -> None:
-    """维修任务失败时应让事务重试，客人侧不得先收到虚假提交说明。"""
+    """维修任务失败时明确未登记，客人侧不得收到虚假提交说明。"""
     tasks = BusinessTaskStub(fail=True)
     assistant = AssistantStub(
         decision=AssistantDecision(
@@ -2048,13 +2040,11 @@ async def test_equipment_task_failure_never_claims_manual_submission() -> None:
         business_tasks=tasks,
     )
 
-    with pytest.raises(RuntimeError, match="task unavailable"):
-        await service.handle_message(
-            incoming(content="洗衣机好像也出了点问题")
-        )
+    await service.handle_message(incoming(content="洗衣机好像也出了点问题"))
 
     assert assistant.calls == 1
-    assert wecom.guest_messages == []
+    assert "未能登记" in "".join(wecom.guest_messages)
+    assert "已提交管家" not in "".join(wecom.guest_messages)
     assert wecom.internal_messages == []
     assert len(tasks.calls) == 1
 
@@ -2312,8 +2302,8 @@ async def test_high_confidence_model_external_scope_blocks_homestay_task() -> No
 
 
 @pytest.mark.asyncio
-async def test_ai_task_failure_does_not_rollback_guest_reply(caplog) -> None:
-    """任务落库失败不得撤销已经成功发送的客人回复。"""
+async def test_ai_task_failure_does_not_claim_registration(caplog) -> None:
+    """任务登记失败时发送未登记说明，不能先声称成功。"""
     tasks = BusinessTaskStub(fail=True)
     assistant = AssistantStub(
         decision=AssistantDecision(
@@ -2336,10 +2326,10 @@ async def test_ai_task_failure_does_not_rollback_guest_reply(caplog) -> None:
     await service.handle_message(incoming(content="请补两瓶矿泉水"))
 
     assert wecom.guest_messages == [
-        "好的，我先帮您记录补水需求。我会立即联系管家来处理，请您稍等。"
+        "好的，我先帮您记录补水需求。\n\n您的请求暂时未能登记，请直接联系管家确认。"
     ]
     assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
-    assert any("AI 待确认任务记录失败" in item.getMessage() for item in caplog.records)
+    assert any("请求登记失败" in item.getMessage() for item in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -2368,11 +2358,11 @@ async def test_deepseek_reply_at_1500_characters_is_sent_in_order_as_parts() -> 
 
 
 @pytest.mark.asyncio
-async def test_deepseek_reply_over_1500_characters_is_truncated_before_recording() -> None:
-    """超过总长上限的回复先截到一千五百字并以省略号结尾，再拆段发送。"""
+async def test_deepseek_reply_over_1500_characters_keeps_final_condition() -> None:
+    """出站分段保留末尾限制条件，不按字符数切掉事实。"""
     assistant = AssistantStub(
         decision=AssistantDecision(
-            reply_text="汉" * 1501,
+            reply_text="汉" * 1500 + "仅限工作日。",
             language=Language.ZH,
             intent="faq",
             confidence=0.98,
@@ -2383,7 +2373,7 @@ async def test_deepseek_reply_over_1500_characters_is_truncated_before_recording
     await service.handle_message(incoming())
 
     joined = "".join(part[5:] for part in wecom.guest_messages)
-    assert joined == "汉" * 1499 + "…"
+    assert joined == "汉" * 1500 + "仅限工作日。"
 
 
 @pytest.mark.asyncio
@@ -2438,9 +2428,10 @@ async def test_outbox_message_is_not_recorded_before_delivery() -> None:
 
 
 @pytest.mark.asyncio
-async def test_confirmed_booking_details_create_pending_approval_only() -> None:
-    """客人明确确认完整资料后只能生成待审批单，不得直接下单。"""
+async def test_explicit_booking_creates_staff_request_without_approval() -> None:
+    """客人明确预订只登记管家请求，不创建审批或订单。"""
     approvals = ApprovalServiceStub()
+    tasks = BusinessTaskStub()
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text="资料已提交工作人员确认。",
@@ -2460,13 +2451,16 @@ async def test_confirmed_booking_details_create_pending_approval_only() -> None:
     service, _, _, wecom = build_service(
         assistant=assistant,
         approvals=approvals,
+        business_tasks=tasks,
+        customer_profiles=CustomerProfileStub(),
     )
 
-    await service.handle_message(incoming(content="以上资料确认无误"))
+    await service.handle_message(incoming(content="我要预订这个房间"))
 
-    assert len(approvals.calls) == 1
-    assert approvals.calls[0][1].guest_name == "张三"
-    assert "待审批单" in wecom.internal_messages[0]
+    assert approvals.calls == []
+    assert len(tasks.calls) == 1
+    assert tasks.calls[0]["task_type"] is BusinessTaskType.SPECIAL_SERVICE
+    assert "新任务待确认" in wecom.internal_messages[0]
 
 
 @pytest.mark.asyncio
@@ -2501,16 +2495,16 @@ async def test_booking_approval_is_ignored_without_current_confirmation() -> Non
 
 
 @pytest.mark.asyncio
-async def test_tourism_search_failure_replies_then_switches_to_human() -> None:
-    """联网失败不得静默，客人和员工都应收到消息。"""
+async def test_tourism_search_failure_replies_without_switching_to_human() -> None:
+    """联网失败说明缺项，不自动创建人工请求或切换会话。"""
     assistant = FailingTourismAssistantStub("degraded")
     service, conversations, _, wecom = build_service(assistant=assistant)
 
     await service.handle_message(incoming(content="武汉有哪些地方好玩？"))
 
     assert "实时信息刚才没能查完整" in wecom.guest_messages[0]
-    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
-    assert "旅游联网失败：degraded" in wecom.internal_messages[0]
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+    assert wecom.internal_messages == []
 
 
 @pytest.mark.asyncio
@@ -2519,12 +2513,12 @@ async def test_tourism_search_failure_uses_english_for_english_guest() -> None:
     assistant = FailingTourismAssistantStub("unsupported")
     service, conversations, _, wecom = build_service(assistant=assistant)
 
-    await service.handle_message(
-        incoming(content="What attractions are fun in Wuhan?")
-    )
+    await service.handle_message(incoming(content="What attractions are fun in Wuhan?"))
 
     assert "couldn’t finish the live search" in wecom.guest_messages[0]
-    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+
+    assert wecom.internal_messages == []
 
 
 @pytest.mark.asyncio
@@ -2546,8 +2540,7 @@ async def test_knowledge_gap_is_tracked_without_immediate_staff_alert() -> None:
     assistant = AssistantStub(
         decision=AssistantDecision(
             reply_text=(
-                "当前资料暂未确认是否有专属停车场，"
-                "建议先使用附近公共停车场并留意现场标识。"
+                "当前资料暂未确认是否有专属停车场，建议先使用附近公共停车场并留意现场标识。"
             ),
             language=Language.ZH,
             intent="property_facility",
@@ -2624,12 +2617,11 @@ async def test_refund_request_notifies_staff_and_switches_to_human() -> None:
     await service.handle_message(incoming(content="这个订单能退款多少？"))
 
     assert wecom.guest_messages[0] == (
-        "您的情况我已记录。"
-        "我会立即联系值班管家跟进处理，请保持联系方式畅通。"
+        "您的情况我已记录。我会立即联系值班管家跟进处理，请保持联系方式畅通。"
     )
     assert "已为您发起确认" not in wecom.guest_messages[0]
     assert len(wecom.internal_messages) == 1
-    assert "YuMi 接管：refund" in wecom.internal_messages[0]
+    assert "YuMi 接管：退款或赔偿诉求" in wecom.internal_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 
@@ -2650,10 +2642,10 @@ async def test_refund_handoff_has_priority_over_knowledge_gap() -> None:
     )
     service, conversations, _, wecom = build_service(assistant=assistant)
 
-    await service.handle_message(incoming(content="退款政策是什么？"))
+    await service.handle_message(incoming(content="我要申请退款"))
 
     assert len(wecom.internal_messages) == 1
-    assert "YuMi 接管：refund" in wecom.internal_messages[0]
+    assert "YuMi 接管：退款或赔偿诉求" in wecom.internal_messages[0]
     assert "知识库待补充" not in wecom.internal_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
@@ -2728,6 +2720,127 @@ async def test_non_live_questions_still_get_no_generic_ack(question: str) -> Non
 
     assert assistant.ack_calls == 0
     assert all("最新信息" not in text for text in wecom.guest_messages)
+
+
+@pytest.mark.asyncio
+async def test_service_registration_precedes_reply_and_preserves_policy() -> None:
+    """混合政策与申请保留条件，先登记成功才允许向客人确认转交。"""
+    events: list[str] = []
+
+    class OrderedTasks(BusinessTaskStub):
+        """捕获真实编排顺序。"""
+
+        async def record_ai_suggestion(self, **kwargs):
+            """记录任务已创建事件。"""
+            result = await super().record_ai_suggestion(**kwargs)
+            events.append("task")
+            return result
+
+    class OrderedWeCom(WeComStub):
+        """捕获最终客人出口。"""
+
+        async def send_text(self, *args, **kwargs):
+            """发送前记录事件。"""
+            events.append("guest")
+            return await super().send_text(*args, **kwargs)
+
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="延迟退房需视当天房态确认，节假日不提供。",
+            language=Language.ZH,
+            intent="service",
+            confidence=0.95,
+            task_suggestion=TaskSuggestion(
+                task_type=BusinessTaskType.LATE_CHECK_OUT, description="申请延迟退房"
+            ),
+        )
+    )
+    service, _, _, wecom = build_service(
+        assistant=assistant,
+        wecom=OrderedWeCom(),
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=OrderedTasks(),
+    )
+    await service.handle_message(incoming(content="帮我申请延迟退房，也说一下限制"))
+    assert events.index("task") < events.index("guest")
+    assert "节假日不提供" in wecom.guest_messages[-1]
+    assert "已登记" in wecom.guest_messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_failed_registration_never_claims_staff_notified() -> None:
+    """任务保存失败必须显式失败，不沿用模型成功话术。"""
+    service, _, _, wecom = build_service(
+        assistant=AssistantStub(
+            decision=AssistantDecision(
+                reply_text="已安排管家送毛巾。",
+                language=Language.ZH,
+                intent="service",
+                confidence=0.95,
+                task_suggestion=TaskSuggestion(
+                    task_type=BusinessTaskType.SUPPLIES, description="送毛巾"
+                ),
+            )
+        ),
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=BusinessTaskStub(fail=True),
+    )
+    await service.handle_message(incoming(content="麻烦送一条毛巾"))
+    assert "未能登记" in wecom.guest_messages[-1]
+    assert wecom.internal_messages == []
+    assert "已安排" not in wecom.guest_messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_live_lookup_failure_does_not_handoff_or_promise_followup() -> None:
+    """公开信息暂不可查时保留机器人模式且不通知员工。"""
+    service, conversations, _, wecom = build_service(
+        assistant=FailingTourismAssistantStub("degraded")
+    )
+    await service.handle_message(incoming(content="明天武汉天气怎么样"))
+    assert conversations.conversation.mode is ConversationMode.BOT_ACTIVE
+    assert wecom.internal_messages == []
+    assert "管家" not in wecom.guest_messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_multiple_requests_are_preserved_in_one_pending_task() -> None:
+    """同一消息只有一个任务来源键，多事项合并后仍须完整可见。"""
+    tasks = BusinessTaskStub()
+    service, _, _, _ = build_service(
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=tasks,
+        assistant=AssistantStub(
+            decision=AssistantDecision(
+                reply_text="延迟退房需要确认。",
+                language=Language.ZH,
+                intent="service",
+                confidence=1,
+                task_suggestion=TaskSuggestion(
+                    task_type=BusinessTaskType.SUPPLIES, description="补水"
+                ),
+            )
+        ),
+    )
+    await service.handle_message(incoming(content="帮我补两瓶矿泉水，并申请延迟退房"))
+    assert len(tasks.calls) == 1
+    assert tasks.calls[0]["task_type"] is BusinessTaskType.SPECIAL_SERVICE
+    assert "延迟退房" in tasks.calls[0]["description"]
+
+
+@pytest.mark.asyncio
+async def test_model_can_escalate_unfamiliar_emergency_to_safety_reply() -> None:
+    """模型可对本地未识别的危险改述升级，必须使用确定性安全正文。"""
+    service, conversation, _, wecom = build_service(
+        assistant=AssistantStub(decision=AssistantDecision(
+            reply_text="请原地等候。", language=Language.ZH, intent="emergency",
+            confidence=0.9, handoff_reason="emergency:medical",
+        )),
+    )
+    await service.handle_message(incoming(content="胸口闷得厉害，人快撑不住了"))
+    assert "120" in wecom.guest_messages[-1]
+    assert "原地等候" not in wecom.guest_messages[-1]
+    assert conversation.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 
 @pytest.mark.asyncio

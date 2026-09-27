@@ -1,0 +1,7 @@
+{% macro scope_fields(properties, entry=none) %}
+<label>适用范围<select name="scope" required>{% for value, label in [('unreviewed', '范围待审核'), ('global', '本店通用'), ('property', '指定房间'), ('public', '店外公开知识')] %}<option value="{{ value }}" {% if (entry.scope if entry else 'unreviewed') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+<label>适用房间（仅指定房间时选择）<select name="property_id"><option value="">不指定房间</option>{% for room in properties %}<option value="{{ room.id }}" {% if entry and entry.property_id == room.id %}selected{% endif %}>{{ room.room_number }} · {{ room.title }}{% if not room.is_active %}（已停用）{% endif %}</option>{% endfor %}</select></label>
+<label>生效日期（可不填）<input type="date" name="valid_from" value="{{ entry.valid_from or '' if entry else '' }}"></label>
+<label>有效至（含当日，可不填）<input type="date" name="valid_until" value="{{ entry.valid_until or '' if entry else '' }}"></label>
+<p class="muted">范围待审核的知识不会用于客人回复；日期为空表示未另设期限。</p>
+{% endmacro %}

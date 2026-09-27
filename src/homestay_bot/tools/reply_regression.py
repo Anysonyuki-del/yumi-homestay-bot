@@ -69,8 +69,6 @@ def observed_route(record: dict[str, Any]) -> str:
         # 模型判为需要人工时，线上最终回复就是转人工话术，与直接转人工同一结果。
         return "handoff"
     tools = record.get("tools") or []
-    if "tourism_search" in (record.get("traces") or []):
-        return "live_search"
     for name, label in (
         ("search_availability", "tool_availability"),
         ("search_reference_price", "tool_price"),
@@ -78,6 +76,8 @@ def observed_route(record: dict[str, Any]) -> str:
     ):
         if name in tools:
             return label
+    if "tourism_search" in (record.get("traces") or []):
+        return "live_search"
     return "unconfirmed" if record.get("knowledge_gap") else "model"
 
 
@@ -97,8 +97,7 @@ def judge(
         item
         for item in expect.get("must_include", [])
         if not any(
-            normalize(option) in final
-            for option in (item if isinstance(item, list) else [item])
+            normalize(option) in final for option in (item if isinstance(item, list) else [item])
         )
     ]
     forbidden = [
@@ -252,6 +251,17 @@ class _Entry:
     question_en: str
     answer_en: str
     keywords: list[str] = field(default_factory=list)
+    scope: str = "unreviewed"
+    property_id: int | None = None
+    valid_from: date | None = None
+    valid_until: date | None = None
+
+    def __post_init__(self) -> None:
+        """JSON 夹具日期恢复为领域日期，范围过滤与真实仓储一致。"""
+        for field_name in ("valid_from", "valid_until"):
+            value = getattr(self, field_name)
+            if isinstance(value, str):
+                setattr(self, field_name, date.fromisoformat(value))
 
 
 class _MemoryKnowledge:
@@ -428,7 +438,9 @@ def pre_route(
         return {
             "route": "complaint",
             "final": prepare_guest_reply(
-                ComplaintService.guest_acknowledgement(), language=language, requires_human=True
+                ComplaintService.guest_acknowledgement(language),
+                language=language,
+                requires_human=True,
             ),
         }
     if ConversationService._handoff_pattern.search(question):
@@ -512,9 +524,9 @@ class _Runner:
         from homestay_bot.services.conversation_service import ConversationService
         from homestay_bot.services.guest_reply_policy import (
             prepare_facility_advice_reply,
-            prepare_guest_reply,
         )
         from homestay_bot.services.knowledge_service import KnowledgeService
+        from homestay_bot.services.reply_plan import prepare_planned_reply
 
         messages = [
             item for item in scenario["messages"] if item.get("role") in {"user", "assistant"}
@@ -550,6 +562,22 @@ class _Runner:
             messages=messages,
             tool_trace_sink=lambda trace: traces.append(trace.name),
         )
+        # 会话在设施分支之前处理模型升级的紧急事件；门禁同样使用固定安全回复。
+        if decision.handoff_reason in {
+            "emergency:fire", "emergency:gas", "emergency:electric",
+            "emergency:medical", "emergency:violence",
+        }:
+            from homestay_bot.services.emergency_service import (
+                EmergencyClassification,
+                EmergencyService,
+            )
+            return {
+                "route": "emergency",
+                "final": EmergencyService().safety_reply(
+                    EmergencyClassification(True, decision.handoff_reason.split(":", 1)[1]),
+                    language,
+                ),
+            }
         facility = (
             decision.facility_issue is not None
             and decision.facility_issue.scope == "homestay_facility"
@@ -557,10 +585,11 @@ class _Runner:
         final = (
             prepare_facility_advice_reply(decision.facility_advice, language)
             if facility
-            else prepare_guest_reply(
-                decision.reply_text,
+            else prepare_planned_reply(
+                decision.reply_parts,
+                fallback=decision.reply_text,
                 language=language,
-                requires_human=decision.staff_confirmation_required,
+                high_risk=bool(decision.handoff_reason),
                 question=question,
             )
         )
@@ -570,7 +599,8 @@ class _Runner:
             "tools": tools.calls,
             "traces": traces,
             "knowledge_gap": decision.knowledge_gap,
-            "staff_confirmation_required": decision.staff_confirmation_required,
+            # 当前会话只有本地归一化接管理由才切人工，模型辅助标记只用于通知资料预加载。
+            "staff_confirmation_required": bool(decision.handoff_reason),
         }
 
 

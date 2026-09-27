@@ -13,6 +13,7 @@
     <dt>服务日期</dt><dd>{{ task.service_date | date_zh }}</dd>
     <dt>房间状态</dt><dd>{{ room_state.status | status_zh if room_state else "未开始" }}</dd>
     {% if task.status.value == "expired" %}<dt>失效原因</dt><dd>{{ task.closure_reason_code | status_zh }}</dd><dt>失效时间</dt><dd>{{ task.closed_at | datetime_zh }}</dd>{% endif %}
+    {% if task.verification_data and task.verification_data.get("value") %}<dt>订单核对资料（待人工核实）</dt><dd class="long-text">{{ task.verification_data["value"] }}</dd>{% endif %}
     <dt>任务说明</dt><dd class="long-text">{{ safe_description }}</dd>
   </dl>
 </section>

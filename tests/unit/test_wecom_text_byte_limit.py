@@ -65,6 +65,7 @@ def test_multibyte_characters_are_never_split(limit: int) -> None:
 async def test_audited_answer_beyond_the_part_limit_is_not_truncated() -> None:
     """审核答案拆到段数上限仍放不下时不截断条件，改为未确认并请客人细化。"""
     oversized = KnowledgeSnippet(
+        scope="global",
         source_id=1,
         category="客房温控",
         question="房间能调节温度吗？",
@@ -86,6 +87,7 @@ async def test_audited_answer_beyond_the_part_limit_is_not_truncated() -> None:
 async def test_long_audited_answer_within_the_limit_is_answered_in_full() -> None:
     """超过单条上限但能拆成几段的审核答案照常完整回答，发送时再拆段。"""
     long_answer = KnowledgeSnippet(
+        scope="global",
         source_id=1,
         category="客房温控",
         question="房间能调节温度吗？",
@@ -146,14 +148,15 @@ def test_a_single_huge_sentence_is_split_without_breaking_characters() -> None:
     assert _strip_labels(parts) == "长" * 1400
 
 
-def test_parts_beyond_the_limit_are_capped_and_keep_the_footer() -> None:
-    """普通回复超过段数上限时保留前几段，最后一段收口并保留时效说明。"""
+def test_parts_beyond_planning_budget_keep_all_facts() -> None:
+    """组合答案超出规划预算仍完整分段，不丢末尾条件和动作结果。"""
     paragraph = "黄鹤楼可以俯瞰长江大桥与三镇，傍晚的光线最好。" * 20
     text = "\n\n".join([paragraph] * 5 + [FOOTER])
 
     parts = split_guest_reply(text, Language.ZH)
 
-    assert len(parts) == GUEST_REPLY_MAX_PARTS
+    assert len(parts) > GUEST_REPLY_MAX_PARTS
+    assert "".join(_strip_labels(parts).split()) == "".join(text.split())
     assert parts[-1].endswith(FOOTER)
     assert all(_size(part) <= WECOM_TEXT_MAX_BYTES for part in parts)
 

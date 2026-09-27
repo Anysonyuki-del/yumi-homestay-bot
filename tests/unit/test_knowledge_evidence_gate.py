@@ -12,12 +12,14 @@ from homestay_bot.domain.enums import Language
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
 
 AIR_CONDITIONER = KnowledgeSnippet(
+    scope="global",
     source_id=1,
     category="客房温控",
     question="房间能调节温度吗？",
     answer="每间房都有独立空调，可在18至30摄氏度之间调节；冬季制热也由同一面板控制。",
 )
 QUIET_HOURS_EN = KnowledgeSnippet(
+    scope="global",
     source_id=2,
     category="住客公约",
     question="When are quiet hours?",
@@ -27,36 +29,42 @@ QUIET_HOURS_EN = KnowledgeSnippet(
     ),
 )
 QUIET_HOURS_WITHOUT_ENGLISH = KnowledgeSnippet(
+    scope="global",
     source_id=2,
     category="住客公约",
     question="",
     answer="",
 )
 BREAKFAST_TIME = KnowledgeSnippet(
+    scope="global",
     source_id=3,
     category="早餐",
     question="早餐几点送到？",
     answer="预订含早餐时，固定简餐在07:30至09:00按约定时间送到一楼取餐架。",
 )
 BREAKFAST_NO_GLUTEN_FREE = KnowledgeSnippet(
+    scope="global",
     source_id=4,
     category="早餐",
     question="早餐能做特殊饮食吗？",
     answer="厨房不能提供无麸质早餐，也无法单独处理过敏原。",
 )
 PARKING_FEE = KnowledgeSnippet(
+    scope="global",
     source_id=5,
     category="停车",
     question="停车怎么收费？",
     answer="门口有 2 个车位。每天 20 元。",
 )
 LAUNDRY_HOURS = KnowledgeSnippet(
+    scope="global",
     source_id=6,
     category="洗衣",
     question="民宿有洗衣机吗？",
     answer="洗衣区每天 08:00 至 22:00 开放，洗衣液放在洗手台下方。",
 )
 TELEVISION = KnowledgeSnippet(
+    scope="global",
     source_id=7,
     category="电视",
     question="房间的电视怎么用？",
@@ -220,6 +228,7 @@ async def test_repeated_unknown_topic_stops_asking() -> None:
 async def test_static_answer_skips_refinement() -> None:
     """审核原文是确定性输出，不再经过会改事实的精炼调用。"""
     long_answer = KnowledgeSnippet(
+        scope="global",
         source_id=8,
         category="客房温控",
         question="房间能调节温度吗？",
@@ -240,6 +249,7 @@ async def test_static_answer_skips_refinement() -> None:
 async def test_single_long_audited_answer_is_sent_in_full() -> None:
     """一条审核问答是最小证据单元，再长也整条发出，不截掉尾部条件。"""
     long_answer = KnowledgeSnippet(
+        scope="global",
         source_id=9,
         category="客房温控",
         question="房间能调节温度吗？",
@@ -259,12 +269,14 @@ async def test_single_long_audited_answer_is_sent_in_full() -> None:
 async def test_multiple_oversized_answers_ask_to_narrow_the_question() -> None:
     """需要拼接多条且超出回复预算时请客人细化，不截断任何一条的条件。"""
     long_ac = KnowledgeSnippet(
+        scope="global",
         source_id=10,
         category="客房温控",
         question="房间能调节温度吗？",
         answer="空调可在18至30摄氏度之间调节。" + "另有若干使用条件。" * 100,
     )
     long_parking = KnowledgeSnippet(
+        scope="global",
         source_id=11,
         category="停车",
         question="民宿可以停车吗？",
@@ -286,6 +298,7 @@ async def test_multiple_oversized_answers_ask_to_narrow_the_question() -> None:
 async def test_knowledge_with_embedded_instruction_is_not_forwarded() -> None:
     """审核知识里夹带的指令只是数据，不能原样转发给客人。"""
     tampered = KnowledgeSnippet(
+        scope="global",
         source_id=10,
         category="客房温控",
         question="房间能调节温度吗？",
@@ -320,6 +333,7 @@ async def test_general_question_keeps_existing_behaviour() -> None:
 async def test_title_naming_the_attribute_is_not_evidence() -> None:
     """标题写着无麸质、答案只讲供应时间：标题不能作证。"""
     title_only = KnowledgeSnippet(
+        scope="global",
         source_id=12,
         category="早餐",
         question="早餐能做无麸质的吗？",
@@ -354,6 +368,7 @@ async def test_price_without_live_lookup_is_not_sent() -> None:
 async def test_lane_side_merchant_does_not_prove_the_homestay_serves_breakfast() -> None:
     """「巷口的咖啡馆供应早餐」是店外商户，不能为本店早餐作证，也不得进入回复。"""
     lane_side = KnowledgeSnippet(
+        scope="global",
         source_id=13,
         category="周边",
         question="早上附近哪里能吃饭？",
@@ -375,6 +390,7 @@ async def test_lane_side_merchant_does_not_prove_the_homestay_serves_breakfast()
 async def test_self_service_laundry_does_not_prove_drying_or_wash_service() -> None:
     """自助洗衣、烘干、代洗是三种服务，洗衣房的开放时间证明不了另外两种。"""
     laundry_room = KnowledgeSnippet(
+        scope="global",
         source_id=14,
         category="洗衣",
         question="洗衣房几点开放？",
@@ -402,6 +418,7 @@ async def test_self_service_laundry_does_not_prove_drying_or_wash_service() -> N
 async def test_night_supply_needs_evidence_about_the_time_window() -> None:
     """问夜间还有没有热水时，设备位置和出水速度不能作证。"""
     water_heater = KnowledgeSnippet(
+        scope="global",
         source_id=15,
         category="卫浴",
         question="热水怎么用？",
@@ -419,64 +436,216 @@ async def test_night_supply_needs_evidence_about_the_time_window() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('knowledge', [
-    [], [KnowledgeSnippet(1, '借用', '转换插头借用', '不提供转换插头借用。')],
-])
+@pytest.mark.parametrize(
+    "knowledge",
+    [
+        [],
+        [KnowledgeSnippet(1, "借用", "转换插头借用", "不提供转换插头借用。", scope="global")],
+    ],
+)
 async def test_unrecognized_borrowing_never_promises_items(knowledge) -> None:
     """未知物品不因未命中设施清单绕过证据检查，包括空知识库。"""
-    d, _ = await _respond_with('能借转换插头吗？', '可以免费借，押金100元。', knowledge)
-    assert '100' not in d.reply_text
-    assert '尚未确认' in d.reply_text
+    d, _ = await _respond_with("能借转换插头吗？", "可以免费借，押金100元。", knowledge)
+    assert "100" not in d.reply_text
+    assert "尚未确认" in d.reply_text
 
 
 @pytest.mark.asyncio
 async def test_fee_conflict_is_checked_within_topic_before_selection() -> None:
     """同主题矛盾候选不能按排名挑一个；不同主题的免费与收费不矛盾。"""
-    free = KnowledgeSnippet(1, '停车', '停车政策', '停车免费。')
-    paid = KnowledgeSnippet(2, '停车', '停车收费', '停车每天收费20元。')
-    breakfast = KnowledgeSnippet(3, '早餐', '早餐政策', '早餐免费。')
-    d, _ = await _respond_with('停车收费吗？', '停车免费。', [free, paid])
-    assert '尚未确认' in d.reply_text
-    d, _ = await _respond_with('停车收费吗，早餐免费吗？', '都免费。', [paid, breakfast])
-    assert d.reply_text == paid.answer + '\n' + breakfast.answer
+    free = KnowledgeSnippet(1, "停车", "停车政策", "停车免费。", scope="global")
+    paid = KnowledgeSnippet(2, "停车", "停车收费", "停车每天收费20元。", scope="global")
+    breakfast = KnowledgeSnippet(3, "早餐", "早餐政策", "早餐免费。", scope="global")
+    d, _ = await _respond_with("停车收费吗？", "停车免费。", [free, paid])
+    assert "尚未确认" in d.reply_text
+    d, _ = await _respond_with("停车收费吗，早餐免费吗？", "都免费。", [paid, breakfast])
+    assert [line for line in d.reply_text.splitlines() if line] == [paid.answer, breakfast.answer]
 
 
 @pytest.mark.asyncio
 async def test_breakfast_cannot_borrow_parking_time() -> None:
     """另一主题的时段不证明早餐时间；无主语承接仍可使用。"""
-    wrong = KnowledgeSnippet(1, '早餐', '早餐安排', '早餐放在大厅。停车场22:00关闭。')
-    correct = KnowledgeSnippet(2, '早餐', '早餐安排', '早餐放在大厅。每天08:00送到。')
-    d, _ = await _respond_with('早餐几点送到？', '早餐22点送到。', [wrong])
-    assert '尚未确认' in d.reply_text
-    d, _ = await _respond_with('早餐几点送到？', '早餐22点送到。', [correct])
+    wrong = KnowledgeSnippet(
+        1, "早餐", "早餐安排", "早餐放在大厅。停车场22:00关闭。", scope="global"
+    )
+    correct = KnowledgeSnippet(
+        2, "早餐", "早餐安排", "早餐放在大厅。每天08:00送到。", scope="global"
+    )
+    d, _ = await _respond_with("早餐几点送到？", "早餐22点送到。", [wrong])
+    assert "尚未确认" in d.reply_text
+    d, _ = await _respond_with("早餐几点送到？", "早餐22点送到。", [correct])
     assert d.reply_text == correct.answer
 
 
 @pytest.mark.asyncio
 async def test_static_parking_amount_is_not_a_live_room_price() -> None:
     """静态停车费从审核知识回答，真正的房价仍须实时证据。"""
-    k = KnowledgeSnippet(1, '停车', '停车收费', '停车每天20元。')
-    d, _ = await _respond_with('停车多少钱？', '停车每天20元。', [k])
+    k = KnowledgeSnippet(1, "停车", "停车收费", "停车每天20元。", scope="global")
+    d, _ = await _respond_with("停车多少钱？", "停车每天20元。", [k])
     assert d.reply_text == k.answer
-    d, _ = await _respond_with('今晚房价多少钱，停车多少钱？', '房价300元。', [k])
-    assert '300' not in d.reply_text
+    d, _ = await _respond_with("今晚房价多少钱，停车多少钱？", "房价300元。", [k])
+    assert "300" not in d.reply_text
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rule", [
-    None,
-    "如需延迟退房，最晚可延至14:00，每小时加收50元，节假日不接受延迟退房。",
-    "不支持延迟退房，请在12:00前退房。",
-])
+@pytest.mark.parametrize(
+    "rule",
+    [
+        None,
+        "如需延迟退房，最晚可延至14:00，每小时加收50元，节假日不接受延迟退房。",
+        "不支持延迟退房，请在12:00前退房。",
+    ],
+)
 async def test_late_checkout_requires_its_own_rule(rule: str | None) -> None:
     """普通时间不证明可延迟；有专属规则时保留否定、收费和节假日条件。"""
-    normal = KnowledgeSnippet(1, "入住", "入住退房时间", "退房时间为中午12:00以前。")
+    normal = KnowledgeSnippet(
+        1, "入住", "入住退房时间", "退房时间为中午12:00以前。", scope="global"
+    )
     knowledge = [normal]
     if rule:
-        knowledge.append(KnowledgeSnippet(2, "入住", "延迟退房", rule))
+        knowledge.append(KnowledgeSnippet(2, "入住", "延迟退房", rule, scope="global"))
     decision, _ = await _respond_with(
-        "退房能不能晚一点", "可以免费延迟到14:00。", knowledge,
+        "退房能不能晚一点",
+        "可以免费延迟到14:00。",
+        knowledge,
     )
     assert decision.reply_text == rule if rule else "尚未确认" in decision.reply_text
     ordinary, _ = await _respond_with("几点退房？", normal.answer, [normal])
     assert ordinary.reply_text == normal.answer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario_id,source_id",
+    [
+        ("K-入住-D", 9001),
+        ("E-退房", 9001),
+        ("K-停车-C2", 9010),
+        ("K-宠物-D", 9013),
+        ("K-厨房-D", 9016),
+        ("K-床品-D", 9027),
+        ("K-行李-D", 9022),
+        ("K-吸烟-D", 9021),
+        ("K-用电-D", 9034),
+        ("E-早餐", 9011),
+        ("M-wifi空调", 9023),
+        ("T-wifi", 9023),
+        ("K-加床-C", 9014),
+        ("K-发票-C", 9019),
+        ("K-无障碍-C", 9020),
+        ("K-行李-C", 9022),
+        ("K-饮水-C", 9035),
+        ("K-早餐-C", 9011),
+        ("K-温控-C", 9029),
+        ("K-电视-D", 9037),
+    ],
+)
+async def test_audited_fixture_answers_survive_related_policy_candidates(scenario_id, source_id):
+    """真实失败问法走合成知识检索与证据门，不联网也不借模型改写掩盖误拒答。"""
+    import json
+    from pathlib import Path
+
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+    from homestay_bot.services.conversation_service import ConversationService
+    from homestay_bot.services.knowledge_evidence_policy import build_evidence_plan
+    from homestay_bot.services.knowledge_service import KnowledgeService
+    from homestay_bot.tools.reply_regression import _Entry, _MemoryKnowledge
+
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures/guest_reply_scenarios.json").read_text()
+    )
+    scenario = next(item for item in fixture["scenarios"] if item["id"] == scenario_id)
+    question = scenario["messages"][-1]["content"]
+    language = ConversationService._detect_language(question, Language.ZH)
+    service = KnowledgeService(_MemoryKnowledge([_Entry(**item) for item in fixture["knowledge"]]))
+    entries = DeepSeekGuestAssistant._scope_knowledge(
+        question, await service.retrieve(language, question)
+    )
+    plan = build_evidence_plan(
+        question,
+        entries,
+        is_property_question=True,
+        supporting_for_topic=DeepSeekGuestAssistant._supporting_knowledge,
+    )
+    expected = next(item.answer for item in entries if item.source_id == source_id)
+    assert plan.status == "grounded"
+    assert expected in plan.answers
+
+
+def test_conflict_checks_do_not_borrow_other_topic_amounts_or_times():
+    """相同停车费和早餐时间不因同条正文里的其他主题数值不同而冲突。"""
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+    from homestay_bot.services.knowledge_evidence_policy import build_evidence_plan
+
+    for question, answers in [
+        ("停车多少钱？", ["停车每天20元。早餐30元。", "停车每天20元。早餐40元。"]),
+        ("早餐几点？", ["早餐8:00供应。停车场22:00关闭。", "早餐8:00供应。停车场23:00关闭。"]),
+    ]:
+        entries = [
+            KnowledgeSnippet(i, "政策", question, answer, scope="global")
+            for i, answer in enumerate(answers)
+        ]
+        plan = build_evidence_plan(
+            question,
+            entries,
+            is_property_question=True,
+            supporting_for_topic=DeepSeekGuestAssistant._supporting_knowledge,
+        )
+        assert plan.status == "grounded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question,answer",
+    [
+        ("我们三个人住201，能再加一张床不", "202可以加床，每晚80元。"),
+        ("我在携程订的，发票找谁开", "本店直接预订可以开发票。"),
+        ("我妈坐轮椅，住得了吗", "无障碍房间在一楼，有扶手。"),
+        ("退房后箱子能先放你们那儿吗，晚上的火车", "入住当天可以免费寄存行李。"),
+        ("有烧水壶吗", "每个房间提供矿泉水。"),
+        ("有备用被子和枕头吗？", "房间提供被子和枕头。"),
+        ("插座是220V的吗？", "房间插座在床头。"),
+        ("停车有哪些限高？", "停车场有20个车位。"),
+        ("房间有电视吗？能投屏吗？", "每间房都有电视，可看有线节目。"),
+        ("冬天屋里冷不冷，有暖气吗", "房间有空调，可调温度。"),
+        ("早饭有吗 要钱不", "提供早餐，公共客厅收费20元。"),
+    ],
+)
+async def test_recognized_limit_still_requires_matching_answer(question, answer):
+    """能识别限定并不代表已有证据，标题复述限定也不能替正文背书。"""
+    decision, _ = await _respond_with(
+        question, "可以。", [KnowledgeSnippet(1, "政策", question, answer, scope="global")]
+    )
+    assert "尚未确认" in decision.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question,answer,grounded",
+    [
+        ("几点入住？", "入住时间为14:00以后，不支持提前入住。", True),
+        ("几点退房？", "退房时间为12:00以前；延迟退房须提前申请。", True),
+        ("几点入住？", "入住时间：14:00以后。", True),
+        ("几点入住？", "提前入住需要申请。最早13:00可以入住。", False),
+        ("几点入住？", "可以申请提前入住，入住时间为13:00以后。", False),
+        ("几点退房？", "延迟退房需要申请，14:00前退房。", False),
+        (
+            "What time is check-in?",
+            "Early check-in requires approval. Check-in is at 13:00.",
+            False,
+        ),
+    ],
+)
+async def test_ordinary_stay_time_keeps_conditions_without_borrowing_special_time(
+    question, answer, grounded
+):
+    """普通钟点后的限制不能抹掉证据，附加政策后的省略主语也不能冒充普通钟点。"""
+    decision, _ = await _respond_with(
+        question,
+        "普通时间为13:00。",
+        [KnowledgeSnippet(1, "入住", question, answer, scope="global")],
+        language=Language.EN if question.startswith("What") else Language.ZH,
+    )
+    assert decision.knowledge_gap is not grounded
+    if grounded:
+        assert decision.reply_text == answer

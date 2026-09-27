@@ -3,6 +3,7 @@ from typing import Any, Protocol
 
 from homestay_bot.domain.enums import ComplaintReviewStatus
 from homestay_bot.integrations.deepseek_complaint import DeepSeekComplaintAnalyzer
+from homestay_bot.services.message_service import model_message_content
 
 
 class ComplaintReviewRepositoryPort(Protocol):
@@ -97,7 +98,7 @@ class SQLAlchemyComplaintMessageContext:
             result.append(
                 {
                     "role": role,
-                    "content": self._sanitize(str(message.content))[:800],
+                    "content": self._sanitize(model_message_content(message))[:800],
                 }
             )
         return result

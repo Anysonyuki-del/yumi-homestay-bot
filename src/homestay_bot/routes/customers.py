@@ -36,6 +36,11 @@ router = APIRouter(prefix="/employee/customers")
 class CustomerAdminServicePort(Protocol):
     """定义客户管理页面所需的安全服务接口。"""
 
+    async def release_conversation(
+        self, customer_id: int, conversation_id: int, administrator: Employee,
+    ) -> None:
+        """交还属于该客户的人工会话。"""
+
     async def list_customers(
         self,
         query: str | CustomerListFilters | None,
@@ -599,3 +604,17 @@ async def review_customer_memory(
     except Exception as error:
         _raise_page_error(error)
     return _customer_redirect(customer_id, "memory")
+
+
+@router.post("/{customer_id}/conversations/{conversation_id}/release")
+async def release_customer_conversation(
+    request: Request, customer_id: int, conversation_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """消费客户绑定的一次性 CSRF 后交还机器人，权限沿用客户后台。"""
+    administrator, service = await _customer_form_context(request, customer_id, csrf_token)
+    try:
+        await service.release_conversation(customer_id, conversation_id, administrator)
+    except Exception as error:
+        _raise_page_error(error)
+    return _customer_redirect(customer_id, "service")

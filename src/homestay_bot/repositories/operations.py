@@ -28,7 +28,9 @@ from homestay_bot.domain.enums import (
     BusinessTaskOrigin,
     BusinessTaskStatus,
     BusinessTaskType,
+    ConversationMode,
     CustomerIdentityProvider,
+    MessageOrigin,
     RoomOperationalStatus,
     TaskClosureReason,
     TaskClosureSource,
@@ -37,12 +39,14 @@ from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     AuditLog,
     BusinessTask,
+    Conversation,
     Customer,
     CustomerIdentity,
     Employee,
     HostexWebhookEvent,
     Job,
     LifecycleReminder,
+    Message,
     PropertyProfile,
     PurgedTaskMark,
     RoomOperationalState,
@@ -1491,6 +1495,71 @@ class SQLAlchemyOperationsRepository:
                 },
             )
         )
+        await self._session.flush()
+        return True
+
+    def _idle_human_query(self, now: datetime) -> Select[tuple[int]]:
+        """先过滤最新接管风险与员工空闲时间，再限批，避免高风险会话占满批次。"""
+        latest_handoff = (
+            select(AuditLog.id).where(
+                AuditLog.action == "conversation_handoff",
+                AuditLog.target_type == "conversation",
+                AuditLog.target_id == sa_cast(Conversation.id, String),
+            ).order_by(AuditLog.id.desc()).limit(1).correlate(Conversation).scalar_subquery()
+        )
+        cutoff = now - timedelta(minutes=30)
+        reason = AuditLog.details["reason"].as_string()
+        return select(Conversation.id).join(AuditLog, AuditLog.id == latest_handoff).where(
+            Conversation.mode == ConversationMode.HUMAN_ACTIVE,
+            AuditLog.created_at <= cutoff, reason.is_not(None),
+            ~reason.in_(["refund", "complaint", "agitated"]),
+            ~reason.startswith("emergency:"), ~reason.startswith("complaint:"),
+            ~exists(select(Message.id).where(
+                Message.conversation_id == Conversation.id,
+                Message.origin == MessageOrigin.SERVICER, Message.sent_at > cutoff,
+            )),
+        )
+
+    async def list_idle_human_conversations(
+        self, *, now: datetime, limit: int
+    ) -> tuple[int, ...]:
+        """沿用巡检批量上限读取已经空闲满三十分钟的低风险会话。"""
+        return tuple((await self._session.scalars(
+            self._idle_human_query(now).order_by(Conversation.id).limit(limit)
+        )).all())
+
+    async def release_conversation(
+        self, conversation_id: int, *, now: datetime,
+        actor_employee_id: int | None = None, customer_id: int | None = None,
+        automatic: bool = False,
+    ) -> bool:
+        """与入站共用会话行锁，锁内复核最新接管和员工活动后交还并审计。"""
+        conversation = await self._session.scalar(
+            select(Conversation).where(Conversation.id == conversation_id)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        if (conversation is None or conversation.mode != ConversationMode.HUMAN_ACTIVE
+                or (customer_id is not None and conversation.customer_id != customer_id)):
+            return False
+        if automatic and await self._session.scalar(
+            self._idle_human_query(now).where(Conversation.id == conversation_id)
+        ) is None:
+            return False
+        handoff_id = await self._session.scalar(
+            select(AuditLog.id).where(
+                AuditLog.action == "conversation_handoff",
+                AuditLog.target_type == "conversation",
+                AuditLog.target_id == str(conversation_id),
+            ).order_by(AuditLog.id.desc()).limit(1)
+        )
+        conversation.mode = ConversationMode.BOT_ACTIVE
+        self._session.add(AuditLog(
+            actor_employee_id=actor_employee_id,
+            action="conversation_release", target_type="conversation",
+            target_id=str(conversation_id), created_at=now,
+            details={"reason": "auto_idle_30m" if automatic else "employee",
+                     "handoff_id": handoff_id, "customer_id": conversation.customer_id},
+        ))
         await self._session.flush()
         return True
 

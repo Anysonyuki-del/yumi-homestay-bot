@@ -2,7 +2,9 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from homestay_bot.domain.enums import Language
 
@@ -37,6 +39,13 @@ def _topic_pattern(pattern: str) -> re.Pattern[str]:
 # ponytail: 别名是按已知主题和校准集漏检手工维护的有限清单，识别不了没有列出
 # 的说法和主题。评估集中同义问法持续漏检时，再扩充别名或进入 C2 语义检索。
 PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
+    # 发放时间和渠道来自审核政策；具体密码值仍由订单凭证安全门处理。
+    PropertyTopic(
+        "门锁凭证",
+        _topic_pattern(r"门锁密码|房门密码|door\s+(?:code|passcode)"),
+        "门锁 房门 密码 door code",
+        english="door-code delivery",
+    ),
     PropertyTopic(
         "停车",
         _topic_pattern(
@@ -92,7 +101,7 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
     PropertyTopic(
         "洗衣",
         _topic_pattern(
-            r"洗衣|烘干机|衣服.{0,6}洗|laundry|washing\s+machine|clothes\s+dryer"
+            r"洗衣机|洗衣|烘干机|衣服.{0,6}洗|laundry|washing\s+machine|clothes\s+dryer"
             r"|wash\s+(?:my|our|the)?\s*clothes"
         ),
         "洗衣 洗衣机 laundry washing machine",
@@ -188,9 +197,7 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
     ),
     PropertyTopic(
         "安静时段",
-        _topic_pattern(
-            r"安静时段|静音时段|噪音.{0,6}(?:规定|时间|时段|要求)|quiet\s+hours?"
-        ),
+        _topic_pattern(r"安静时段|静音时段|噪音.{0,6}(?:规定|时间|时段|要求)|quiet\s+hours?"),
         "安静时段 quiet hours",
         english="quiet hours",
     ),
@@ -221,9 +228,7 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
     ),
     PropertyTopic(
         "客房清洁",
-        _topic_pattern(
-            r"打扫|保洁|清洁服务|换洗|housekeeping|cleaning\s+service|room\s+cleaning"
-        ),
+        _topic_pattern(r"打扫|保洁|清洁服务|换洗|housekeeping|cleaning\s+service|room\s+cleaning"),
         "保洁 打扫 housekeeping",
         english="housekeeping",
     ),
@@ -237,9 +242,7 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
     ),
     PropertyTopic(
         "饮用水",
-        _topic_pattern(
-            r"饮用水|直饮水|喝的水|烧水|热水壶|drinking\s+water|\bkettle\b"
-        ),
+        _topic_pattern(r"饮用水|直饮水|喝的水|烧水|热水壶|drinking\s+water|\bkettle\b"),
         "饮用水 热水壶 drinking water",
         english="drinking water",
     ),
@@ -355,6 +358,23 @@ _QUERY_STOP_TOKENS = frozenset(
 )
 
 
+def validate_knowledge_scope(
+    scope: str,
+    property_id: int | None,
+    valid_from: date | None,
+    valid_until: date | None,
+) -> None:
+    """所有知识写入入口共享范围与日期约束，数据库约束作为最终防线。"""
+    if scope not in {"unreviewed", "global", "property", "public"}:
+        raise ValueError("请选择有效的知识适用范围")
+    if (scope == "property") != (property_id is not None):
+        raise ValueError("指定房间知识必须填写房源编号，其他范围不得填写")
+    if property_id is not None and (isinstance(property_id, bool) or property_id <= 0):
+        raise ValueError("房源编号必须是正整数")
+    if valid_from and valid_until and valid_from > valid_until:
+        raise ValueError("生效日期不得晚于失效日期")
+
+
 class KnowledgeRecord(Protocol):
     """定义知识服务读取的最小条目字段。"""
 
@@ -365,6 +385,10 @@ class KnowledgeRecord(Protocol):
     question_en: str
     answer_en: str
     keywords: list[str]
+    scope: str
+    property_id: int | None
+    valid_from: date | None
+    valid_until: date | None
 
 
 class ActiveKnowledgeRepository(Protocol):
@@ -399,6 +423,10 @@ class KnowledgeSnippet:
     category: str
     question: str
     answer: str
+    scope: str = "unreviewed"
+    property_id: int | None = None
+    valid_from: date | None = None
+    valid_until: date | None = None
 
 
 @dataclass(frozen=True)
@@ -465,9 +493,7 @@ class KnowledgeService:
         """按问题、关键词、分类和答案的证据强度计算相关度。"""
         question = entry.question_en if language is Language.EN else entry.question_zh
         answer = entry.answer_en if language is Language.EN else entry.answer_zh
-        alternate_question = (
-            entry.question_zh if language is Language.EN else entry.question_en
-        )
+        alternate_question = entry.question_zh if language is Language.EN else entry.question_en
         alternate_answer = entry.answer_zh if language is Language.EN else entry.answer_en
         keyword_text = " ".join(str(item) for item in entry.keywords)
         return (
@@ -498,6 +524,9 @@ class KnowledgeService:
         *,
         limit: int = 8,
         char_budget: int = 12_000,
+        property_id: int | None = None,
+        target_date: date | None = None,
+        target_end_date: date | None = None,
     ) -> list[KnowledgeSnippet]:
         """按当前问题返回相关且受字符预算约束的审核知识。"""
         retrieval = await self.retrieve_detailed(
@@ -505,6 +534,9 @@ class KnowledgeService:
             query,
             limit=limit,
             char_budget=char_budget,
+            property_id=property_id,
+            target_date=target_date,
+            target_end_date=target_end_date,
         )
         return retrieval.snippets
 
@@ -515,6 +547,9 @@ class KnowledgeService:
         *,
         limit: int = 8,
         char_budget: int = 12_000,
+        property_id: int | None = None,
+        target_date: date | None = None,
+        target_end_date: date | None = None,
     ) -> KnowledgeRetrieval:
         """按相关度选取完整问答单元，放不进预算的整条跳过并计数。
 
@@ -522,15 +557,28 @@ class KnowledgeService:
         适用条件，把「需收费」截成「可以」，比不给证据更危险。因此只整条放入，
         剩余预算不够就跳过换下一条；同分时按编号排序只为结果可复现。
         """
-        entries = list(await self._repository.list_active())
+        start = target_date or datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        end = target_end_date or start
+        if end < start:
+            raise ValueError("知识查询结束日期不得早于开始日期")
+        # 在任何评分前过滤；区间查询保留相交政策及边界，由回复分段说明适用日期。
+        # 未审核或旧格式记录一律不能为事实背书。
+        entries = [
+            entry
+            for entry in await self._repository.list_active()
+            if getattr(entry, "scope", "unreviewed") in {"global", "public", "property"}
+            and (
+                entry.scope != "property"
+                or (property_id is not None and entry.property_id == property_id)
+            )
+            and (entry.valid_from is None or entry.valid_from <= end)
+            and (entry.valid_until is None or entry.valid_until >= start)
+        ]
         query_tokens = self._query_tokens(query)
         keyword_ranked = [
             entry
             for score, entry in sorted(
-                (
-                    (self._score(query_tokens, entry, language), entry)
-                    for entry in entries
-                ),
+                ((self._score(query_tokens, entry, language), entry) for entry in entries),
                 key=lambda item: (item[0], item[1].id),
                 reverse=True,
             )
@@ -546,9 +594,7 @@ class KnowledgeService:
             if len(snippets) >= max(0, limit):
                 break
             matched += 1
-            question = (
-                entry.question_en if language is Language.EN else entry.question_zh
-            )
+            question = entry.question_en if language is Language.EN else entry.question_zh
             answer = entry.answer_en if language is Language.EN else entry.answer_zh
             item_chars = len(entry.category) + len(question) + len(answer)
             if used_chars + item_chars > max(0, char_budget):
@@ -560,6 +606,10 @@ class KnowledgeService:
                     category=entry.category,
                     question=question,
                     answer=answer,
+                    scope=entry.scope,
+                    property_id=entry.property_id,
+                    valid_from=entry.valid_from,
+                    valid_until=entry.valid_until,
                 )
             )
             used_chars += item_chars

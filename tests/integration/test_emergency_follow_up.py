@@ -40,6 +40,7 @@ async def _factory(tmp_path):
     async with factory() as session:
         session.add(
             KnowledgeEntry(
+                scope="global",
                 category="紧急处置",
                 question_zh="闻到燃气味怎么办？",
                 answer_zh="燃气总阀在一楼厨房门后，请立即开窗通风并到院子等候。",

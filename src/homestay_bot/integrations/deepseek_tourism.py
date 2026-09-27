@@ -1,7 +1,7 @@
 import logging
 import re
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from time import monotonic
 from typing import Any
 
@@ -13,6 +13,7 @@ from homestay_bot.integrations.tourism import (
     format_tourism_reply,
 )
 from homestay_bot.services.fact_policy import FACT_SOURCE_RULE_EN, FACT_SOURCE_RULE_ZH
+from homestay_bot.services.reply_plan import ReplyEvidence
 
 _RECENT_PATTERN = re.compile(
     r"最近|近期|本周|本月|今天|明天|"
@@ -63,13 +64,11 @@ _ISO_DATE_PATTERN = re.compile(
 )
 _MONTH_DAY_PATTERN = re.compile(r"\d{1,2}月\d{1,2}日")
 _MONTH_ONLY_PATTERN = re.compile(r"\d{1,2}月(?!\d{1,2}日)")
-_YEAR_MONTH_PATTERN = re.compile(
-    r"(?P<year>20\d{2})年(?P<month>\d{1,2})月"
-)
+_YEAR_MONTH_PATTERN = re.compile(r"(?P<year>20\d{2})年(?P<month>\d{1,2})月")
 logger = logging.getLogger(__name__)
 
 TourismCacheKey = tuple[str, str, date]
-TourismCacheValue = tuple[float, str]
+TourismCacheValue = tuple[float, str, tuple[ReplyEvidence, ...]]
 
 
 class DeepSeekTourismSearcher:
@@ -127,7 +126,7 @@ class DeepSeekTourismSearcher:
         cached = self._cache.get(key)
         if cached is None:
             return None
-        expires_at, reply = cached
+        expires_at, reply, _evidence = cached
         if self._clock() >= expires_at:
             self._cache.pop(key, None)
             return None
@@ -137,6 +136,7 @@ class DeepSeekTourismSearcher:
         self,
         key: TourismCacheKey,
         reply: str,
+        evidence: tuple[ReplyEvidence, ...],
     ) -> None:
         """缓存成功答案，并按插入顺序限制内存条目数量。"""
         self._cache.pop(key, None)
@@ -146,6 +146,7 @@ class DeepSeekTourismSearcher:
         self._cache[key] = (
             self._clock() + self._cache_ttl_seconds,
             reply,
+            evidence,
         )
 
     @staticmethod
@@ -275,9 +276,7 @@ class DeepSeekTourismSearcher:
                 str(year) in line for year in allowed_years
             ):
                 return False
-        mentioned_years = {
-            int(year) for year in _YEAR_PATTERN.findall(text)
-        }
+        mentioned_years = {int(year) for year in _YEAR_PATTERN.findall(text)}
         if any(year < queried_on.year for year in mentioned_years):
             return False
 
@@ -337,10 +336,7 @@ class DeepSeekTourismSearcher:
                 return match.group(0)
             month = int(match.group(0).split("月", 1)[0])
             year = queried_on.year
-            if (
-                priority_end.year > queried_on.year
-                and month <= priority_end.month
-            ):
+            if priority_end.year > queried_on.year and month <= priority_end.month:
                 year = priority_end.year
             return f"{year}年{match.group(0)}"
 
@@ -348,17 +344,12 @@ class DeepSeekTourismSearcher:
 
         def replace_month(match: re.Match[str]) -> str:
             """为展期中的省略年份月份补全窗口年份。"""
-            prefix = filled_dates[
-                max(0, match.start() - 5) : match.start()
-            ]
+            prefix = filled_dates[max(0, match.start() - 5) : match.start()]
             if re.search(r"20\d{2}年$", prefix):
                 return match.group(0)
             month = int(match.group(0).removesuffix("月"))
             year = queried_on.year
-            if (
-                priority_end.year > queried_on.year
-                and month <= priority_end.month
-            ):
+            if priority_end.year > queried_on.year and month <= priority_end.month:
                 year = priority_end.year
             return f"{year}年{match.group(0)}"
 
@@ -370,19 +361,20 @@ class DeepSeekTourismSearcher:
         question: str,
         language: Language,
         queried_on: date,
+        evidence_sink: Callable[[tuple[ReplyEvidence, ...]], None] | None = None,
     ) -> str:
         """执行有限武汉搜索，要求正文和搜索证据同时存在。"""
         cache_key = self._cache_key(question, language, queried_on)
         cached_reply = self._get_cached_reply(cache_key)
         if cached_reply is not None:
+            if evidence_sink is not None:
+                evidence_sink(self._cache[cache_key][2])
             logger.info("旅游搜索完成：cache_hit=true duration_ms=0")
             return cached_reply
 
-        search_question, location_instruction = (
-            self._prepare_default_location_question(
-                question,
-                language=language,
-            )
+        search_question, location_instruction = self._prepare_default_location_question(
+            question,
+            language=language,
         )
         weather_instruction = ""
         if _WEATHER_PATTERN.search(question):
@@ -399,7 +391,8 @@ class DeepSeekTourismSearcher:
             "最终正文使用温暖、简洁、可靠的民宿管家口吻，使用“您”；"
             "天气回复根据搜索结果给一条实用提醒。"
             + FACT_SOURCE_RULE_ZH
-            + "正文只写武汉的公开信息。"
+            + "正文只写本次住宿出行相关的公开信息，未指定地点默认武汉，"
+            "明确异地目的地按客人地点查询。"
             "不得为了亲和改动日期、温度、降雨、票价、开放时间、路线或来源。"
             "优先武汉政府、文旅局、景区、场馆和主办方来源。"
             f"当前日期：{queried_on.isoformat()}。"
@@ -422,8 +415,7 @@ class DeepSeekTourismSearcher:
             "仅客人明确指定其他地点时才使用其他地点。"
             + location_instruction
             + (
-                "天气问题必须明确回答目标日期、最高/最低气温和降雨概率；"
-                + weather_instruction
+                "天气问题必须明确回答目标日期、最高/最低气温和降雨概率；" + weather_instruction
                 if weather_instruction
                 else ""
             )
@@ -447,8 +439,7 @@ class DeepSeekTourismSearcher:
                 + location_instruction
                 + (
                     " For weather questions, state the target date, high/low "
-                    "temperature, and precipitation probability explicitly. "
-                    + weather_instruction
+                    "temperature, and precipitation probability explicitly. " + weather_instruction
                     if weather_instruction
                     else ""
                 )
@@ -456,56 +447,44 @@ class DeepSeekTourismSearcher:
         )
         text = ""
         citations: list[tuple[str, str]] = []
-        for attempt in range(2):
-            try:
-                response = await self._client.messages.create(
-                    model=self._model,
-                    # 只对已有证据但遗漏正文的间歇响应做一次有限重试。
-                    max_tokens=3000,
-                    # 2026-09-24 生产实测：关闭思考、只搜一次、推荐正文 400 至 600 字，
-                    # 联网搜索中位数从 14.6 秒降到 3.4 秒，四类问题的质量底线全部
-                    # 满足（docs/specs/2026-09-24_live-reply-latency-spec.md §6）。
-                    thinking={"type": "disabled"},
-                    system=(
-                        system
-                        + "完成搜索后，结束前必须输出一段客人可见的最终正文。"
-                    ),
-                    messages=[{"role": "user", "content": search_question}],
-                    tools=[
-                        {
-                            "type": "web_search_20250305",
-                            "name": "web_search",
-                            "max_uses": 1,
-                            "user_location": {
-                                "type": "approximate",
-                                "country": "CN",
-                                "city": "Wuhan",
-                                "region": "Hubei",
-                            },
-                        }
-                    ],
-                )
-            except Exception as error:
-                status_code = getattr(error, "status_code", None)
-                status: WebSearchStatus = (
-                    "unsupported"
-                    if status_code in {400, 404, 422}
-                    else "degraded"
-                )
-                self._set_status(status)
-                logger.info(
-                    "旅游搜索完成：cache_hit=false success=false duration_ms=%d",
-                    round((self._clock() - started_at) * 1000),
-                )
-                raise TourismSearchError(status) from error
+        try:
+            response = await self._client.messages.create(
+                model=self._model,
+                # 每轮只允许一次公开搜索；缺正文按查询失败返回。
+                max_tokens=3000,
+                # 2026-09-24 生产实测：关闭思考、只搜一次、推荐正文 400 至 600 字，
+                # 联网搜索中位数从 14.6 秒降到 3.4 秒，四类问题的质量底线全部
+                # 满足（docs/specs/2026-09-24_live-reply-latency-spec.md §6）。
+                thinking={"type": "disabled"},
+                system=(system + "完成搜索后，结束前必须输出一段客人可见的最终正文。"),
+                messages=[{"role": "user", "content": search_question}],
+                tools=[
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 1,
+                        "user_location": {
+                            "type": "approximate",
+                            "country": "CN",
+                            "city": "Wuhan",
+                            "region": "Hubei",
+                        },
+                    }
+                ],
+            )
+        except Exception as error:
+            status_code = getattr(error, "status_code", None)
+            status: WebSearchStatus = (
+                "unsupported" if status_code in {400, 404, 422} else "degraded"
+            )
+            self._set_status(status)
+            logger.info(
+                "旅游搜索完成：cache_hit=false success=false duration_ms=%d",
+                round((self._clock() - started_at) * 1000),
+            )
+            raise TourismSearchError(status) from error
 
-            text, citations = self._extract_content(response)
-            if text and citations:
-                break
-            if citations and not text and attempt == 0:
-                logger.info("旅游搜索已有证据但缺少正文，执行有限重试：attempt=2")
-                continue
-            break
+        text, citations = self._extract_content(response)
 
         if not text or not citations:
             self._set_status("degraded")
@@ -559,7 +538,25 @@ class DeepSeekTourismSearcher:
                 round((self._clock() - started_at) * 1000),
             )
             raise TourismSearchError("degraded") from error
-        self._store_cached_reply(cache_key, reply)
+        # 来源引用跟随原获取时间进入缓存，命中不伪装成一次新的联网读取。
+        target_date = queried_on
+        if _DAY_AFTER_TOMORROW_PATTERN.search(question):
+            target_date += timedelta(days=2)
+        elif _TOMORROW_PATTERN.search(question):
+            target_date += timedelta(days=1)
+        evidence = tuple(
+            ReplyEvidence(
+                source_kind="public",
+                source_id=url,
+                target_date=target_date,
+                fetched_at=datetime.now(UTC),
+                conditions=(reply,),
+            )
+            for _title, url in citations
+        )
+        self._store_cached_reply(cache_key, reply, evidence)
+        if evidence_sink is not None:
+            evidence_sink(evidence)
         self._set_status("ok")
         logger.info(
             "旅游搜索完成：cache_hit=false success=true duration_ms=%d",

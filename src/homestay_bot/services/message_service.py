@@ -1,9 +1,27 @@
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-from homestay_bot.domain.enums import MessageOrigin
+from homestay_bot.domain.enums import Language, MessageOrigin
 from homestay_bot.domain.models import Message
+
+
+def model_message_content(message: Message) -> str:
+    """核对原文留库，但所有模型入口仅接收占位，不扩散到摘要。"""
+    if (message.message_metadata or {}).get("verification_task_id"):
+        return "[核对信息已转交管家]"
+    return message.content or ""
+
+
+def substantive_language(text: str) -> Language | None:
+    """忽略短确认、链接和数字；四个汉字或三个英文词才作为语言证据。"""
+    text = re.sub(r"https?://\S+", "", text)
+    if len(re.findall(r"[\u4e00-\u9fff]", text)) >= 4:
+        return Language.ZH
+    if len(re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", text)) >= 3:
+        return Language.EN
+    return None
 
 
 @dataclass(frozen=True)
@@ -131,12 +149,12 @@ class MessageService:
             if message.message_type != "text" or not message.content:
                 continue
             if message.origin is MessageOrigin.GUEST:
-                context.append({"role": "user", "content": message.content})
+                context.append({"role": "user", "content": model_message_content(message)})
             elif message.origin is MessageOrigin.BOT:
                 # 企业微信异步失败回执确认未送达，不能让模型误以为客人已看到。
                 if message.message_metadata.get("delivery_status") == "failed":
                     continue
-                context.append({"role": "assistant", "content": message.content})
+                context.append({"role": "assistant", "content": model_message_content(message)})
         if (
             merged_guest_content is not None
             and merged_guest_count > 1
@@ -173,6 +191,7 @@ class MessageService:
                 message.origin is not MessageOrigin.GUEST
                 or message.message_type != "text"
                 or not message.content
+                or (message.message_metadata or {}).get("verification_task_id")
             ):
                 break
             received_at = self._received_at(message)

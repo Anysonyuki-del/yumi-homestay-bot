@@ -38,6 +38,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import statistics
 import sys
 import tempfile
@@ -139,7 +140,8 @@ def reply_passes_oracle(case: dict[str, Any], snippets: list[KnowledgeSnippet], 
 
     ponytail: 仅接受固定兜底、已标注正确回复或正确来源原文组合；新改写需人工标注。
     """
-    final = final.strip()
+    # 平台分段编号不是业务事实，只移除行首已知的编号格式。
+    final = re.sub(r"(?:\n\n)?（\d+/\d+）", "", final).strip()
     if any(fact in final for fact in case["forbidden_facts"]):
         return False
     expected = set(case["expected_source_ids"])
@@ -147,41 +149,59 @@ def reply_passes_oracle(case: dict[str, Any], snippets: list[KnowledgeSnippet], 
     approved = [item for item in snippets if item.source_id in expected]
     if approved and required <= {item.source_id for item in approved}:
         evidence = "\n".join(item.answer for item in approved)
-        if (case["stub_reply_supported"] and final == str(case["stub_reply"]).strip()
-                and all(fact in evidence for fact in case["key_facts"])):
+        if (
+            case["stub_reply_supported"]
+            and final == str(case["stub_reply"]).strip()
+            and all(fact in evidence for fact in case["key_facts"])
+        ):
             return True
         remaining = final
         used = set()
         # 原文允许按输出顺序组合，但不能带入其他模型断言或遗漏必需来源。
         for _ in approved:
-            match = next((item for item in sorted(approved, key=lambda x: -len(x.answer))
-                          if item.answer.strip() and remaining.startswith(item.answer.strip())),
-                         None)
+            match = next(
+                (
+                    item
+                    for item in sorted(approved, key=lambda x: -len(x.answer))
+                    if item.answer.strip() and remaining.startswith(item.answer.strip())
+                ),
+                None,
+            )
             if match is None:
                 break
             used.add(match.source_id)
-            remaining = remaining[len(match.answer.strip()):].strip()
-        if (not remaining and used and required <= used
-                and all(fact in final for fact in case["key_facts"])):
+            remaining = remaining[len(match.answer.strip()) :].strip()
+        if (
+            not remaining
+            and used
+            and required <= used
+            and all(fact in final for fact in case["key_facts"])
+        ):
             return True
     if case["stub_reply_supported"]:
         return False
     safe = {
+        "这项信息暂时无法确认。",
+        "I’m unable to confirm that information right now.",
         DeepSeekGuestAssistant._unconfirmed_reply(case["question"], Language(case["language"])),
-        CLARIFY_REPLY_EN, CLARIFY_REPLY_ZH,
+        CLARIFY_REPLY_EN,
+        CLARIFY_REPLY_ZH,
     }
     if case["realtime"]:
-        safe.update({
-            "房价和房态以实时查询为准，当前无法确认具体金额，稍后由工作人员为您核实。",
-            "Prices and availability need a live check, so I can't confirm "
-            "an amount here. A staff member will confirm it for you.",
-        })
+        safe.update(
+            {
+                "房价和房态以实时查询为准，当前无法确认具体金额，稍后由工作人员为您核实。",
+                "Prices and availability need a live check, so I can't confirm "
+                "an amount here. A staff member will confirm it for you.",
+            }
+        )
     return final in safe
 
 
 def _knowledge_entry(raw: dict[str, Any]) -> KnowledgeEntry:
     """把用例里的知识条目转换为数据库行。"""
     return KnowledgeEntry(
+        scope="global",
         id=raw["id"],
         category=raw["category"],
         question_zh=raw["question_zh"],
@@ -287,7 +307,17 @@ async def final_reply(
         language=language,
         messages=[{"role": "user", "content": question}],
     )
-    return decision.reply_text
+    # 评估必须覆盖发送前安全准备与实际分段，而非止于助手聚合文本。
+    from homestay_bot.services.answer_policy import handoff_reason
+    from homestay_bot.services.guest_reply_policy import split_guest_reply
+    from homestay_bot.services.reply_plan import prepare_planned_reply
+
+    high_risk = bool(handoff_reason(question) or decision.handoff_reason)
+    prepared = prepare_planned_reply(
+        decision.reply_parts, fallback=decision.reply_text, language=language,
+        question=question, high_risk=high_risk,
+    )
+    return "\n\n".join(split_guest_reply(prepared, language))
 
 
 @dataclass(frozen=True)
@@ -343,8 +373,13 @@ class EvaluatedRanker(SemanticRanker):
         self.requests = 0
         self.cache_hits = 0
         self.queried = False
-        super().__init__(self, store, config.model, min_similarity=config.min_similarity,
-                         timeout_seconds=QUERY_EMBEDDING_TIMEOUT_SECONDS)
+        super().__init__(
+            self,
+            store,
+            config.model,
+            min_similarity=config.min_similarity,
+            timeout_seconds=QUERY_EMBEDDING_TIMEOUT_SECONDS,
+        )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """只统计查询，不把建索引的请求算进查询时延和调用数。"""
@@ -396,8 +431,9 @@ def _load_semantic_config(argv: list[str]) -> SemanticEvalConfig | None:
     )
 
     transport = build_public_https_client(OutboundUrlPolicy(), timeout_seconds=30.0)
-    client = AsyncOpenAI(api_key=key, base_url=DEFAULT_EMBEDDING_BASE_URL,
-                         http_client=transport, max_retries=0)
+    client = AsyncOpenAI(
+        api_key=key, base_url=DEFAULT_EMBEDDING_BASE_URL, http_client=transport, max_retries=0
+    )
     raw = OpenAICompatibleEmbeddingClient(client, DEFAULT_EMBEDDING_MODEL)
     cache = Path(tempfile.gettempdir()) / "yumi-embedding-eval-cache.json"
     return SemanticEvalConfig(
@@ -472,9 +508,7 @@ async def evaluate_case(
         await engine.dispose()
 
     retrieved_ids = [item.source_id for item in snippets]
-    evidence = "\n".join(
-        f"{item.category}\n{item.question}\n{item.answer}" for item in snippets
-    )
+    evidence = "\n".join(f"{item.category}\n{item.question}\n{item.answer}" for item in snippets)
     expected = set(case["expected_source_ids"])
     required = set(case["required_source_ids"])
     answerable = bool(expected)
@@ -493,9 +527,7 @@ async def evaluate_case(
     # 放行口径与生产一致：只有证据计划判为已覆盖，客人才会收到本店事实。
     grounded = plan is not None and plan.status == "grounded"
     should_ground = bool(case["expect_grounded"])
-    false_admit = (
-        grounded and not should_ground if case["property_specific"] else None
-    )
+    false_admit = grounded and not should_ground if case["property_specific"] else None
     stub_accepted: bool | None = None
     stub_ok: bool | None = None
     if case.get("stub_reply"):
@@ -554,8 +586,10 @@ def summarize(outcomes: list[CaseOutcome]) -> dict[str, Any]:
     latencies = sorted(item.elapsed_ms for item in outcomes)
     queried = [item for item in outcomes if item.query_requests or item.query_cache_hits]
     live_success = sorted(
-        item.elapsed_ms for item in outcomes
-        if item.query_requests and not item.query_cache_hits
+        item.elapsed_ms
+        for item in outcomes
+        if item.query_requests
+        and not item.query_cache_hits
         and item.semantic_status in {"success", "no_candidates"}
     )
     changed = [item for item in outcomes if item.stub_ok is not None and not item.stub_accepted]
@@ -650,8 +684,7 @@ def _validate_case(case: dict[str, Any], split: str) -> None:
     answer_field = "answer_zh" if case["language"] == "zh" else "answer_en"
     for fact in case["key_facts"]:
         assert any(
-            fact in entries[source_id][answer_field]
-            for source_id in case["expected_source_ids"]
+            fact in entries[source_id][answer_field] for source_id in case["expected_source_ids"]
         ), (case["case_id"], fact)
     if case.get("stub_reply"):
         assert isinstance(case["stub_reply_supported"], bool), case["case_id"]
@@ -700,18 +733,12 @@ def test_retrieval_meets_preregistered_targets(split: str) -> None:
     """Spec 9.2 事先登记的目标：召回达标，隔离、边界与回复断言安全项全部通过。"""
     outcomes = _split_outcomes(split)
     summary = summarize(outcomes)
-    failures = {
-        item.case_id: failure_kinds(item) for item in outcomes if failure_kinds(item)
-    }
+    failures = {item.case_id: failure_kinds(item) for item in outcomes if failure_kinds(item)}
     assert summary["recall_at_3"] >= RECALL_AT_3_TARGET, (summary, failures)
     assert summary["isolation_pass"] == 1.0, failures
     assert summary["boundary_pass"] == 1.0, failures
     assert summary["false_admits"] == 0, failures
-    unsupported_accepted = [
-        item.case_id
-        for item in outcomes
-        if item.unsafe_final
-    ]
+    unsupported_accepted = [item.case_id for item in outcomes if item.unsafe_final]
     assert unsupported_accepted == []
 
 
@@ -772,11 +799,7 @@ def _record_baseline(outcomes: list[CaseOutcome]) -> None:
             for split in ("calibration", "holdout")
         },
         "outcomes": [
-            {
-                key: value
-                for key, value in asdict(item).items()
-                if key != "elapsed_ms"
-            }
+            {key: value for key, value in asdict(item).items() if key != "elapsed_ms"}
             for item in outcomes
         ],
     }
@@ -805,35 +828,33 @@ def _print_report(outcomes: list[CaseOutcome], *, show_holdout: bool) -> None:
                 )
 
 
-
-
 @pytest.mark.asyncio
 async def test_latency_mode_bypasses_query_cache_and_counts_fallback(tmp_path) -> None:
     """质量模式允许缓存；延迟模式必须查询真实客户端，失败须单独计数。"""
     from unittest.mock import AsyncMock
 
-    case = load_cases('calibration')[0]
+    case = load_cases("calibration")[0]
     raw = AsyncMock()
     raw.embed.side_effect = lambda texts: [[1.0, 0.0] for _ in texts]
-    cached = CachedEmbedder(raw, 'test-model', tmp_path / 'vectors.json')
-    quality = SemanticEvalConfig(cached, 'test-model', 0.5)
+    cached = CachedEmbedder(raw, "test-model", tmp_path / "vectors.json")
+    quality = SemanticEvalConfig(cached, "test-model", 0.5)
     await evaluate_case(case, quality)
     warm = await evaluate_case(case, quality)
     assert warm.query_cache_hits == 1
     assert warm.query_requests == 0
-    latency = SemanticEvalConfig(cached, 'test-model', 0.5, query_embedder=raw)
+    latency = SemanticEvalConfig(cached, "test-model", 0.5, query_embedder=raw)
     measured = await evaluate_case(case, latency)
     assert measured.query_requests == 1
     assert measured.query_cache_hits == 0
-    assert measured.semantic_status == 'success'
+    assert measured.semantic_status == "success"
     raw.embed.side_effect = TimeoutError
     failed = await evaluate_case(case, latency)
-    assert failed.semantic_status == 'timeout'
+    assert failed.semantic_status == "timeout"
     assert failed.retrieved_ids
     report = summarize([warm, measured, failed])
-    assert report['semantic_timeouts'] == 1
-    assert report['query_requests'] == 2
-    assert report['query_cache_hits'] == 1
+    assert report["semantic_timeouts"] == 1
+    assert report["query_requests"] == 2
+    assert report["query_cache_hits"] == 1
 
 
 @pytest.mark.asyncio
@@ -843,22 +864,26 @@ async def test_eval_uses_production_deadline_and_reports_empty_vectors(monkeypat
 
     from homestay_bot.services.knowledge_embeddings import StoredVector, content_hash
 
-    case = load_cases('calibration')[0]
-    entry = _knowledge_entry(case['knowledge'][0])
-    config = SemanticEvalConfig(AsyncMock(), 'test-model', 0.5)
+    case = load_cases("calibration")[0]
+    entry = _knowledge_entry(case["knowledge"][0])
+    config = SemanticEvalConfig(AsyncMock(), "test-model", 0.5)
     config.embedder.embed.return_value = [[1.0, 0.0]]
     store = AsyncMock()
     store.list_vectors.return_value = []
     ranker = EvaluatedRanker(config, store)
-    assert await ranker.rank(Language.ZH, '停车', [entry]) == []
-    assert ranker.status == 'no_vectors'
+    assert await ranker.rank(Language.ZH, "停车", [entry]) == []
+    assert ranker.status == "no_vectors"
     assert ranker.requests == 0
     from homestay_bot.services.knowledge_embeddings import embedding_text
 
-    store.list_vectors.return_value = [StoredVector(
-        entry.id, 'zh', content_hash(embedding_text(entry, Language.ZH), 'test-model'),
-        [1.0, 0.0],
-    )]
+    store.list_vectors.return_value = [
+        StoredVector(
+            entry.id,
+            "zh",
+            content_hash(embedding_text(entry, Language.ZH), "test-model"),
+            [1.0, 0.0],
+        )
+    ]
     original = asyncio.wait_for
     deadlines = []
 
@@ -867,8 +892,8 @@ async def test_eval_uses_production_deadline_and_reports_empty_vectors(monkeypat
         deadlines.append(timeout)
         return await original(awaitable, timeout)
 
-    monkeypatch.setattr(asyncio, 'wait_for', checked_wait_for)
-    await ranker.rank(Language.ZH, '停车', [entry])
+    monkeypatch.setattr(asyncio, "wait_for", checked_wait_for)
+    await ranker.rank(Language.ZH, "停车", [entry])
     assert deadlines == [3.0]
 
 
@@ -883,25 +908,31 @@ def test_eval_sdk_matches_production_transport(monkeypatch) -> None:
     transport = Mock()
     builder = Mock(return_value=transport)
     sdk = Mock()
-    monkeypatch.setenv('YUMI_EMBEDDING_API_KEY', 'synthetic-test-key')
-    monkeypatch.setattr(outbound_url_policy, 'build_public_https_client', builder)
-    monkeypatch.setattr(openai, 'AsyncOpenAI', sdk)
-    config = _load_semantic_config(['--semantic', '--latency'])
+    monkeypatch.setenv("YUMI_EMBEDDING_API_KEY", "synthetic-test-key")
+    monkeypatch.setattr(outbound_url_policy, "build_public_https_client", builder)
+    monkeypatch.setattr(openai, "AsyncOpenAI", sdk)
+    config = _load_semantic_config(["--semantic", "--latency"])
     assert config is not None and config.query_embedder is not None
-    assert sdk.call_args.kwargs['max_retries'] == 0
-    assert sdk.call_args.kwargs['http_client'] is transport
-    assert builder.call_args.kwargs['timeout_seconds'] == 30.0
+    assert sdk.call_args.kwargs["max_retries"] == 0
+    assert sdk.call_args.kwargs["http_client"] is transport
+    assert builder.call_args.kwargs["timeout_seconds"] == 30.0
 
 
 async def _main(argv: list[str]) -> None:
     """整个评估共用一个事件循环；结束时关闭 SDK，避免连接泄漏。"""
     config = _load_semantic_config(argv)
     try:
-        splits = [name for name in CASE_FILES
-                  if "--only" not in argv or name == argv[argv.index("--only") + 1]]
+        splits = [
+            name
+            for name in CASE_FILES
+            if "--only" not in argv or name == argv[argv.index("--only") + 1]
+        ]
         if config is not None:
-            print("mode: uncached-query latency" if "--latency" in argv
-                  else "mode: cached quality; latency is NOT production evidence")
+            print(
+                "mode: uncached-query latency"
+                if "--latency" in argv
+                else "mode: cached quality; latency is NOT production evidence"
+            )
         outcomes = []
         for name in splits:
             outcomes.extend(await evaluate_split(name, config))

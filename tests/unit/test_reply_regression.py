@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import date
+from datetime import UTC, date
 from pathlib import Path
 
 from homestay_bot.tools import reply_regression as rr
@@ -140,6 +140,7 @@ def test_fake_hostex_follows_the_fixture_calendar() -> None:
     assert [day["available"] for day in first["days"]] == [True, False]
     assert first["stay_available"] is False
 
+
 def test_the_committed_baseline_covers_every_scenario_exactly_once() -> None:
     """入库基线必须覆盖全部场景且互不重叠，否则门禁会漏判或重复判。"""
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -199,3 +200,91 @@ def test_fake_hostex_client_goes_through_the_production_executor() -> None:
     text = json.dumps(rows, ensure_ascii=False)
     assert "hx-" not in text
     assert all(row["nightly_reference_prices"] for row in rows)
+
+
+def test_runner_preserves_grounded_price_evidence(monkeypatch) -> None:
+    """实测出口须保留取证价格，不能退回旧改写器抹掉事实。"""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+    from homestay_bot.services.reply_plan import ReplyEvidence, ReplyPart
+
+    handoff_reason = None
+
+    async def respond(self, **kwargs):
+        """仅替代模型调用，仍经过实测工具的完整输出处理。"""
+        return SimpleNamespace(
+            facility_issue=None,
+            reply_text="旧出口不应出现",
+            handoff_reason=handoff_reason,
+            reply_parts=[
+                ReplyPart(
+                    question="价格",
+                    status="grounded",
+                    text="201 房参考价格为 299 元，以下单为准。",
+                    evidence=(
+                        ReplyEvidence(
+                            source_kind="reference_price",
+                            source_id="201",
+                            fetched_at=datetime.now(UTC),
+                        ),
+                    ),
+                )
+            ],
+            knowledge_gap=False,
+            staff_confirmation_required=True,
+        )
+
+    monkeypatch.setattr(DeepSeekGuestAssistant, "respond", respond)
+    fixture = json.loads(FIXTURE.read_text())
+    runner = rr._Runner(
+        fixture,
+        SimpleNamespace(
+            deepseek_api_key="synthetic-only",
+            deepseek_base_url="https://example.invalid",
+            deepseek_model="synthetic",
+        ),
+    )
+    result = asyncio.run(
+        runner._respond(
+            {
+                "messages": [{"role": "user", "content": "201 明晚多少钱？"}],
+            }
+        )
+    )
+    assert "299" in result["final"]
+    assert rr.observed_route(result) == "model"
+    assert "旧出口" not in result["final"]
+    handoff_reason = "emergency:fire"
+    result = asyncio.run(
+        runner._respond(
+            {
+                "messages": [{"role": "user", "content": "201 明晚多少钱？"}],
+            }
+        )
+    )
+    assert result["route"] == "emergency" and "119" in result["final"]
+
+
+def test_negative_availability_is_not_a_positive_fixture_match() -> None:
+    """满房禁用规则不能把“不可订”匹配为“可订”。"""
+    fixture = json.loads(FIXTURE.read_text())
+    scenario = next(s for s in fixture["scenarios"] if s["id"] == "AV-国庆")
+    record = {
+        "route": "model",
+        "tools": ["search_availability"],
+        "final": "芸栖·101 庭院大床房（2026-10-01 — 2026-10-03）：不可订。",
+    }
+    assert rr.judge(scenario, record)["ok"]
+    assert not rr.judge(scenario, {**record, "final": "101房可订。"})["ok"]
+
+
+def test_mixed_weather_and_availability_keeps_inventory_route() -> None:
+    """复合问题查询天气后继续查询房态，不应被视为漏答房态。"""
+    assert (
+        rr.observed_route(
+            {"route": "model", "tools": ["search_availability"], "traces": ["tourism_search"]}
+        )
+        == "tool_availability"
+    )

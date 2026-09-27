@@ -287,6 +287,16 @@ class DeepSeekDeliveryRewriter:
     @staticmethod
     def _validate_facts(original: str, rewritten: str) -> None:
         """拒绝新增或丢失数字事实，并保留已出现的核心事实类别。"""
+        # 条件属于完整事实单元；词汇或数字集合相同也不能删改适用条件。
+        for clause in re.split(r"[。！？!?；;\n]", original):
+            if re.search(
+                r"仅|除|需|必须|节假日|工作日|预约|周末|\bonly\b|\bunless\b|\bif\b|\bexcept\b",
+                clause,
+                re.IGNORECASE,
+            ):
+                normalized = re.sub(r"[\s，,：:]", "", clause).casefold()
+                if normalized and normalized not in re.sub(r"[\s，,：:]", "", rewritten).casefold():
+                    raise DeliveryRewriteUnavailableError("改写改变适用条件")
         original_numbers = _NUMBER_FACT_PATTERN.findall(original)
         rewritten_numbers = _NUMBER_FACT_PATTERN.findall(rewritten)
         original_numbers.extend(_CHINESE_NUMBER_FACT_PATTERN.findall(original))
@@ -297,9 +307,7 @@ class DeepSeekDeliveryRewriter:
             _DATE_FACT_PATTERN.findall(rewritten)
         ):
             raise DeliveryRewriteUnavailableError("改写日期事实发生变化")
-        if Counter(
-            item.lower() for item in _WEATHER_FACT_PATTERN.findall(original)
-        ) != Counter(
+        if Counter(item.lower() for item in _WEATHER_FACT_PATTERN.findall(original)) != Counter(
             item.lower() for item in _WEATHER_FACT_PATTERN.findall(rewritten)
         ):
             raise DeliveryRewriteUnavailableError("改写天气事实发生变化")
@@ -445,9 +453,7 @@ class DeepSeekDeliveryRewriter:
                 predicates.append(f"cancelled:{not is_negative}")
 
             numbers = tuple(sorted(_NUMBER_FACT_PATTERN.findall(clause)))
-            weather = tuple(
-                sorted(item.lower() for item in _WEATHER_FACT_PATTERN.findall(clause))
-            )
+            weather = tuple(sorted(item.lower() for item in _WEATHER_FACT_PATTERN.findall(clause)))
             signature = (
                 tuple(sorted(predicates)),
                 numbers,
@@ -548,13 +554,9 @@ class DeepSeekDeliveryRewriter:
             }
             if serialized_chars(rewrite_request) > MODEL_BUDGET.main_request_chars:
                 raise DeliveryRewriteUnavailableError("改写请求超过字符预算")
-            response = await self._client.chat.completions.create(
-                **rewrite_request
-            )
+            response = await self._client.chat.completions.create(**rewrite_request)
             content = response.choices[0].message.content or ""
-            rewritten = _DeliveryRewritePayload.model_validate_json(
-                content
-            ).reply_text.strip()
+            rewritten = _DeliveryRewritePayload.model_validate_json(content).reply_text.strip()
         except (ValidationError, AttributeError, IndexError, TypeError) as error:
             raise DeliveryRewriteUnavailableError("改写响应无效") from error
         except DeliveryRewriteUnavailableError:

@@ -102,15 +102,9 @@ async def test_explicit_memory_is_recalled_only_for_owner_and_relevant_query() -
             now,
         )
 
-        owner_context = await repository.load_model_context(
-            customer.id, query="我的狗叫什么？"
-        )
-        unrelated_context = await repository.load_model_context(
-            customer.id, query="几点退房？"
-        )
-        other_context = await repository.load_model_context(
-            other.id, query="我的狗叫什么？"
-        )
+        owner_context = await repository.load_model_context(customer.id, query="我的狗叫什么？")
+        unrelated_context = await repository.load_model_context(customer.id, query="几点退房？")
+        other_context = await repository.load_model_context(other.id, query="我的狗叫什么？")
 
         assert owner_context.memories == [
             {
@@ -213,9 +207,7 @@ async def test_single_recent_message_becomes_cross_conversation_memory() -> None
             repository,
             RecentMemorySummarizer(),
         ).maintain_customer(customer.id, now)
-        context = await repository.load_model_context(
-            customer.id, query="我的狗叫什么？"
-        )
+        context = await repository.load_model_context(customer.id, query="我的狗叫什么？")
 
         assert source.content == "我的狗叫查理"
         assert source.short_summarized_at is None
@@ -310,14 +302,10 @@ async def test_model_inference_stays_candidate_and_explicit_correction_supersede
 
         memories = list(
             (
-                await session.scalars(
-                    select(CustomerMemoryItem).order_by(CustomerMemoryItem.id)
-                )
+                await session.scalars(select(CustomerMemoryItem).order_by(CustomerMemoryItem.id))
             ).all()
         )
-        context = await repository.load_model_context(
-            customer.id, query="我喜欢什么楼层？"
-        )
+        context = await repository.load_model_context(customer.id, query="我喜欢什么楼层？")
 
         assert memories[0].status is CustomerMemoryStatus.CANDIDATE
         assert memories[1].status is CustomerMemoryStatus.SUPERSEDED
@@ -364,9 +352,7 @@ async def test_unresolved_items_merge_and_active_memory_expires_to_stale() -> No
             [source],
             now,
         )
-        await repository.expire_customer_memories(
-            customer.id, now + timedelta(days=366)
-        )
+        await repository.expire_customer_memories(customer.id, now + timedelta(days=366))
         summary = await repository.get_summary(customer.id)
         memory = await session.scalar(select(CustomerMemoryItem))
 
@@ -544,15 +530,12 @@ async def test_memory_conflicts_keep_versions_and_events(duplicate, confidence) 
         )
         memories = list(
             (
-                await session.scalars(
-                    select(CustomerMemoryItem).order_by(CustomerMemoryItem.id)
-                )
+                await session.scalars(select(CustomerMemoryItem).order_by(CustomerMemoryItem.id))
             ).all()
         )
 
         expected = (
-            CustomerMemoryStatus.SUPERSEDED if confidence == 0.99
-            else CustomerMemoryStatus.DISPUTED
+            CustomerMemoryStatus.SUPERSEDED if confidence == 0.99 else CustomerMemoryStatus.DISPUTED
         )
         assert [memory.status for memory in memories] == [
             expected,
@@ -563,11 +546,15 @@ async def test_memory_conflicts_keep_versions_and_events(duplicate, confidence) 
         assert memories[1].supersedes_id == (
             memories[0].id if confidence == 0.99 and not duplicate else None
         )
-        events = list((await session.scalars(
-            select(CustomerMemoryEvent).where(
-                CustomerMemoryEvent.memory_item_id == memories[0].id,
-            )
-        )).all())
+        events = list(
+            (
+                await session.scalars(
+                    select(CustomerMemoryEvent).where(
+                        CustomerMemoryEvent.memory_item_id == memories[0].id,
+                    )
+                )
+            ).all()
+        )
         assert len(events) == 1
         assert events[0].event_type == expected.value
         assert events[0].previous_status == "ACTIVE"
@@ -633,9 +620,7 @@ async def test_a_weaker_new_statement_still_goes_to_dispute() -> None:
         )
         memories = list(
             (
-                await session.scalars(
-                    select(CustomerMemoryItem).order_by(CustomerMemoryItem.id)
-                )
+                await session.scalars(select(CustomerMemoryItem).order_by(CustomerMemoryItem.id))
             ).all()
         )
 
@@ -728,13 +713,12 @@ async def test_model_context_includes_safe_active_orders_and_open_tasks() -> Non
         )
         await session.commit()
 
-        context = await SQLAlchemyContextRepository(session).load_model_context(
-            customer.id
-        )
+        context = await SQLAlchemyContextRepository(session).load_model_context(customer.id)
 
         assert context.active_orders == [
             {
-                "property_id": 101,
+                "order_id": 1,
+            "property_id": 101,
                 "property_title": "长江中心",
                 "check_in_date": "2026-08-01",
                 "check_out_date": "2026-08-02",
@@ -929,9 +913,7 @@ async def test_context_summary_multiple_batches_eventually_cover_all_candidates(
         async def summarize(self, *, tier, existing_summary, messages):
             """返回不含敏感信息的固定合并结果。"""
             assert tier == "short"
-            self.batch_sizes.append(
-                sum(1 for item in messages if item.summary_eligible)
-            )
+            self.batch_sizes.append(sum(1 for item in messages if item.summary_eligible))
             return ContextSummaryResult(
                 summary=f"已处理 {sum(self.batch_sizes)} 条",
                 unresolved_items=[],
@@ -1004,4 +986,38 @@ async def test_context_summary_multiple_batches_eventually_cover_all_candidates(
             "候选消息 119",
         ]
 
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_recent_task_status_includes_terminal_only_for_owner() -> None:
+    """已完成请求仍可追问，其他客户的任务绝不能进入查询结果。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        owner = Customer(display_name="合成客人甲")
+        other = Customer(display_name="合成客人乙")
+        session.add_all([owner, other])
+        await session.flush()
+        session.add(PropertyProfile(id=9001, title="合成房间"))
+        await session.flush()
+        for customer in (owner, other):
+            session.add(
+                BusinessTask(
+                    customer_id=customer.id,
+                    task_type=BusinessTaskType.SPECIAL_SERVICE,
+                    status=BusinessTaskStatus.COMPLETED,
+                    property_id=9001,
+                    service_date=date(2026, 9, 25),
+                    description="合成送毛巾请求",
+                )
+            )
+        await session.flush()
+        repository = SQLAlchemyContextRepository(session)
+        assert hasattr(repository, "list_recent_task_statuses")
+        rows = await repository.list_recent_task_statuses(owner.id)
+        assert len(rows) == 1
+        assert rows[0]["status"] == "completed"
+        assert rows[0]["task_id"] is not None
     await engine.dispose()

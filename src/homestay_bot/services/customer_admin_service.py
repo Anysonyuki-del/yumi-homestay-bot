@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -11,6 +11,7 @@ from homestay_bot.services.customer_errors import (
     CustomerPermissionError,
 )
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
+from homestay_bot.services.task_lifecycle_service import ConversationReleaseRepositoryPort
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
@@ -214,10 +215,12 @@ class CustomerAdminService:
         jobs: CustomerAdminJobQueue,
         *,
         tag_sync_enabled: bool,
+        release_repository: ConversationReleaseRepositoryPort | None = None,
         local_date_provider: Callable[[], date] | None = None,
     ) -> None:
         """注入 CRM 仓储、加密服务、任务队列、同步开关和武汉日期。"""
         self._repository = repository
+        self._release_repository = release_repository
         self._cipher = cipher
         self._jobs = jobs
         self._tag_sync_enabled = tag_sync_enabled
@@ -388,6 +391,19 @@ class CustomerAdminService:
             target_customer_id,
             administrator.id,
         )
+
+    async def release_conversation(
+        self, customer_id: int, conversation_id: int, administrator: Employee,
+    ) -> None:
+        """沿用 CRM 管理员权限，归属检查与交还在仓储锁内一起完成。"""
+        self._require_admin(administrator)
+        if self._release_repository is None:
+            raise CustomerConflictError("会话交还服务尚未配置")
+        if not await self._release_repository.release_conversation(
+            conversation_id, customer_id=customer_id,
+            actor_employee_id=administrator.id, now=datetime.now(UTC),
+        ):
+            raise CustomerConflictError("会话状态已变化，请刷新后重试")
 
     async def update_note(
         self,

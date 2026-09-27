@@ -2,12 +2,12 @@ import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from time import monotonic
 from typing import Any, Protocol, runtime_checkable
-
-from pydantic import ValidationError
+from zoneinfo import ZoneInfo
 
 from homestay_bot.domain.enums import (
     BusinessTaskType,
@@ -26,6 +26,7 @@ from homestay_bot.domain.schemas import BookingRequest
 from homestay_bot.integrations.deepseek_client import (
     AssistantDecision,
     AssistantUnavailableError,
+    FacilityIssue,
     TaskSuggestion,
 )
 from homestay_bot.integrations.tourism import TourismSearchError, classify_tourism_query
@@ -47,16 +48,38 @@ from homestay_bot.services.emergency_service import (
     is_emergency_follow_up,
 )
 from homestay_bot.services.guest_reply_policy import (
-    MAX_GUEST_REPLY_CHARS,
     prepare_facility_advice_reply,
     prepare_guest_reply,
     split_guest_reply,
 )
-from homestay_bot.services.message_service import GuestMessageBatch, IncomingMessage
+from homestay_bot.services.guest_verification import GuestVerificationService
+from homestay_bot.services.message_service import (
+    GuestMessageBatch,
+    IncomingMessage,
+    substantive_language,
+)
+from homestay_bot.services.reply_plan import (
+    GuestActionResult,
+    compose_reply_parts,
+    prepare_planned_reply,
+)
 from homestay_bot.worker import DeferredRetryJobError
 
-# 与知识证据计划共用同一上限，见 guest_reply_policy.MAX_GUEST_REPLY_CHARS。
-_MAX_ASSISTANT_REPLY_CHARACTERS = MAX_GUEST_REPLY_CHARS
+
+def format_employee_notification(
+    *, reason: str, guest: str, room: str, link: str, original: str,
+    replied: str = "尚未回复客人", account: str = "微信客服",
+) -> str:
+    """会话转交和自动交还共用六字段格式；先保留定位信息，再按字节平分摘要。"""
+    def clip(value: str, budget: int) -> str:
+        """UTF-8 截断不切断汉字，输出永不超过平台上限。"""
+        return value.encode()[:budget].decode("utf-8", errors="ignore")
+    prefix = (f"{clip(reason, 300)}\n客服账号：{clip(account, 240)}\n{clip(guest, 240)}"
+              f"\n{clip(room, 240)}\n后台：{clip(link, 400)}")
+    budget = max(0, 2048 - len(prefix.encode()) - 60) // 2
+    return (f"{prefix}\n消息：{clip(original, budget)}"
+            f"\n机器人已回复：{clip(replied or '尚未回复客人', budget)}")
+
 _GUEST_MESSAGE_DEBOUNCE_SECONDS = 3
 # 联网查询要等十几秒，先让客人知道在查。固定话术不调用模型，不增加等待；
 # 不传问题原文，出口不会补天气开场白，也不标记人工，不会追加转人工收尾。
@@ -96,12 +119,38 @@ class ConversationRepository(Protocol):
         """锁定会话行，串行化入站活动与静默任务消费。"""
 
 
+@runtime_checkable
+class StayConfirmationPort(Protocol):
+    """把确认持久化留在会话仓储，模型只提供本轮意图。"""
+
+    async def prepare_stay_confirmation(
+        self,
+        conversation_id: int,
+        *,
+        source_message_id: str,
+        today: date,
+        order_id: int | None = None,
+    ) -> str:
+        """准备经客户归属核实的订单确认提示。"""
+
+    async def confirm_stay(
+        self, conversation_id: int, *, prompt_message_id: str, guest_message_id: str, now: datetime
+    ) -> bool:
+        """原子确认未变化的本次订单。"""
+
+    async def decline_stay(self, conversation_id: int, *, prompt_message_id: str) -> None:
+        """撤销仍对应当前提示的待确认记录。"""
+
+    async def get_confirmed_stay(
+        self, conversation_id: int, *, today: date, allow_history: bool = False, lock: bool = True
+    ) -> dict[str, Any] | None:
+        """复核客户归属和订单快照；模型前只读，发出前加锁。"""
+
+
 class ConversationMessageService(Protocol):
     """定义编排层所需的消息记录接口。"""
 
-    async def record_incoming(
-        self, conversation_id: int, message: IncomingMessage
-    ) -> bool:
+    async def record_incoming(self, conversation_id: int, message: IncomingMessage) -> bool:
         """保存入站消息并返回是否为新消息。"""
 
     async def record_bot(
@@ -286,6 +335,16 @@ class CustomerContextPort(Protocol):
         """按当前问题返回不含原文和敏感字段的客户摘要。"""
 
 
+@runtime_checkable
+class TaskStatusPort(Protocol):
+    """提供按客户归属限定的近期任务状态。"""
+
+    async def list_recent_task_statuses(
+        self, customer_id: int
+    ) -> list[dict[str, str | int | None]]:
+        """返回包含终态的有限记录。"""
+
+
 class BusinessTaskPort(Protocol):
     """定义会话层保存 AI 待确认任务的最小入口。"""
 
@@ -357,7 +416,7 @@ class ComplaintClassifierPort(Protocol):
         """识别客诉风险。"""
 
     @staticmethod
-    def guest_acknowledgement() -> str:
+    def guest_acknowledgement(language: Language = Language.ZH) -> str:
         """返回客诉固定安抚。"""
 
 
@@ -432,6 +491,7 @@ class ConversationService:
         wecom: WeComMessagingPort,
         agent_id: int,
         duty_employee_userids: list[str],
+        verification: GuestVerificationService | None = None,
         approvals: PendingApprovalPort | None = None,
         approval_base_url: str = "",
         frequent_faq: FrequentFaqPort | None = None,
@@ -447,10 +507,14 @@ class ConversationService:
         emergency_knowledge: EmergencyKnowledgePort | None = None,
         defer_model: bool = False,
         commit_boundary: Callable[[], Awaitable[None]] | None = None,
+        savepoint_factory: Callable[[], AbstractAsyncContextManager[Any]] | None = None,
     ) -> None:
         """注入仓储、AI、安全分类器和企业微信发送端口。"""
         self._conversations = conversations
         self._messages = messages
+        self._verification = verification
+        self._last_guest_reply = ""
+        self._notification_task_id: int | None = None
         self._assistant = assistant
         self._emergency = emergency_service
         self._wecom = wecom
@@ -471,6 +535,8 @@ class ConversationService:
         self._emergency_knowledge = emergency_knowledge
         self._defer_model = defer_model
         self._commit_boundary = commit_boundary
+        self._savepoint_factory = savepoint_factory or nullcontext
+        self._notification_names: tuple[str, str] | None = None
 
     async def handle_message(self, message: IncomingMessage) -> None:
         """处理单条已去重消息，确保人工回复不会形成机器人回环。"""
@@ -495,15 +561,44 @@ class ConversationService:
         if message.origin is not MessageOrigin.GUEST:
             return
 
-        language = self._detect_language(message.content, conversation.language)
+        detector = getattr(self._conversations, "detect_language", None)
+        language = (
+            await detector(conversation.id, conversation.language) if detector is not None
+            else self._detect_language(message.content, conversation.language)
+        )
         if language is not conversation.language:
             conversation.language = language
             await self._conversations.save(conversation)
 
         emergency = self._emergency.classify(message.content)
+        if emergency.is_possible:
+            await self._answer_possible_danger(conversation, message)
+            # 已给安全提醒并通知，仍允许模型将含糊情况升级为确定危险。
+            await self._process_model_reply(conversation, message)
+            return
         if emergency.is_emergency:
             await self._escalate_emergency(conversation, message, emergency)
             return
+
+        if self._verification is not None:
+            verification = await self._verification.handle(conversation, message)
+            if verification is not None:
+                self._notification_task_id, reply = verification
+                await self._send_prepared_guest_reply(conversation, reply)
+                classification = (self._complaint_service.classify(message.content)
+                                  if self._complaint_service is not None else None)
+                reason = (f"complaint:{classification.reason}"
+                          if classification and classification.is_complaint
+                          else "manual_request_or_media")
+                # 提交资料不覆盖已有客诉/紧急接管原因，避免巡检错误自动交还。
+                if (conversation.mode is not ConversationMode.HUMAN_ACTIVE
+                        or (classification and classification.is_complaint)):
+                    await self._switch_to_human(conversation, reason)
+                await self._notify_employee(
+                    conversation, replace(message, content="核对信息请在后台任务查看"),
+                    "订单待人工核实",
+                )
+                return
 
         if self._complaint_service is not None:
             classification = self._complaint_service.classify(message.content)
@@ -526,7 +621,8 @@ class ConversationService:
         ):
             await self._send_guest_reply(
                 conversation,
-                "我已收到您的诉求。",
+                ("I have received your request." if conversation.language is Language.EN
+                 else "我已收到您的诉求。"),
                 requires_human=True,
                 high_risk=True,
             )
@@ -582,6 +678,8 @@ class ConversationService:
             emergency = self._emergency.classify(rule_content)
             if emergency.is_emergency:
                 break
+        if emergency.is_possible:
+            await self._answer_possible_danger(conversation, merged_message)
         if emergency.is_emergency:
             await self._escalate_emergency(conversation, merged_message, emergency)
             return
@@ -599,13 +697,11 @@ class ConversationService:
                 )
                 return
         handoff_reason = self._determine_handoff_reason(merged_message.content)
-        if (
-            conversation.mode is ConversationMode.HUMAN_ACTIVE
-            and handoff_reason is not None
-        ):
+        if conversation.mode is ConversationMode.HUMAN_ACTIVE and handoff_reason is not None:
             await self._send_guest_reply(
                 conversation,
-                "我已收到您的诉求。",
+                ("I have received your request." if conversation.language is Language.EN
+                 else "我已收到您的诉求。"),
                 requires_human=True,
                 high_risk=True,
             )
@@ -715,7 +811,7 @@ class ConversationService:
         if self._complaint_service is not None:
             await self._send_guest_reply(
                 conversation,
-                self._complaint_service.guest_acknowledgement(),
+                self._complaint_service.guest_acknowledgement(conversation.language),
                 message_type="complaint_ack",
                 requires_human=True,
                 high_risk=True,
@@ -753,27 +849,32 @@ class ConversationService:
         conversation: Conversation,
         message: IncomingMessage,
         advice: list[str] | None,
+        *,
+        extra_reply: str = "",
     ) -> None:
         """先登记住宿问题任务和员工通知，再发送由建议清单组装的回复。
 
         `advice` 为 None 表示模型不可用或未给出清单，回复策略会使用固定兜底。
         """
-        if self._business_tasks is None or conversation.customer_id is None:
-            # 生产装配必须同时提供正式客户和任务仓储；缺失时回滚入站并由 worker 重试。
-            raise RuntimeError("设施故障人工任务依赖未配置")
-        task = await self._business_tasks.record_ai_suggestion(
-            customer_id=conversation.customer_id,
-            source_message_id=message.msgid,
-            task_type=BusinessTaskType.MAINTENANCE,
-            description="客人反馈民宿设施或环境问题，待人工处理",
+        decision = AssistantDecision(
+            reply_text="", language=conversation.language, intent="facility_issue", confidence=1,
+            facility_issue=FacilityIssue(scope="homestay_facility"),
+            task_suggestion=TaskSuggestion(
+                task_type=BusinessTaskType.MAINTENANCE,
+                description=message.content[:500],
+            ),
         )
-        await self._notify_employee(
-            conversation,
-            message,
-            f"新任务待确认：ID {task.id}，类型 {task.task_type.value}",
+        action_reply = await self._record_task_suggestion(conversation, message, decision)
+        # 复用请求登记的 savepoint 和失败口径，通知失败时不能沿用成功收尾。
+        reply = prepare_facility_advice_reply(
+            advice, conversation.language,
+            action_reply=(
+                None if decision.action_result and decision.action_result.notification_queued
+                else action_reply
+            ),
         )
-        # 开头、结尾与标点全部由本地组装，模型只提供逐条检查过的短建议。
-        reply = prepare_facility_advice_reply(advice, conversation.language)
+        if extra_reply:
+            reply = f"{extra_reply}\n\n{reply}"
         await self._send_prepared_guest_reply(conversation, reply)
 
     async def _stage_fast_ack(
@@ -789,22 +890,7 @@ class ConversationService:
         sent_ack: GuestReplyReceipt | None = None
         if has_facility_fault_signal(message.content):
             pass
-        elif self._should_send_fast_ack(message.content):
-            ack = await self._assistant.respond_ack(
-                guest_identifier=message.external_userid,
-                language=conversation.language,
-                question=message.content,
-            )
-            sent_ack = await self._send_guest_reply(
-                conversation,
-                ack,
-                message_type="ack",
-                requires_human=True,
-            )
-        elif (
-            classify_tourism_query([{"role": "user", "content": message.content}])
-            == "live"
-        ):
+        elif classify_tourism_query([{"role": "user", "content": message.content}]) == "live":
             # 1.39.13 测试号验收：联网问题分别等了约 30 秒和 21 秒，期间没有任何回复。
             sent_ack = await self._send_guest_reply(
                 conversation,
@@ -813,9 +899,7 @@ class ConversationService:
             )
         if sent_ack is not None:
             # 最终阶段只携带摘要，避免在任务载荷中复制一份安抚正文。
-            fast_ack_sha256 = hashlib.sha256(
-                sent_ack.content.encode("utf-8")
-            ).hexdigest()
+            fast_ack_sha256 = hashlib.sha256(sent_ack.content.encode("utf-8")).hexdigest()
         payload: dict[str, object] = {
             "phase": "final",
             "msgid": message.msgid,
@@ -826,16 +910,10 @@ class ConversationService:
             "content": message.content,
             "sent_at": message.sent_at.isoformat(),
         }
-        merged_guest_count = str(
-            (message.metadata or {}).get("merged_guest_count", "")
-        )
+        merged_guest_count = str((message.metadata or {}).get("merged_guest_count", ""))
         if merged_guest_count.isdigit() and int(merged_guest_count) > 1:
             payload["merged_guest_count"] = int(merged_guest_count)
-        if (
-            fast_ack_sha256 is not None
-            and sent_ack is not None
-            and sent_ack.message_id is not None
-        ):
+        if fast_ack_sha256 is not None and sent_ack is not None and sent_ack.message_id is not None:
             payload["fast_ack_sha256"] = fast_ack_sha256
             if sent_ack.message_id and sent_ack.message_id.startswith("outbox:"):
                 payload["fast_ack_outbox_id"] = sent_ack.message_id
@@ -864,8 +942,7 @@ class ConversationService:
                 "content": message.content,
                 "sent_at": message.sent_at.isoformat(),
             },
-            available_at=datetime.now(UTC)
-            + timedelta(seconds=_GUEST_MESSAGE_DEBOUNCE_SECONDS),
+            available_at=datetime.now(UTC) + timedelta(seconds=_GUEST_MESSAGE_DEBOUNCE_SECONDS),
             dedupe_key=f"debounce:{message.msgid}",
         )
         if self._commit_boundary is not None:
@@ -875,7 +952,9 @@ class ConversationService:
         """发送固定的非民宿问题边界说明。"""
         await self._send_guest_reply(
             conversation,
-            "我主要协助民宿入住或武汉旅行相关问题，这类问题暂时无法回答。",
+            ("I can help with your stay and travel in Wuhan, but cannot answer this topic."
+             if conversation.language is Language.EN
+             else "我主要协助民宿入住或武汉旅行相关问题，这类问题暂时无法回答。"),
         )
 
     @staticmethod
@@ -972,6 +1051,13 @@ class ConversationService:
         timing 只收集耗时与结果类别，不参与任何分支判断。
         """
 
+        stay_repository = (
+            self._conversations if isinstance(self._conversations, StayConfirmationPort) else None
+        )
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        pending = dict(conversation.stay_confirmation or {})
+        confirmed = None
+        progress_reply = ""
         try:
             context_started = monotonic()
             model_context = None
@@ -980,13 +1066,64 @@ class ConversationService:
                     conversation.customer_id,
                     query=message.content,
                 )
-            merged_guest_count_text = str(
-                (message.metadata or {}).get("merged_guest_count", "1")
-            )
+            if (
+                conversation.customer_id is not None
+                and isinstance(self._customer_context, TaskStatusPort)
+                and re.search(
+                    r"进度|处理好了吗|完成了吗|送到了吗|申请.{0,8}(?:怎么样|有消息)"
+                    r"|request status|any update",
+                    message.content,
+                    re.I,
+                )
+            ):
+                rows = await self._customer_context.list_recent_task_statuses(
+                    conversation.customer_id
+                )
+                # 多个请求不猜指代，列出可核验编号和状态，不让模型宣称完成。
+                statuses = {
+                    "pending_confirmation": "待管家确认",
+                    "pending_assignment": "待分派",
+                    "in_progress": "处理中",
+                    "pending_inspection": "待检查",
+                    "completed": "已完成",
+                    "cancelled": "已取消",
+                    "expired": "已失效",
+                }
+                if conversation.language is Language.EN:
+                    statuses = dict(zip(statuses, [
+                        "awaiting host confirmation", "awaiting assignment", "in progress",
+                        "awaiting inspection", "completed", "cancelled", "expired",
+                    ], strict=True))
+                progress_reply = (
+                    "\n".join(
+                        (f"Request {row['task_id']}: {statuses.get(str(row['status']), 'unknown')} "
+                         f"(updated: {row['updated_at']})."
+                         if conversation.language is Language.EN else
+                         f"请求 {row['task_id']}：{statuses.get(str(row['status']), '状态待核实')}"
+                         f"（记录更新时间：{row['updated_at']}）。")
+                        for row in rows
+                    )
+                    if rows
+                    else ("No request records found." if conversation.language is Language.EN
+                          else "暂未找到您的请求记录。")
+                )
+                model_context = replace(model_context or CustomerModelContext(), open_tasks=rows)
+            if stay_repository is not None:
+                confirmed = await stay_repository.get_confirmed_stay(
+                    conversation.id,
+                    today=today,
+                    lock=False,
+                )
+                if confirmed is None and pending.get("status") == "confirmed":
+                    pending = {}
+                model_context = replace(
+                    model_context or CustomerModelContext(),
+                    stay_confirmation=pending or None,
+                    confirmed_stay=confirmed,
+                )
+            merged_guest_count_text = str((message.metadata or {}).get("merged_guest_count", "1"))
             merged_guest_count = (
-                int(merged_guest_count_text)
-                if merged_guest_count_text.isdigit()
-                else 1
+                int(merged_guest_count_text) if merged_guest_count_text.isdigit() else 1
             )
             context_messages = await self._messages.build_context(
                 conversation.id,
@@ -1026,9 +1163,8 @@ class ConversationService:
             ):
                 timing.outcome = "stale_discarded"
                 return
-            if (
-                self._determine_handoff_reason(message.content) is None
-                and self._is_facility_issue(message.content, None)
+            if self._determine_handoff_reason(message.content) is None and self._is_facility_issue(
+                message.content, None
             ):
                 timing.outcome = "facility"
                 await self._handle_facility_issue(
@@ -1040,12 +1176,97 @@ class ConversationService:
             timing.outcome = "assistant_unavailable"
             await self._escalate_assistant_failure(conversation, message)
             return
+        if (
+            decision.task_suggestion
+            or decision.handoff_reason
+            or decision.facility_issue
+            or decision.staff_confirmation_required
+            or is_service_request(message.content)
+            or is_booking_action_request(message.content)
+        ):
+            await self._load_notification_names(conversation)
         if discard_if_stale and await self._discard_stale_final(
             conversation,
             message,
         ):
             timing.outcome = "stale_discarded"
             return
+        if decision.handoff_reason in {
+            "emergency:fire",
+            "emergency:gas",
+            "emergency:electric",
+            "emergency:medical",
+            "emergency:violence",
+        }:
+            await self._escalate_emergency(
+                conversation,
+                message,
+                EmergencyClassification(True, decision.handoff_reason.split(":", 1)[1]),
+            )
+            return
+        confirmation_reply = ""
+        if stay_repository is not None:
+            # 不把过时肯定回复套用到新提示；订单变化时不用旧事实发送个性化答复。
+            current = await stay_repository.get_confirmed_stay(conversation.id, today=today)
+            if confirmed is not None and current != confirmed:
+                confirmation_reply = await stay_repository.prepare_stay_confirmation(
+                    conversation.id,
+                    source_message_id=message.msgid,
+                    today=today,
+                )
+                await self._send_guest_reply(conversation, confirmation_reply)
+                return
+            intent = decision.stay_confirmation_intent
+            prompt_id = str(pending.get("prompt_message_id", ""))
+            if intent == "confirm" and pending.get("status") == "pending":
+                accepted = await stay_repository.confirm_stay(
+                    conversation.id,
+                    prompt_message_id=prompt_id,
+                    guest_message_id=message.msgid,
+                    now=datetime.now(UTC),
+                )
+                confirmation_reply = (
+                    ("Your stay dates and room are confirmed." if accepted
+                      else "Your stay details have changed. Please confirm again.")
+                     if conversation.language is Language.EN else
+                     ("本次入住日期和房间已确认。" if accepted
+                      else "入住资料发生变化，请重新确认。")
+                )
+                if not accepted:
+                    confirmation_reply += await stay_repository.prepare_stay_confirmation(
+                        conversation.id,
+                        source_message_id=message.msgid,
+                        today=today,
+                    )
+            elif intent == "decline" and prompt_id:
+                await stay_repository.decline_stay(conversation.id, prompt_message_id=prompt_id)
+                confirmation_reply = (
+                    "Please tell us which dates or room need checking with the host."
+                    if conversation.language is Language.EN else
+                    "请说明需要核对的日期或房间，管家核实后再确认。"
+                )
+            elif intent == "select" and decision.stay_order_id is not None:
+                confirmation_reply = await stay_repository.prepare_stay_confirmation(
+                    conversation.id,
+                    source_message_id=message.msgid,
+                    today=today,
+                    order_id=decision.stay_order_id,
+                )
+            elif (
+                current is None
+                and not pending
+                and (
+                    (model_context is not None and model_context.active_orders)
+                    or re.search(
+                        r"我的房间|我住的|办理入住|入住确认|my room|my stay", message.content, re.I
+                    )
+                )
+            ):
+                confirmation_reply = await stay_repository.prepare_stay_confirmation(
+                    conversation.id,
+                    source_message_id=message.msgid,
+                    today=today,
+                )
         local_handoff_reason = self._determine_handoff_reason(message.content)
         if (
             local_handoff_reason is None
@@ -1057,40 +1278,22 @@ class ConversationService:
                 conversation,
                 message,
                 decision.facility_advice,
+                extra_reply="\n\n".join(
+                    filter(
+                        None,
+                        (
+                            compose_reply_parts(decision.reply_parts),
+                            confirmation_reply,
+                            progress_reply,
+                        ),
+                    )
+                ),
             )
             return
-        service_requested = is_service_request(message.content)
-        booking_action_requested = is_booking_action_request(message.content)
-        requires_human = bool(
-            local_handoff_reason
-            or decision.handoff_reason
-            or decision.staff_confirmation_required
-            or (decision.task_suggestion is not None and service_requested)
-            or (decision.intent == "booking_confirmed" and booking_action_requested)
-            or self._should_send_fast_ack(message.content)
-        )
-        reply_text = self._clean_guest_reply_topics(
-            self._limit_assistant_reply(decision.reply_text),
-            question=message.content,
-        )
-        prepared_reply = prepare_guest_reply(
-            reply_text,
-            language=conversation.language,
-            requires_human=requires_human,
-            question=message.content,
-            high_risk=bool(local_handoff_reason or decision.handoff_reason),
-        )
-        fast_ack_sha256 = str((message.metadata or {}).get("fast_ack_sha256", ""))
-        prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
-        # 快速安抚已经包含全部最终内容时不重复发送；后续业务副作用仍照常执行。
-        if fast_ack_sha256 != prepared_sha256:
-            await self._send_prepared_guest_reply(
-                conversation,
-                prepared_reply,
-            )
-        await self._track_frequent_faq(message, decision)
-        await self._record_task_suggestion(conversation, message, decision)
-        if local_handoff_reason or decision.handoff_reason:
+        # 先登记请求和通知，再根据实际结果组织收尾，模型不能生成成功承诺。
+        action_reply = await self._record_task_suggestion(conversation, message, decision)
+        high_risk = bool(local_handoff_reason or decision.handoff_reason)
+        if high_risk:
             reason = local_handoff_reason or decision.handoff_reason
             await self._activate_human(
                 conversation,
@@ -1098,23 +1301,29 @@ class ConversationService:
                 f"YuMi 接管：{reason}",
                 audit_reason=reason,
             )
-            return
-
-        if decision.intent == "booking_confirmed" and booking_action_requested:
-            await self._create_pending_approval(conversation, message, decision)
-            return
-        # 未确认的普通交易事实只提醒员工核实，机器人继续承接后续对话。
-        if decision.staff_confirmation_required:
-            await self._notify_employee(
-                conversation,
-                message,
-                (
-                    "业务待确认"
-                    "\n原因："
-                    f"{decision.staff_confirmation_reason or 'transaction_unconfirmed'}"
-                ),
+        prepared_reply = prepare_planned_reply(
+            decision.reply_parts, fallback=decision.reply_text,
+            language=conversation.language, question=message.content, high_risk=high_risk,
+        )
+        if progress_reply:
+            prepared_reply = f"{prepared_reply}\n\n{progress_reply}"
+        if confirmation_reply:
+            prepared_reply = f"{prepared_reply}\n\n{confirmation_reply}"
+        if action_reply:
+            prepared_reply = f"{prepared_reply}\n\n{action_reply}"
+        fast_ack_sha256 = str((message.metadata or {}).get("fast_ack_sha256", ""))
+        prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
+        unchanged_ack = (
+            not action_reply
+            and not confirmation_reply
+            and not progress_reply
+            and hashlib.sha256(decision.reply_text.encode("utf-8")).hexdigest() == fast_ack_sha256
+        )
+        if fast_ack_sha256 != prepared_sha256 and not unchanged_ack:
+            await self._send_prepared_guest_reply(
+                conversation, prepared_reply, stale_exempt=high_risk
             )
-            return
+        await self._track_frequent_faq(message, decision)
 
     @staticmethod
     def _is_facility_issue(
@@ -1150,36 +1359,92 @@ class ConversationService:
         conversation: Conversation,
         message: IncomingMessage,
         decision: AssistantDecision,
-    ) -> None:
-        """客人回复成功后幂等保存待确认任务，失败不回滚可见回复。"""
-        suggestion: TaskSuggestion | None = decision.task_suggestion
-        if (
-            self._business_tasks is None
-            or conversation.customer_id is None
-            or suggestion is None
-            or not is_service_request(message.content)
-        ):
-            return
+    ) -> str:
+        """先幂等登记请求，隔离失败事务；仅从实际结果生成客人收尾。"""
+        decision.action_result = GuestActionResult()
+        if decision.facility_issue and decision.facility_issue.scope in {"private", "external"}:
+            return ""
+        booking = is_booking_action_request(message.content)
+        requested = (
+            any(is_service_request(text) for text in self._policy_questions(message.content))
+            or booking
+            or self._is_facility_issue(message.content, decision)
+        )
+        if not requested:
+            return ""
+        suggestion = decision.task_suggestion
+        if suggestion is None:
+            suggestion = TaskSuggestion(
+                task_type=BusinessTaskType.SPECIAL_SERVICE,
+                description=message.content[:500],
+            )
+        # ponytail: 一条来源消息只有一个任务键；多事项合并，需独立分派时再拆任务模型。
+        clauses = re.split(r"[，,；;。]|并且|并|另外|以及|同时| and ", message.content)
+        multiple = sum(
+            is_service_request(clause) or has_facility_fault_signal(clause)
+            for clause in clauses
+        ) > 1
+        description = TaskSuggestion.redact_sensitive_description(message.content)[:500]
+        english = conversation.language is Language.EN
+        failure = (
+            "Your request could not be registered. Please contact the host directly."
+            if english
+            else "您的请求暂时未能登记，请直接联系管家确认。"
+        )
+        if self._business_tasks is None or conversation.customer_id is None:
+            return failure
+        # 房间和日期不能由模型猜测；未确认的请求保持待确认状态。
+        confirmed = {}
+        if isinstance(self._conversations, StayConfirmationPort):
+            confirmed = (
+                await self._conversations.get_confirmed_stay(
+                    conversation.id,
+                    today=datetime.now(ZoneInfo("Asia/Shanghai")).date(),
+                )
+                or {}
+            )
+        property_id = (
+            confirmed.get("property_id") if confirmed.get("status") == "confirmed" else None
+        )
         try:
-            task = await self._business_tasks.record_ai_suggestion(
-                customer_id=conversation.customer_id,
-                source_message_id=message.msgid,
-                task_type=suggestion.task_type,
-                description=suggestion.description,
-                property_id=suggestion.property_id,
-                service_date=suggestion.service_date,
-            )
-            await self._notify_employee(
-                conversation,
-                message,
-                f"新任务待确认：ID {task.id}，类型 {task.task_type.value}",
-            )
+            async with self._savepoint_factory():
+                task = await self._business_tasks.record_ai_suggestion(
+                    customer_id=conversation.customer_id,
+                    source_message_id=message.msgid,
+                    task_type=BusinessTaskType.SPECIAL_SERVICE
+                    if booking or multiple
+                    else suggestion.task_type,
+                    description=description,
+                    property_id=property_id,
+                    service_date=None,
+                )
         except Exception as error:
-            # 任务记录是回复后的副作用；日志只保留异常类型，不复制聊天正文。
-            logger.warning(
-                "AI 待确认任务记录失败，已保留客人回复：error_type=%s",
-                type(error).__name__,
+            logger.warning("请求登记失败：error_type=%s", type(error).__name__)
+            return failure
+        self._notification_task_id = task.id
+        decision.action_result = GuestActionResult(task_id=task.id, registered=True)
+        try:
+            async with self._savepoint_factory():
+                await self._notify_employee(
+                    conversation,
+                    message,
+                    f"新任务待确认：ID {task.id}，类型 {task.task_type.value}",
+                )
+        except Exception as error:
+            logger.warning("请求通知入队失败：error_type=%s", type(error).__name__)
+            return (
+                "Your request is registered, but the staff notification failed. "
+                "Please contact the host."
+                if english
+                else "您的请求已登记，但管家通知未成功，请直接联系管家。"
             )
+        decision.action_result.notification_queued = True
+        return (
+            "Your request is registered and a staff notification is queued; it awaits confirmation."
+            if english
+            else "您的请求已登记，管家通知已提交，尚待管家确认。"
+        )
+
     async def _track_frequent_faq(
         self,
         message: IncomingMessage,
@@ -1201,48 +1466,6 @@ class ConversationService:
                 "高频 FAQ 统计失败，已保留客人回复：error_type=%s",
                 type(error).__name__,
             )
-
-    async def _create_pending_approval(
-        self,
-        conversation: Conversation,
-        message: IncomingMessage,
-        decision: AssistantDecision,
-    ) -> None:
-        """把模型提取的完整资料转换为待审批单，缺项时强制转人工。"""
-        if not is_booking_action_request(message.content):
-            # 业务层再次校验本轮确认语义，隔离错误模型或其他 Assistant 实现。
-            return
-        fields = decision.booking_fields
-        if self._approvals is None or fields is None:
-            await self._activate_human(
-                conversation, message, "预订资料无法生成待审批单"
-            )
-            return
-        try:
-            request = BookingRequest.model_validate(fields.model_dump())
-        except ValidationError:
-            await self._activate_human(
-                conversation, message, "预订资料不完整或格式无效"
-            )
-            return
-
-        approval = await self._approvals.create_pending(
-            conversation.id,
-            request,
-            source_message_id=message.msgid,
-        )
-        await self._switch_to_human(
-            conversation,
-            "booking_approval_created",
-        )
-        await self._notify_employee(
-            conversation,
-            message,
-            (
-                f"新待审批单：{approval.approval_code}（ID {approval.id}）\n"
-                f"{self._approval_base_url}/employee/approvals/{approval.id}"
-            ),
-        )
 
     async def _activate_human(
         self,
@@ -1276,12 +1499,8 @@ class ConversationService:
 
     @staticmethod
     def _detect_language(text: str, fallback: Language) -> Language:
-        """包含中文时使用中文，否则英文字符占主导时使用英文。"""
-        if re.search(r"[\u4e00-\u9fff]", text):
-            return Language.ZH
-        if re.search(r"[A-Za-z]", text):
-            return Language.EN
-        return fallback
+        """无持久化测试替身仅判断有效文本；生产由消息历史控制切换。"""
+        return substantive_language(text) or fallback
 
     async def _send_guest_reply(
         self,
@@ -1324,6 +1543,7 @@ class ConversationService:
         超过企业微信单条上限的回复拆成多条：生产 outbox 链式入队，保证逐段有序；
         直接发送的发送器按顺序逐条发出。
         """
+        self._last_guest_reply = content
         parts = split_guest_reply(content, conversation.language)
         if len(parts) > 1:
             return await self._send_guest_reply_parts(
@@ -1392,103 +1612,17 @@ class ConversationService:
             )
         return GuestReplyReceipt(content=full_content, message_id=first_id)
 
-    @staticmethod
-    def _clean_guest_reply_topics(content: str, *, question: str = "") -> str:
-        """清理与当前问题无关的旧话题；风格和安全由统一策略负责。"""
-        replacements = {
-            (
-                "该需求会提交给工作人员确认并安排，最终是否安排成功需以员工确认为准，"
-                "不便之处敬请谅解。"
-            ): "我已经帮您记下啦，会尽快为您安排，稍后给您反馈。",
-            "以员工确认为准": "以最终安排结果为准",
-            "需员工确认": "我们会尽快帮您核实",
-            "由工作人员进一步确认": "我们会尽快为您核实",
-            "请由工作人员进一步确认": "我会尽快为您核实",
-            "建议到店前由工作人员进一步确认": "建议到店前我再为您核实",
-            "到店前再请工作人员确认": "到店前我再帮您核实",
-        }
-        for source, target in replacements.items():
-            content = content.replace(source, target)
-        # 只替换内部角色短语，保留退款对象、核实依据等业务事实。
-        content = re.sub(
-            r"(?:跟|与)(?:工作人员|员工)确认",
-            "进一步核实",
-            content,
+    async def _answer_possible_danger(
+        self, conversation: Conversation, message: IncomingMessage,
+    ) -> None:
+        """不明确的安全情况先提醒和通知；不发撤离模板，不自动接管。"""
+        reply = (
+            "Please avoid the suspected hazard for now. What is happening at the moment?"
+            if conversation.language is Language.EN
+            else "请先避开可能有危险的位置。现在具体是什么情况？"
         )
-        content = re.sub(
-            r"(?:需|需要)(?:工作人员|员工)(?:进一步|再)?确认",
-            "需要进一步核实",
-            content,
-        )
-        content = re.sub(
-            r"(?:请|由)(?:工作人员|员工)(?:进一步|再)?确认",
-            "我会尽快为您核实",
-            content,
-        )
-        content = re.sub(
-            r"会安排(?:工作人员|员工)[^。！？，]*?给您",
-            "已联系管家，会尽快为您",
-            content,
-        )
-        # 服务安排只向客人承诺已记录和持续跟进，不展示内部派送动作。
-        content = re.sub(
-            r"(?:马上|尽快)?让(?:工作人员|员工)(?:给您)?(?:送|补)[^，。！？]*",
-            "已联系管家，会尽快为您补上",
-            content,
-        )
-        content = re.sub(
-            r"已提交(?:给)?(?:工作人员|员工)确认",
-            "已联系管家核实",
-            content,
-        )
-        content = content.replace("确认后会尽快给您回复", "有结果后马上告诉您")
-        if question:
-            # 模型偶尔会把上一轮任务或客诉一起写进本轮回复；按当前问题
-            # 删除未被请求的服务句，避免退款、补水等承诺互相串线。
-            requested_topics = {
-                topic
-                for topic in (
-                    "退款",
-                    "退钱",
-                    "退费",
-                    "矿泉水",
-                    "补水",
-                    "纸巾",
-                    "被子",
-                    "床单",
-                    "枕头",
-                    "麻将",
-                    "维修",
-                    "保洁",
-                    "提前入住",
-                    "延迟退房",
-                )
-                if topic in question
-            }
-            if {"矿泉水", "补水"} & requested_topics:
-                # “补水”和“矿泉水”在客人表达中是同一项服务，避免清理时
-                # 把正常的补水确认句误删为空回复。
-                requested_topics.update({"矿泉水", "补水"})
-            removable_topics = (
-                "退款|退钱|退费|矿泉水|补水|纸巾|被子|床单|枕头|麻将|维修|"
-                "保洁|提前入住|延迟退房"
-            )
-            sentences = re.split(r"(?<=[。！？；;])", content)
-            filtered_sentences: list[str] = []
-            for sentence in sentences:
-                mentioned = set(re.findall(removable_topics, sentence))
-                if mentioned and not (mentioned & requested_topics):
-                    continue
-                filtered_sentences.append(sentence)
-            content = "".join(filtered_sentences).strip()
-        return content or "我已收到您的诉求。"
-
-    @staticmethod
-    def _limit_assistant_reply(content: str) -> str:
-        """把精简后的客人可见回复限制为最多一千五百个字符。"""
-        if len(content) <= _MAX_ASSISTANT_REPLY_CHARACTERS:
-            return content
-        return content[: _MAX_ASSISTANT_REPLY_CHARACTERS - 1] + "…"
+        await self._send_prepared_guest_reply(conversation, reply, stale_exempt=True)
+        await self._notify_employee(conversation, message, "可能的安全情况")
 
     async def _escalate_emergency(
         self,
@@ -1511,9 +1645,7 @@ class ConversationService:
             audit_reason=f"emergency:{emergency.category}",
         )
 
-    async def _escalate_regular(
-        self, conversation: Conversation, message: IncomingMessage
-    ) -> None:
+    async def _escalate_regular(self, conversation: Conversation, message: IncomingMessage) -> None:
         """对媒体、投诉和客人主动要求人工等情况执行普通接管。"""
         reply = (
             "Thanks for letting us know."
@@ -1539,7 +1671,7 @@ class ConversationService:
         message: IncomingMessage,
         error: TourismSearchError,
     ) -> None:
-        """明确告知联网失败，再切人工并通知值班员工。"""
+        """明确告知公开查询失败，不创建人工任务或后续补发承诺。"""
         reply = (
             "Sorry, I couldn’t finish the live search just now."
             if conversation.language is Language.EN
@@ -1548,13 +1680,7 @@ class ConversationService:
         await self._send_guest_reply(
             conversation,
             reply,
-            requires_human=True,
-        )
-        await self._activate_human(
-            conversation,
-            message,
-            f"旅游联网失败：{error.status}",
-            audit_reason=f"tourism_failure:{error.status}",
+            requires_human=False,
         )
 
     async def _escalate_assistant_failure(
@@ -1580,21 +1706,15 @@ class ConversationService:
             audit_reason="assistant_unavailable",
         )
 
-    async def _notify_employee(
-        self,
-        conversation: Conversation,
-        message: IncomingMessage,
-        reason: str,
-    ) -> None:
-        """向值班员工发送不包含接口密钥的会话摘要。"""
-        customer_service_name = "微信客服"
-        guest_name = "客人"
+    async def _load_notification_names(self, conversation: Conversation) -> None:
+        """在任务及订单写锁之前读取外部展示名称，本轮通知直接复用。"""
+        if self._notification_names is not None:
+            return
+        customer_service_name, guest_name = "微信客服", "客人"
         if self._identity_resolver is not None:
             try:
                 customer_service_name = (
-                    await self._identity_resolver.get_kf_account_name(
-                        conversation.open_kfid
-                    )
+                    await self._identity_resolver.get_kf_account_name(conversation.open_kfid)
                     or customer_service_name
                 )
                 guest_name = (
@@ -1605,11 +1725,19 @@ class ConversationService:
                     or guest_name
                 )
             except Exception as error:
-                # 名称接口不可用不应阻塞任务通知，且不把 UID 回退给员工端。
-                logger.warning(
-                    "企业微信展示名称读取失败，使用友好名称：error_type=%s",
-                    type(error).__name__,
-                )
+                logger.warning("读取通知名称失败：error_type=%s", type(error).__name__)
+        self._notification_names = (customer_service_name, guest_name)
+
+    async def _notify_employee(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        reason: str,
+    ) -> None:
+        """向值班员工发送不包含接口密钥的会话摘要。"""
+        if self._notification_names is None:
+            await self._load_notification_names(conversation)
+        customer_service_name, guest_name = self._notification_names or ("微信客服", "客人")
         customer_service_name = (
             self._employee_notification_label(
                 customer_service_name,
@@ -1627,15 +1755,10 @@ class ConversationService:
         )
         # 员工端优先看到 CRM 备注；没有任何备注时再显示企业微信客人名称。
         customer_note = None
-        if (
-            self._customer_notification is not None
-            and conversation.customer_id is not None
-        ):
+        if self._customer_notification is not None and conversation.customer_id is not None:
             try:
-                customer_note = (
-                    await self._customer_notification.get_customer_notification_note(
-                        conversation.customer_id
-                    )
+                customer_note = await self._customer_notification.get_customer_notification_note(
+                    conversation.customer_id
                 )
             except Exception as error:
                 # CRM 备注查询失败不应阻塞人工通知，继续使用客人名称兜底。
@@ -1644,11 +1767,7 @@ class ConversationService:
                     type(error).__name__,
                 )
         customer_note = self._employee_notification_label(customer_note)
-        display_identity = (
-            f"客人备注：{customer_note}"
-            if customer_note
-            else f"客人：{guest_name}"
-        )
+        display_identity = f"客人备注：{customer_note}" if customer_note else f"客人：{guest_name}"
         reason_label = (
             self._employee_notification_label(
                 reason,
@@ -1657,23 +1776,35 @@ class ConversationService:
             )
             or "新任务待确认"
         )
-        # 固定字段和客人定位信息优先保留，剩余字节全部分配给真实消息。
-        notification_prefix = (
-            f"{reason_label}\n客服账号：{customer_service_name}\n"
-            f"{display_identity}\n消息："
-        )
-        remaining_bytes = max(
-            0,
-            self._EMPLOYEE_NOTIFICATION_MAX_BYTES
-            - len(notification_prefix.encode("utf-8")),
-        )
-        message_text = " ".join(str(message.content or "").split())
-        message_text = self._truncate_utf8(
-            message_text,
-            max_bytes=remaining_bytes,
-        )
+        # 原因与链接优先，原话和实际已登记回复分别限额，不能把排队说成已读。
+        labels = {
+            **_COMPLAINT_REASON_LABELS, **_EMERGENCY_CATEGORY_LABELS,
+            "manual_request_or_media": "客人请求人工协助",
+            "assistant_unavailable": "问答服务暂时不可用",
+            "early_check_in": "提前入住申请", "price": "价格协商",
+            "servicer_reply": "员工正在接待",
+        }
+        for code, label in labels.items():
+            reason_label = re.sub(rf"(?<![a-z_]){re.escape(code)}(?![a-z_])", label, reason_label)
+        location = "房间与入住日期：尚未确认"
+        if isinstance(self._conversations, StayConfirmationPort):
+            stay = await self._conversations.get_confirmed_stay(
+                conversation.id, today=datetime.now(ZoneInfo("Asia/Shanghai")).date(),
+                lock=False,
+            )
+            if stay:
+                room_name = stay.get("room_number") or stay.get("property_title") or "待核实"
+                location = (f"房间：{room_name}；"
+                            f"入住：{stay.get('check_in_date')}，退房：{stay.get('check_out_date')}")
+        base = self._approval_base_url.rstrip("/")
+        link = (f"{base}/employee/tasks/{self._notification_task_id}"
+                if self._notification_task_id else
+                f"{base}/employee/customers/{conversation.customer_id}")
         await self._wecom.send_internal_text(
-            agent_id=self._agent_id,
-            employee_userids=self._duty_employee_userids,
-            content=f"{notification_prefix}{message_text}",
+            agent_id=self._agent_id, employee_userids=self._duty_employee_userids,
+            content=format_employee_notification(
+                reason=reason_label, account=customer_service_name, guest=display_identity,
+                room=location, link=link, original=" ".join(message.content.split()),
+                replied=self._last_guest_reply,
+            ),
         )

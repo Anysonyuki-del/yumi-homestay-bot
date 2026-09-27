@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlencode
 
@@ -10,13 +10,14 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import EmployeeRole, KnowledgeCandidateStatus
-from homestay_bot.domain.models import AuditLog, KnowledgeCandidate, KnowledgeEntry
+from homestay_bot.domain.models import AuditLog, KnowledgeCandidate, KnowledgeEntry, PropertyProfile
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
 from homestay_bot.routes.admin_form_csrf import AdminCsrfServicePort
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.page_errors import safe_return_path
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
+from homestay_bot.services.knowledge_service import validate_knowledge_scope
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/knowledge")
@@ -38,20 +39,19 @@ class KnowledgeAdminServicePort(Protocol):
     ) -> list[Any]:
         """分页返回包括停用项在内的知识。"""
 
+    async def list_properties(self) -> list[Any]:
+        """提供房间选项，避免管理员手填内部编号。"""
+
     async def get_detail(self, entry_id: int) -> Any:
         """按编号返回单条知识详情。"""
 
     async def create(self, employee_id: int, **fields: Any) -> Any:
         """创建一条双语知识。"""
 
-    async def update(
-        self, entry_id: int, employee_id: int, **fields: Any
-    ) -> Any:
+    async def update(self, entry_id: int, employee_id: int, **fields: Any) -> Any:
         """更新一条双语知识。"""
 
-    async def set_enabled(
-        self, entry_id: int, employee_id: int, enabled: bool
-    ) -> None:
+    async def set_enabled(self, entry_id: int, employee_id: int, enabled: bool) -> None:
         """启用或停用知识。"""
 
     async def list_candidates(self, *, offset: int, limit: int) -> list[Any]:
@@ -99,11 +99,7 @@ class KnowledgeAdminService:
         statement = select(KnowledgeEntry)
         cleaned_query = (query or "").strip()[:100]
         if cleaned_query:
-            escaped = (
-                cleaned_query.replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_")
-            )
+            escaped = cleaned_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             pattern = f"%{escaped}%"
             statement = statement.where(
                 or_(
@@ -122,12 +118,42 @@ class KnowledgeAdminService:
         )
         return list(result.all())
 
+    async def list_properties(self) -> list[PropertyProfile]:
+        """包含停用房间，编辑已有知识时仍能准确显示原选择。"""
+        return list(
+            (
+                await self._session.scalars(
+                    select(PropertyProfile).order_by(
+                        PropertyProfile.room_number, PropertyProfile.id
+                    )
+                )
+            ).all()
+        )
+
+    async def _validate_scope(self, fields: dict[str, Any]) -> None:
+        """写入前统一复核范围和房间存在性，返回可读的表单错误。"""
+        try:
+            validate_knowledge_scope(
+                fields.get("scope", "unreviewed"),
+                fields.get("property_id"),
+                fields.get("valid_from"),
+                fields.get("valid_until"),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if (
+            fields.get("property_id") is not None
+            and await self._session.get(PropertyProfile, fields["property_id"]) is None
+        ):
+            raise HTTPException(status_code=422, detail="所选房间不存在，请重新选择")
+
     async def get_detail(self, entry_id: int) -> KnowledgeEntry:
         """按主键读取知识详情，模板不得自行访问数据库。"""
         return await self._require_entry(entry_id)
 
     async def create(self, employee_id: int, **fields: Any) -> KnowledgeEntry:
         """创建默认启用的双语知识，并记录最小审计信息。"""
+        await self._validate_scope(fields)
         entry = KnowledgeEntry(**fields, is_enabled=True, updated_by=employee_id)
         self._session.add(entry)
         await self._session.flush()
@@ -135,11 +161,15 @@ class KnowledgeAdminService:
         await self._session.commit()
         return entry
 
-    async def update(
-        self, entry_id: int, employee_id: int, **fields: Any
-    ) -> KnowledgeEntry:
+    async def update(self, entry_id: int, employee_id: int, **fields: Any) -> KnowledgeEntry:
         """更新允许编辑的知识字段，并记录条目级审计。"""
         entry = await self._require_entry(entry_id)
+        await self._validate_scope(
+            {
+                name: fields.get(name, getattr(entry, name))
+                for name in ("scope", "property_id", "valid_from", "valid_until")
+            }
+        )
         allowed = {
             "category",
             "question_zh",
@@ -147,6 +177,10 @@ class KnowledgeAdminService:
             "question_en",
             "answer_en",
             "keywords",
+            "scope",
+            "property_id",
+            "valid_from",
+            "valid_until",
         }
         for key, value in fields.items():
             if key in allowed:
@@ -156,9 +190,7 @@ class KnowledgeAdminService:
         await self._session.commit()
         return entry
 
-    async def set_enabled(
-        self, entry_id: int, employee_id: int, enabled: bool
-    ) -> None:
+    async def set_enabled(self, entry_id: int, employee_id: int, enabled: bool) -> None:
         """立即切换知识可用状态并写入最小审计记录。"""
         entry = await self._require_entry(entry_id)
         entry.is_enabled = enabled
@@ -167,9 +199,7 @@ class KnowledgeAdminService:
         self._add_audit(employee_id, action, entry.id)
         await self._session.commit()
 
-    async def list_candidates(
-        self, *, offset: int, limit: int
-    ) -> list[KnowledgeCandidate]:
+    async def list_candidates(self, *, offset: int, limit: int) -> list[KnowledgeCandidate]:
         """分页返回仍开放的候选，正文仅交给管理员页面。"""
         result = await self._session.scalars(
             select(KnowledgeCandidate)
@@ -190,6 +220,7 @@ class KnowledgeAdminService:
         candidate = await self._require_candidate(candidate_id)
         if candidate.status is not KnowledgeCandidateStatus.OPEN:
             raise LookupError(f"FAQ 候选不可转换: {candidate_id}")
+        await self._validate_scope(fields)
         entry = KnowledgeEntry(**fields, is_enabled=True, updated_by=employee_id)
         self._session.add(entry)
         await self._session.flush()
@@ -316,9 +347,7 @@ async def _consume_csrf(request: Request, csrf_token: str) -> None:
     )
     # Cookie 集合只用于兼容旧页面和控制体积，绝不参与授权判断。
     tokens = _csrf_tokens(request)
-    request.session["knowledge_csrf"] = [
-        token for token in tokens if token != csrf_token
-    ]
+    request.session["knowledge_csrf"] = [token for token in tokens if token != csrf_token]
     if not consumed:
         raise HTTPException(status_code=409, detail="表单令牌无效或已使用")
 
@@ -361,11 +390,9 @@ def _csrf_tokens(request: Request) -> list[str]:
         raw_tokens = stored
     else:
         raw_tokens = []
-    return [
-        token
-        for token in raw_tokens
-        if isinstance(token, str) and 1 <= len(token) <= 128
-    ][-_MAX_CSRF_TOKENS:]
+    return [token for token in raw_tokens if isinstance(token, str) and 1 <= len(token) <= 128][
+        -_MAX_CSRF_TOKENS:
+    ]
 
 
 def _fields(
@@ -375,18 +402,31 @@ def _fields(
     question_en: str,
     answer_en: str,
     keywords: str,
+    scope: str = "unreviewed",
+    property_id: str = "",
+    valid_from: str = "",
+    valid_until: str = "",
 ) -> dict[str, Any]:
-    """清理表单字段并把逗号分隔关键词转换为列表。"""
+    """清理表单并复用所有入口一致的范围、日期约束。"""
+    try:
+        room = int(property_id) if property_id.strip() else None
+        start = date.fromisoformat(valid_from) if valid_from else None
+        end = date.fromisoformat(valid_until) if valid_until else None
+        validate_knowledge_scope(scope, room, start, end)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=f"知识适用范围或日期有误：{error}") from error
     return {
+        "scope": scope,
+        "property_id": room,
+        "valid_from": start,
+        "valid_until": end,
         "category": category.strip(),
         "question_zh": question_zh.strip(),
         "answer_zh": answer_zh.strip(),
         "question_en": question_en.strip(),
         "answer_en": answer_en.strip(),
         "keywords": [
-            item.strip()
-            for item in keywords.replace("，", ",").split(",")
-            if item.strip()
+            item.strip() for item in keywords.replace("，", ",").split(",") if item.strip()
         ],
     }
 
@@ -446,10 +486,9 @@ async def knowledge_index(
             # 当前视图原样带给每个写操作表单：回来时筛选、两个分页都还在。
             # 回跳时仍由 safe_return_path 复核，不接受站外目标。
             "current_view": (
-                f"{request.url.path}?{request.url.query}"
-                if request.url.query
-                else request.url.path
+                f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
             ),
+            "properties": await service.list_properties(),
             "entries": entries[:50],
             "candidates": candidates[:50],
             "can_edit": role is EmployeeRole.ADMIN,
@@ -461,29 +500,15 @@ async def knowledge_index(
             "category_filter": category or "",
             "previous_page": page - 1 if page > 1 else None,
             "next_page": page + 1 if len(entries) > 50 else None,
-            "previous_url": (
-                list_url(page - 1, candidate_page) if page > 1 else None
-            ),
-            "next_url": (
-                list_url(page + 1, candidate_page)
-                if len(entries) > 50
-                else None
-            ),
-            "previous_candidate_page": (
-                candidate_page - 1 if candidate_page > 1 else None
-            ),
-            "next_candidate_page": (
-                candidate_page + 1 if len(candidates) > 50 else None
-            ),
+            "previous_url": (list_url(page - 1, candidate_page) if page > 1 else None),
+            "next_url": (list_url(page + 1, candidate_page) if len(entries) > 50 else None),
+            "previous_candidate_page": (candidate_page - 1 if candidate_page > 1 else None),
+            "next_candidate_page": (candidate_page + 1 if len(candidates) > 50 else None),
             "previous_candidate_url": (
-                list_url(page, candidate_page - 1)
-                if candidate_page > 1
-                else None
+                list_url(page, candidate_page - 1) if candidate_page > 1 else None
             ),
             "next_candidate_url": (
-                list_url(page, candidate_page + 1)
-                if len(candidates) > 50
-                else None
+                list_url(page, candidate_page + 1) if len(candidates) > 50 else None
             ),
             "page_title": "民宿知识库",
             "active_nav": "knowledge",
@@ -504,10 +529,9 @@ async def knowledge_detail(request: Request, entry_id: int) -> Response:
         name="knowledge/detail.html",
         context={
             "entry": entry,
+            "properties": await _get_service(request).list_properties(),
             "can_edit": role is EmployeeRole.ADMIN,
-            "csrf_token": (
-                await _issue_csrf(request) if role is EmployeeRole.ADMIN else ""
-            ),
+            "csrf_token": (await _issue_csrf(request) if role is EmployeeRole.ADMIN else ""),
             "page_title": f"知识条目 #{entry_id}",
             "active_nav": "knowledge",
         },
@@ -523,6 +547,10 @@ async def create_knowledge(
     question_en: str = Form(min_length=1, max_length=500),
     answer_en: str = Form(min_length=1, max_length=10_000),
     keywords: str = Form("", max_length=1000),
+    scope: str = Form("unreviewed", max_length=16),
+    property_id: str = Form("", max_length=20),
+    valid_from: str = Form("", max_length=10),
+    valid_until: str = Form("", max_length=10),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
@@ -538,6 +566,10 @@ async def create_knowledge(
             question_en,
             answer_en,
             keywords,
+            scope,
+            property_id,
+            valid_from,
+            valid_until,
         ),
     )
     return RedirectResponse(
@@ -556,6 +588,10 @@ async def convert_candidate(
     question_en: str = Form(min_length=1, max_length=500),
     answer_en: str = Form(min_length=1, max_length=10_000),
     keywords: str = Form("", max_length=1000),
+    scope: str = Form("unreviewed", max_length=16),
+    property_id: str = Form("", max_length=20),
+    valid_from: str = Form("", max_length=10),
+    valid_until: str = Form("", max_length=10),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
@@ -572,6 +608,10 @@ async def convert_candidate(
             question_en,
             answer_en,
             keywords,
+            scope,
+            property_id,
+            valid_from,
+            valid_until,
         ),
     )
     return RedirectResponse(
@@ -607,6 +647,10 @@ async def update_knowledge(
     question_en: str = Form(min_length=1, max_length=500),
     answer_en: str = Form(min_length=1, max_length=10_000),
     keywords: str = Form("", max_length=1000),
+    scope: str = Form("unreviewed", max_length=16),
+    property_id: str = Form("", max_length=20),
+    valid_from: str = Form("", max_length=10),
+    valid_until: str = Form("", max_length=10),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
@@ -623,6 +667,10 @@ async def update_knowledge(
             question_en,
             answer_en,
             keywords,
+            scope,
+            property_id,
+            valid_from,
+            valid_until,
         ),
     )
     return RedirectResponse(
@@ -644,9 +692,7 @@ async def toggle_knowledge(
         raise HTTPException(status_code=404, detail="未知知识操作")
     employee_id = await _require_admin(request)
     await _consume_csrf(request, csrf_token)
-    await _get_service(request).set_enabled(
-        entry_id, employee_id, enabled=action == "enable"
-    )
+    await _get_service(request).set_enabled(entry_id, employee_id, enabled=action == "enable")
     # 回到来源视图；来源里没带锚点时才补上条目区锚点。
     target = safe_return_path(return_to, fallback="/employee/knowledge")
     if "#" not in target:

@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -313,7 +313,60 @@ async def test_service_normalizes_hostile_intent_and_tool_names_before_audit() -
         "list_properties",
         "search_availability",
         "search_reference_price",
+        "tourism_search",
     ]
     serialized = repr(audit.items[0])
-    for secret in ("13800138000", "UID", "token=", "secret", "tourism_search"):
+    for secret in ("13800138000", "UID", "token=", "secret"):
         assert secret not in serialized
+
+
+@pytest.mark.asyncio
+async def test_preview_exposes_evidence_and_simulates_action_without_claiming_success():
+    """调试使用已验证分项及最终排版，动作仅展示模拟结果，不伪造登记成功。"""
+    from homestay_bot.domain.enums import BusinessTaskType
+    from homestay_bot.integrations.deepseek_client import TaskSuggestion
+    from homestay_bot.services.reply_plan import ReplyEvidence, ReplyPart
+
+    part = ReplyPart(
+        question="早餐",
+        status="grounded",
+        text="早餐7:00供应，需提前预约。",
+        evidence=(
+            ReplyEvidence(
+                source_kind="knowledge", source_id="test-1", fetched_at=datetime.now(UTC)
+            ),
+        ),
+    )
+
+    class PlannedAssistant:
+        async def respond(self, **kwargs):
+            """故意提供与分项冲突的聚合正文，预览只能采用事实分项。"""
+            return AssistantDecision(
+                reply_text="错误聚合回复",
+                language=Language.ZH,
+                intent="room_service",
+                confidence=1,
+                reply_parts=[part],
+                task_suggestion=TaskSuggestion(
+                    task_type=BusinessTaskType.SUPPLIES, description="补水"
+                ),
+            )
+
+    audit = AuditStub()
+    service = AdminDebugService(
+        registry=RegistryStub(PlannedAssistant()),
+        properties=PropertyStub(),
+        audits=audit,
+        limiter=AdminDebugRateLimiter(),
+        local_date_provider=lambda: date(2026, 8, 11),
+    )
+    result = await service.preview(
+        DebugPreviewCommand(actor_employee_id=1, admin_id=1, question="早餐几点？请帮我补水")
+    )
+    assert part.text in result.reply_text
+    assert "错误聚合回复" not in result.reply_text
+    assert result.reply_parts == (part,)
+    assert result.reply_parts[0].evidence[0].source_id == "test-1"
+    assert "模拟" in result.simulated_action
+    assert "已登记" not in result.reply_text
+    assert result.guest_messages

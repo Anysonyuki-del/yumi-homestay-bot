@@ -1,5 +1,6 @@
 """以确定性业务规则治理已经失去价值的开放任务。"""
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -42,6 +43,7 @@ class TaskLifecycleSweepResult:
     scanned: int
     expired: int
     skipped: int
+    released: int = 0
 
 
 class TaskLifecycleRepositoryPort(Protocol):
@@ -66,12 +68,34 @@ class TaskLifecycleRepositoryPort(Protocol):
         """重新锁定任务并在仍满足安全边界时写入失效终态。"""
 
 
+class ConversationReleaseRepositoryPort(Protocol):
+    """后台手动操作和定时巡检共用同一个原子交还入口。"""
+
+    async def list_idle_human_conversations(
+        self, *, now: datetime, limit: int
+    ) -> tuple[int, ...]:
+        """读取有限空闲低风险人工会话。"""
+
+    async def release_conversation(
+        self, conversation_id: int, *, now: datetime,
+        actor_employee_id: int | None = None, customer_id: int | None = None,
+        automatic: bool = False,
+    ) -> bool:
+        """锁内复核再交还，拒绝已变化或归属不符的会话。"""
+
+
 class TaskLifecycleService:
     """只根据订单、提醒窗口和执行证据决定任务是否失效。"""
 
-    def __init__(self, repository: TaskLifecycleRepositoryPort) -> None:
+    def __init__(
+        self, repository: TaskLifecycleRepositoryPort, *,
+        release_repository: ConversationReleaseRepositoryPort | None = None,
+        release_notifier: Callable[[int], Awaitable[None]] | None = None,
+    ) -> None:
         """注入短事务仓储。"""
         self._repository = repository
+        self._release_repository = release_repository
+        self._release_notifier = release_notifier
 
     @staticmethod
     def _reason(
@@ -161,7 +185,19 @@ class TaskLifecycleService:
                 now=observed_at,
             ):
                 expired += 1
+        released = 0
+        # 定向订单治理不操作会话；通知与模式变更由装配层同事务提交。
+        if order_id is None and self._release_repository and self._release_notifier:
+            for conversation_id in await self._release_repository.list_idle_human_conversations(
+                now=observed_at, limit=limit
+            ):
+                if await self._release_repository.release_conversation(
+                    conversation_id, now=observed_at, automatic=True
+                ):
+                    await self._release_notifier(conversation_id)
+                    released += 1
         return TaskLifecycleSweepResult(
+            released=released,
             scanned=len(candidates),
             expired=expired,
             skipped=len(candidates) - expired,

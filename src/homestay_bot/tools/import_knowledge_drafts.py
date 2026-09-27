@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.domain.enums import EmployeeRole
 from homestay_bot.domain.models import AuditLog, Employee, KnowledgeEntry
-from homestay_bot.services.knowledge_service import normalize_text
+from homestay_bot.services.knowledge_service import normalize_text, validate_knowledge_scope
 
 TEXT_FIELDS = ("category", "question_zh", "answer_zh", "question_en", "answer_en")
 ALLOWED_FIELDS = frozenset((*TEXT_FIELDS, "keywords", "is_enabled"))
@@ -153,8 +153,14 @@ def summarize(drafts: Sequence[DraftEntry]) -> DraftSummary:
     """统计数量、分类与仍含「待填写」的条数，并给出内容摘要用于核对是同一份输入。"""
     canonical = json.dumps(
         [
-            [draft.category, draft.question_zh, draft.answer_zh,
-             draft.question_en, draft.answer_en, list(draft.keywords)]
+            [
+                draft.category,
+                draft.question_zh,
+                draft.answer_zh,
+                draft.question_en,
+                draft.answer_en,
+                list(draft.keywords),
+            ]
             for draft in drafts
         ],
         ensure_ascii=False,
@@ -175,8 +181,11 @@ async def plan_import(session: AsyncSession, drafts: Sequence[DraftEntry]) -> Im
     启用与否不参与比较：已启用的同一条知识照样跳过，不会被强制停用。
     """
     existing = {
-        (_canonical(entry.category), _canonical(entry.question_zh), _canonical(entry.question_en)):
-        entry
+        (
+            _canonical(entry.category),
+            _canonical(entry.question_zh),
+            _canonical(entry.question_en),
+        ): entry
         for entry in await session.scalars(select(KnowledgeEntry))
     }
     new: list[DraftEntry] = []
@@ -234,6 +243,8 @@ async def apply_import(
             raise ImportConflictError(f"第 {plan.conflicts} 条与已有知识冲突，未写入任何条目")
         created: list[KnowledgeEntry] = []
         for draft in plan.new:
+            # 草稿不接受外部输入的已审核范围，必须由管理员在表单确认。
+            validate_knowledge_scope("unreviewed", None, None, None)
             entry = KnowledgeEntry(
                 category=draft.category,
                 question_zh=draft.question_zh,
@@ -243,6 +254,7 @@ async def apply_import(
                 keywords=list(draft.keywords),
                 # 从第一次提交起就是停用：客人检索与向量补齐都只读启用条目。
                 is_enabled=False,
+                scope="unreviewed",
                 updated_by=admin.id,
             )
             session.add(entry)
@@ -311,4 +323,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

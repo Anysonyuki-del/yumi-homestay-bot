@@ -371,19 +371,11 @@ class CustomerMemoryItem(TimestampMixin, Base):
     source_occurred_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    verified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
-    confirmed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    review_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     supersedes_id: Mapped[int | None] = mapped_column(
         ForeignKey("customer_memory_items.id", ondelete="SET NULL"), nullable=True
     )
@@ -460,6 +452,7 @@ class Conversation(TimestampMixin, Base):
         default=ConversationMode.BOT_ACTIVE,
         nullable=False,
     )
+    stay_confirmation: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     assigned_employee_id: Mapped[int | None] = mapped_column(
         ForeignKey("employees.id"), nullable=True
     )
@@ -550,6 +543,28 @@ class KnowledgeEntry(TimestampMixin, Base):
     """保存经过人工审核的中英文民宿知识。"""
 
     __tablename__ = "knowledge_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "scope IN ('unreviewed', 'global', 'property', 'public')",
+            name="ck_knowledge_scope",
+        ),
+        CheckConstraint(
+            "(scope = 'property' AND property_id IS NOT NULL) OR "
+            "(scope <> 'property' AND property_id IS NULL)",
+            name="ck_knowledge_scope_property",
+        ),
+        CheckConstraint(
+            "valid_from IS NULL OR valid_until IS NULL OR valid_from <= valid_until",
+            name="ck_knowledge_valid_dates",
+        ),
+    )
+
+    scope: Mapped[str] = mapped_column(
+        String(16), default="unreviewed", server_default="unreviewed", nullable=False
+    )
+    property_id: Mapped[int | None] = mapped_column(ForeignKey("property_profiles.id"))
+    valid_from: Mapped[date | None] = mapped_column(Date)
+    valid_until: Mapped[date | None] = mapped_column(Date)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     category: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -978,14 +993,12 @@ class BusinessTask(TimestampMixin, Base):
     assigned_employee_id: Mapped[int | None] = mapped_column(
         ForeignKey("employees.id"), nullable=True
     )
+    # 核对资料仅供获授权员工查看，不进入模型，不自动推断订单归属。
+    verification_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     checklist: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict, nullable=False)
-    expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    closed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closure_reason_code: Mapped[TaskClosureReason | None] = mapped_column(
         Enum(TaskClosureReason, native_enum=False, length=32), nullable=True
     )
@@ -996,9 +1009,7 @@ class BusinessTask(TimestampMixin, Base):
         ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
     # 软归档只影响列表可见性，不参与状态机；终态任务才允许归档。
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_by_employee_id: Mapped[int | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )

@@ -46,7 +46,6 @@ from homestay_bot.services.customer_memory_policy import (
 logger = logging.getLogger(__name__)
 
 
-
 class SQLAlchemyContextRepository:
     """按客户隔离读取摘要候选并原子保存分层摘要。"""
 
@@ -66,20 +65,14 @@ class SQLAlchemyContextRepository:
         """绑定当前维护事务。"""
         self._session = session
 
-    async def get_summary(
-        self, customer_id: int
-    ) -> CustomerContextSummary | None:
+    async def get_summary(self, customer_id: int) -> CustomerContextSummary | None:
         """读取客户唯一摘要记录。"""
         result = await self._session.scalars(
-            select(CustomerContextSummary).where(
-                CustomerContextSummary.customer_id == customer_id
-            )
+            select(CustomerContextSummary).where(CustomerContextSummary.customer_id == customer_id)
         )
         return result.first()
 
-    async def expire_customer_memories(
-        self, customer_id: int, now: datetime
-    ) -> None:
+    async def expire_customer_memories(self, customer_id: int, now: datetime) -> None:
         """统一失效超期记忆、清理终态正文并限制事件保留期。"""
         memories = list(
             (
@@ -87,30 +80,21 @@ class SQLAlchemyContextRepository:
                     select(CustomerMemoryItem).where(
                         CustomerMemoryItem.customer_id == customer_id,
                         (
-                            (
-                                CustomerMemoryItem.status
-                                == CustomerMemoryStatus.ACTIVE
-                            )
+                            (CustomerMemoryItem.status == CustomerMemoryStatus.ACTIVE)
                             & (
                                 (CustomerMemoryItem.review_at <= now)
                                 | (CustomerMemoryItem.expires_at <= now)
                             )
                         )
                         | (
-                            (
-                                CustomerMemoryItem.status
-                                == CustomerMemoryStatus.CANDIDATE
-                            )
+                            (CustomerMemoryItem.status == CustomerMemoryStatus.CANDIDATE)
                             & (
                                 CustomerMemoryItem.created_at
                                 <= now - timedelta(days=self.CANDIDATE_RETENTION_DAYS)
                             )
                         )
                         | (
-                            (
-                                CustomerMemoryItem.status
-                                == CustomerMemoryStatus.DISPUTED
-                            )
+                            (CustomerMemoryItem.status == CustomerMemoryStatus.DISPUTED)
                             & (
                                 CustomerMemoryItem.created_at
                                 <= now - timedelta(days=self.DISPUTED_RETENTION_DAYS)
@@ -174,17 +158,16 @@ class SQLAlchemyContextRepository:
             event.content_redacted_at = now
 
         await self._session.execute(
-            delete(CustomerMemoryEvent).where(
+            delete(CustomerMemoryEvent)
+            .where(
                 CustomerMemoryEvent.customer_id == customer_id,
-                CustomerMemoryEvent.occurred_at
-                <= now - timedelta(days=self.EVENT_RETENTION_DAYS),
-            ).execution_options(synchronize_session=False)
+                CustomerMemoryEvent.occurred_at <= now - timedelta(days=self.EVENT_RETENTION_DAYS),
+            )
+            .execution_options(synchronize_session=False)
         )
         await self._session.flush()
 
-    async def reconcile_legacy_memories(
-        self, customer_id: int, now: datetime
-    ) -> None:
+    async def reconcile_legacy_memories(self, customer_id: int, now: datetime) -> None:
         """只用尚存的来源原文重验证历史候选，不调用模型。"""
         rows = list(
             (
@@ -249,10 +232,7 @@ class SQLAlchemyContextRepository:
                     CustomerMemoryItem.id != memory.id,
                 )
             )
-            if (
-                proposed_status is CustomerMemoryStatus.ACTIVE
-                and active_conflict is None
-            ):
+            if proposed_status is CustomerMemoryStatus.ACTIVE and active_conflict is None:
                 memory.status = CustomerMemoryStatus.ACTIVE
                 memory.confirmed_at = now
                 memory.status_reason = None
@@ -311,9 +291,7 @@ class SQLAlchemyContextRepository:
         candidates.reverse()
         return candidates
 
-    async def list_recent_unobserved(
-        self, customer_id: int, now: datetime
-    ) -> list[Message]:
+    async def list_recent_unobserved(self, customer_id: int, now: datetime) -> list[Message]:
         """返回最近七天尚未提取结构化记忆的文本消息。"""
         return list(
             (
@@ -450,9 +428,7 @@ class SQLAlchemyContextRepository:
                 )
                 .where(
                     StayOrder.customer_id == customer_id,
-                    StayOrder.status.not_in(
-                        ["cancelled", "canceled", "checked_out", "completed"]
-                    ),
+                    StayOrder.status.not_in(["cancelled", "canceled", "checked_out", "completed"]),
                 )
                 .order_by(StayOrder.check_in_date, StayOrder.id)
                 .limit(5)
@@ -478,32 +454,30 @@ class SQLAlchemyContextRepository:
             ).all()
         )
         active_orders = [
-                {
-                    "property_id": order.property_id,
-                    "property_title": property_title,
-                    "check_in_date": order.check_in_date.isoformat(),
-                    "check_out_date": order.check_out_date.isoformat(),
-                    "status": order.status,
-                }
-                for order, property_title in order_rows
-            ]
+            {
+                "order_id": order.id,
+                "property_id": order.property_id,
+                "property_title": property_title,
+                "check_in_date": order.check_in_date.isoformat(),
+                "check_out_date": order.check_out_date.isoformat(),
+                "status": order.status,
+            }
+            for order, property_title in order_rows
+        ]
         open_tasks = [
-                {
-                    "task_type": task.task_type.value,
-                    "status": task.status.value,
-                    "property_id": task.property_id,
-                    "service_date": (
-                        task.service_date.isoformat()
-                        if task.service_date is not None
-                        else None
-                    ),
-                }
-                for task in tasks
-            ]
+            {
+                "task_type": task.task_type.value,
+                "status": task.status.value,
+                "property_id": task.property_id,
+                "service_date": (
+                    task.service_date.isoformat() if task.service_date is not None else None
+                ),
+            }
+            for task in tasks
+        ]
         operational_chars = len(str(active_orders)) + len(str(open_tasks))
         memory_chars = sum(
-            len(str(item.get("subject_key", "")))
-            + len(str(item.get("statement", "")))
+            len(str(item.get("subject_key", ""))) + len(str(item.get("statement", "")))
             for item in memories
         )
         episode_budget = max(
@@ -532,16 +506,12 @@ class SQLAlchemyContextRepository:
                 "memory_ids": [item["memory_id"] for item in memories],
                 "summary_version": summary.version if summary else 0,
                 "used_chars": (
-                    operational_chars
-                    + memory_chars
-                    + len(recent_episode)
-                    + len(historical_episode)
+                    operational_chars + memory_chars + len(recent_episode) + len(historical_episode)
                 ),
             },
         )
         safe_memories = [
-            {key: value for key, value in item.items() if key != "memory_id"}
-            for item in memories
+            {key: value for key, value in item.items() if key != "memory_id"} for item in memories
         ]
         return CustomerModelContext(
             recent_episode=recent_episode,
@@ -550,6 +520,31 @@ class SQLAlchemyContextRepository:
             active_orders=active_orders,
             open_tasks=open_tasks,
         )
+
+    async def list_recent_task_statuses(
+        self,
+        customer_id: int,
+    ) -> list[dict[str, str | int | None]]:
+        """只查询归属当前客户的近期请求，保留终态和更新时间供进度答复。"""
+        tasks = (
+            await self._session.scalars(
+                select(BusinessTask)
+                .where(BusinessTask.customer_id == customer_id)
+                .order_by(BusinessTask.updated_at.desc(), BusinessTask.id.desc())
+                .limit(10)
+            )
+        ).all()
+        return [
+            {
+                "task_id": task.id,
+                "task_type": task.task_type.value,
+                "status": task.status.value,
+                "property_id": task.property_id,
+                "description": task.description,
+                "updated_at": task.updated_at.isoformat(),
+            }
+            for task in tasks
+        ]
 
     async def get_customer_room_number(self, customer_id: int) -> str | None:
         """返回客户唯一有效订单对应的房间号，无法唯一确定时返回空值。"""
@@ -663,8 +658,10 @@ class SQLAlchemyContextRepository:
                     else CustomerMemoryStatus.DISPUTED
                 )
                 reason = (
-                    "客户或员工明确纠正" if correction_is_proven
-                    else "同主题出现证据不弱于既有的新陈述" if may_supersede
+                    "客户或员工明确纠正"
+                    if correction_is_proven
+                    else "同主题出现证据不弱于既有的新陈述"
+                    if may_supersede
                     else "同一主题存在冲突陈述"
                 )
                 for item in active_conflicts:
@@ -684,9 +681,7 @@ class SQLAlchemyContextRepository:
                 selected_evidence = stronger_evidence(duplicate.evidence_type, evidence)
                 if selected_evidence is evidence and evidence is not duplicate.evidence_type:
                     duplicate.evidence_type = evidence
-                    duplicate.source_message_id = (
-                        source.external_message_id if source else None
-                    )
+                    duplicate.source_message_id = source.external_message_id if source else None
                     duplicate.source_excerpt = (
                         redact_memory_text(candidate.source_excerpt or "") or None
                     )
@@ -746,9 +741,7 @@ class SQLAlchemyContextRepository:
                 status=status,
                 evidence_type=evidence,
                 source_message_id=source.external_message_id if source else None,
-                source_excerpt=(
-                    redact_memory_text(candidate.source_excerpt or "") or None
-                ),
+                source_excerpt=(redact_memory_text(candidate.source_excerpt or "") or None),
                 source_excerpt_hash=(
                     source_excerpt_hash(candidate.source_excerpt or "")
                     if candidate.source_excerpt
@@ -757,8 +750,7 @@ class SQLAlchemyContextRepository:
                 source_occurred_at=source.sent_at if source else None,
                 verified_at=(
                     now
-                    if grounded
-                    and evidence is not CustomerMemoryEvidenceType.MODEL_INFERENCE
+                    if grounded and evidence is not CustomerMemoryEvidenceType.MODEL_INFERENCE
                     else None
                 ),
                 confidence=candidate.confidence,

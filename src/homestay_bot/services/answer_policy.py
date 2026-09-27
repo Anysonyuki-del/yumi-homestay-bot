@@ -44,7 +44,7 @@ _PROPERTY_SPECIFIC_PATTERN = re.compile(
 _HIGH_RISK_PATTERNS = (
     (
         "refund",
-        re.compile(r"退款|退钱|退费|refund", re.IGNORECASE),
+        re.compile(r"退款|退钱|退费|退全款|退全额|退多少|refund", re.IGNORECASE),
     ),
     (
         "complaint",
@@ -166,13 +166,11 @@ _EXTERNAL_PLACE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# 住宿资料确认只更新已有订单快照，不能据此创建新的预订请求。
 _BOOKING_CONFIRMATION_PATTERN = re.compile(
-    r"(?:以上|上述|这些|预订|入住|订单).{0,10}(?:资料|信息|内容|日期)?"
-    r".{0,6}(?:确认无误|都对|没问题|可以提交|确认预订)|"
-    r"(?:确认无误|资料无误|信息无误)|"
-    r"(?:就按|按这个|按以上|按上述).{0,6}(?:订|预订|提交)|"
-    r"(?:confirm|confirmed).{0,12}(?:booking|reservation|details)|"
-    r"(?:booking|reservation).{0,12}(?:confirm|confirmed)",
+    r"(?:我要|帮我|请帮我|我想)(?:预订|订房|订这个房间)|please book|"
+    r"确认预订|(?:就按|按这个|按以上|按上述).{0,6}(?:订|预订|提交)|"
+    r"(?:submit|place).{0,12}(?:booking|reservation)",
     re.IGNORECASE,
 )
 
@@ -195,16 +193,17 @@ def is_property_specific(text: str) -> bool:
     宣传删掉，召回等于白做。别名只收含义明确的说法，不把「猫」「lift」这类
     多义词算作在问本店。
     """
-    return (
-        _PROPERTY_SPECIFIC_PATTERN.search(text) is not None
-        or bool(detect_property_topics(text))
-    )
+    return _PROPERTY_SPECIFIC_PATTERN.search(text) is not None or bool(detect_property_topics(text))
 
 
 def handoff_reason(text: str) -> str | None:
     """按固定优先级识别必须由 YuMi 决策的高风险事项。"""
+    if _BARGAIN_PATTERN.search(text) is not None:
+        return "price"
+    if is_policy_inquiry(text):
+        return None
     for reason, pattern in _HIGH_RISK_PATTERNS:
-        if pattern.search(text) is not None:
+        if reason != "early_check_in" and pattern.search(text) is not None:
             return reason
     if _BARGAIN_PATTERN.search(text) is not None:
         return "price"
@@ -225,8 +224,23 @@ def is_homestay_related(text: str) -> bool:
     return _CLEARLY_UNRELATED_PATTERN.search(text) is None
 
 
+def is_policy_inquiry(text: str) -> bool:
+    """识别只读政策咨询；混合的明确申请仍按申请处理。"""
+    inquiry = re.search(
+        r"政策|规定|规则|条件|收费|费用|怎么收费|policy|rules?|conditions?|fee", text, re.I
+    )
+    action = re.search(
+        r"帮我|给我|我想退|想退款|要退|申请|安排|现在需要|please.{0,15}(?:arrange|refund|book)",
+        text,
+        re.I,
+    )
+    return inquiry is not None and action is None
+
+
 def is_service_request(text: str) -> bool:
     """判断本轮客人是否明确提出需要执行的民宿服务。"""
+    if is_policy_inquiry(text):
+        return False
     if has_facility_fault_signal(text):
         return facility_fault_exclusion(text) is None
     return _SERVICE_REQUEST_PATTERN.search(text) is not None
@@ -279,10 +293,16 @@ def is_static_service_fee(text: str) -> bool:
         r"|退款|退费|退多少|取消|改期|支付|付款|到账|发票金额|availability|reschedule"
         r"|room\s+(?:rate|price)|reservation|booking|refund|cancel|payment|invoice\s+amount"
         r"|how\s+much.{0,45}\brooms?\b",
-        text, re.IGNORECASE,
+        text,
+        re.IGNORECASE,
     ):
         return False
-    return bool(detect_property_topics(text)) and re.search(
-        r"多少钱|收费|费用|价格|免费|how\s+much|\bcost|\bfee|\bprice|\bcharge|\bfree",
-        text, re.IGNORECASE,
-    ) is not None
+    return (
+        bool(detect_property_topics(text))
+        and re.search(
+            r"多少钱|收费|费用|价格|免费|how\s+much|\bcost|\bfee|\bprice|\bcharge|\bfree",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )

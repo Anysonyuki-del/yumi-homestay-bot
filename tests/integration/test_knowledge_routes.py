@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from admin_auth_helpers import configure_admin_auth
@@ -44,6 +44,10 @@ class EntryStub:
     answer_en: str
     keywords: list[str]
     is_enabled: bool = True
+    scope: str = "global"
+    property_id: int | None = None
+    valid_from: date | None = None
+    valid_until: date | None = None
 
 
 @dataclass
@@ -83,6 +87,7 @@ class KnowledgeAdminStub:
                 total_occurrences=3,
                 examples=["能停车吗", "有停车位吗"],
                 draft_payload={
+                    "scope": "global",
                     "category": "交通",
                     "question_zh": "是否提供停车位？",
                     "answer_zh": "【待管理员确认】",
@@ -112,11 +117,7 @@ class KnowledgeAdminStub:
             for entry in self.entries
             if (enabled is None or entry.is_enabled is enabled)
             and (not category or entry.category == category)
-            and (
-                not query
-                or query in entry.question_zh
-                or query in entry.answer_zh
-            )
+            and (not query or query in entry.question_zh or query in entry.answer_zh)
         ]
         return entries * (limit if offset == 50 else 1)
 
@@ -131,6 +132,10 @@ class KnowledgeAdminStub:
         except StopIteration as error:
             raise LookupError("知识条目不存在") from error
 
+    async def list_properties(self):
+        """提供合成房间选项。"""
+        return []
+
     async def create(self, employee_id: int, **fields) -> EntryStub:
         """新增双语条目。"""
         entry = EntryStub(id=len(self.entries) + 1, **fields)
@@ -144,16 +149,12 @@ class KnowledgeAdminStub:
             setattr(entry, key, value)
         return entry
 
-    async def set_enabled(
-        self, entry_id: int, employee_id: int, enabled: bool
-    ) -> None:
+    async def set_enabled(self, entry_id: int, employee_id: int, enabled: bool) -> None:
         """启用或停用指定条目。"""
         entry = next(item for item in self.entries if item.id == entry_id)
         entry.is_enabled = enabled
 
-    async def list_candidates(
-        self, *, offset: int, limit: int
-    ) -> list[CandidateStub]:
+    async def list_candidates(self, *, offset: int, limit: int) -> list[CandidateStub]:
         """返回管理员待归纳候选。"""
         self.list_candidate_calls.append((offset, limit))
         return self.candidates * (limit if offset == 50 else 1)
@@ -187,9 +188,7 @@ def build_client(
     @app.post("/test/login")
     async def test_login(request: Request) -> dict[str, bool]:
         """仅在测试应用中写入可信员工会话。"""
-        request.session["employee_id"] = (
-            1 if role is EmployeeRole.ADMIN else 2
-        )
+        request.session["employee_id"] = 1 if role is EmployeeRole.ADMIN else 2
         request.session["employee_role"] = role.value
         request.session["admin_id"] = 1
         request.session["admin_session_version"] = 1
@@ -233,10 +232,10 @@ def test_knowledge_pages_use_admin_shell_and_detail_respects_role() -> None:
     staff_detail = staff.get("/employee/knowledge/1")
     missing = admin.get("/employee/knowledge/404")
 
-    assert '/static/admin.js' in index.text
+    assert "/static/admin.js" in index.text
     assert 'href="/employee/knowledge" aria-current="page"' in detail.text
     assert 'action="/employee/knowledge/1/edit"' in detail.text
-    assert 'data-unsaved-warning' in detail.text
+    assert "data-unsaved-warning" in detail.text
     assert 'action="/employee/knowledge/1/disable"' not in detail.text
     assert 'action="/employee/knowledge/1/disable"' in index.text
     assert 'action="/employee/knowledge/1/edit"' not in staff_detail.text
@@ -248,17 +247,14 @@ def test_knowledge_csrf_tokens_survive_navigation_and_remain_single_use() -> Non
     """列表和详情签发的令牌应并存，且各自仍只能成功使用一次。"""
     client, service = build_client(EmployeeRole.ADMIN)
     index = client.get("/employee/knowledge")
-    index_token = re.search(
-        r'name="csrf_token" value="([^"]+)"', index.text
-    ).group(1)
+    index_token = re.search(r'name="csrf_token" value="([^"]+)"', index.text).group(1)
     detail = client.get("/employee/knowledge/1")
-    detail_token = re.search(
-        r'name="csrf_token" value="([^"]+)"', detail.text
-    ).group(1)
+    detail_token = re.search(r'name="csrf_token" value="([^"]+)"', detail.text).group(1)
 
     created = client.post(
         "/employee/knowledge",
         data={
+            "scope": "global",
             "category": "交通",
             "question_zh": "怎么到民宿？",
             "answer_zh": "请按导航前往。",
@@ -285,6 +281,7 @@ def test_knowledge_csrf_tokens_survive_navigation_and_remain_single_use() -> Non
     edited = client.post(
         "/employee/knowledge/1/edit",
         data={
+            "scope": "global",
             "category": "入住",
             "question_zh": "几点可以入住？",
             "answer_zh": "下午三点后。",
@@ -308,11 +305,7 @@ def test_knowledge_csrf_token_collection_is_bounded() -> None:
     tokens = []
     for _ in range(9):
         response = client.get("/employee/knowledge")
-        tokens.append(
-            re.search(
-                r'name="csrf_token" value="([^"]+)"', response.text
-            ).group(1)
-        )
+        tokens.append(re.search(r'name="csrf_token" value="([^"]+)"', response.text).group(1))
 
     oldest = client.post(
         "/employee/knowledge/1/disable",
@@ -335,9 +328,7 @@ def test_knowledge_csrf_survives_interleaved_get_cookie_updates() -> None:
     client.cookies.clear()
     client.cookies.update(original_cookies)
     index = client.get("/employee/knowledge")
-    index_token = re.search(
-        r'name="csrf_token" value="([^"]+)"', index.text
-    ).group(1)
+    index_token = re.search(r'name="csrf_token" value="([^"]+)"', index.text).group(1)
 
     # 模拟详情 GET 与列表 GET 同时读取签发前的同一份 Cookie，且详情响应最后落盘。
     client.cookies.clear()
@@ -355,13 +346,12 @@ def test_knowledge_csrf_is_atomically_consumed_across_same_cookie_posts() -> Non
     """两个 POST 复用同一旧 Cookie 和 nonce 时，服务端只能接受其中一个。"""
     client, service = build_client(EmployeeRole.ADMIN)
     page = client.get("/employee/knowledge")
-    token = re.search(
-        r'name="csrf_token" value="([^"]+)"', page.text
-    ).group(1)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
     csrf_service = client.app.state.admin_csrf_service
     assert csrf_service.pending[token] == ("knowledge-write", 1)
     unconsumed_cookies = dict(client.cookies)
     payload = {
+        "scope": "global",
         "category": "交通",
         "question_zh": "怎么到民宿？",
         "answer_zh": "请按导航前往。",
@@ -371,15 +361,11 @@ def test_knowledge_csrf_is_atomically_consumed_across_same_cookie_posts() -> Non
         "csrf_token": token,
     }
 
-    first = client.post(
-        "/employee/knowledge", data=payload, follow_redirects=False
-    )
+    first = client.post("/employee/knowledge", data=payload, follow_redirects=False)
     # 恢复未消费 Cookie，模拟另一个并发请求已经携带同一份请求头发出。
     client.cookies.clear()
     client.cookies.update(unconsumed_cookies)
-    second = client.post(
-        "/employee/knowledge", data=payload, follow_redirects=False
-    )
+    second = client.post("/employee/knowledge", data=payload, follow_redirects=False)
 
     assert first.status_code == 303
     assert second.status_code == 409
@@ -390,17 +376,11 @@ def test_knowledge_csrf_cookie_metadata_is_not_an_authorization_source() -> None
     """删除 Cookie 内兼容集合后，服务端 nonce 仍应成功一次且只能成功一次。"""
     client, _ = build_client(EmployeeRole.ADMIN)
     page = client.get("/employee/knowledge")
-    token = re.search(
-        r'name="csrf_token" value="([^"]+)"', page.text
-    ).group(1)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
     client.post("/test/clear-knowledge-csrf")
 
-    first = client.post(
-        "/employee/knowledge/1/disable", data={"csrf_token": token}
-    )
-    replay = client.post(
-        "/employee/knowledge/1/disable", data={"csrf_token": token}
-    )
+    first = client.post("/employee/knowledge/1/disable", data={"csrf_token": token})
+    replay = client.post("/employee/knowledge/1/disable", data={"csrf_token": token})
 
     assert first.status_code == 200
     assert replay.status_code == 409
@@ -435,10 +415,8 @@ def test_knowledge_index_orders_filters_candidates_and_entries() -> None:
 
     assert response.text.index("知识筛选") < response.text.index("待归纳问题")
     assert response.text.index("待归纳问题") < response.text.index("新增知识")
-    assert response.text.index("新增知识") < response.text.index(
-        'id="knowledge-entries"'
-    )
-    assert 'data-unsaved-warning' in response.text
+    assert response.text.index("新增知识") < response.text.index('id="knowledge-entries"')
+    assert "data-unsaved-warning" in response.text
     assert 'action="/employee/knowledge/1/disable" data-confirm=' in response.text
 
 
@@ -451,14 +429,8 @@ def test_knowledge_lists_use_independent_bounded_pagination() -> None:
     assert response.status_code == 200
     assert service.list_all_calls == [(50, 51)]
     assert service.list_candidate_calls == [(50, 51)]
-    assert (
-        'href="/employee/knowledge?page=1&amp;candidate_page=2"'
-        in response.text
-    )
-    assert (
-        'href="/employee/knowledge?page=2&amp;candidate_page=3"'
-        in response.text
-    )
+    assert 'href="/employee/knowledge?page=1&amp;candidate_page=2"' in response.text
+    assert 'href="/employee/knowledge?page=2&amp;candidate_page=3"' in response.text
 
 
 def test_knowledge_filter_form_accepts_empty_enabled_value() -> None:
@@ -483,9 +455,7 @@ async def test_disabling_knowledge_removes_it_from_bot_context() -> None:
     knowledge_service = KnowledgeService(repository)
 
     page = client.get("/employee/knowledge")
-    csrf_token = re.search(
-        r'name="csrf_token" value="([^"]+)"', page.text
-    ).group(1)
+    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
     response = client.post(
         "/employee/knowledge/1/disable",
         data={"csrf_token": csrf_token},
@@ -501,12 +471,11 @@ def test_admin_can_create_bilingual_knowledge() -> None:
     client, service = build_client(EmployeeRole.ADMIN)
 
     page = client.get("/employee/knowledge")
-    csrf_token = re.search(
-        r'name="csrf_token" value="([^"]+)"', page.text
-    ).group(1)
+    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
     response = client.post(
         "/employee/knowledge",
         data={
+            "scope": "global",
             "category": "交通",
             "question_zh": "怎么到民宿？",
             "answer_zh": "请按导航前往。",
@@ -527,9 +496,7 @@ def test_admin_can_view_and_edit_draft_before_conversion() -> None:
     client, service = build_client(EmployeeRole.ADMIN)
 
     page = client.get("/employee/knowledge")
-    csrf_token = re.search(
-        r'name="csrf_token" value="([^"]+)"', page.text
-    ).group(1)
+    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
     assert "待归纳问题" in page.text
     assert "能停车吗" in page.text
     assert "停车位置和收费规则" in page.text
@@ -537,6 +504,7 @@ def test_admin_can_view_and_edit_draft_before_conversion() -> None:
     response = client.post(
         "/employee/knowledge/candidates/8/convert",
         data={
+            "scope": "global",
             "category": "交通",
             "question_zh": "民宿是否提供停车位？",
             "answer_zh": "院外有公共停车位，收费以现场为准。",
@@ -573,9 +541,7 @@ def test_candidate_actions_require_admin_and_one_time_csrf() -> None:
     assert admin_service.snoozed is None
 
     page = admin_client.get("/employee/knowledge")
-    csrf_token = re.search(
-        r'name="csrf_token" value="([^"]+)"', page.text
-    ).group(1)
+    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
     accepted = admin_client.post(
         "/employee/knowledge/candidates/8/snooze",
         data={"csrf_token": csrf_token},
@@ -771,9 +737,7 @@ async def test_employee_repository_lists_only_active_admin_userids() -> None:
         )
         await session.commit()
 
-        userids = await SQLAlchemyEmployeeRepository(
-            session
-        ).list_active_admin_userids()
+        userids = await SQLAlchemyEmployeeRepository(session).list_active_admin_userids()
 
         assert userids == ["admin-active"]
 
@@ -821,3 +785,58 @@ def test_knowledge_actions_refuse_a_foreign_source() -> None:
     assert response.status_code == 303
     assert "evil.example.com" not in response.headers["location"]
     assert response.headers["location"].startswith("/employee/knowledge")
+
+
+def test_knowledge_scope_form_rejects_roomless_property_and_invalid_dates():
+    """范围和日期错误在写入前给出明确错误，不保存错误知识。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    for metadata in (
+        {"scope": "property"},
+        {"scope": "global", "property_id": "201"},
+        {"scope": "global", "valid_from": "2026-09-26", "valid_until": "2026-09-25"},
+    ):
+        page = client.get("/employee/knowledge")
+        token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+        result = client.post(
+            "/employee/knowledge",
+            data={
+                "category": "早餐",
+                "question_zh": "早餐？",
+                "answer_zh": "7点",
+                "question_en": "Breakfast?",
+                "answer_en": "At 7",
+                "csrf_token": token,
+                **metadata,
+            },
+        )
+        assert result.status_code == 422
+    assert len(service.entries) == 1
+
+
+def test_knowledge_scope_dates_survive_form_save_and_edit_render():
+    """范围及日期随表单保存，编辑页回显相同选择，不误重置审核范围。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    page = client.get("/employee/knowledge/1")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    response = client.post(
+        "/employee/knowledge/1/edit",
+        data={
+            "category": "早餐",
+            "question_zh": "早餐？",
+            "answer_zh": "7点",
+            "question_en": "Breakfast?",
+            "answer_en": "At 7",
+            "csrf_token": token,
+            "scope": "global",
+            "valid_from": "2026-09-25",
+            "valid_until": "2026-09-30",
+        },
+    )
+    assert response.status_code == 200
+    assert service.entries[0].scope == "global"
+    assert service.entries[0].valid_from == date(2026, 9, 25)
+    assert service.entries[0].valid_until == date(2026, 9, 30)
+    rendered = client.get("/employee/knowledge/1").text
+    assert 'value="global" selected' in rendered
+    assert 'name="valid_from" value="2026-09-25"' in rendered
+    assert 'name="valid_until" value="2026-09-30"' in rendered

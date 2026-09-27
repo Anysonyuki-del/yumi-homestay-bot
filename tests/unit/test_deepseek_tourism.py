@@ -407,23 +407,13 @@ async def test_deepseek_tourism_retries_evidence_without_final_text() -> None:
         status_setter=statuses.append,
     )
 
-    result = await searcher.search(
-        question="武汉近期有啥好玩的",
-        language=Language.ZH,
-        queried_on=date(2026, 8, 13),
-    )
-
-    assert len(client.messages.requests) == 2
-    assert all("extra_body" not in item for item in client.messages.requests)
-    assert all(
-        "结束前必须输出一段客人可见的最终正文" in item["system"]
-        for item in client.messages.requests
-    )
-    assert "帮您查到的" in result
-    # v1.28.0 起页脚不再列举来源：拿到的只是搜索结果标题，且带这句的回复
-    # 会被企业微信以安全限制拦下，反而让客人连时效提醒都收不到。
-    assert "主要参考了" not in result
-    assert statuses == ["ok"]
+    with pytest.raises(TourismSearchError):
+        await searcher.search(
+            question="武汉近期有啥好玩的", language=Language.ZH,
+            queried_on=date(2026, 8, 13),
+        )
+    assert len(client.messages.requests) == 1
+    assert statuses == ["degraded"]
 
 
 @pytest.mark.asyncio

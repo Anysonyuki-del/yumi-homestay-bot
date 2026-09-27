@@ -19,10 +19,13 @@ class SQLAlchemyKnowledgeRepository:
         self._session = session
 
     async def list_active(self) -> list[KnowledgeEntry]:
-        """按稳定主键顺序返回已启用知识，排除全部停用内容。"""
+        """按稳定主键顺序返回已启用且范围已审核的知识。"""
         statement = (
             select(KnowledgeEntry)
-            .where(KnowledgeEntry.is_enabled.is_(True))
+            .where(
+                KnowledgeEntry.is_enabled.is_(True),
+                KnowledgeEntry.scope != "unreviewed",
+            )
             .order_by(KnowledgeEntry.id)
         )
         return list((await self._session.scalars(statement)).all())

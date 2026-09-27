@@ -17,6 +17,13 @@ from homestay_bot.integrations.deepseek_client import (
     AssistantToolTrace,
     TaskSuggestion,
 )
+from homestay_bot.services.answer_policy import (
+    handoff_reason,
+    is_booking_action_request,
+    is_service_request,
+)
+from homestay_bot.services.guest_reply_policy import split_guest_reply
+from homestay_bot.services.reply_plan import ReplyPart, prepare_planned_reply
 from homestay_bot.services.stay_date_range import validate_stay_date_range
 
 logger = logging.getLogger(__name__)
@@ -25,6 +32,7 @@ DEBUG_TOOL_NAMES = (
     "list_properties",
     "search_availability",
     "search_reference_price",
+    "tourism_search",
 )
 _DEBUG_INTENT_PATTERN = re.compile(r"[a-z0-9_]{1,64}")
 
@@ -98,6 +106,9 @@ class DebugPreviewResult:
     faq_canonical_question: str | None
     faq_category: str | None
     revision: int
+    reply_parts: tuple[ReplyPart, ...] = ()
+    guest_messages: tuple[str, ...] = ()
+    simulated_action: str | None = None
 
 
 class DebugAssistantPort(Protocol):
@@ -212,11 +223,30 @@ class AdminDebugService:
                 )
                 intent = normalize_debug_intent(decision.intent)
                 succeeded = True
-                safe_traces = tuple(
-                    trace for trace in traces if trace.name in DEBUG_TOOL_NAMES
+                safe_traces = tuple(trace for trace in traces if trace.name in DEBUG_TOOL_NAMES)
+                # 调试复用事实分项和实际发送前排版；不调用任务、通知或订单写入口。
+                parts = tuple(decision.reply_parts)
+                risk = handoff_reason(question) or decision.handoff_reason
+                reply = prepare_planned_reply(
+                    parts, fallback=decision.reply_text, language=command.language,
+                    question=question, high_risk=bool(risk),
                 )
+                simulated_action = None
+                if is_booking_action_request(question) or (
+                    is_service_request(question)
+                    and (decision.task_suggestion or decision.staff_confirmation_required)
+                ):
+                    simulated_action = "仅模拟：登记待确认请求并提交管家通知；未实际写入或发送。"
+                elif decision.facility_issue and decision.facility_issue.scope not in {
+                    "private",
+                    "external",
+                }:
+                    simulated_action = "仅模拟：登记设施处理请求并提交管家通知；未实际写入或发送。"
                 return DebugPreviewResult(
-                    reply_text=decision.reply_text,
+                    reply_text=reply,
+                    reply_parts=parts,
+                    guest_messages=tuple(split_guest_reply(reply, command.language)),
+                    simulated_action=simulated_action,
                     intent=intent,
                     confidence=float(decision.confidence),
                     knowledge_gap=bool(decision.knowledge_gap),
@@ -226,9 +256,7 @@ class AdminDebugService:
                     selected_property_title=selected.title if selected else None,
                     check_in_date=command.check_in_date,
                     check_out_date=command.check_out_date,
-                    staff_confirmation_required=bool(
-                        decision.staff_confirmation_required
-                    ),
+                    staff_confirmation_required=bool(decision.staff_confirmation_required),
                     staff_confirmation_reason=decision.staff_confirmation_reason,
                     task_suggestion=decision.task_suggestion,
                     faq_candidate=bool(decision.faq_candidate),
@@ -244,9 +272,7 @@ class AdminDebugService:
                     question_hash=hashlib.sha256(question.encode("utf-8")).hexdigest(),
                     question_length=len(question),
                     intent=intent,
-                    tool_names=normalize_debug_tool_names(
-                        [trace.name for trace in traces]
-                    ),
+                    tool_names=normalize_debug_tool_names([trace.name for trace in traces]),
                     succeeded=succeeded,
                 )
             except Exception as error:
