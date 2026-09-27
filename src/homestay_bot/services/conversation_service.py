@@ -68,17 +68,84 @@ from homestay_bot.worker import DeferredRetryJobError
 
 def format_employee_notification(
     *, reason: str, guest: str, room: str, link: str, original: str,
-    replied: str = "尚未回复客人", account: str = "微信客服",
+    replied: str | None = "尚未回复客人", account: str = "微信客服",
 ) -> str:
-    """会话转交和自动交还共用六字段格式；先保留定位信息，再按字节平分摘要。"""
+    """会话转交和自动交还共用六字段格式；先保留定位信息，再按字节平分摘要。
+
+    `replied=None` 表示这类通知与回复客人无关（如自动交还），不写「机器人已回复」行。
+    """
     def clip(value: str, budget: int) -> str:
         """UTF-8 截断不切断汉字，输出永不超过平台上限。"""
         return value.encode()[:budget].decode("utf-8", errors="ignore")
     prefix = (f"{clip(reason, 300)}\n客服账号：{clip(account, 240)}\n{clip(guest, 240)}"
               f"\n{clip(room, 240)}\n后台：{clip(link, 400)}")
     budget = max(0, 2048 - len(prefix.encode()) - 60) // 2
-    return (f"{prefix}\n消息：{clip(original, budget)}"
-            f"\n机器人已回复：{clip(replied or '尚未回复客人', budget)}")
+    text = f"{prefix}\n消息：{clip(original, budget)}"
+    if replied is None:
+        return text
+    return f"{text}\n机器人已回复：{clip(replied or '尚未回复客人', budget)}"
+
+
+async def load_notification_names(
+    conversation: "Conversation", identity_resolver: "WeComIdentityPort | None"
+) -> tuple[str, str]:
+    """从企业微信读取（客服账号名，客人名）；失败或没有解析器时回退默认名。"""
+    customer_service_name, guest_name = "微信客服", "客人"
+    if identity_resolver is None:
+        return customer_service_name, guest_name
+    try:
+        customer_service_name = (
+            await identity_resolver.get_kf_account_name(conversation.open_kfid)
+            or customer_service_name
+        )
+        guest_name = (
+            await identity_resolver.get_kf_customer_name(
+                conversation.open_kfid, conversation.external_userid
+            )
+            or guest_name
+        )
+    except Exception as error:
+        logger.warning("读取通知名称失败：error_type=%s", type(error).__name__)
+    return customer_service_name, guest_name
+
+
+async def resolve_notification_identity(
+    conversation: "Conversation",
+    *,
+    identity_resolver: "WeComIdentityPort | None",
+    customer_notification: "CustomerNotificationPort | None",
+    names: tuple[str, str] | None = None,
+) -> tuple[str, str]:
+    """返回员工通知的（客服账号名，客人那一行），转人工与自动交还共用一套取名。
+
+    客人那一行优先用 CRM 备注（「客人备注：8.14-8.16《春和景明》」），没有备注才用
+    企业微信客人名称。1.45.0 自动交还通知自己取名，只显示「微信客服」「微信客户」，
+    与转人工通知对不上。`names` 为调用方已缓存的（客服账号名，客人名）。
+    查询失败只记类型并回退默认名，不阻塞通知。
+    """
+    label = ConversationService._employee_notification_label
+    customer_service_name, guest_name = names or await load_notification_names(
+        conversation, identity_resolver
+    )
+    customer_service_name = (
+        label(customer_service_name, fallback="微信客服", max_bytes=240) or "微信客服"
+    )
+    guest_name = label(guest_name, fallback="客人") or "客人"
+    customer_note = None
+    if customer_notification is not None and conversation.customer_id is not None:
+        try:
+            customer_note = await customer_notification.get_customer_notification_note(
+                conversation.customer_id
+            )
+        except Exception as error:
+            # CRM 备注查询失败不应阻塞人工通知，继续使用客人名称兜底。
+            logger.warning(
+                "客户通知备注读取失败，使用客人名称兜底：error_type=%s",
+                type(error).__name__,
+            )
+    customer_note = label(customer_note)
+    display_identity = f"客人备注：{customer_note}" if customer_note else f"客人：{guest_name}"
+    return customer_service_name, display_identity
 
 # 员工通知入队时客人回复还没发出、但紧接着会发（回复内容取决于通知是否入队成功）。
 _REPLYING_NOTICE = "正在回复客人（回复内容含本次登记结果）"
@@ -1716,23 +1783,9 @@ class ConversationService:
         """在任务及订单写锁之前读取外部展示名称，本轮通知直接复用。"""
         if self._notification_names is not None:
             return
-        customer_service_name, guest_name = "微信客服", "客人"
-        if self._identity_resolver is not None:
-            try:
-                customer_service_name = (
-                    await self._identity_resolver.get_kf_account_name(conversation.open_kfid)
-                    or customer_service_name
-                )
-                guest_name = (
-                    await self._identity_resolver.get_kf_customer_name(
-                        conversation.open_kfid,
-                        conversation.external_userid,
-                    )
-                    or guest_name
-                )
-            except Exception as error:
-                logger.warning("读取通知名称失败：error_type=%s", type(error).__name__)
-        self._notification_names = (customer_service_name, guest_name)
+        self._notification_names = await load_notification_names(
+            conversation, self._identity_resolver
+        )
 
     async def _notify_employee(
         self,
@@ -1749,37 +1802,13 @@ class ConversationService:
         """
         if self._notification_names is None:
             await self._load_notification_names(conversation)
-        customer_service_name, guest_name = self._notification_names or ("微信客服", "客人")
-        customer_service_name = (
-            self._employee_notification_label(
-                customer_service_name,
-                fallback="微信客服",
-                max_bytes=240,
-            )
-            or "微信客服"
-        )
-        guest_name = (
-            self._employee_notification_label(
-                guest_name,
-                fallback="客人",
-            )
-            or "客人"
-        )
         # 员工端优先看到 CRM 备注；没有任何备注时再显示企业微信客人名称。
-        customer_note = None
-        if self._customer_notification is not None and conversation.customer_id is not None:
-            try:
-                customer_note = await self._customer_notification.get_customer_notification_note(
-                    conversation.customer_id
-                )
-            except Exception as error:
-                # CRM 备注查询失败不应阻塞人工通知，继续使用客人名称兜底。
-                logger.warning(
-                    "客户通知备注读取失败，使用客人名称兜底：error_type=%s",
-                    type(error).__name__,
-                )
-        customer_note = self._employee_notification_label(customer_note)
-        display_identity = f"客人备注：{customer_note}" if customer_note else f"客人：{guest_name}"
+        customer_service_name, display_identity = await resolve_notification_identity(
+            conversation,
+            identity_resolver=None,
+            customer_notification=self._customer_notification,
+            names=self._notification_names,
+        )
         reason_label = (
             self._employee_notification_label(
                 reason,

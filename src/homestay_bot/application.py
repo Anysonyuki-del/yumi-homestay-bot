@@ -39,7 +39,6 @@ from homestay_bot.domain.models import (
     AuditLog,
     BookingApproval,
     Conversation,
-    Customer,
     Employee,
     ExternalRequest,
     Message,
@@ -136,6 +135,7 @@ from homestay_bot.services.context_retention import ContextRetentionService
 from homestay_bot.services.conversation_service import (
     ConversationService,
     format_employee_notification,
+    resolve_notification_identity,
 )
 from homestay_bot.services.credential_delivery import (
     CredentialDeliveryService,
@@ -3318,7 +3318,6 @@ async def _notify_conversation_release(
     conversation = await session.get(Conversation, conversation_id)
     if conversation is None:
         raise RuntimeError("交还会话不存在")
-    customer = await session.get(Customer, conversation.customer_id)
     confirmed = await SQLAlchemyConversationRepository(session).get_confirmed_stay(
         conversation_id,
         today=now.astimezone(ZoneInfo("Asia/Shanghai")).date(),
@@ -3330,16 +3329,25 @@ async def _notify_conversation_release(
             f"入住：{confirmed.get('check_in_date')}"
             if confirmed else "房间与入住日期：尚未确认")
     async with registry.acquire() as bundle:
+        # 与转人工通知共用取名：客服账号名、CRM 备注优先（1.46.0 起）。
+        account, guest = await resolve_notification_identity(
+            conversation,
+            identity_resolver=bundle.wecom,
+            customer_notification=SQLAlchemyCustomerRepository(session),
+        )
         await TransactionalOutboxWeCom(
             session, source_message_id=f"release:{conversation_id}:{now.isoformat()}"
         ).send_internal_text(
             agent_id=bundle.agent_id, employee_userids=list(bundle.duty_userids),
             content=format_employee_notification(
                 reason=f"员工空闲满{IDLE_RELEASE_MINUTES}分钟，会话已交还机器人",
-                guest=f"客人：{customer.display_name if customer else '客人'}",
+                account=account,
+                guest=guest,
                 room=room,
                 link=f"{public_base_url}/employee/customers/{conversation.customer_id}",
                 original="巡检自动交还；原有任务状态不变。",
+                # 交还不涉及回复客人，不写「机器人已回复」。
+                replied=None,
             ),
         )
 
