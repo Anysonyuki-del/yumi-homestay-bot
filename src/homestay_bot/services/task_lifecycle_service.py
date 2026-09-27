@@ -43,7 +43,6 @@ class TaskLifecycleSweepResult:
     scanned: int
     expired: int
     skipped: int
-    released: int = 0
 
 
 class TaskLifecycleRepositoryPort(Protocol):
@@ -185,20 +184,32 @@ class TaskLifecycleService:
                 now=observed_at,
             ):
                 expired += 1
-        released = 0
-        # 定向订单治理不操作会话；通知与模式变更由装配层同事务提交。
-        if order_id is None and self._release_repository and self._release_notifier:
-            for conversation_id in await self._release_repository.list_idle_human_conversations(
-                now=observed_at, limit=limit
-            ):
-                if await self._release_repository.release_conversation(
-                    conversation_id, now=observed_at, automatic=True
-                ):
-                    await self._release_notifier(conversation_id)
-                    released += 1
         return TaskLifecycleSweepResult(
-            released=released,
             scanned=len(candidates),
             expired=expired,
             skipped=len(candidates) - expired,
         )
+
+    async def release_idle_conversations(
+        self, *, now: datetime | None = None, limit: int = 100
+    ) -> int:
+        """把空闲满时限的低风险人工会话交还机器人，返回交还数量。
+
+        由每分钟一次的交还巡检调用，不随每小时的任务治理：交还时限只有 5 分钟，
+        放在每小时巡检里，最坏要一个多小时才交还。通知与模式变更由调用方同事务提交。
+        """
+        if not self._release_repository or not self._release_notifier:
+            return 0
+        observed_at = now or datetime.now(UTC)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=UTC)
+        released = 0
+        for conversation_id in await self._release_repository.list_idle_human_conversations(
+            now=observed_at, limit=limit
+        ):
+            if await self._release_repository.release_conversation(
+                conversation_id, now=observed_at, automatic=True
+            ):
+                await self._release_notifier(conversation_id)
+                released += 1
+        return released

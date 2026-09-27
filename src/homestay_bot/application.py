@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -82,7 +83,10 @@ from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
 from homestay_bot.repositories.lifecycle_reminders import (
     SQLAlchemyLifecycleReminderRepository,
 )
-from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
+from homestay_bot.repositories.operations import (
+    IDLE_RELEASE_MINUTES,
+    SQLAlchemyOperationsRepository,
+)
 from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
 from homestay_bot.repositories.runtime_config import (
     RuntimeConfigConflictError,
@@ -3302,59 +3306,118 @@ async def _run_hostex_reconcile_loop(
         await asyncio.sleep(next_interval)
 
 
-async def _run_task_lifecycle_loop(
+async def _notify_conversation_release(
+    session: AsyncSession,
+    *,
+    registry: RuntimeClientRegistry,
+    public_base_url: str,
+    conversation_id: int,
+    now: datetime,
+) -> None:
+    """自动交还后通知值班员工：只写员工 outbox，与交还同事务提交，不调用外部接口。"""
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is None:
+        raise RuntimeError("交还会话不存在")
+    customer = await session.get(Customer, conversation.customer_id)
+    confirmed = await SQLAlchemyConversationRepository(session).get_confirmed_stay(
+        conversation_id,
+        today=now.astimezone(ZoneInfo("Asia/Shanghai")).date(),
+        lock=False,
+    )
+    room_name = (confirmed.get("room_number") or confirmed.get("property_title")
+                 if confirmed else None)
+    room = (f"房间：{room_name}；"
+            f"入住：{confirmed.get('check_in_date')}"
+            if confirmed else "房间与入住日期：尚未确认")
+    async with registry.acquire() as bundle:
+        await TransactionalOutboxWeCom(
+            session, source_message_id=f"release:{conversation_id}:{now.isoformat()}"
+        ).send_internal_text(
+            agent_id=bundle.agent_id, employee_userids=list(bundle.duty_userids),
+            content=format_employee_notification(
+                reason=f"员工空闲满{IDLE_RELEASE_MINUTES}分钟，会话已交还机器人",
+                guest=f"客人：{customer.display_name if customer else '客人'}",
+                room=room,
+                link=f"{public_base_url}/employee/customers/{conversation.customer_id}",
+                original="巡检自动交还；原有任务状态不变。",
+            ),
+        )
+
+
+async def _notify_release_conversation_id(
+    conversation_id: int,
+    *,
+    session: AsyncSession,
+    registry: RuntimeClientRegistry,
+    public_base_url: str,
+    now: datetime,
+) -> None:
+    """交还通知的单参数适配：服务层只传会话编号。"""
+    await _notify_conversation_release(
+        session, registry=registry, public_base_url=public_base_url,
+        conversation_id=conversation_id, now=now,
+    )
+
+
+async def _run_conversation_release_loop(
     factory: async_sessionmaker[AsyncSession],
     *,
-    interval_seconds: float = 3600,
-    registry: RuntimeClientRegistry | None = None,
+    registry: RuntimeClientRegistry,
     public_base_url: str = "",
+    interval_seconds: float = 60,
     now_provider: Callable[[], datetime] | None = None,
-    heartbeat: Callable[[datetime], None] | None = None,
-    result_recorder: Callable[[TaskLifecycleSweepResult], None] | None = None,
 ) -> None:
-    """每小时有限治理失去业务价值的任务，不调用模型或外部接口。"""
+    """每分钟把空闲满时限的低风险人工会话交还机器人，并通知值班员工。
+
+    从每小时的任务巡检里拆出来：交还时限改为 5 分钟后，放在每小时巡检里最坏要等
+    一个多小时。只读数据库和写员工 outbox，不调用模型或外部接口。
+    """
     current_time = now_provider or (lambda: datetime.now(UTC))
     while True:
         try:
             async with factory() as session:
-                async def notify_release(conversation_id: int) -> None:
-                    """仅写员工 outbox，交还和通知同事务提交，不调用外部接口。"""
-                    if registry is None:
-                        raise RuntimeError("交还通知未装配")
-                    conversation = await session.get(Conversation, conversation_id)
-                    if conversation is None:
-                        raise RuntimeError("交还会话不存在")
-                    customer = await session.get(Customer, conversation.customer_id)
-                    confirmed = await SQLAlchemyConversationRepository(session).get_confirmed_stay(
-                        conversation_id,
-                        today=current_time().astimezone(ZoneInfo("Asia/Shanghai")).date(),
-                        lock=False,
-                    )
-                    room_name = (confirmed.get("room_number") or confirmed.get("property_title")
-                                 if confirmed else None)
-                    room = (f"房间：{room_name}；"
-                            f"入住：{confirmed.get('check_in_date')}"
-                            if confirmed else "房间与入住日期：尚未确认")
-                    async with registry.acquire() as bundle:
-                        await TransactionalOutboxWeCom(
-                            session, source_message_id=(
-                                f"release:{conversation_id}:{current_time().isoformat()}"
-                            )
-                        ).send_internal_text(
-                            agent_id=bundle.agent_id, employee_userids=list(bundle.duty_userids),
-                            content=format_employee_notification(
-                                reason="员工空闲满30分钟，会话已交还机器人",
-                                guest=f"客人：{customer.display_name if customer else '客人'}",
-                                room=room,
-                                link=f"{public_base_url}/employee/customers/{conversation.customer_id}",
-                                original="巡检自动交还；原有任务状态不变。",
-                            ),
-                        )
+                observed_at = current_time()
                 repository = SQLAlchemyOperationsRepository(session)
-                result = await TaskLifecycleService(
-                    repository, release_repository=repository if registry else None,
-                    release_notifier=notify_release if registry else None,
-                ).sweep(
+                await TaskLifecycleService(
+                    repository,
+                    release_repository=repository,
+                    # 通知写进本轮同一事务；partial 绑定本轮的会话与时间。
+                    release_notifier=functools.partial(
+                        _notify_release_conversation_id,
+                        session=session, registry=registry,
+                        public_base_url=public_base_url, now=observed_at,
+                    ),
+                ).release_idle_conversations(now=observed_at, limit=100)
+                await session.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "人工会话交还巡检失败：error_type=%s",
+                type(error).__name__,
+                exc_info=error,
+            )
+        await asyncio.sleep(interval_seconds)
+
+
+async def _run_task_lifecycle_loop(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    interval_seconds: float = 3600,
+    now_provider: Callable[[], datetime] | None = None,
+    heartbeat: Callable[[datetime], None] | None = None,
+    result_recorder: Callable[[TaskLifecycleSweepResult], None] | None = None,
+) -> None:
+    """每小时有限治理失去业务价值的任务，不调用模型或外部接口。
+
+    人工会话交还由 _run_conversation_release_loop 每分钟单独执行。
+    """
+    current_time = now_provider or (lambda: datetime.now(UTC))
+    while True:
+        try:
+            async with factory() as session:
+                repository = SQLAlchemyOperationsRepository(session)
+                result = await TaskLifecycleService(repository).sweep(
                     now=current_time(), limit=100
                 )
                 await session.commit()
@@ -4367,8 +4430,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 started_tasks.append(
                     _create_runtime_task(
                         _run_task_lifecycle_loop(
-                            factory, registry=candidate_registry,
-                            public_base_url=bootstrap.public_base_url,
+                            factory,
                             heartbeat=lambda value: setattr(
                                 app.state,
                                 "task_lifecycle_last_success",
@@ -4383,6 +4445,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                                     "skipped": result.skipped,
                                 },
                             ),
+                        )
+                    )
+                )
+                started_tasks.append(
+                    _create_runtime_task(
+                        _run_conversation_release_loop(
+                            factory, registry=candidate_registry,
+                            public_base_url=bootstrap.public_base_url,
                         )
                     )
                 )

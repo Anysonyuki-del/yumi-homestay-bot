@@ -245,3 +245,117 @@ def test_mixed_availability_lists_available_before_unavailable() -> None:
         lines = text.splitlines()
         assert lines.index(first) < lines.index(second)
         assert "201城景大床房可订" not in "".join(text.split())
+
+
+def test_weekend_options_follow_the_calendar() -> None:
+    """「这周末」给周五—周日、周六—周一两种住法；已过去的入住日不给，具体日期不展开。"""
+    from datetime import date
+
+    from homestay_bot.integrations.deepseek_client import weekend_stay_options
+
+    monday, saturday, sunday = date(2026, 9, 28), date(2026, 10, 3), date(2026, 10, 4)
+    assert weekend_stay_options("这周末有房吗", monday) == [
+        (date(2026, 10, 2), date(2026, 10, 4)),
+        (date(2026, 10, 3), date(2026, 10, 5)),
+    ]
+    assert weekend_stay_options("这周末有房吗", saturday) == [
+        (date(2026, 10, 3), date(2026, 10, 5)),
+    ]
+    assert weekend_stay_options("这周末有房吗", sunday) == []
+    assert weekend_stay_options("下周末多少钱", monday)[0] == (
+        date(2026, 10, 9), date(2026, 10, 11),
+    )
+    assert weekend_stay_options("Any rooms this weekend?", monday)[1][0] == date(2026, 10, 3)
+    for concrete in ("这周末还是10月8号有房？", "这周六有房吗", "明晚有房吗"):
+        assert weekend_stay_options(concrete, monday) == []
+
+
+def test_weekend_expands_only_when_model_picked_this_weekend() -> None:
+    """模型选的入住日落在这个周末的周五或周六才展开成两次查询，其他日期原样查。"""
+    from datetime import date
+
+    monday = date(2026, 9, 28)
+    for check_in in ("2026-10-02", "2026-10-03"):
+        options = DeepSeekGuestAssistant._weekend_argument_options(
+            "search_availability", {"check_in_date": check_in, "check_out_date": "x"},
+            "这周末有房吗", monday,
+        )
+        assert [o["check_in_date"] for o in options] == ["2026-10-02", "2026-10-03"]
+        assert [o["check_out_date"] for o in options] == ["2026-10-04", "2026-10-05"]
+    arguments = {"check_in_date": "2026-10-09", "check_out_date": "2026-10-10"}
+    assert DeepSeekGuestAssistant._weekend_argument_options(
+        "search_availability", arguments, "这周末有房吗", monday
+    ) == [arguments]
+    assert DeepSeekGuestAssistant._weekend_argument_options(
+        "list_properties", {}, "这周末有房吗", monday
+    ) == [{}]
+
+
+def test_weekend_question_queries_both_stays_and_shows_both_options() -> None:
+    """模型只调一次房态查询，代码按两种住法各查一次，回复里两个方案都在。"""
+    import asyncio
+    import json
+    from datetime import date
+    from types import SimpleNamespace
+
+    from tests.unit.test_deepseek_client import (
+        KnowledgeStub,
+        ToolExecutorStub,
+        TourismStub,
+    )
+
+    class WeekendCompletions:
+        """第一次请求房态（模型只选了周六住法），第二次返回整理后的正文。"""
+
+        def __init__(self) -> None:
+            """记录请求。"""
+            self.requests: list[dict[str, object]] = []
+
+        async def create(self, **kwargs):
+            """按请求次数返回工具调用或最终回复。"""
+            self.requests.append(kwargs)
+            if len(self.requests) == 1:
+                function = SimpleNamespace(
+                    name="search_availability",
+                    arguments='{"check_in_date":"2026-10-03","check_out_date":"2026-10-05"}',
+                )
+                call = SimpleNamespace(id="call-weekend", type="function", function=function)
+                message = SimpleNamespace(
+                    content=None, tool_calls=[call],
+                    model_dump=lambda **_kwargs: {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": call.id, "type": "function",
+                            "function": {"name": function.name,
+                                         "arguments": function.arguments},
+                        }],
+                    },
+                )
+            else:
+                message = SimpleNamespace(content='{"reply_text":"查询完成"}', tool_calls=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    completions = WeekendCompletions()
+    executor = ToolExecutorStub()
+    assistant = DeepSeekGuestAssistant(
+        chat_client=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=executor,
+        local_date_provider=lambda: date(2026, 9, 28),
+    )
+    decision = asyncio.run(assistant.respond(
+        guest_identifier="wm-guest", language=Language.ZH,
+        messages=[{"role": "user", "content": "这周末有房吗"}],
+    ))
+    assert [args["check_in_date"] for _name, args in executor.calls] == [
+        "2026-10-02", "2026-10-03",
+    ]
+    assert "方案一：周五入住、周日退房" in decision.reply_text
+    assert "方案二：周六入住、周一退房" in decision.reply_text
+    tool_message = next(
+        m for m in completions.requests[1]["messages"] if m.get("role") == "tool"
+    )
+    assert len(json.loads(tool_message["content"])) == 2

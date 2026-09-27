@@ -82,6 +82,39 @@ _EXPLICIT_STAY_DATE_PATTERN = re.compile(
     r"\b(?:today|tonight|tomorrow)\b",
     re.IGNORECASE,
 )
+# 「这周末 / 下周末 / this weekend」这类没有具体日期的说法；带具体日期时不走两种住法。
+_WEEKEND_PATTERN = re.compile(r"周末|\bweekend\b", re.IGNORECASE)
+_NEXT_WEEKEND_PATTERN = re.compile(r"下(?:个)?周末|\bnext\s+weekend\b", re.IGNORECASE)
+_CONCRETE_DATE_PATTERN = re.compile(
+    r"\d{1,2}月\d{1,2}[日号]|\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2}|周[一二三四五六日天]|"
+    r"星期[一二三四五六日天]|今天|今晚|明天|明晚|后天|\b(?:today|tonight|tomorrow)\b",
+    re.IGNORECASE,
+)
+
+
+def weekend_stay_options(question: str, today: date) -> list[tuple[date, date]]:
+    """「周末」没有固定住法：返回「周五入住、周日退房」和「周六入住、周一退房」两种。
+
+    用户决定（2026-09-28）：两种都查、一起给客人挑，不交给模型每次各猜一种
+    （1.42.0 同一句「这周末有房吗」先后被理解成 10/3–10/5 和 10/2–10/4）。
+    已经过去的入住日不给；周日才问「这周末」时不再推算，交还模型处理。
+    问题里另有具体日期或星期几时返回空列表，按客人给的日期查。
+    """
+    if not _WEEKEND_PATTERN.search(question) or _CONCRETE_DATE_PATTERN.search(question):
+        return []
+    friday = today + timedelta(days=(4 - today.weekday()) % 7)
+    if today.weekday() in (5, 6):
+        # 周六、周日问「这周末」，指的是本周已经开始的这个周末。
+        friday = today - timedelta(days=today.weekday() - 4)
+    if _NEXT_WEEKEND_PATTERN.search(question):
+        friday += timedelta(days=7)
+    options = [
+        (friday, friday + timedelta(days=2)),
+        (friday + timedelta(days=1), friday + timedelta(days=3)),
+    ]
+    return [option for option in options if option[0] >= today]
+
+
 # 讲周边商户或公共设施的句子不能证明本店提供；只有客人本来就在问周边时才算数。
 _EXTERNAL_SCOPE_PATTERN = re.compile(
     # 巷口、路口这类指路说法同样在讲店外商户；漏一个词，周边商户的早餐就会被
@@ -2394,11 +2427,16 @@ class DeepSeekGuestAssistant:
                                 arguments.get("check_out_date")
                             ),
                         }
+                        option_arguments = self._weekend_argument_options(
+                            call.function.name, arguments, question_text, local_today
+                        )
                         try:
-                            result = await self._tool_executor.execute(
-                                call.function.name,
-                                arguments,
-                            )
+                            option_results = [
+                                await self._tool_executor.execute(
+                                    call.function.name, option
+                                )
+                                for option in option_arguments
+                            ]
                         except BaseException as error:
                             _record_stage(
                                 stage_timing_sink, f"tool:{call.function.name}", started
@@ -2450,12 +2488,30 @@ class DeepSeekGuestAssistant:
                                     **trace_dates,
                                 )
                             )
-                        tool_parts.extend(
-                            self._tool_reply_parts(
-                                call.function.name, arguments, result, language, call.id,
-                                question_text
+                        if len(option_arguments) == 1:
+                            result: Any = option_results[0]
+                            tool_parts.extend(
+                                self._tool_reply_parts(
+                                    call.function.name, arguments, result, language, call.id,
+                                    question_text
+                                )
                             )
-                        )
+                        else:
+                            # 两种住法各成一组，前面说明是哪种住法；模型也拿到两组结果。
+                            tool_parts.extend(self._weekend_reply_parts(
+                                call.function.name, option_arguments, option_results,
+                                language, call.id, question_text,
+                            ))
+                            result = [
+                                {
+                                    "check_in_date": option["check_in_date"],
+                                    "check_out_date": option["check_out_date"],
+                                    "result": option_result,
+                                }
+                                for option, option_result in zip(
+                                    option_arguments, option_results, strict=True
+                                )
+                            ]
                         if tool_parts:
                             availability_fallback = AssistantDecision(
                                 reply_text="",
@@ -2536,6 +2592,73 @@ class DeepSeekGuestAssistant:
                 )
                 continue
         raise AssistantUnavailableError()
+
+    @staticmethod
+    def _weekend_argument_options(
+        name: str, arguments: dict[str, Any], question: str, today: date
+    ) -> list[dict[str, Any]]:
+        """客人只说「周末」时，把一次房态或参考价查询展开成两种住法。
+
+        只在模型选的入住日正好落在这个周末的周五或周六时展开，避免覆盖客人
+        另外说的日期；其余情况原样返回模型的参数。
+        """
+        if name not in {"search_availability", "search_reference_price"}:
+            return [arguments]
+        options = weekend_stay_options(question, today)
+        if len(options) < 2:
+            return [arguments]
+        requested = DeepSeekGuestAssistant._safe_trace_date(arguments.get("check_in_date"))
+        if requested not in {start for start, _end in options}:
+            return [arguments]
+        return [
+            {
+                **arguments,
+                "check_in_date": start.isoformat(),
+                "check_out_date": end.isoformat(),
+            }
+            for start, end in options
+        ]
+
+    @staticmethod
+    def _weekend_reply_parts(
+        name: str,
+        option_arguments: list[dict[str, Any]],
+        option_results: list[Any],
+        language: Language,
+        source_id: str,
+        question: str,
+    ) -> list[ReplyPart]:
+        """两种周末住法分别成组：先写「方案一：周五入住、周日退房」，再写该方案的结果。"""
+        english = language is Language.EN
+        labels = (
+            ("Option 1: check in Friday, check out Sunday",
+             "方案一：周五入住、周日退房"),
+            ("Option 2: check in Saturday, check out Monday",
+             "方案二：周六入住、周一退房"),
+        )
+        parts = [ReplyPart(
+            question=name,
+            status="clarification",
+            text=(
+                "\"This weekend\" can mean two different stays, so here are both:"
+                if english
+                else "「周末」有两种住法，都帮您查了，您看哪种合适："
+            ),
+        )]
+        for index, (option, option_result) in enumerate(
+            zip(option_arguments, option_results, strict=True)
+        ):
+            label_en, label_zh = labels[index]
+            option_parts = DeepSeekGuestAssistant._tool_reply_parts(
+                name, option, option_result, language, f"{source_id}:{index}", question,
+            )
+            # 方案名紧贴在该方案结果上方，不单独空一行；只改排版，证据不变。
+            first = option_parts[0]
+            option_parts[0] = first.model_copy(
+                update={"text": f"{label_en if english else label_zh}\n{first.text}"}
+            )
+            parts.extend(option_parts)
+        return parts
 
     @staticmethod
     def _availability_lines(

@@ -1677,3 +1677,61 @@ async def test_retention_summary_is_a_warning_when_a_phase_hits_the_cap(
             if record.getMessage().startswith("历史记录清理轮次结束")
         ]
         assert [record.levelno for record in summary] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_conversation_release_loop_runs_every_minute_and_commits(monkeypatch) -> None:
+    """交还巡检每分钟一次，交还与通知在同一事务提交；不再挂在每小时的任务巡检上。"""
+    observed_at = datetime(2026, 9, 28, 3, 0, tzinfo=UTC)
+    session = SimpleNamespace(committed=False)
+    calls: list[tuple[datetime, int, bool]] = []
+
+    async def commit() -> None:
+        """记录交还事务已提交。"""
+        session.committed = True
+
+    session.commit = commit
+
+    class SessionContext:
+        """提供固定交还会话。"""
+
+        async def __aenter__(self):
+            """进入测试会话。"""
+            return session
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            """退出测试会话。"""
+
+    class ServiceStub:
+        """记录交还调用及是否装配了通知。"""
+
+        def __init__(self, repository, *, release_repository, release_notifier) -> None:
+            """交还必须带着同事务的通知。"""
+            self._notifier = release_notifier
+
+        async def release_idle_conversations(self, *, now: datetime, limit: int) -> int:
+            """记录巡检时间、批次与通知装配。"""
+            calls.append((now, limit, callable(self._notifier)))
+            return 0
+
+    class StopReleaseLoop(Exception):
+        """一轮后结束循环。"""
+
+    async def stop_after_cycle(delay: float) -> None:
+        """验证每分钟周期后结束循环。"""
+        assert delay == 60
+        raise StopReleaseLoop
+
+    monkeypatch.setattr(application, "SQLAlchemyOperationsRepository", lambda _session: object())
+    monkeypatch.setattr(application, "TaskLifecycleService", ServiceStub)
+    monkeypatch.setattr(application.asyncio, "sleep", stop_after_cycle)
+
+    with pytest.raises(StopReleaseLoop):
+        await application._run_conversation_release_loop(
+            cast(Any, lambda: SessionContext()),
+            registry=cast(Any, object()),
+            now_provider=lambda: observed_at,
+        )
+
+    assert calls == [(observed_at, 100, True)]
+    assert session.committed is True

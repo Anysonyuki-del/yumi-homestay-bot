@@ -77,6 +77,11 @@ def _wuhan_today() -> date:
 PURGED_MARK_RETENTION_DAYS = 180
 
 
+# 低风险人工接管空闲多久后自动交还机器人。用户 2026-09-28 从 30 分钟改为 5 分钟；
+# 判定由每分钟一次的交还巡检执行（application._run_conversation_release_loop）。
+IDLE_RELEASE_MINUTES = 5
+
+
 class SQLAlchemyOperationsRepository:
     """提供运营模型的最小幂等写入入口。"""
 
@@ -1507,7 +1512,7 @@ class SQLAlchemyOperationsRepository:
                 AuditLog.target_id == sa_cast(Conversation.id, String),
             ).order_by(AuditLog.id.desc()).limit(1).correlate(Conversation).scalar_subquery()
         )
-        cutoff = now - timedelta(minutes=30)
+        cutoff = now - timedelta(minutes=IDLE_RELEASE_MINUTES)
         reason = AuditLog.details["reason"].as_string()
         return select(Conversation.id).join(AuditLog, AuditLog.id == latest_handoff).where(
             Conversation.mode == ConversationMode.HUMAN_ACTIVE,
@@ -1523,7 +1528,7 @@ class SQLAlchemyOperationsRepository:
     async def list_idle_human_conversations(
         self, *, now: datetime, limit: int
     ) -> tuple[int, ...]:
-        """沿用巡检批量上限读取已经空闲满三十分钟的低风险会话。"""
+        """沿用巡检批量上限读取已经空闲满 IDLE_RELEASE_MINUTES 分钟的低风险会话。"""
         return tuple((await self._session.scalars(
             self._idle_human_query(now).order_by(Conversation.id).limit(limit)
         )).all())
@@ -1557,7 +1562,7 @@ class SQLAlchemyOperationsRepository:
             actor_employee_id=actor_employee_id,
             action="conversation_release", target_type="conversation",
             target_id=str(conversation_id), created_at=now,
-            details={"reason": "auto_idle_30m" if automatic else "employee",
+            details={"reason": f"auto_idle_{IDLE_RELEASE_MINUTES}m" if automatic else "employee",
                      "handoff_id": handoff_id, "customer_id": conversation.customer_id},
         ))
         await self._session.flush()
