@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import Language, MessageOrigin
 from homestay_bot.domain.models import Conversation, Message, PropertyProfile, StayOrder
-from homestay_bot.domain.stay_status import is_checked_out_stay_status, is_excluded_stay_status
+from homestay_bot.domain.stay_status import (
+    is_checked_out_stay_status,
+    is_current_stay,
+    is_excluded_stay_status,
+)
 from homestay_bot.services.message_service import IncomingMessage, substantive_language
 
 
@@ -180,7 +184,12 @@ class SQLAlchemyConversationRepository:
                 )
             ).all()
         )
-        orders = [order for order in orders if self._stay_order_valid(order)]
+        # 与模型上下文的「进行中订单」共用同一判定，避免一边判有订单、一边找不到。
+        orders = [
+            order
+            for order in orders
+            if is_current_stay(order.status, order.check_in_date, order.check_out_date, today)
+        ]
         if order_id is not None:
             orders = [order for order in orders if order.id == order_id]
         if not orders:

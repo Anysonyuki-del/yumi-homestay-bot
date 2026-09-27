@@ -679,8 +679,17 @@ async def test_expired_candidate_leaves_pending_review_pool() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_context_includes_safe_active_orders_and_open_tasks() -> None:
-    """模型上下文只加入订单和任务的运营摘要，不复制任务正文。"""
+async def test_model_context_includes_safe_active_orders_and_open_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """模型上下文只加入订单和任务的运营摘要，不复制任务正文。
+
+    固定「今天」，让用例不随真实日期过期；退房日已过、状态却不是终态的订单
+    不算进行中（1.43.0：与住宿确认共用 is_current_stay）。
+    """
+    monkeypatch.setattr(
+        "homestay_bot.repositories.context.wuhan_today", lambda: date(2026, 7, 30)
+    )
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -702,6 +711,19 @@ async def test_model_context_includes_safe_active_orders_and_open_tasks() -> Non
                 status="confirmed",
             )
         )
+        # 已过退房日但状态停在 confirmed / 自定义值的历史订单，生产上很常见。
+        for code, status in (("R-PAST", "confirmed"), ("R-PAST-CRM", "crm_test")):
+            session.add(
+                StayOrder(
+                    hostex_reservation_code=code,
+                    stay_code=f"S-{code}",
+                    customer_id=customer.id,
+                    property_id=101,
+                    check_in_date=date(2026, 7, 1),
+                    check_out_date=date(2026, 7, 3),
+                    status=status,
+                )
+            )
         session.add(
             BusinessTask(
                 source_message_id="msg-context",

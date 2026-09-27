@@ -1779,8 +1779,9 @@ async def test_invalid_tool_followup_returns_safe_availability_fallback() -> Non
 
     assert decision.intent == "availability_query"
     assert decision.staff_confirmation_required is False
-    assert "2026-07-30" in decision.reply_text
-    assert "2026-07-31" in decision.reply_text
+    # 1.43.0 起日期按客人读法写（「7月30日」），不再用 ISO 格式。
+    assert "7月30日" in decision.reply_text
+    assert "7月31日" in decision.reply_text
     assert "江景房" in decision.reply_text
     assert executor.calls
 

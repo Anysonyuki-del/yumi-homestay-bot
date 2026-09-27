@@ -164,3 +164,84 @@ def test_chat_door_code_request_uses_deterministic_refusal() -> None:
         ))
         assert expected in decision.reply_text and not decision.knowledge_gap
         assert "密码是" not in decision.reply_text and "code is" not in decision.reply_text
+
+
+def _price_rows(titles: list[str], *, available: bool | None = True) -> list[dict[str, object]]:
+    """合成按房间返回的参考价结果（1.40.0 执行器格式）。"""
+    return [
+        {
+            "property_id": index,
+            "property_title": title,
+            "stay_available": available,
+            "check_in_date": "2026-09-29", "check_out_date": "2026-09-30",
+            "nightly_reference_prices": [{"date": "2026-09-29", "price": 980 + index}],
+            "note": "参考价，以实际下单为准；是否可住以 stay_available 为准",
+        }
+        for index, title in enumerate(titles)
+    ]
+
+
+def test_price_list_is_one_part_with_the_disclaimer_once() -> None:
+    """所问房号不存在时先说明没找到，再每行一个房间；免责说明全段只出现一次。
+
+    1.42.0 测试号「明晚201多少钱」：生产没有 201，回复逐房列出且每行重复免责说明。
+    """
+    rows = _price_rows(["《春和景明》", "《古家》2栋1803", "收藏家套房"])
+    parts = DeepSeekGuestAssistant._tool_reply_parts(
+        "search_reference_price", {}, rows, Language.ZH, "price", "明晚201多少钱"
+    )
+    assert len(parts) == 1 and parts[0].status == "grounded"
+    text = parts[0].text
+    assert text.startswith("没有找到「201」这个房间")
+    assert text.count("以实际下单为准") == 1
+    assert "stay_available" not in text and "房态查询结果" not in text
+    assert "《古家》2栋1803：9月29日 981元" in text.splitlines()
+    assert [e.source_id for e in parts[0].evidence] == ["price:0", "price:1", "price:2"]
+
+
+def test_room_number_with_hao_selects_room_and_money_is_not_a_room() -> None:
+    """「1803号房」按房号选中该房；「预算1000元」里的数字不是房号，不提示没找到。"""
+    rows = _price_rows(["《春和景明》", "《古家》2栋1803"])
+    parts = DeepSeekGuestAssistant._tool_reply_parts(
+        "search_reference_price", {}, rows, Language.ZH, "price", "1803号房明晚多少钱"
+    )
+    assert [e.property_id for e in parts[0].evidence] == [1]
+    assert "没有找到" not in parts[0].text
+    parts = DeepSeekGuestAssistant._tool_reply_parts(
+        "search_reference_price", {}, rows, Language.ZH, "price", "预算1000元，明晚有什么房"
+    )
+    assert "没有找到" not in parts[0].text
+
+
+def test_all_unavailable_collapses_into_one_sentence() -> None:
+    """全部不可订时合成一句，不再逐房念「不可订」，证据仍逐行绑定。"""
+    rows = [
+        {"property_id": index, "property_title": title, "stay_available": False,
+         "check_in_date": "2026-10-03", "check_out_date": "2026-10-05"}
+        for index, title in enumerate(["《丹麦》1栋1803", "《春和景明》", "收藏家套房"])
+    ]
+    parts = DeepSeekGuestAssistant._tool_reply_parts(
+        "search_availability", {}, rows, Language.ZH, "av", "这周末有房吗"
+    )
+    assert parts[0].text == "10月3日入住、10月5日退房：所有房间在这段时间都不可订。"
+    assert len(parts[0].evidence) == 3
+
+
+def test_mixed_availability_lists_available_before_unavailable() -> None:
+    """可订行在前、不可订行在后：去掉空白后也拼不出「某房可订」的误读。"""
+    rows = [
+        {"property_id": 1, "property_title": "201 城景大床房", "stay_available": False,
+         "check_in_date": "2026-10-03", "check_out_date": "2026-10-04"},
+        {"property_id": 2, "property_title": "101 庭院大床房", "stay_available": True,
+         "check_in_date": "2026-10-03", "check_out_date": "2026-10-04"},
+    ]
+    for language, first, second in (
+        (Language.ZH, "可订：101 庭院大床房", "不可订：201 城景大床房"),
+        (Language.EN, "Rooms available: 101 庭院大床房", "Not available: 201 城景大床房"),
+    ):
+        text = DeepSeekGuestAssistant._tool_reply_parts(
+            "search_availability", {}, rows, language, "av", "有房吗"
+        )[0].text
+        lines = text.splitlines()
+        assert lines.index(first) < lines.index(second)
+        assert "201城景大床房可订" not in "".join(text.split())

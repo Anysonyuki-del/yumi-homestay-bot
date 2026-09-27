@@ -391,6 +391,17 @@ def _record_stage(
 _REFERENCE_PRICE_NOTE = "参考价，以实际下单为准；是否可住以 stay_available 为准"
 
 
+def _guest_date(value: object, language: Language) -> str:
+    """把工具返回的 ISO 日期写成客人读的「9月29日」「Sep 29」；解析不了原样返回。"""
+    try:
+        day = date.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    return f"{day.strftime('%b')} {day.day}" if language is Language.EN else (
+        f"{day.month}月{day.day}日"
+    )
+
+
 def _stay_nights(check_in_date: date, check_out_date: date) -> list[date]:
     """本次住宿的每一晚：入住日起，到退房日前一天为止。"""
     return [
@@ -1817,7 +1828,16 @@ class DeepSeekGuestAssistant:
                         if sum(n["price"] for n in row["nightly_reference_prices"]) == lowest]
             else:
                 rows = []
-        parts: list[ReplyPart] = []
+        # 同一次工具结果合成一段：每行一个房间、免责说明只写一次。逐房逐行各带一遍说明
+        # 读起来像机器在念（1.42.0 测试号「明晚201多少钱」列出全部房间且每行重复说明）。
+        # 证据仍按原始行逐条绑定，合并只改排版，不改事实。
+        lines: list[str] = []
+        evidence_items: list[ReplyEvidence] = []
+        available_titles: list[str] = []
+        unavailable_titles: list[str] = []
+        unknown_titles: list[str] = []
+        stay_range: tuple[object, object] | None = None
+        english = language is Language.EN
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -1827,23 +1847,25 @@ class DeepSeekGuestAssistant:
                 title = row.get("title")
                 if not title:
                     continue
-                text = f"房源：{title}。" if language is Language.ZH else f"Room: {title}."
+                condition = str(title)
+                lines.append(condition)
             elif name == "search_availability":
                 kind = "availability"
-                title = row.get("property_title") or row.get("property_id")
+                title = str(row.get("property_title") or row.get("property_id"))
                 start = row.get("check_in_date") or arguments.get("check_in_date")
                 end = row.get("check_out_date") or arguments.get("check_out_date")
+                stay_range = stay_range or (start, end)
                 state = row.get("stay_available")
-                status = "可订" if state is True else "不可订" if state is False else "房态未确认"
-                if language is Language.EN:
-                    status = (
-                        "available"
-                        if state is True
-                        else "unavailable"
-                        if state is False
-                        else "availability unconfirmed"
-                    )
-                text = f"{title}（{start} — {end}）：{status}。"
+                if state is True:
+                    available_titles.append(title)
+                    status = "available" if english else "可订"
+                elif state is False:
+                    unavailable_titles.append(title)
+                    status = "unavailable" if english else "不可订"
+                else:
+                    unknown_titles.append(title)
+                    status = "availability unconfirmed" if english else "房态未确认"
+                condition = f"{title}（{start} — {end}）：{status}"
             elif name == "search_reference_price":
                 kind = "reference_price"
                 title = row.get("property_title")
@@ -1855,30 +1877,22 @@ class DeepSeekGuestAssistant:
                 if not title or not nights:
                     continue
                 # 参考价逐夜绑定同一房间；即使附带房态，也不把价格当成可订证明。
-                if language is Language.EN:
-                    prices = "; ".join(
-                        f"{night['date']}: CNY {night['price']:g}"
-                        for night in nights
+                separator = "; " if english else "、"
+                prices = separator.join(
+                    f"{_guest_date(night['date'], language)} CNY {night['price']:g}"
+                    if english
+                    else f"{_guest_date(night['date'], language)} {night['price']:g}元"
+                    for night in nights
+                )
+                condition = f"{title}: {prices}" if english else f"{title}：{prices}"
+                if row.get("stay_available") is False:
+                    condition += (
+                        " (unavailable for this stay)" if english else "（这段时间不可订）"
                     )
-                    text = (
-                        f"{title}: {prices}. Calendar reference prices only; "
-                        "final price and availability require confirmation when booking."
-                    )
-                    if row.get("stay_available") is False:
-                        text += " Unavailable for this stay."
-                else:
-                    prices = "；".join(
-                        f"{night['date']} 参考价{night['price']:g}元"
-                        for night in nights
-                    )
-                    note = str(row.get("note") or "渠道日历参考价，以实际下单为准。")
-                    note = note.replace("stay_available", "房态查询结果").rstrip("。.")
-                    text = f"{title}：{prices}；{note}。参考价不代表可订状态。"
-                    if row.get("stay_available") is False:
-                        text += "该入住时段不可订。"
+                lines.append(condition)
             else:
                 continue
-            evidence = ReplyEvidence(
+            evidence_items.append(ReplyEvidence(
                 source_kind=kind,
                 # 过滤房间后仍指向工具原始行，不能用过滤后的序号冒充来源位置。
                 source_id=f"{source_id}:{result.index(row)}",
@@ -1888,11 +1902,34 @@ class DeepSeekGuestAssistant:
                 or arguments.get("check_in_date"),
                 target_end_date=row.get("check_out_date") or arguments.get("check_out_date"),
                 fetched_at=datetime.now(UTC),
-                conditions=(text,),
+                conditions=(condition,),
+            ))
+        if name == "search_availability" and evidence_items:
+            lines = DeepSeekGuestAssistant._availability_lines(
+                available_titles, unavailable_titles, unknown_titles, stay_range, language
             )
-            parts.append(
-                ReplyPart(question=name, status="grounded", text=text, evidence=(evidence,))
+        parts: list[ReplyPart] = []
+        if lines:
+            header = DeepSeekGuestAssistant._unmatched_room_header(
+                name, question, bool(selected), language
             )
+            if name == "list_properties":
+                # 房源目录只有房名，一行写完即可。
+                lines = [
+                    f"Rooms: {', '.join(lines)}." if english else f"房源：{'、'.join(lines)}。"
+                ]
+            footer = ""
+            if name == "search_reference_price":
+                footer = (
+                    "These are calendar reference prices only; the final price and availability "
+                    "are confirmed when booking."
+                    if english
+                    else "以上为参考价，以实际下单为准；参考价不代表可订状态。"
+                )
+            text = "\n".join(filter(None, [header, *lines, footer]))
+            parts.append(ReplyPart(
+                question=name, status="grounded", text=text, evidence=tuple(evidence_items),
+            ))
         if not parts:
             parts.append(
                 ReplyPart(
@@ -2499,6 +2536,67 @@ class DeepSeekGuestAssistant:
                 )
                 continue
         raise AssistantUnavailableError()
+
+    @staticmethod
+    def _availability_lines(
+        available: list[str],
+        unavailable: list[str],
+        unknown: list[str],
+        stay_range: tuple[object, object] | None,
+        language: Language,
+    ) -> list[str]:
+        """房态按「可订 / 不可订 / 未确认」分组，入住退房日期只写一次。
+
+        「可订」行放在最前：回归判定会去掉空白再匹配，若「不可订」行后紧跟「可订」行，
+        拼起来可能读成「某房可订」。全部不可订时合成一句，不再逐房念一遍。
+        """
+        english = language is Language.EN
+        header = ""
+        if stay_range is not None and all(stay_range):
+            start, end = (_guest_date(value, language) for value in stay_range)
+            header = f"{start} – {end}:" if english else f"{start}入住、{end}退房："
+        if unavailable and not available and not unknown:
+            summary = (
+                "No rooms are available for these dates." if english
+                else "所有房间在这段时间都不可订。"
+            )
+            return [f"{header} {summary}" if english and header else f"{header}{summary}"]
+        separator = ", " if english else "、"
+        groups = (
+            ("Rooms available", "可订", available),
+            ("Not available", "不可订", unavailable),
+            ("Availability unconfirmed", "房态未确认", unknown),
+        )
+        lines = [header] if header else []
+        for label_en, label_zh, titles in groups:
+            if titles:
+                label = label_en if english else label_zh
+                colon = ": " if english else "："
+                lines.append(f"{label}{colon}{separator.join(titles)}")
+        return lines
+
+    @staticmethod
+    def _unmatched_room_header(
+        name: str, question: str, matched: bool, language: Language
+    ) -> str:
+        """客人问了具体房号、但没有房间标题含这个号时，先说明没找到再列全部房间。
+
+        房号只认 3–4 位数字，排除金额、年份、日期、人数这类数字（「500元」「2026年」）。
+        """
+        if matched or name not in {"search_reference_price", "search_availability"}:
+            return ""
+        # 不排除「号」：「201号房」是在问房间，日期里的「3号」只有一两位数字。
+        numbers = re.findall(
+            r"(?<!\d)\d{3,4}(?!\d|\s*(?:元|块|年|月|日|晚|人|点|分|%))", question
+        )
+        if not numbers:
+            return ""
+        room = numbers[0]
+        return (
+            f"No room numbered {room} was found. Here are all rooms:"
+            if language is Language.EN
+            else f"没有找到「{room}」这个房间，以下是全部房间："
+        )
 
     @staticmethod
     def _safe_trace_date(value: object) -> date | None:

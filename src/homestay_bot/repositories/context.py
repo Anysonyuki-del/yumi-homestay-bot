@@ -21,6 +21,7 @@ from homestay_bot.domain.models import (
     PropertyProfile,
     StayOrder,
 )
+from homestay_bot.domain.stay_status import is_current_stay
 from homestay_bot.services.context_retention import (
     ContextSummaryResult,
     CustomerModelContext,
@@ -42,6 +43,7 @@ from homestay_bot.services.customer_memory_policy import (
     supersedes_existing,
     verify_source_excerpt,
 )
+from homestay_bot.services.stay_date_range import wuhan_today
 
 logger = logging.getLogger(__name__)
 
@@ -419,7 +421,8 @@ class SQLAlchemyContextRepository:
         """按实时运营优先级和硬预算构建客户上下文。"""
         summary = await self.get_summary(customer_id)
         memories = await self._recall_memories(customer_id, query, datetime.now(UTC))
-        order_rows = (
+        today = wuhan_today()
+        candidate_rows = (
             await self._session.execute(
                 select(StayOrder, PropertyProfile.title)
                 .join(
@@ -428,12 +431,17 @@ class SQLAlchemyContextRepository:
                 )
                 .where(
                     StayOrder.customer_id == customer_id,
-                    StayOrder.status.not_in(["cancelled", "canceled", "checked_out", "completed"]),
+                    StayOrder.check_out_date > today,
                 )
                 .order_by(StayOrder.check_in_date, StayOrder.id)
-                .limit(5)
             )
         ).all()
+        # 状态判定与住宿确认共用 is_current_stay；SQL 只按日期粗筛，再取前 5 张。
+        order_rows = [
+            (order, title)
+            for order, title in candidate_rows
+            if is_current_stay(order.status, order.check_in_date, order.check_out_date, today)
+        ][:5]
         tasks = list(
             (
                 await self._session.scalars(
