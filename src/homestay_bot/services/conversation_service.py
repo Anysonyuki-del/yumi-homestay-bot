@@ -80,6 +80,8 @@ def format_employee_notification(
     return (f"{prefix}\n消息：{clip(original, budget)}"
             f"\n机器人已回复：{clip(replied or '尚未回复客人', budget)}")
 
+# 员工通知入队时客人回复还没发出、但紧接着会发（回复内容取决于通知是否入队成功）。
+_REPLYING_NOTICE = "正在回复客人（回复内容含本次登记结果）"
 _GUEST_MESSAGE_DEBOUNCE_SECONDS = 3
 # 联网查询要等十几秒，先让客人知道在查。固定话术不调用模型，不增加等待；
 # 不传问题原文，出口不会补天气开场白，也不标记人工，不会追加转人工收尾。
@@ -1293,14 +1295,11 @@ class ConversationService:
         # 先登记请求和通知，再根据实际结果组织收尾，模型不能生成成功承诺。
         action_reply = await self._record_task_suggestion(conversation, message, decision)
         high_risk = bool(local_handoff_reason or decision.handoff_reason)
-        if high_risk:
-            reason = local_handoff_reason or decision.handoff_reason
-            await self._activate_human(
-                conversation,
-                message,
-                f"YuMi 接管：{reason}",
-                audit_reason=reason,
-            )
+        handoff_reason = local_handoff_reason or decision.handoff_reason
+        if handoff_reason:
+            # 先切人工模式，员工通知等回复发出后再生成：通知要写明机器人实际回了什么
+            # （1.43.0 测试号：通知先于回复生成，写着「尚未回复客人」，4 秒后机器人才回复）。
+            await self._switch_to_human(conversation, handoff_reason)
         prepared_reply = prepare_planned_reply(
             decision.reply_parts, fallback=decision.reply_text,
             language=conversation.language, question=message.content, high_risk=high_risk,
@@ -1323,6 +1322,11 @@ class ConversationService:
             await self._send_prepared_guest_reply(
                 conversation, prepared_reply, stale_exempt=high_risk
             )
+        else:
+            # 快速确认已经发过同样的正文，通知照实写这段已发内容。
+            self._last_guest_reply = prepared_reply
+        if handoff_reason:
+            await self._notify_employee(conversation, message, f"YuMi 接管：{handoff_reason}")
         await self._track_frequent_faq(message, decision)
 
     @staticmethod
@@ -1429,6 +1433,8 @@ class ConversationService:
                     conversation,
                     message,
                     f"新任务待确认：ID {task.id}，类型 {task.task_type.value}",
+                    # 客人回复要写明登记和通知结果，只能在通知入队后发出。
+                    replied=_REPLYING_NOTICE,
                 )
         except Exception as error:
             logger.warning("请求通知入队失败：error_type=%s", type(error).__name__)
@@ -1733,8 +1739,14 @@ class ConversationService:
         conversation: Conversation,
         message: IncomingMessage,
         reason: str,
+        *,
+        replied: str | None = None,
     ) -> None:
-        """向值班员工发送不包含接口密钥的会话摘要。"""
+        """向值班员工发送不包含接口密钥的会话摘要。
+
+        `replied` 为空时写本轮实际发给客人的正文；回复必须等通知结果才能发出时，
+        由调用方传 `_REPLYING_NOTICE`，不能写成「尚未回复客人」误导员工。
+        """
         if self._notification_names is None:
             await self._load_notification_names(conversation)
         customer_service_name, guest_name = self._notification_names or ("微信客服", "客人")
@@ -1805,6 +1817,6 @@ class ConversationService:
             content=format_employee_notification(
                 reason=reason_label, account=customer_service_name, guest=display_identity,
                 room=location, link=link, original=" ".join(message.content.split()),
-                replied=self._last_guest_reply,
+                replied=self._last_guest_reply if replied is None else replied,
             ),
         )

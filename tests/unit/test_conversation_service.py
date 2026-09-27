@@ -2947,3 +2947,65 @@ async def test_an_unexpected_error_is_logged_and_re_raised_unchanged(caplog) -> 
 
     lines = _stage_lines(caplog)
     assert len(lines) == 1 and "outcome=error:RuntimeError" in lines[0]
+
+
+class _OrderedWeCom(WeComStub):
+    """按先后记录客人回复与员工通知。"""
+
+    def __init__(self) -> None:
+        """初始化事件序列。"""
+        super().__init__()
+        self.events: list[str] = []
+
+    async def send_text(self, *args, **kwargs):
+        """记录客人回复。"""
+        self.events.append("guest")
+        return await super().send_text(*args, **kwargs)
+
+    async def send_internal_text(self, **kwargs) -> None:
+        """记录员工通知。"""
+        self.events.append("internal")
+        await super().send_internal_text(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_handoff_notification_is_sent_after_the_reply_and_quotes_it() -> None:
+    """转人工通知在客人回复之后生成，写明机器人实际回了什么。
+
+    1.43.0 测试号：讲价转人工的通知先于回复生成，写着「机器人已回复：尚未回复客人」，
+    4 秒后机器人才回复，员工会以为机器人没回。
+    """
+    wecom = _OrderedWeCom()
+    assistant = AssistantStub(
+        decision=AssistantDecision(
+            reply_text="退款金额需要确认。", language=Language.ZH,
+            intent="refund", confidence=0.8,
+        )
+    )
+    service, conversations, _, _ = build_service(assistant=assistant, wecom=wecom)
+
+    await service.handle_message(incoming(content="这个订单能退款多少？"))
+
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert wecom.events == ["guest", "internal"]
+    notification = wecom.internal_messages[0]
+    assert f"机器人已回复：{wecom.guest_messages[0]}" in notification
+    assert "尚未回复客人" not in notification
+
+
+@pytest.mark.asyncio
+async def test_task_notification_says_reply_is_in_progress() -> None:
+    """登记请求的通知必须先入队（回复要写登记结果），通知里写「正在回复」，不写「尚未回复」。"""
+    wecom = _OrderedWeCom()
+    service, conversations, _, _ = build_service(
+        wecom=wecom,
+        customer_profiles=CustomerProfileStub(),
+        business_tasks=BusinessTaskStub(),
+    )
+
+    await service.handle_message(incoming(content="请补两瓶矿泉水"))
+
+    task_notice = next(m for m in wecom.internal_messages if "新任务待确认" in m)
+    assert "机器人已回复：正在回复客人" in task_notice
+    assert "尚未回复客人" not in task_notice
+    assert "您的请求已登记" in wecom.guest_messages[-1]
