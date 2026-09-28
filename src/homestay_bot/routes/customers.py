@@ -351,9 +351,10 @@ async def customer_detail(
     request: Request,
     customer_id: int,
     merge_query: Annotated[str | None, Query(max_length=100)] = None,
-    tab: Literal["overview", "stays", "service", "memory", "governance"] | None = None,
+    tab: Literal["overview", "stays", "chat", "service", "memory", "governance"] | None = None,
+    before_message_id: Annotated[int | None, Query(gt=0)] = None,
 ) -> Response:
-    """展示脱敏手机号、标签、备注、摘要和待合并建议。"""
+    """展示客户档案各页签；对话记录页签按 before_message_id 向前翻页。"""
     administrator = await _current_admin(request)
     service = _get_service(request)
     try:
@@ -361,7 +362,7 @@ async def customer_detail(
         # 资料、标签、备注、AI 摘要、结构化记忆和合并区一次铺开，而日常入口和
         # 所有写操作都落在这个 URL 上，五个标签页形同虚设。旧 URL 仍可访问。
         detail = await service.get_detail(
-            CustomerDetailRequest(customer_id, tab or "overview"),
+            CustomerDetailRequest(customer_id, tab or "overview", before_message_id),
             administrator,
         )
         merge_targets = (

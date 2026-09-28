@@ -139,6 +139,18 @@ button:active:not(:disabled), .button:active { transform: translateY(1px); box-s
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .button-row form { margin: 0; }
 .inline-form { max-width: 34rem; }
+.chat-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.chat-status form { margin: 0; }
+.chat-log { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.chat-day { margin: 8px 0 0; color: var(--muted); font-size: var(--t-sm); text-align: center; }
+.chat-message { max-width: min(42rem, 88%); padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
+.chat-message p { margin: 4px 0 0; white-space: pre-wrap; }
+.chat-message--guest { justify-self: start; background: var(--surface-sunk); }
+.chat-message--bot, .chat-message--servicer { justify-self: end; }
+.chat-message--servicer { border-color: #fde68a; background: var(--warning-soft); }
+.chat-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-sm); }
+.chat-meta strong { color: var(--text); }
+.chat-empty { color: var(--muted); }
 .image-list { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 12px; padding: 0; list-style: none; }
 .image-list li { display: grid; gap: 8px; }
 .image-list img { display: block; width: 200px; max-width: 100%; height: 200px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-sunk); object-fit: contain; }

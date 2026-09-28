@@ -636,6 +636,47 @@ class SQLAlchemyCustomerRepository:
         )
         return _notification_label(employee_note)
 
+    async def customer_messages(
+        self,
+        customer_id: int,
+        *,
+        before_message_id: int | None = None,
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """按消息编号倒序取这位客户全部会话的一页消息，返回（按时间正序的消息，是否还有更早）。
+
+        员工接手转人工时要快速看完上下文（2026-09-29 用户要求在后台看客户对话）。
+        多个客服账号的会话按消息编号合并成一条时间线；消息编号按入库顺序递增，
+        作分页游标不会漏页或重复。
+        """
+        statement = (
+            select(
+                Message.id,
+                Message.conversation_id,
+                Message.origin,
+                Message.message_type,
+                Message.content,
+                Message.sent_at,
+                Message.message_metadata,
+            )
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(Conversation.customer_id == customer_id)
+        )
+        if before_message_id is not None:
+            statement = statement.where(Message.id < before_message_id)
+        rows = [
+            dict(row)
+            for row in (
+                await self._session.execute(
+                    statement.order_by(Message.id.desc()).limit(limit + 1)
+                )
+            ).mappings().all()
+        ]
+        has_older = len(rows) > limit
+        page = rows[:limit]
+        page.reverse()
+        return page, has_older
+
     async def customer_detail(
         self,
         customer_id: int,
@@ -741,6 +782,22 @@ class SQLAlchemyCustomerRepository:
                     "is_test_account": await self._is_test_account(customer_id),
                 }
             )
+            return detail
+
+        if tab == "chat":
+            # 对话记录页签：会话处理状态放在消息上方，转人工时可以就地交还机器人；
+            # 消息正文由 customer_messages 按游标分页读取。
+            detail["conversations"] = [
+                dict(row)
+                for row in (
+                    await self._session.execute(
+                        select(Conversation.id, Conversation.mode, Conversation.updated_at)
+                        .where(Conversation.customer_id == customer_id)
+                        .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
+                        .limit(20)
+                    )
+                ).mappings().all()
+            ]
             return detail
 
         load_overview = tab in {None, "overview"}

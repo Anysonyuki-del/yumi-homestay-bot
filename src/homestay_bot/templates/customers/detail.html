@@ -6,6 +6,7 @@
 <nav class="tab-nav" aria-label="客户档案页签">
   <a href="/employee/customers/{{ customer.id }}?tab=overview" {% if active_tab == "overview" %}aria-current="page"{% endif %}>客户概览</a>
   <a href="/employee/customers/{{ customer.id }}?tab=stays" {% if active_tab == "stays" %}aria-current="page"{% endif %}>住宿记录</a>
+  <a href="/employee/customers/{{ customer.id }}?tab=chat" {% if active_tab == "chat" %}aria-current="page"{% endif %}>对话记录</a>
   <a href="/employee/customers/{{ customer.id }}?tab=service" {% if active_tab == "service" %}aria-current="page"{% endif %}>服务记录</a>
   <a href="/employee/customers/{{ customer.id }}?tab=memory" {% if active_tab == "memory" %}aria-current="page"{% endif %}>客户记忆</a>
   <a href="/employee/customers/{{ customer.id }}?tab=governance" {% if active_tab == "governance" %}aria-current="page"{% endif %}>档案治理</a>
@@ -17,6 +18,16 @@
 <section class="detail-section panel panel--padded"><h2>最新入住备注</h2><p class="long-text">{{ customer.latest_stay_note or "暂无入住记录" }}</p><p class="field-help">该内容按入住订单自动计算，不会覆盖员工备注。</p></section>
 <section class="detail-section panel panel--padded"><h2>客户标签</h2><form method="post" action="/employee/customers/{{ customer.id }}/tags" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="tag-grid">{% for tag in tags|default([]) %}<label class="checkbox"><input type="checkbox" name="tag_ids" value="{{ tag.id }}" {% if tag.id in selected_tag_ids|default([]) %}checked{% endif %}><span>{{ tag.name }}</span></label>{% else %}<p>尚未配置客户标签。</p>{% endfor %}</div><button type="submit">保存标签</button></form></section>
 <section class="detail-section panel panel--padded"><h2>员工备注</h2><form method="post" action="/employee/customers/{{ customer.id }}/note" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>备注<textarea name="note" maxlength="2000">{{ customer.note }}</textarea></label><button type="submit">保存备注</button></form></section>
+{% endif %}
+
+{% if active_tab == "chat" %}
+<section class="detail-section panel panel--padded" id="chat">
+  <div class="section-heading"><h2>对话记录</h2><div class="button-row">{% if has_older_messages %}<a class="button button--secondary" href="/employee/customers/{{ customer.id }}?tab=chat&before_message_id={{ older_before_message_id }}#chat">查看更早消息</a>{% endif %}{% if not is_latest_message_page %}<a class="button button--secondary" href="/employee/customers/{{ customer.id }}?tab=chat#chat-latest">回到最新</a>{% endif %}</div></div>
+  {% for conversation in conversations|default([]) %}<div class="chat-status"><span>{{ ui.badge(conversation.mode_label, "warning" if conversation.mode_label == "人工接待" else "neutral") }} 最近活动 {{ conversation.updated_at_label }}</span>{% if conversation.mode_label == '人工接待' %}<form method="post" action="/employee/customers/{{ customer.id }}/conversations/{{ conversation.id }}/release"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button button--secondary">交还机器人</button></form>{% endif %}</div>{% endfor %}
+  <p class="field-help">客人、机器人和人工客服的全部消息，时间为武汉时间；每页 100 条，最新的在最下面。</p>
+  <ol class="chat-log">{% for message in messages|default([]) %}{% if message.day_label %}<li class="chat-day">{{ message.day_label }}</li>{% endif %}<li class="chat-message chat-message--{{ message.origin }}"><div class="chat-meta"><strong>{{ message.sender_label }}</strong> <time>{{ message.time_label }}</time>{% if message.delivery_failed %} {{ ui.badge("发送失败", "danger") }}{% endif %}</div><p class="long-text">{{ message.text }}</p></li>{% else %}<li class="chat-empty">暂无对话消息。</li>{% endfor %}</ol>
+  <span id="chat-latest"></span>
+</section>
 {% endif %}
 
 {% if active_tab == "stays" %}
@@ -69,7 +80,7 @@
 {% else %}<p class="empty-state">暂无服务任务。</p>{% endif %}
 </section>
 <section class="detail-section panel panel--padded"><h2>投诉复核</h2><ul class="record-list clean-list">{% for complaint in complaints|default([]) %}<li><a class="record-link" href="/employee/complaints/{{ complaint.id }}"><strong>{{ complaint.reason or "待分析原因" }}</strong><span>{{ complaint.status_label }} · {{ complaint.updated_at_label }}</span></a></li>{% else %}<li>暂无投诉复核。</li>{% endfor %}</ul></section>
-<section class="detail-section panel panel--padded"><h2>接待会话</h2><p class="field-help">这里只展示会话处理状态，不加载对话内容。</p><ul class="record-list clean-list">{% for conversation in conversations|default([]) %}<li><span class="record-link"><strong>{{ conversation.mode_label }}</strong><span>{{ conversation.updated_at_label }}</span></span>{% if conversation.mode_label == '人工接待' %}<form method="post" action="/employee/customers/{{ customer.id }}/conversations/{{ conversation.id }}/release"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button button--secondary">交还机器人</button></form>{% endif %}</li>{% else %}<li>暂无接待会话。</li>{% endfor %}</ul>{% if is_test_account %}<form method="post" action="/employee/customers/{{ customer.id }}/test-data/clear" data-confirm="确定清空这个测试号的聊天记录、上下文记忆和订单吗？清空后无法恢复。任务和审计日志保留。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><p class="field-help">测试专用号：可清空聊天记录、上下文记忆与订单，会话恢复为机器人接待；任务和审计日志保留。</p><button type="submit" class="button button--danger">清空测试数据</button></form>{% endif %}</section>
+<section class="detail-section panel panel--padded"><h2>接待会话</h2><p class="field-help">这里只展示会话处理状态；对话内容见「对话记录」页签。</p><ul class="record-list clean-list">{% for conversation in conversations|default([]) %}<li><span class="record-link"><strong>{{ conversation.mode_label }}</strong><span>{{ conversation.updated_at_label }}</span></span>{% if conversation.mode_label == '人工接待' %}<form method="post" action="/employee/customers/{{ customer.id }}/conversations/{{ conversation.id }}/release"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button button--secondary">交还机器人</button></form>{% endif %}</li>{% else %}<li>暂无接待会话。</li>{% endfor %}</ul>{% if is_test_account %}<form method="post" action="/employee/customers/{{ customer.id }}/test-data/clear" data-confirm="确定清空这个测试号的聊天记录、上下文记忆和订单吗？清空后无法恢复。任务和审计日志保留。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><p class="field-help">测试专用号：可清空聊天记录、上下文记忆与订单，会话恢复为机器人接待；任务和审计日志保留。</p><button type="submit" class="button button--danger">清空测试数据</button></form>{% endif %}</section>
 {% endif %}
 
 {% if active_tab == "memory" %}

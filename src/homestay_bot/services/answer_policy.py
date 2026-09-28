@@ -209,9 +209,11 @@ _INTERNAL_SYSTEM_PROBE = re.compile(
     re.IGNORECASE,
 )
 
-INTERNAL_SYSTEM_REPLY_ZH = "内部系统的信息不便透露。入住、房间或武汉出行的问题，我都可以帮您。"
+# 措辞要能原样通过客人侧出口：「我都可以帮您」会被当成软承诺删掉（1.53.0 测试号
+# 实测只剩前半句），所以用「欢迎直接问我」。
+INTERNAL_SYSTEM_REPLY_ZH = "内部系统的信息不便透露。入住、房间或武汉出行方面的问题，欢迎直接问我。"
 INTERNAL_SYSTEM_REPLY_EN = (
-    "I can't share details about our internal systems, but I'm happy to help with your stay, "
+    "I can't share details about our internal systems. Feel free to ask me about your stay, "
     "the rooms, or getting around Wuhan."
 )
 

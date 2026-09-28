@@ -253,3 +253,11 @@ def test_internal_system_probe_gets_a_fixed_decline() -> None:
     ))
     assert decision.reply_text == INTERNAL_SYSTEM_REPLY_ZH
     assert not decision.knowledge_gap and decision.handoff_reason is None
+    # 客人实际收到的是经过出口过滤的正文：两种语言都要原样保留，不能被当成承诺删句。
+    from homestay_bot.services.answer_policy import INTERNAL_SYSTEM_REPLY_EN
+    from homestay_bot.services.guest_reply_policy import prepare_guest_reply
+
+    for text, language in (
+        (INTERNAL_SYSTEM_REPLY_ZH, Language.ZH), (INTERNAL_SYSTEM_REPLY_EN, Language.EN)
+    ):
+        assert prepare_guest_reply(text, language=language, requires_human=False) == text

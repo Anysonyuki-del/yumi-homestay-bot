@@ -40,6 +40,23 @@ class CustomerDetailRequest:
 
     customer_id: int
     tab: str
+    # 对话记录页签的翻页游标：只看这条消息之前的一页。
+    before_message_id: int | None = None
+
+
+# 对话记录每页条数：一次入住的来回通常在这之内，更早的按「查看更早消息」翻页。
+CHAT_PAGE_SIZE = 100
+_SENDER_LABELS = {"guest": "客人", "bot": "YuMi 机器人", "servicer": "人工客服"}
+_NON_TEXT_LABELS = {
+    "image": "[图片]",
+    "voice": "[语音]",
+    "video": "[视频]",
+    "file": "[文件]",
+    "location": "[位置]",
+    "link": "[链接]",
+    "business_card": "[名片]",
+    "miniprogram": "[小程序]",
+}
 
 
 @dataclass(frozen=True)
@@ -81,6 +98,15 @@ class CustomerAdminRepositoryPort(Protocol):
         self, customer_id: int, administrator_id: int
     ) -> dict[str, int]:
         """清空测试号的聊天与订单；非测试号拒绝。"""
+
+    async def customer_messages(
+        self,
+        customer_id: int,
+        *,
+        before_message_id: int | None = None,
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """返回这位客户全部会话的一页消息（按时间正序）以及是否还有更早消息。"""
 
     async def latest_context_refresh_at(self, customer_id: int) -> datetime | None:
         """锁定客户并返回最近重算作业时间，锁保持到入队事务结束。"""
@@ -286,6 +312,19 @@ class CustomerAdminService:
                 tab=tab,
             )
         )
+        if tab == "chat" and isinstance(customer_id, CustomerDetailRequest):
+            messages, has_older = await self._repository.customer_messages(
+                actual_customer_id,
+                before_message_id=customer_id.before_message_id,
+                limit=CHAT_PAGE_SIZE,
+            )
+            detail = {
+                **detail,
+                "messages": self._chat_rows(messages),
+                "has_older_messages": has_older,
+                "older_before_message_id": messages[0]["id"] if messages else None,
+                "is_latest_message_page": customer_id.before_message_id is None,
+            }
         customer = detail["customer"]
         notes = await self._repository.latest_stay_notes(
             [int(customer.id)],
@@ -646,6 +685,58 @@ class CustomerAdminService:
             memory.source_time_label = CustomerAdminService._time_label(
                 memory.source_occurred_at
             )
+
+    @staticmethod
+    def _chat_rows(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """把消息转成页面可直接渲染的行：发送方、武汉时间、日期分隔、非文字类型与投递失败。
+
+        正文原样交给模板转义显示，不在这里拼 HTML。测试号清空后正文为空的消息
+        显示「（内容已清空）」，保留时间线上的位置。
+        """
+        rows: list[dict[str, Any]] = []
+        previous_day = ""
+        for message in messages:
+            origin = CustomerAdminService._value(message.get("origin"))
+            sent_at = message.get("sent_at")
+            localized = (
+                None
+                if sent_at is None
+                else (
+                    sent_at.replace(tzinfo=UTC)
+                    if sent_at.tzinfo is None
+                    else sent_at
+                ).astimezone(WUHAN_TIMEZONE)
+            )
+            day = (
+                f"{localized.year}年{localized.month}月{localized.day}日"
+                if localized is not None
+                else "时间未知"
+            )
+            metadata = message.get("message_metadata") or {}
+            message_type = str(message.get("message_type") or "text")
+            content = message.get("content")
+            if message_type != "text":
+                label = _NON_TEXT_LABELS.get(message_type, f"[{message_type}]")
+                if metadata.get("image_file_id"):
+                    label = "[图片：知识配图或欢迎图片]"
+                text = label if not content or content == "[图片]" else f"{label} {content}"
+            elif content is None or metadata.get("cleared_by"):
+                text = "（内容已清空）"
+            else:
+                text = str(content)
+            rows.append(
+                {
+                    "id": message.get("id"),
+                    "origin": origin,
+                    "sender_label": _SENDER_LABELS.get(origin, "其他"),
+                    "time_label": localized.strftime("%H:%M:%S") if localized else "",
+                    "day_label": day if day != previous_day else "",
+                    "text": text,
+                    "delivery_failed": str(metadata.get("delivery_status", "")) == "failed",
+                }
+            )
+            previous_day = day
+        return rows
 
     @staticmethod
     def _value(value: Any) -> str:
