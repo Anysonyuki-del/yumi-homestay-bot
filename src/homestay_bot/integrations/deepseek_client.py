@@ -18,11 +18,14 @@ from homestay_bot.integrations.tourism import (
     split_tourism_reply,
 )
 from homestay_bot.services.answer_policy import (
+    INTERNAL_SYSTEM_REPLY_EN,
+    INTERNAL_SYSTEM_REPLY_ZH,
     asks_room_price,
     asks_stay_availability,
     facility_fault_exclusion,
     has_facility_fault_signal,
     is_booking_action_request,
+    is_internal_system_probe,
     is_property_specific,
     is_service_request,
     is_static_service_fee,
@@ -2006,6 +2009,18 @@ class DeepSeekGuestAssistant:
         话题（Spec F3）；为空时退回用 `messages` 里的客人消息。
         """
         question_text = latest_user_question(messages)["content"]
+        if is_internal_system_probe(question_text) and not detect_property_topics(question_text):
+            # 只问内部系统时固定婉拒，不调用模型，也不当成本店事实去判「尚未确认」。
+            # 同一句还问了本店话题时照常回答，模型提示词里已有不透露内部信息的规则。
+            return AssistantDecision(
+                reply_text=(
+                    INTERNAL_SYSTEM_REPLY_EN if language is Language.EN
+                    else INTERNAL_SYSTEM_REPLY_ZH
+                ),
+                language=language,
+                intent="internal_system",
+                confidence=1.0,
+            )
         earlier_guest = (
             list(guest_history)
             if guest_history is not None

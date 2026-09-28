@@ -53,7 +53,12 @@ from homestay_bot.services.guest_reply_policy import (
     split_guest_reply,
 )
 from homestay_bot.services.guest_verification import GuestVerificationService
-from homestay_bot.services.knowledge_service import PropertyCard, property_card_snippet
+from homestay_bot.services.knowledge_service import (
+    PropertyCard,
+    detect_property_topics,
+    normalize_text,
+    property_card_snippet,
+)
 from homestay_bot.services.message_service import (
     GuestMessageBatch,
     IncomingMessage,
@@ -61,6 +66,7 @@ from homestay_bot.services.message_service import (
 )
 from homestay_bot.services.reply_plan import (
     GuestActionResult,
+    ReplyPart,
     compose_reply_parts,
     prepare_planned_reply,
 )
@@ -1461,7 +1467,9 @@ class ConversationService:
             and hashlib.sha256(decision.reply_text.encode("utf-8")).hexdigest() == fast_ack_sha256
         )
         welcome_stay = None if high_risk else (current_stay or resolved)
-        welcome = await self._stay_welcome_text(conversation, welcome_stay)
+        welcome = await self._stay_welcome_text(
+            conversation, welcome_stay, answered_parts=decision.reply_parts
+        )
         if welcome:
             prepared_reply = f"{welcome}\n\n{prepared_reply}"
             prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
@@ -1672,11 +1680,17 @@ class ConversationService:
         }
 
     async def _stay_welcome_text(
-        self, conversation: Conversation, stay: dict[str, Any] | None
+        self,
+        conversation: Conversation,
+        stay: dict[str, Any] | None,
+        *,
+        answered_parts: Sequence[ReplyPart] = (),
     ) -> str:
         """识别出房间后，每张订单第一次回复时附上欢迎入住消息（Spec D2）。
 
         内容：房名、入住与退房日期，以及房源卡片里的房型、地址楼层、停车等信息。
+        本轮回答已经用审核知识讲了某个话题时，卡片里同话题那一行不再写，免得同一条
+        消息里说两遍（2026-09-29：问停车时停车信息在欢迎和回答里各出现一次）。
         已发过、没有订单编号或仓储不支持时返回空。门锁密码不在房源卡片里。
         """
         if not stay or not isinstance(self._audit_events, StayWelcomePort):
@@ -1700,8 +1714,23 @@ class ConversationService:
             lines.append(dates)
         snippet = property_card_snippet(card, conversation.language) if card else None
         if snippet is not None:
-            # 卡片第一行是房名，欢迎语已经写过。
-            lines.extend(snippet.answer.split("\n")[1:])
+            answered = [
+                topic
+                for part in answered_parts
+                if part.status == "grounded"
+                and any(evidence.source_kind == "knowledge" for evidence in part.evidence)
+                for topic in detect_property_topics(part.question)
+            ]
+            # 卡片第一行是房名，欢迎语已经写过。只按「停车：」这类行首标签比对话题，
+            # 不看正文，地址行顺带提到停车场不会被误删。
+            lines.extend(
+                line
+                for line in snippet.answer.split("\n")[1:]
+                if not any(
+                    topic.aliases.search(normalize_text(line.split("：", 1)[0]))
+                    for topic in answered
+                )
+            )
         return "\n".join(lines)
 
     async def _record_stay_welcome(

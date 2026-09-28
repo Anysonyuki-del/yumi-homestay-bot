@@ -487,3 +487,25 @@ async def test_async_failure_of_an_image_is_never_resent_as_text(tmp_path, monke
     assert queued is False
     assert len(text_jobs) == 1  # 只有原来那条文字
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_welcome_skips_the_card_line_the_answer_already_covers(tmp_path, monkeypatch) -> None:
+    """问停车时，欢迎里不再写卡片的停车行，地址行照留（2026-09-29：停车信息说了两遍）。"""
+    engine, factory, storage = await _world(tmp_path, welcome_image=False)
+    async with factory() as session:
+        profile = await session.get(PropertyProfile, 1)
+        profile.address_hint = "合成小区2栋201"
+        profile.parking_instructions = "地下一层A区"
+        await session.commit()
+    client = FakeWeCom()
+
+    await _receive(factory, _grounded_parking(), "g-1", "开车停哪里")
+    await _run_until_idle(factory, client, storage, monkeypatch)
+
+    text = client.events[0][1]
+    assert text.startswith("欢迎入住合成201房！")
+    assert "地址与楼层：合成小区2栋201" in text
+    assert "停车：地下一层A区" not in text
+    assert "停地下一层 A 区。" in text
+    await engine.dispose()

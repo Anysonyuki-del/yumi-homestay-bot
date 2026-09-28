@@ -320,3 +320,45 @@ def test_registration_and_gate_questions_get_fixed_answers_and_are_not_followups
     assert carry_followup_topic("怎么登记", history) == "怎么登记"
     assert carry_followup_topic("那晚上呢", history) == "那晚上呢"
     assert carry_followup_topic("那要钱吗", ["开车停哪里"]).endswith("：那要钱吗")
+
+
+def test_address_upstairs_and_yes_no_procedure_questions_pick_the_right_entry() -> None:
+    """2026-09-29：「地址在哪」「怎么上楼」「需要实名登记吗」「保安要登记吗」拿不到固定回答，
+    或被虚字重合（「怎么」「登记吗」）带去顺带提到主题的条目。
+    """
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+    from homestay_bot.services.knowledge_evidence_policy import build_evidence_plan
+    from homestay_bot.services.knowledge_service import detect_property_topics
+
+    def snippet(source_id: int, question: str, answer: str) -> KnowledgeSnippet:
+        """合成房间的审核问答。"""
+        return KnowledgeSnippet(
+            source_id, "合成", question, answer, scope="property", property_id=7
+        )
+
+    knowledge = [
+        snippet(1, "地址在哪？怎么导航过去？", "导航搜「合成小区」（合成路1号）。房间在2栋301。"),
+        snippet(2, "到了小区大门怎么进？保安要登记吗？",
+                "保安可能会给一份登记表，填写真实楼栋和房号即可。进门左边是1栋，右边是2栋。"),
+        snippet(3, "有电梯吗？房间在几楼？", "楼栋有电梯，乘电梯到3楼，出电梯右转就是301。"),
+        snippet(4, "开车来停哪里？怎么从停车场走到房间？",
+                "停地下一层，走到2栋入口，乘电梯上到3楼就是门口。"),
+        snippet(5, "入住前要做什么登记？", "入住前请扫描二维码完成公安实名登记，填写身份信息。"),
+    ]
+
+    def chosen(question: str) -> tuple[str, list[str]]:
+        """返回证据判定状态与作为固定回答的条目编号。"""
+        result = build_evidence_plan(
+            question, knowledge, is_property_question=True,
+            supporting_for_topic=DeepSeekGuestAssistant._supporting_knowledge,
+        )
+        return result.status, [part.evidence[0].source_id for part in result.parts]
+
+    assert chosen("地址在哪") == ("grounded", ["1"])
+    assert chosen("地址发我一下") == ("grounded", ["1"])
+    assert chosen("怎么上楼") == ("grounded", ["3"])
+    assert chosen("需要实名登记吗") == ("grounded", ["5"])
+    assert chosen("保安要登记吗") == ("grounded", ["2"])
+    # 问别处的地址、别处的上楼不算在问本店。
+    assert detect_property_topics("户部巷地址在哪") == []
+    assert detect_property_topics("黄鹤楼怎么上楼") == []

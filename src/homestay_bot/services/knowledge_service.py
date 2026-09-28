@@ -93,6 +93,9 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
             r"电梯|elevator|"
             r"(?:(?<!\d)[1-9]\d{2}(?!\d|\s*(?:元|块))(?:号房|房)?|房间|客房)"
             r"[^，。？?！!]{0,6}(?:几楼|几层|楼层|爬楼|楼梯)"
+            # 「怎么上楼」问的是本店进楼上楼（2026-09-29）；前面紧跟「楼」的
+            # 「黄鹤楼怎么上楼」是旅游问题，不收。
+            r"|(?<!楼)(?:怎么|如何)上楼"
         ),
         "电梯 楼梯 楼层 elevator stairs",
         english="the elevator and floors",
@@ -185,6 +188,21 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
         ),
         "小区 大门 门口 保安 闸机 entrance gate",
         english="getting into the residential compound",
+    ),
+    # 地址（2026-09-29）：「户部巷地址在哪」是问别处，所以只收句首或前面是「你们、
+    # 民宿、具体」等本店说法的「地址」。审核答案常写「导航搜「某小区」」而不写
+    # 「地址」二字，也要认作讲地址。以房名开头的问法（「挽江地址在哪」）认不出，
+    # 仍由模型参考知识回答。
+    PropertyTopic(
+        "地址",
+        _topic_pattern(
+            r"(?:^|你们|你家|咱们|民宿|房子|酒店|店|具体|详细)的?(?:地址|定位)"
+            r"|地址[:：]|导航(?:搜索?|到|至)?[「“\"]"
+            r"|(?:你们|你家|民宿|房子)(?:具体)?(?:在哪|位置在哪|在什么位置)"
+            r"|\byour\s+address\b|\baddress\s+of\s+(?:the|your)\s+(?:homestay|apartment|place)\b"
+        ),
+        "地址 导航 address",
+        english="the address",
     ),
     PropertyTopic(
         "网络",

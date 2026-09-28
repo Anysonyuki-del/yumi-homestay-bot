@@ -632,3 +632,18 @@ def test_facility_advice_drops_supply_claims_but_keeps_device_advice() -> None:
 
     assert "前台" not in reply
     assert "检查房间空调遥控器是否设为制冷模式" in reply
+
+
+def test_internal_system_terms_are_cut_from_guest_replies() -> None:
+    """门禁 MT-延迟周六：模型回「这条在知识库里是明确的」；只删提到内部系统的分句。"""
+    from homestay_bot.services.guest_reply_policy import sanitize_guest_reply
+
+    def clean(text: str) -> str:
+        return sanitize_guest_reply(text, language=Language.ZH, requires_human=False)
+
+    assert clean("周六不提供延迟退房，这条在知识库里是明确的。") == "周六不提供延迟退房。"
+    assert clean("根据知识库，早餐8点开始。\n\n停车在B1。") == "早餐8点开始。\n\n停车在B1。"
+    assert "知识库" not in clean("我们的知识库里没有这条信息。")
+    # 本地兜底话术和常见的「接口」不受影响。
+    assert clean("当前审核资料尚未确认早餐信息。") == "当前审核资料尚未确认早餐信息。"
+    assert clean("充电接口在床头。") == "充电接口在床头。"

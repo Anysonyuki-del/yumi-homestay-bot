@@ -53,7 +53,9 @@ _ATTRIBUTE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             # 「几层」「爬楼」问的是楼层位置（「401要爬几层楼」，门禁 K-电梯-C）。
             r"在哪|哪里|哪儿|放哪|位置|放在|怎么走|几楼|楼层|几层|爬楼"
-            r"|\bwhere\b|which\s+floor|how\s+do\s+i\s+get",
+            # 要地址本身就是问位置（「地址发我一下」「地址是什么」）。
+            r"|地址|定位"
+            r"|\bwhere\b|which\s+floor|how\s+do\s+i\s+get|\baddress\b",
             re.IGNORECASE,
         ),
     ),
@@ -65,6 +67,8 @@ _ATTRIBUTE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"怎么(?!样|办|收|算|付|走|用|开|关|调|卖)|如何(?!使用|收)|要做什么|需要做什么"
             r"|流程|步骤|手续"
+            # 是非问法「保安要登记吗」「需要实名登记吗」也是在问要办的手续。
+            r"|(?:需要|要|得)先?(?:登记|实名|办理|出示|刷卡|预约)"
             r"|how\s+(?:do|can|should)\s+(?:i|we)\s+(?!use|turn|adjust|set|get\s+to)",
             re.IGNORECASE,
         ),
@@ -543,6 +547,13 @@ def _knowledge_part(question: str, entry: Any, *, text: str | None = None) -> Re
     )
 
 
+def _rank_covering(item: Any, topic: PropertyTopic, asked: set[str]) -> int:
+    """条目问法与客人问题越贴近、越直接点名本主题，排序分越高。"""
+    item_question = str(getattr(item, "question", ""))
+    names_topic = topic.aliases.search(normalize_text(item_question)) is not None
+    return len(asked & _bigrams(item_question)) + (2 if names_topic else 0)
+
+
 def _bigrams(text: str) -> set[str]:
     """归一化后按相邻两字切分，用于比较两句问法的重合程度。"""
     compact = re.sub(r"[\s\W_]+", "", normalize_text(text))
@@ -772,16 +783,14 @@ def _build_evidence_plan_for_period(
             # 多条都能作答时，问法与客人问题重合最多的条目优先：「门禁卡在哪里」的答案
             # 顺带提到停车场，不能抢在「开车来停哪里」前面回答停车问题。排序稳定，
             # 重合相同时保持检索给出的相关度顺序。
-            # 重合相同时，问法本身点名这个主题的条目优先：进门条目的答案写了「登记表」，
-            # 不能和入住实名登记条目打平后靠检索顺序碰运气（2026-09-29）。只作次序，
-            # 「开车来停哪里」这种问法认不出别名，不能因此排到收费条目后面。
+            # 排序分 = 问法与客人问题的相邻两字重合数 + 问法本身点名这个主题时加 2。
+            # 只看重合时，「怎么」「登记吗」这类虚字重合会让顺带提到主题的条目抢答：
+            # 「需要实名登记吗」选成了进门条目（答案写了登记表），「怎么上楼」选成了
+            # 停车条目（2026-09-29）。只看点名又不行：「开车来停哪里」认不出停车别名，
+            # 会输给「停车收费吗」。加分不超过一处实词重合的量级，排序稳定。
             asked = _bigrams(question_text)
-            covering_items.sort(
-                key=lambda item: (
-                    -len(asked & _bigrams(str(getattr(item, "question", "")))),
-                    not topic.aliases.search(normalize_text(str(getattr(item, "question", "")))),
-                )
-            )
+
+            covering_items.sort(key=lambda item: -_rank_covering(item, topic, asked))
             evidence_texts = [
                 _attribute_evidence_text(topic, question_text, attribute, item.answer)
                 for item in covering_items

@@ -844,13 +844,55 @@ def prepare_guest_reply(
     return layout_guest_reply(prepared, language)
 
 
+# 客人不该看到的内部说法（门禁 MT-延迟周六：模型回「这条在知识库里是明确的」）。
+# 只收不会出现在正常回答里的词；「模型」「接口」太常见（充电接口），不收。本地兜底
+# 话术用的是「审核资料」，也不收。
+_INTERNAL_TERM = re.compile(
+    r"知识库|审核知识|系统提示|提示词|数据库|reply_text|tool_call|内部备注"
+    r"|deepseek|hostex|百居易|knowledge\s+base|system\s+prompt",
+    re.IGNORECASE,
+)
+_CLAUSE_CHUNK = re.compile(r"[^，,]+[，,]?")
+
+
+def _strip_internal_terms(content: str) -> str:
+    """按分句删去提到内部系统的部分，同一句里的事实照留。
+
+    「周六不提供延迟退房，这条在知识库里是明确的。」只删后半句，得到「周六不提供
+    延迟退房。」；整句都在讲内部系统时整句删掉。句间换行原样保留。
+    """
+    if not _INTERNAL_TERM.search(content):
+        return content
+    pieces: list[str] = []
+    for chunk in _SENTENCE_CHUNK.findall(content):
+        if not _INTERNAL_TERM.search(chunk):
+            pieces.append(chunk)
+            continue
+        leading = chunk[: len(chunk) - len(chunk.lstrip())]
+        body = chunk.strip()
+        ending = re.search(r"[。！？；;.!?]*$", body).group(0)  # type: ignore[union-attr]
+        kept = [
+            clause
+            for clause in _CLAUSE_CHUNK.findall(body[: len(body) - len(ending)])
+            if not _INTERNAL_TERM.search(clause)
+        ]
+        text = "".join(kept).rstrip("，, ")
+        if text:
+            pieces.append(f"{leading}{text}{ending}")
+        elif "\n" in leading:
+            # 整句删掉时把它前面的分段留给下一句，避免两段粘在一起。
+            pieces.append(leading)
+    return "".join(pieces)
+
+
 def sanitize_guest_reply(
     content: str,
     *,
     language: Language,
     requires_human: bool,
 ) -> str:
-    """清除客人侧执行承诺，并在需要人工时追加唯一管家收尾。"""
+    """清除客人侧执行承诺与内部系统说法，并在需要人工时追加唯一管家收尾。"""
+    content = _strip_internal_terms(content)
     if requires_human:
         handoff = human_contact_reply(language)
         separator = " " if language is Language.EN else ""

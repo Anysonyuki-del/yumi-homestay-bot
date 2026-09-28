@@ -4368,7 +4368,7 @@
     }
    ],
    "expect": {
-    "route": "tool_price",
+    "route": "knowledge",
     "must_include": [
      [
       "哪天",
@@ -4379,7 +4379,7 @@
     ],
     "must_not_include": [],
     "handoff": false,
-    "notes": "没有日期应追问日期，不得报任何金额。",
+    "notes": "没有日期应追问日期，不得报任何金额。追问日期由本地规则直接回复，不调用参考价工具，所以路由按普通回复判（2026-09-29 更正：原写 tool_price，行为正确却一直判失败）。",
     "must_not_match": [
      "\\d{3}\\s*元"
     ]
@@ -5627,7 +5627,7 @@
     }
    ],
    "expect": {
-    "route": "knowledge",
+    "route": "handoff",
     "must_include": [],
     "must_not_include": [
      "可以便宜",
@@ -5637,7 +5637,7 @@
      "可以打折"
     ],
     "handoff": false,
-    "notes": "讨价还价由人工决定，机器人不得答应任何优惠；本地规则判为 price 转人工。"
+    "notes": "讨价还价由人工决定，机器人不得答应任何优惠；本地规则判为 price 转人工。路由按转人工判（2026-09-29 更正：原写 knowledge，转人工正确却一直判失败）。"
    }
   },
   {

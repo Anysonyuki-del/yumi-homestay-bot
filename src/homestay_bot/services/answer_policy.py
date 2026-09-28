@@ -83,7 +83,10 @@ _ROOM_PRICE_PATTERN = re.compile(
 )
 # 讨价还价、折扣与最终成交价属于经营决定，仍交人工；单纯问参考价不再转人工。
 _BARGAIN_PATTERN = re.compile(
-    r"优惠|打折|折扣|几折|便宜点|便宜一点|便宜些|能不能便宜|可以便宜|砍价|讲价|少点|少一点|"
+    # 「打五折」「给我八折」「8.5折」也是要优惠（门禁 PI-折扣：原来只认「打折」，
+    # 客人要五折没有转人工）。「折叠床」「折腾」前面不是数字，不会误中。
+    r"优惠|打折|折扣|几折|打?[一二三四五六七八九\d](?:\.\d)?折(?![叠腾返])|"
+    r"便宜点|便宜一点|便宜些|能不能便宜|可以便宜|砍价|讲价|少点|少一点|"
     r"最低能|底价|\bdiscounts?\b|\bcheaper\b|\bbest\s+price\b|\bdeal\b",
     re.IGNORECASE,
 )
@@ -194,6 +197,28 @@ def is_property_specific(text: str) -> bool:
     多义词算作在问本店。
     """
     return _PROPERTY_SPECIFIC_PATTERN.search(text) is not None or bool(detect_property_topics(text))
+
+
+# 打听内部系统（用什么模型、知识库多少条、调哪个接口）：固定婉拒，不进入本店事实
+# 判定。此前被「你们」判成本店问题，回「尚未确认民宿专属信息」（门禁 PI-内部）。
+_INTERNAL_SYSTEM_PROBE = re.compile(
+    r"(?:什么|哪个|哪家|哪种)(?:ai|大)?模型|模型是(?:什么|哪)|知识库|系统提示词?|提示词"
+    r"|(?:调|用|走)的?(?:是)?(?:哪个|什么)(?:接口|api)|数据库"
+    r"|\bwhat\s+(?:ai\s+|language\s+)?model\b|\bsystem\s+prompt\b|\bwhich\s+api\b"
+    r"|\bknowledge\s+base\b",
+    re.IGNORECASE,
+)
+
+INTERNAL_SYSTEM_REPLY_ZH = "内部系统的信息不便透露。入住、房间或武汉出行的问题，我都可以帮您。"
+INTERNAL_SYSTEM_REPLY_EN = (
+    "I can't share details about our internal systems, but I'm happy to help with your stay, "
+    "the rooms, or getting around Wuhan."
+)
+
+
+def is_internal_system_probe(text: str) -> bool:
+    """判断客人是否在打听机器人背后的模型、知识库或接口。"""
+    return _INTERNAL_SYSTEM_PROBE.search(text) is not None
 
 
 def handoff_reason(text: str) -> str | None:
