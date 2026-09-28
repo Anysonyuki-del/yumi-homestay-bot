@@ -2095,10 +2095,10 @@ class ConversationService:
                 location = (f"房间：{room_name}；"
                             f"入住：{stay.get('check_in_date')}，退房：{stay.get('check_out_date')}")
         base = self._approval_base_url.rstrip("/")
-        # 没有任务时直接进客户的对话记录页签，员工接手前能先看完上下文（2026-09-29）。
+        # 没有任务时直接进客户的对话记录页签并滚到最新消息，员工接手前能先看完上下文。
         link = (f"{base}/employee/tasks/{self._notification_task_id}"
                 if self._notification_task_id else
-                f"{base}/employee/customers/{conversation.customer_id}?tab=chat")
+                f"{base}/employee/customers/{conversation.customer_id}?tab=chat#chat-latest")
         await self._wecom.send_internal_text(
             agent_id=self._agent_id, employee_userids=self._duty_employee_userids,
             content=format_employee_notification(

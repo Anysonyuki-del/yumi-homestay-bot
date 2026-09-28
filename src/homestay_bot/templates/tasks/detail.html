@@ -16,7 +16,7 @@
     {% if task.verification_data and task.verification_data.get("value") %}<dt>订单核对资料（待人工核实）</dt><dd class="long-text">{{ task.verification_data["value"] }}</dd>{% endif %}
     <dt>任务说明</dt><dd class="long-text">{{ safe_description }}</dd>
     {# 转人工带任务时通知链接落在任务页；管理员从这里一步进到客户的对话记录。 #}
-    {% if is_admin and task.customer_id %}<dt>客户对话</dt><dd><a href="/employee/customers/{{ task.customer_id }}?tab=chat">查看客户对话记录</a></dd>{% endif %}
+    {% if is_admin and task.customer_id %}<dt>客户对话</dt><dd><a href="/employee/customers/{{ task.customer_id }}?tab=chat#chat-latest">查看客户对话记录</a></dd>{% endif %}
   </dl>
 </section>
 

@@ -1375,7 +1375,7 @@ async def test_employee_notification_prefers_crm_stay_note() -> None:
     notification = wecom.internal_messages[0]
     assert "客服账号：YuMi客服" in notification
     # 没有任务时后台链接直接落在客户的对话记录页签（2026-09-29）。
-    assert "/employee/customers/42?tab=chat" in notification
+    assert "/employee/customers/42?tab=chat#chat-latest" in notification
     assert "客人备注：8.14-8.16《春和景明》" in notification
     assert "wk-1" not in notification
     assert "wm-1" not in notification

@@ -3609,7 +3609,10 @@ async def _notify_conversation_release(
                 account=account,
                 guest=guest,
                 room=room,
-                link=f"{public_base_url}/employee/customers/{conversation.customer_id}?tab=chat",
+                link=(
+                    f"{public_base_url}/employee/customers/{conversation.customer_id}"
+                    "?tab=chat#chat-latest"
+                ),
                 original="巡检自动交还；原有任务状态不变。",
                 # 交还不涉及回复客人，不写「机器人已回复」。
                 replied=None,

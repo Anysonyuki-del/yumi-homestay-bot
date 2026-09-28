@@ -642,13 +642,24 @@ class SQLAlchemyCustomerRepository:
         *,
         before_message_id: int | None = None,
         limit: int = 100,
-    ) -> tuple[list[dict[str, Any]], bool]:
-        """按消息编号倒序取这位客户全部会话的一页消息，返回（按时间正序的消息，是否还有更早）。
+    ) -> tuple[list[dict[str, Any]], bool, int]:
+        """按消息编号倒序取这位客户全部会话的一页消息。
 
-        员工接手转人工时要快速看完上下文（2026-09-29 用户要求在后台看客户对话）。
-        多个客服账号的会话按消息编号合并成一条时间线；消息编号按入库顺序递增，
-        作分页游标不会漏页或重复。
+        返回（按时间正序的消息，是否还有更早，隐藏的已清空消息条数）。员工接手转人工
+        时要快速看完上下文（2026-09-29 用户要求在后台看客户对话）。多个客服账号的
+        会话按消息编号合并成一条时间线；消息编号按入库顺序递增，作分页游标不会漏页
+        或重复。「清空测试数据」留下的消息行只为入站去重保留编号（1.49.1），没有正文，
+        不显示，只报条数。
         """
+        cleared = Message.message_metadata["cleared_by"].as_string().is_not(None)
+        hidden = int(
+            await self._session.scalar(
+                select(func.count(Message.id))
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(Conversation.customer_id == customer_id, cleared)
+            )
+            or 0
+        )
         statement = (
             select(
                 Message.id,
@@ -660,7 +671,7 @@ class SQLAlchemyCustomerRepository:
                 Message.message_metadata,
             )
             .join(Conversation, Conversation.id == Message.conversation_id)
-            .where(Conversation.customer_id == customer_id)
+            .where(Conversation.customer_id == customer_id, ~cleared)
         )
         if before_message_id is not None:
             statement = statement.where(Message.id < before_message_id)
@@ -675,7 +686,7 @@ class SQLAlchemyCustomerRepository:
         has_older = len(rows) > limit
         page = rows[:limit]
         page.reverse()
-        return page, has_older
+        return page, has_older, hidden
 
     async def customer_detail(
         self,

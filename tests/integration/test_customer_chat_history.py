@@ -105,7 +105,7 @@ def _client(role: EmployeeRole, service) -> TestClient:
 
 
 def test_chat_tab_shows_the_whole_timeline_in_wuhan_time(tmp_path) -> None:
-    """按时间正序显示发送方、武汉时间与日期分隔；正文转义；清空、图片、失败都有标注。"""
+    """按时间正序显示发送方、武汉时间与日期分隔；正文转义；图片、失败有标注，清空的隐藏。"""
     engine, service = _world(tmp_path)
     page = _client(EmployeeRole.ADMIN, service).get("/employee/customers/7?tab=chat")
 
@@ -115,9 +115,12 @@ def test_chat_tab_shows_the_whole_timeline_in_wuhan_time(tmp_path) -> None:
     order = [text.index(item) for item in (
         "2026年9月28日", "开车停哪里&lt;script&gt;", "停地下一层A区。",
         "[图片：知识配图或欢迎图片]",
-        "2026年9月29日", "转人工", "您好，我是管家。", "（内容已清空）",
+        "2026年9月29日", "转人工", "您好，我是管家。",
     )]
     assert order == sorted(order)
+    # 清空测试数据留下的消息行只为入站去重保留编号，不显示，只报条数。
+    assert "（内容已清空）" not in text
+    assert "已隐藏 1 条清空的测试消息" in text
     assert "<script>" not in text.split("对话记录", 1)[1]
     assert "23:59:00" in text and "08:00:00" in text
     assert text.count('class="chat-day"') == 2

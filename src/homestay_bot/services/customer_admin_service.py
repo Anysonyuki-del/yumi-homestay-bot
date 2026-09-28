@@ -105,8 +105,8 @@ class CustomerAdminRepositoryPort(Protocol):
         *,
         before_message_id: int | None = None,
         limit: int = 100,
-    ) -> tuple[list[dict[str, Any]], bool]:
-        """返回这位客户全部会话的一页消息（按时间正序）以及是否还有更早消息。"""
+    ) -> tuple[list[dict[str, Any]], bool, int]:
+        """返回这位客户一页消息（按时间正序）、是否还有更早消息、隐藏的已清空消息条数。"""
 
     async def latest_context_refresh_at(self, customer_id: int) -> datetime | None:
         """锁定客户并返回最近重算作业时间，锁保持到入队事务结束。"""
@@ -313,7 +313,7 @@ class CustomerAdminService:
             )
         )
         if tab == "chat" and isinstance(customer_id, CustomerDetailRequest):
-            messages, has_older = await self._repository.customer_messages(
+            messages, has_older, hidden = await self._repository.customer_messages(
                 actual_customer_id,
                 before_message_id=customer_id.before_message_id,
                 limit=CHAT_PAGE_SIZE,
@@ -322,6 +322,7 @@ class CustomerAdminService:
                 **detail,
                 "messages": self._chat_rows(messages),
                 "has_older_messages": has_older,
+                "hidden_cleared_count": hidden,
                 "older_before_message_id": messages[0]["id"] if messages else None,
                 "is_latest_message_page": customer_id.before_message_id is None,
             }
