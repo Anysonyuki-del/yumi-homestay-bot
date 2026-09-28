@@ -15,6 +15,21 @@ from homestay_bot.integrations.tourism import (
 from homestay_bot.services.fact_policy import FACT_SOURCE_RULE_EN, FACT_SOURCE_RULE_ZH
 from homestay_bot.services.reply_plan import ReplyEvidence
 
+# 搜索调用本身的内容块类型；紧挨在它们前面的短文字块是模型旁白。
+_SEARCH_BLOCK_TYPES = frozenset({"server_tool_use", "tool_use", "web_search_tool_result"})
+_NARRATION_MAX_CHARS = 200
+# 旁白的说法：宣布要去搜什么。只看长度会把两轮搜索之间的短正文也删掉。
+_NARRATION_PATTERN = re.compile(
+    r"^(?:i'?ll|i will|let me|now i|i need to|searching|i'?m going to"
+    r"|(?:我|让我)(?:先|再|来)?(?:帮您)?(?:搜索|搜一下|查一下|查询|查找|查查))",
+    re.IGNORECASE,
+)
+# 正文里夹带的来源括注：「（来源：武汉市气象台）」「(Source: …)」。
+_INLINE_SOURCE_PATTERN = re.compile(
+    r"\s*[（(]\s*(?:数据)?(?:来源|参考来源|source)\s*[:：][^（）()\n]{0,80}[）)]",
+    re.IGNORECASE,
+)
+
 _RECENT_PATTERN = re.compile(
     r"最近|近期|本周|本月|今天|明天|"
     r"recent|upcoming|this week|this month|today|tomorrow",
@@ -219,13 +234,32 @@ class DeepSeekTourismSearcher:
     def _extract_content(
         response: Any,
     ) -> tuple[str, list[tuple[str, str]]]:
-        """从 Anthropic 内容块提取正文和搜索来源。"""
+        """从 Anthropic 内容块提取正文和搜索来源。
+
+        模型在发起搜索前会先写一句旁白（「I'll search for the weather forecast…」），
+        它是紧跟着搜索调用的一个短文字块，不是答案；此前原样拼进正文发给客人
+        （门禁 W-天气 等联网场景的最终正文都以这句英文开头）。答案里夹的
+        「（来源：武汉市气象台）」也去掉：来源不在正文里点名（1.28.0 起的约定）。
+        """
+        blocks = list(getattr(response, "content", []) or [])
         text_parts: list[str] = []
         citations: list[tuple[str, str]] = []
         seen_urls: set[str] = set()
-        for block in getattr(response, "content", []):
+        for index, block in enumerate(blocks):
             if getattr(block, "type", None) == "text":
                 text = str(getattr(block, "text", "")).strip()
+                following = (
+                    getattr(blocks[index + 1], "type", None) if index + 1 < len(blocks) else None
+                )
+                if (
+                    following in _SEARCH_BLOCK_TYPES
+                    and len(text) <= _NARRATION_MAX_CHARS
+                    and _NARRATION_PATTERN.search(text)
+                ):
+                    # 紧接着就去搜索、又是在宣布要搜什么的短文字块是旁白；两轮搜索之间
+                    # 的正文即使很短也保留。
+                    continue
+                text = _INLINE_SOURCE_PATTERN.sub("", text).strip()
                 if text:
                     text_parts.append(text)
             if getattr(block, "type", None) != "web_search_tool_result":

@@ -769,3 +769,34 @@ async def test_english_tourism_prompt_stays_below_hard_reply_limit() -> None:
     assert "mainly using public information" not in result
     assert "Query date:" not in result
     assert "Sources:" not in result
+
+
+def test_search_narration_and_inline_sources_are_not_part_of_the_answer() -> None:
+    """门禁 W-天气：模型先写「I'll search for…」再搜索，这句旁白原样拼进了客人正文；
+    正文里夹的「（来源：武汉市气象台）」也要去掉。多轮搜索之间的长正文照留。
+    """
+    result = SimpleNamespace(
+        type="web_search_tool_result",
+        content=[SimpleNamespace(url="https://example.com/weather", title="2026年天气")],
+    )
+    # 两轮搜索之间的短正文不是旁白，要保留。
+    long_middle = "明天武汉阴天有小雨，最高气温28℃。"
+    response = SimpleNamespace(content=[
+        SimpleNamespace(type="text", text="I'll search for the weather forecast for Wuhan."),
+        SimpleNamespace(type="server_tool_use", name="web_search"),
+        result,
+        SimpleNamespace(type="text", text=long_middle),
+        SimpleNamespace(type="server_tool_use", name="web_search"),
+        result,
+        SimpleNamespace(type="text", text="让我再查一下最低气温。"),
+        SimpleNamespace(type="server_tool_use", name="web_search"),
+        result,
+        SimpleNamespace(type="text", text="最低气温23℃。（来源：武汉市气象台）出门请带伞。"),
+    ])
+
+    text, citations = DeepSeekTourismSearcher._extract_content(response)
+
+    assert "I'll search" not in text and "让我再查" not in text
+    assert text.startswith(long_middle)
+    assert "来源" not in text and "最低气温23℃。出门请带伞。" in text
+    assert citations == [("2026年天气", "https://example.com/weather")]
