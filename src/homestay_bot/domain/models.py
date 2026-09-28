@@ -580,6 +580,33 @@ class KnowledgeEntry(TimestampMixin, Base):
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
 
 
+class KnowledgeImage(Base):
+    """知识条目的配图：只在该条目作为固定回答发出时随文字发送（Spec G1、G2）。
+
+    `file_id` 指向私有存储里的随机文件名，不保存公网地址。
+    """
+
+    __tablename__ = "knowledge_images"
+    __table_args__ = (
+        Index("ix_knowledge_images_entry_order", "knowledge_entry_id", "sort_order"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    knowledge_entry_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_entries.id", ondelete="CASCADE"), nullable=False
+    )
+    file_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class KnowledgeEmbedding(TimestampMixin, Base):
     """保存审核知识某一语言正文的向量，用于语义检索召回。
 
@@ -837,6 +864,8 @@ class PropertyProfile(TimestampMixin, Base):
     address_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
     parking_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 欢迎消息附带的一张图（Spec G3），私有存储文件名；为空则只发文字。
+    welcome_image_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class StayOrder(TimestampMixin, Base):

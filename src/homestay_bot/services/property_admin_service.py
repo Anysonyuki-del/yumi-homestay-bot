@@ -391,6 +391,42 @@ class PropertyAdminService:
         await self._session.flush()
         return credential
 
+    async def set_welcome_image(
+        self,
+        property_id: int,
+        administrator: Employee,
+        file_id: str | None,
+    ) -> str | None:
+        """设置或清除欢迎图片（Spec G3），返回被替换下来的旧文件名供调用方清理。"""
+        self.require_admin(administrator)
+        if file_id is not None and self._private_file_pattern.fullmatch(file_id) is None:
+            raise ValueError("欢迎图片文件编号无效")
+        property_profile = await self._require_property_for_update(property_id)
+        previous = property_profile.welcome_image_file_id
+        property_profile.welcome_image_file_id = file_id
+        self._add_audit(
+            administrator.id,
+            "property_welcome_image_set" if file_id else "property_welcome_image_cleared",
+            property_id,
+            {},
+        )
+        await self._session.flush()
+        return previous
+
+    async def welcome_image_file_id(
+        self,
+        property_id: int,
+        administrator: Employee,
+    ) -> str:
+        """只向管理员返回欢迎图片文件名，供后台预览。"""
+        self.require_admin(administrator)
+        file_id = await self._session.scalar(
+            select(PropertyProfile.welcome_image_file_id).where(PropertyProfile.id == property_id)
+        )
+        if not isinstance(file_id, str):
+            raise LookupError("房源尚未设置欢迎图片")
+        return file_id
+
     async def active_qr_file_id(
         self,
         property_id: int,

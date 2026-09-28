@@ -94,7 +94,11 @@ from homestay_bot.repositories.runtime_config import (
 )
 from homestay_bot.routes.employee_auth import AdminLoginRateLimiter
 from homestay_bot.routes.health import OperationalHealthService
-from homestay_bot.routes.knowledge import KnowledgeAdminService
+from homestay_bot.routes.knowledge import (
+    KNOWLEDGE_IMAGE_MAX_BYTES,
+    KNOWLEDGE_IMAGE_TYPES,
+    KnowledgeAdminService,
+)
 from homestay_bot.services.admin_auth_service import (
     AdminAuthService,
     AdminSession,
@@ -375,13 +379,16 @@ async def _enqueue_guest_reply_continuation(
 ) -> str | None:
     """在当前段发送成功的同一事务里登记下一段，返回其 outbox 编号。
 
-    编号由分组与段序号确定，同一段重复处理时去重，不会重复发送。
+    先发完文字段，再逐张发配图（Spec G2）：图片编号保存在分组的 `images` 里，
+    文字段全部发出后才轮到第一张图。编号由分组与段序号确定，同一段重复处理时
+    去重，不会重复发送。
     """
     chain = payload.get("reply_chain")
     if not isinstance(chain, dict):
         return None
     continuation = [item for item in chain.get("continuation", []) if isinstance(item, str)]
-    if not continuation:
+    images = [item for item in chain.get("images", []) if isinstance(item, str)]
+    if not continuation and not images:
         return None
     next_index = _reply_chain_index(payload) + 1
     group = str(chain.get("group", ""))
@@ -393,32 +400,121 @@ async def _enqueue_guest_reply_continuation(
     next_payload = {
         key: value
         for key, value in payload.items()
-        if key not in {"outbox_id", "content", "reply_chain", "retry_of_message_id"}
+        if key
+        not in {"outbox_id", "content", "reply_chain", "retry_of_message_id", "image_file_id"}
     }
+    next_chain = {
+        **chain,
+        "group": group,
+        "index": next_index,
+        "total": chain.get("total"),
+    }
+    if continuation:
+        job_type = "wecom_send_text"
+        next_payload["content"] = continuation[0]
+        next_chain["continuation"] = continuation[1:]
+    else:
+        job_type = GUEST_IMAGE_JOB_TYPE
+        next_payload["content"] = GUEST_IMAGE_PLACEHOLDER
+        next_payload["message_type"] = "image"
+        next_payload["image_file_id"] = images[0]
+        next_chain["continuation"] = []
+        next_chain["images"] = images[1:]
     next_payload.update(
         {
             "outbox_id": outbox_id,
-            "content": continuation[0],
             "delivery_retry_count": 0,
-            "reply_chain": {
-                **chain,
-                "group": group,
-                "index": next_index,
-                "total": chain.get("total"),
-                "continuation": continuation[1:],
-            },
+            "reply_chain": next_chain,
         }
     )
-    await repository.enqueue("wecom_send_text", next_payload, dedupe_key=outbox_id)
+    await repository.enqueue(job_type, next_payload, dedupe_key=outbox_id)
     return outbox_id
+
+
+# 知识配图与欢迎图片的出站作业（Spec G2、G3）；消息表里记这个占位正文。
+GUEST_IMAGE_JOB_TYPE = "wecom_send_image"
+GUEST_IMAGE_PLACEHOLDER = "[图片]"
+
+
+def _build_guest_image_handler(
+    session: AsyncSession,
+    client: WeComApiClient,
+    storage: PrivateFileStorage,
+) -> JobHandler:
+    """返回逐张发送回复配图的处理器：每次重新上传拿临时素材，发完登记下一张。"""
+
+    async def send_guest_image(payload: dict[str, Any]) -> None:
+        """过时复核与文字续发段一致：只因新接管或员工发言停止。"""
+        if await _guest_reply_is_stale(session, payload):
+            logger.info(
+                "跳过已过时的回复配图：outbox_id=%s",
+                payload.get("outbox_id"),
+            )
+            return
+        try:
+            stored = storage.open_for_read(str(payload.get("image_file_id", "")))
+        except (LookupError, ValueError):
+            # 排队期间管理员删了这张图：跳过它继续发后面的，不让整条回复卡住。
+            logger.warning(
+                "回复配图已不存在，跳过：outbox_id=%s",
+                payload.get("outbox_id"),
+            )
+            await _enqueue_guest_reply_continuation(session, payload)
+            return
+        open_kfid = str(payload["open_kfid"])
+        external_userid = str(payload["external_userid"])
+        try:
+            # 临时素材 3 天过期，量小不缓存（Spec D3）；重试时重新上传。
+            media_id = await client.upload_temporary_image(
+                stored.path.read_bytes(),
+                content_type=stored.content_type,
+            )
+            real_message_id = await client.send_image(open_kfid, external_userid, media_id)
+        except httpx.ConnectError as error:
+            raise RetrySafeJobError("企业微信连接尚未建立") from error
+        except WeComApiError as error:
+            if error.error_code == 45009:
+                raise RetrySafeJobError("企业微信明确限流") from error
+            raise
+        conversation = await session.scalar(
+            select(Conversation).where(
+                Conversation.open_kfid == open_kfid,
+                Conversation.external_userid == external_userid,
+            )
+        )
+        if conversation is not None:
+            chain = payload.get("reply_chain")
+            metadata: dict[str, Any] = {
+                "delivery_status": "accepted",
+                "image_file_id": stored.file_id,
+            }
+            source_guest_message_id = payload.get("source_guest_message_id")
+            if source_guest_message_id:
+                metadata["source_guest_message_id"] = str(source_guest_message_id)
+            if isinstance(chain, dict):
+                metadata["reply_part"] = {
+                    "group": str(chain.get("group", "")),
+                    "index": _reply_chain_index(payload),
+                    "total": chain.get("total"),
+                }
+            await MessageService(SQLAlchemyMessageRepository(session)).record_bot(
+                conversation.id,
+                real_message_id,
+                GUEST_IMAGE_PLACEHOLDER,
+                message_type="image",
+                metadata=metadata,
+            )
+        await _enqueue_guest_reply_continuation(session, payload)
+
+    return send_guest_image
 
 
 def reply_chain_undelivered_payload(
     job_type: str,
     failed_payload: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """长回复某段发送终态失败时，返回员工通知所需的最小载荷；其余情况返回 None。"""
-    if job_type != "wecom_send_text":
+    """长回复某段（含配图）发送终态失败时，返回员工通知所需的最小载荷；其余情况返回 None。"""
+    if job_type not in {"wecom_send_text", GUEST_IMAGE_JOB_TYPE}:
         return None
     chain = failed_payload.get("reply_chain")
     if not isinstance(chain, dict) or not failed_payload.get("open_kfid"):
@@ -536,6 +632,34 @@ class TransactionalOutboxWeCom:
                 "index": 1,
                 "total": len(parts),
                 "continuation": list(parts[1:]),
+            },
+        )
+
+    async def send_text_with_images(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        parts: list[str],
+        images: list[str],
+        *,
+        message_type: str = "text",
+        stale_exempt: bool = False,
+    ) -> str | None:
+        """登记文字加配图：沿用分段接力，文字段发完后逐张发图（Spec G2）。
+
+        图片也算一段，失败通知和「新接管停发」与文字续发段同一套口径。
+        """
+        return await self._enqueue_guest_text(
+            open_kfid,
+            external_userid,
+            parts[0],
+            message_type=message_type,
+            stale_exempt=stale_exempt,
+            chain={
+                "index": 1,
+                "total": len(parts) + len(images),
+                "continuation": list(parts[1:]),
+                "images": list(images),
             },
         )
 
@@ -751,6 +875,10 @@ async def _handle_guest_delivery_failure(
         error_code=f"wecom_async_{fail_type}",
     )
     if message is None or message.origin is not MessageOrigin.BOT or not message.content:
+        return False
+    if message.message_type != "text":
+        # 回复配图的正文只是占位符，按文字重发或改写都会把「[图片]」发给客人；
+        # 只记失败，由调用方通知员工。
         return False
     metadata = dict(message.message_metadata or {})
     # 正文会被保留期清掉，形态特征必须在失败当时就固化下来。只写进本地字典，
@@ -2168,6 +2296,53 @@ class SessionPropertyAdminService:
                 self._storage.delete(stored.file_id)
             raise
 
+    async def replace_welcome_image(
+        self,
+        property_id: int,
+        employee: Employee,
+        stream: BinaryIO | None,
+        content_type: str = "",
+    ) -> None:
+        """上传或清除欢迎图片（stream 为空即清除）；旧文件在同一事务登记清理。"""
+        PropertyAdminService.require_admin(employee)
+        stored: StoredPrivateFile | None = None
+        try:
+            if stream is not None:
+                if content_type.lower() not in KNOWLEDGE_IMAGE_TYPES:
+                    raise ValueError("只支持 JPG 或 PNG 图片")
+                stored = await self._storage.save_image(
+                    stream,
+                    content_type,
+                    min(self._upload_size_limit, KNOWLEDGE_IMAGE_MAX_BYTES),
+                )
+            async with self._factory() as session:
+                previous = await self._service(session).set_welcome_image(
+                    property_id,
+                    employee,
+                    stored.file_id if stored is not None else None,
+                )
+                if previous:
+                    await SQLAlchemyJobRepository(session).enqueue(
+                        ATTACHMENT_CLEANUP_JOB_TYPE,
+                        {"file_ids": [previous]},
+                        dedupe_key=f"welcome-image-cleanup:{previous}",
+                    )
+                await session.commit()
+        except Exception:
+            if stored is not None:
+                self._storage.delete(stored.file_id)
+            raise
+
+    async def welcome_image_for(
+        self,
+        property_id: int,
+        employee: Employee,
+    ) -> StoredPrivateFile:
+        """管理员预览欢迎图片。"""
+        async with self._factory() as session:
+            file_id = await self._service(session).welcome_image_file_id(property_id, employee)
+        return self._storage.open_for_read(file_id)
+
     async def qr_for(
         self,
         property_id: int,
@@ -2417,9 +2592,74 @@ class SessionCustomerAdminService:
 class SessionKnowledgeAdminService:
     """为每次管理操作使用独立数据库会话。"""
 
-    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
-        """保存数据库会话工厂。"""
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        storage: PrivateFileStorage | None = None,
+        upload_size_limit: int = KNOWLEDGE_IMAGE_MAX_BYTES,
+    ) -> None:
+        """保存数据库会话工厂与配图私有存储；未配置存储时配图功能不可用。"""
         self._factory = factory
+        self._storage = storage
+        self._upload_size_limit = min(upload_size_limit, KNOWLEDGE_IMAGE_MAX_BYTES)
+
+    def _require_storage(self) -> PrivateFileStorage:
+        """配图读写都依赖私有存储。"""
+        if self._storage is None:
+            raise RuntimeError("知识配图存储尚未配置")
+        return self._storage
+
+    async def list_images(self, entry_id: int) -> list[Any]:
+        """按发送顺序返回条目配图。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).list_images(entry_id)
+
+    async def upload_image(
+        self,
+        entry_id: int,
+        employee_id: int,
+        stream: BinaryIO,
+        content_type: str,
+    ) -> Any:
+        """先校验格式再保存文件；登记失败（如已满 3 张）时删除刚存的文件。"""
+        if content_type.lower() not in KNOWLEDGE_IMAGE_TYPES:
+            raise ValueError("只支持 JPG 或 PNG 图片")
+        storage = self._require_storage()
+        stored: StoredPrivateFile | None = None
+        try:
+            stored = await storage.save_image(stream, content_type, self._upload_size_limit)
+            async with self._factory() as session:
+                return await KnowledgeAdminService(session).add_image(
+                    entry_id,
+                    employee_id,
+                    file_id=stored.file_id,
+                    content_type=stored.content_type,
+                    size=stored.size,
+                )
+        except Exception:
+            if stored is not None:
+                storage.delete(stored.file_id)
+            raise
+
+    async def delete_image(self, entry_id: int, image_id: int, employee_id: int) -> None:
+        """删除配图记录；文件由同事务登记的清理任务在提交后删除。"""
+        async with self._factory() as session:
+            await KnowledgeAdminService(session).delete_image(entry_id, image_id, employee_id)
+
+    async def move_image(
+        self, entry_id: int, image_id: int, direction: str, employee_id: int
+    ) -> None:
+        """调整配图发送顺序。"""
+        async with self._factory() as session:
+            await KnowledgeAdminService(session).move_image(
+                entry_id, image_id, direction, employee_id
+            )
+
+    async def image_file(self, entry_id: int, image_id: int) -> StoredPrivateFile:
+        """确认配图属于该条目后返回私有文件。"""
+        async with self._factory() as session:
+            image = await KnowledgeAdminService(session).get_image(entry_id, image_id)
+        return self._require_storage().open_for_read(image.file_id)
 
     async def list_properties(self) -> list[Any]:
         """读取知识范围表单可选房源，不修改真实房源。"""
@@ -2434,6 +2674,7 @@ class SessionKnowledgeAdminService:
         query: str | None = None,
         enabled: bool | None = None,
         category: str | None = None,
+        room: str | None = None,
     ) -> list[Any]:
         """按分页边界返回知识条目。"""
         async with self._factory() as session:
@@ -2443,6 +2684,7 @@ class SessionKnowledgeAdminService:
                 query=query,
                 enabled=enabled,
                 category=category,
+                room=room,
             )
 
     async def get_detail(self, entry_id: int) -> Any:
@@ -3812,7 +4054,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             runtime_snapshot is not None and runtime_snapshot.wecom_contact_secret is not None
         ),
     )
-    app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory)
+    app.state.knowledge_admin_service = SessionKnowledgeAdminService(
+        factory,
+        private_file_storage,
+        bootstrap.private_upload_max_bytes,
+    )
     app.state.complaint_admin_service = SessionComplaintAdminService(factory)
 
     async def database_probe() -> bool:
@@ -4287,6 +4533,11 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "complaint_review_generate": build_complaint_review_handler(session, bundle),
             "hostex_event": build_hostex_event_handler(session, bundle),
             "credential_send_part": build_credential_part_handler(session, bundle),
+            GUEST_IMAGE_JOB_TYPE: _build_guest_image_handler(
+                session,
+                bundle.wecom,
+                private_file_storage,
+            ),
             "lifecycle_send": build_lifecycle_handler(session, bundle),
             "guest_delivery_rewrite": build_delivery_rewrite_handler(
                 session,

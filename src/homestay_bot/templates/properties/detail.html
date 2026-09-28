@@ -34,6 +34,14 @@
     <label>地址提示<textarea name="address_hint" maxlength="1000">{{ property.address_hint or "" }}</textarea></label><label>停车说明<textarea name="parking_instructions" maxlength="2000">{{ property.parking_instructions or "" }}</textarea></label><label class="checkbox"><input type="checkbox" name="is_active" value="true" {% if property.is_active %}checked{% endif %}>启用该房源</label><button type="submit">保存房源资料</button>
   </form>
 </section>
+<section class="detail-section panel panel--padded" id="welcome-image"><h2>欢迎图片</h2>
+  <p class="help-text">客人订单识别出本房后，欢迎消息发出时接着发这张图，每张订单只发一次。JPG 或 PNG，不超过 2MB。</p>
+  {% if property.welcome_image_file_id %}
+  <ul class="image-list"><li><a href="/employee/properties/{{ property.id }}/welcome-image" target="_blank" rel="noopener"><img src="/employee/properties/{{ property.id }}/welcome-image" alt="欢迎图片"></a>
+    <form method="post" action="/employee/properties/{{ property.id }}/welcome-image/delete" data-confirm="确定删除欢迎图片吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">删除欢迎图片</button></form></li></ul>
+  {% else %}<p>尚未设置欢迎图片。</p>{% endif %}
+  <form class="inline-form" method="post" enctype="multipart/form-data" action="/employee/properties/{{ property.id }}/welcome-image"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>{% if property.welcome_image_file_id %}替换欢迎图片{% else %}上传欢迎图片{% endif %}<input type="file" name="image" accept="image/png,image/jpeg" required></label><button type="submit">上传</button></form>
+</section>
 {% else %}
 <section class="detail-section panel panel--padded"><h2>入住凭证</h2>
   {% if credential %}<div class="alert alert--warning"><span>当前凭证版本 {{ credential.version }}。密码和入住指南不会在页面回显。</span></div><a href="/employee/properties/{{ property.id }}/qr" target="_blank" rel="noopener">查看当前二维码</a>{% else %}<p>尚未配置入住凭证。</p>{% endif %}

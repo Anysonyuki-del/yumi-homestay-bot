@@ -3,26 +3,50 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Form, HTTPException, Query, Request, Response, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BeforeValidator
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import EmployeeRole, KnowledgeCandidateStatus
-from homestay_bot.domain.models import AuditLog, KnowledgeCandidate, KnowledgeEntry, PropertyProfile
+from homestay_bot.domain.models import (
+    AuditLog,
+    KnowledgeCandidate,
+    KnowledgeEntry,
+    KnowledgeImage,
+    PropertyProfile,
+)
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
+from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
 from homestay_bot.routes.admin_form_csrf import AdminCsrfServicePort
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.page_errors import safe_return_path
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 from homestay_bot.services.knowledge_service import validate_knowledge_scope
+from homestay_bot.services.private_file_storage import StoredPrivateFile
+from homestay_bot.services.task_page_service import ATTACHMENT_CLEANUP_JOB_TYPE
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/knowledge")
 _MAX_CSRF_TOKENS = 8
 _KNOWLEDGE_CSRF_PURPOSE = "knowledge-write"
+# 知识配图（Spec G1、D1）：每条最多 3 张，单张不超过 2MB。只收 jpg 和 png：
+# 企业微信临时图片素材只支持这两种，webp 能存下却发不出去。
+MAX_KNOWLEDGE_IMAGES = 3
+KNOWLEDGE_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+KNOWLEDGE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg"})
 
 
 class KnowledgeAdminServicePort(Protocol):
@@ -72,6 +96,29 @@ class KnowledgeAdminServicePort(Protocol):
         employee_id: int,
     ) -> None:
         """关闭候选三十天。"""
+
+    async def list_images(self, entry_id: int) -> list[Any]:
+        """按发送顺序返回条目配图。"""
+
+    async def upload_image(
+        self,
+        entry_id: int,
+        employee_id: int,
+        stream: Any,
+        content_type: str,
+    ) -> Any:
+        """校验并保存一张配图。"""
+
+    async def delete_image(self, entry_id: int, image_id: int, employee_id: int) -> None:
+        """删除一张配图并登记文件清理。"""
+
+    async def move_image(
+        self, entry_id: int, image_id: int, direction: str, employee_id: int
+    ) -> None:
+        """把配图前移或后移一位。"""
+
+    async def image_file(self, entry_id: int, image_id: int) -> StoredPrivateFile:
+        """返回配图私有文件供后台预览。"""
 
 
 class KnowledgeAdminService:
@@ -270,6 +317,104 @@ class KnowledgeAdminService:
         )
         await self._session.commit()
 
+    async def list_images(self, entry_id: int) -> list[KnowledgeImage]:
+        """按发送顺序返回条目配图。"""
+        return list(
+            (
+                await self._session.scalars(
+                    select(KnowledgeImage)
+                    .where(KnowledgeImage.knowledge_entry_id == entry_id)
+                    .order_by(KnowledgeImage.sort_order, KnowledgeImage.id)
+                )
+            ).all()
+        )
+
+    async def add_image(
+        self,
+        entry_id: int,
+        employee_id: int,
+        *,
+        file_id: str,
+        content_type: str,
+        size: int,
+    ) -> KnowledgeImage:
+        """锁定条目后登记配图，并发上传也不会超过每条 3 张。"""
+        entry = await self._session.scalar(
+            select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id).with_for_update()
+        )
+        if entry is None:
+            raise LookupError(f"知识条目不存在: {entry_id}")
+        count, last_order = (
+            await self._session.execute(
+                select(func.count(KnowledgeImage.id), func.max(KnowledgeImage.sort_order)).where(
+                    KnowledgeImage.knowledge_entry_id == entry_id
+                )
+            )
+        ).one()
+        if count >= MAX_KNOWLEDGE_IMAGES:
+            raise ValueError(f"每条知识最多 {MAX_KNOWLEDGE_IMAGES} 张图片")
+        image = KnowledgeImage(
+            knowledge_entry_id=entry_id,
+            file_id=file_id,
+            content_type=content_type,
+            size=size,
+            sort_order=(last_order or 0) + 1,
+            created_by=employee_id,
+        )
+        self._session.add(image)
+        await self._session.flush()
+        self._add_audit(employee_id, "knowledge.image_add", entry_id, image_id=image.id)
+        await self._session.commit()
+        return image
+
+    async def delete_image(self, entry_id: int, image_id: int, employee_id: int) -> None:
+        """删除配图记录，并在同一事务登记私有文件清理（提交后由 worker 删除）。"""
+        image = await self._require_image(entry_id, image_id)
+        await self._session.delete(image)
+        await SQLAlchemyJobRepository(self._session).enqueue(
+            ATTACHMENT_CLEANUP_JOB_TYPE,
+            {"file_ids": [image.file_id]},
+            dedupe_key=f"knowledge-image-cleanup:{image_id}",
+        )
+        self._add_audit(employee_id, "knowledge.image_delete", entry_id, image_id=image_id)
+        await self._session.commit()
+
+    async def move_image(
+        self, entry_id: int, image_id: int, direction: str, employee_id: int
+    ) -> None:
+        """与相邻配图交换顺序；已在最前或最后时不变。"""
+        if direction not in {"up", "down"}:
+            raise ValueError("未知的移动方向")
+        await self._session.scalar(
+            select(KnowledgeEntry.id).where(KnowledgeEntry.id == entry_id).with_for_update()
+        )
+        images = await self.list_images(entry_id)
+        index = next((i for i, item in enumerate(images) if item.id == image_id), None)
+        if index is None:
+            raise LookupError(f"配图不存在: {image_id}")
+        target = index - 1 if direction == "up" else index + 1
+        if 0 <= target < len(images):
+            # 先按当前顺序重排成连续序号，再交换，历史空洞或重复序号都不影响结果。
+            for order, item in enumerate(images, start=1):
+                item.sort_order = order
+            images[index].sort_order, images[target].sort_order = (
+                images[target].sort_order,
+                images[index].sort_order,
+            )
+            self._add_audit(employee_id, "knowledge.image_move", entry_id, image_id=image_id)
+        await self._session.commit()
+
+    async def get_image(self, entry_id: int, image_id: int) -> KnowledgeImage:
+        """读取属于该条目的配图。"""
+        return await self._require_image(entry_id, image_id)
+
+    async def _require_image(self, entry_id: int, image_id: int) -> KnowledgeImage:
+        """配图必须属于地址里的条目，防止跨条目操作。"""
+        image = await self._session.get(KnowledgeImage, image_id)
+        if image is None or image.knowledge_entry_id != entry_id:
+            raise LookupError(f"配图不存在: {image_id}")
+        return image
+
     async def _require_entry(self, entry_id: int) -> KnowledgeEntry:
         """读取目标知识，不存在时抛出稳定异常。"""
         entry = await self._session.get(KnowledgeEntry, entry_id)
@@ -284,15 +429,20 @@ class KnowledgeAdminService:
             raise LookupError(f"FAQ 候选不存在: {candidate_id}")
         return candidate
 
-    def _add_audit(self, employee_id: int, action: str, entry_id: int) -> None:
-        """审计只保存动作和条目 ID，不复制问题、答案或关键词。"""
+    def _add_audit(
+        self, employee_id: int, action: str, entry_id: int, *, image_id: int | None = None
+    ) -> None:
+        """审计只保存动作、条目和配图编号，不复制问题、答案、关键词或图片内容。"""
+        details: dict[str, int] = {"entry_id": entry_id}
+        if image_id is not None:
+            details["image_id"] = image_id
         self._session.add(
             AuditLog(
                 actor_employee_id=employee_id,
                 action=action,
                 target_type="knowledge_entry",
                 target_id=str(entry_id),
-                details={"entry_id": entry_id},
+                details=details,
             )
         )
 
@@ -555,6 +705,8 @@ async def knowledge_detail(request: Request, entry_id: int) -> Response:
         name="knowledge/detail.html",
         context={
             "entry": entry,
+            "images": await _get_service(request).list_images(entry_id),
+            "max_images": MAX_KNOWLEDGE_IMAGES,
             "properties": await _get_service(request).list_properties(),
             "can_edit": role is EmployeeRole.ADMIN,
             "csrf_token": (await _issue_csrf(request) if role is EmployeeRole.ADMIN else ""),
@@ -715,6 +867,86 @@ async def update_knowledge(
         safe_return_path(return_to, fallback="/employee/knowledge"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+def _images_anchor(entry_id: int) -> str:
+    """配图操作完成后回到详情页配图区。"""
+    return f"/employee/knowledge/{entry_id}#knowledge-images"
+
+
+@router.get("/{entry_id}/images/{image_id}")
+async def knowledge_image(request: Request, entry_id: int, image_id: int) -> Response:
+    """员工可预览配图；只按条目内编号取文件，不接受文件名。"""
+    await require_employee_session(request)
+    try:
+        stored = await _get_service(request).image_file(entry_id, image_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="配图不存在") from error
+    response = FileResponse(stored.path, media_type=stored.content_type, filename=None)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@router.post("/{entry_id}/images/upload")
+async def upload_knowledge_image(
+    request: Request,
+    entry_id: int,
+    image: Annotated[UploadFile, File()],
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """管理员给条目加一张配图：限 JPG、PNG，单张 2MB，每条最多 3 张。"""
+    employee_id = await _require_admin(request)
+    await _consume_csrf(request, csrf_token)
+    try:
+        await _get_service(request).upload_image(
+            entry_id,
+            employee_id,
+            image.file,
+            image.content_type or "application/octet-stream",
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="知识条目不存在") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    finally:
+        await image.close()
+    return RedirectResponse(_images_anchor(entry_id), status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/{entry_id}/images/{image_id}/delete")
+async def delete_knowledge_image(
+    request: Request,
+    entry_id: int,
+    image_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """管理员删除一张配图。"""
+    employee_id = await _require_admin(request)
+    await _consume_csrf(request, csrf_token)
+    try:
+        await _get_service(request).delete_image(entry_id, image_id, employee_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="配图不存在") from error
+    return RedirectResponse(_images_anchor(entry_id), status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/{entry_id}/images/{image_id}/move")
+async def move_knowledge_image(
+    request: Request,
+    entry_id: int,
+    image_id: int,
+    direction: Literal["up", "down"] = Form(),
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """管理员调整配图发送顺序。"""
+    employee_id = await _require_admin(request)
+    await _consume_csrf(request, csrf_token)
+    try:
+        await _get_service(request).move_image(entry_id, image_id, direction, employee_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="配图不存在") from error
+    return RedirectResponse(_images_anchor(entry_id), status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/{entry_id}/{action}")

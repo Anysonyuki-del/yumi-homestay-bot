@@ -13,4 +13,18 @@
   <dl class="detail-grid"><dt>中文答案</dt><dd class="long-text">{{ entry.answer_zh }}</dd><dt>English question</dt><dd class="long-text" lang="en">{{ entry.question_en }}</dd><dt>English answer</dt><dd class="long-text" lang="en">{{ entry.answer_en }}</dd><dt>关键词</dt><dd>{{ entry.keywords | join('、') or "—" }}</dd></dl>
   {% endif %}
 </section>
+<section class="panel panel--padded detail-section" id="knowledge-images"><h2>配图</h2>
+  <p class="help-text">这条知识作为固定回答发给客人时，文字之后按顺序发这些图；模型自由作答时不发。每条最多 {{ max_images }} 张，JPG 或 PNG，单张不超过 2MB。</p>
+  {% if images %}
+  <ol class="image-list">{% for image in images %}<li><a href="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}" target="_blank" rel="noopener"><img src="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}" alt="配图 {{ loop.index }}"></a>
+    {% if can_edit %}<div class="button-row">
+      {% if not loop.first %}<form method="post" action="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}/move"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="direction" value="up"><button class="button button--secondary" type="submit" aria-label="配图 {{ loop.index }} 前移">前移</button></form>{% endif %}
+      {% if not loop.last %}<form method="post" action="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}/move"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="direction" value="down"><button class="button button--secondary" type="submit" aria-label="配图 {{ loop.index }} 后移">后移</button></form>{% endif %}
+      <form method="post" action="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}/delete" data-confirm="确定删除这张配图吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit" aria-label="删除配图 {{ loop.index }}">删除</button></form>
+    </div>{% endif %}</li>{% endfor %}</ol>
+  {% else %}<p>暂无配图。</p>{% endif %}
+  {% if can_edit and images | length < max_images %}
+  <form class="inline-form" method="post" enctype="multipart/form-data" action="/employee/knowledge/{{ entry.id }}/images/upload"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>添加配图<input type="file" name="image" accept="image/png,image/jpeg" required></label><button type="submit">上传配图</button></form>
+  {% endif %}
+</section>
 {% endblock %}

@@ -1,7 +1,7 @@
 import hashlib
 import logging
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
@@ -215,6 +215,21 @@ class StayWelcomePort(Protocol):
 
 
 @runtime_checkable
+class ReplyImagePort(Protocol):
+    """读取回复配图：知识条目配图和房源欢迎图片（Spec G2、G3）。"""
+
+    async def knowledge_image_file_ids(self, entry_ids: Iterable[int]) -> list[str]:
+        """按条目顺序返回启用条目的配图文件名。"""
+
+    async def welcome_image_file_id(self, property_id: int) -> str | None:
+        """返回房源欢迎图片文件名。"""
+
+
+# 一次回复连文字带图最多发几条（Spec D1）：企业微信客服每次最多回 5 条。
+MAX_REPLY_MESSAGES = 5
+
+
+@runtime_checkable
 class StayConfirmationPort(Protocol):
     """把确认持久化留在会话仓储，模型只提供本轮意图。"""
 
@@ -363,6 +378,23 @@ class ChainedGuestSenderPort(Protocol):
         stale_exempt: bool = False,
     ) -> str | None:
         """只登记第一段，后续段在前一段发送成功后才入队，保证顺序。"""
+
+
+@runtime_checkable
+class ImageChainSenderPort(Protocol):
+    """能在文字之后逐张接发配图的发送器（生产事务 outbox）。"""
+
+    async def send_text_with_images(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        parts: list[str],
+        images: list[str],
+        *,
+        message_type: str = "text",
+        stale_exempt: bool = False,
+    ) -> str | None:
+        """只登记第一段文字，其余文字段和图片依次在前一条发送成功后入队。"""
 
 
 class WeComIdentityPort(Protocol):
@@ -1434,9 +1466,14 @@ class ConversationService:
             prepared_reply = f"{welcome}\n\n{prepared_reply}"
             prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
             unchanged_ack = False
+        images = (
+            []
+            if high_risk
+            else await self._reply_images(decision, welcome_stay if welcome else None)
+        )
         if fast_ack_sha256 != prepared_sha256 and not unchanged_ack:
             await self._send_prepared_guest_reply(
-                conversation, prepared_reply, stale_exempt=high_risk
+                conversation, prepared_reply, stale_exempt=high_risk, images=images
             )
             if welcome and welcome_stay is not None:
                 await self._record_stay_welcome(conversation, welcome_stay)
@@ -1679,6 +1716,35 @@ class ConversationService:
                 order_id=order_id,
             )
 
+    async def _reply_images(
+        self,
+        decision: AssistantDecision,
+        welcome_stay: dict[str, Any] | None,
+    ) -> list[str]:
+        """挑出本轮要随文字发的图：欢迎图片在前，知识配图在后（Spec G2、G3）。
+
+        只认作为固定回答发出的审核知识（grounded 分项里的知识证据），模型自由作答
+        不附图，保证图和文字对得上。房源卡片的来源编号是负数，不附图。
+        """
+        if not isinstance(self._audit_events, ReplyImagePort):
+            return []
+        images: list[str] = []
+        property_id = (welcome_stay or {}).get("property_id")
+        if isinstance(property_id, int):
+            welcome_image = await self._audit_events.welcome_image_file_id(property_id)
+            if welcome_image:
+                images.append(welcome_image)
+        entry_ids = [
+            int(evidence.source_id)
+            for part in decision.reply_parts
+            if part.status == "grounded"
+            for evidence in part.evidence
+            if evidence.source_kind == "knowledge" and evidence.source_id.isdecimal()
+        ]
+        if entry_ids:
+            images.extend(await self._audit_events.knowledge_image_file_ids(entry_ids))
+        return list(dict.fromkeys(images))
+
     async def _activate_human(
         self,
         conversation: Conversation,
@@ -1749,14 +1815,37 @@ class ConversationService:
         *,
         message_type: str = "text",
         stale_exempt: bool = False,
+        images: list[str] | None = None,
     ) -> GuestReplyReceipt:
         """发送已经过统一客人侧策略处理的文本，并记录真实消息编号。
 
         超过企业微信单条上限的回复拆成多条：生产 outbox 链式入队，保证逐段有序；
-        直接发送的发送器按顺序逐条发出。
+        直接发送的发送器按顺序逐条发出。带配图时文字发完再逐张发图，只有生产
+        outbox 支持；其他发送器只发文字。
         """
         self._last_guest_reply = content
         parts = split_guest_reply(content, conversation.language)
+        if images and isinstance(self._wecom, ImageChainSenderPort):
+            allowed = images[: max(0, MAX_REPLY_MESSAGES - len(parts))]
+            if len(allowed) < len(images):
+                # 超出条数上限只少发图，不报错（Spec D1）。
+                logger.info(
+                    "回复配图超出条数上限：text_parts=%s images=%s dropped=%s",
+                    len(parts),
+                    len(images),
+                    len(images) - len(allowed),
+                )
+            if allowed:
+                first_id = await self._wecom.send_text_with_images(
+                    conversation.open_kfid,
+                    conversation.external_userid,
+                    parts,
+                    allowed,
+                    message_type=message_type,
+                    stale_exempt=stale_exempt,
+                )
+                full_content = content if len(parts) == 1 else "\n\n".join(parts)
+                return GuestReplyReceipt(content=full_content, message_id=first_id)
         if len(parts) > 1:
             return await self._send_guest_reply_parts(
                 conversation,

@@ -136,6 +136,10 @@ class KnowledgeAdminStub:
         except StopIteration as error:
             raise LookupError("知识条目不存在") from error
 
+    async def list_images(self, entry_id: int) -> list[object]:
+        """详情页配图区：存根条目没有配图。"""
+        return []
+
     async def list_properties(self):
         """提供合成房间选项。"""
         return []

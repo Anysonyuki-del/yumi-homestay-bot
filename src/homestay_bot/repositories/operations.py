@@ -45,6 +45,8 @@ from homestay_bot.domain.models import (
     Employee,
     HostexWebhookEvent,
     Job,
+    KnowledgeEntry,
+    KnowledgeImage,
     LifecycleReminder,
     Message,
     PropertyProfile,
@@ -1646,6 +1648,39 @@ class SQLAlchemyOperationsRepository:
             district=room.district,
             address_hint=room.address_hint,
             parking_instructions=room.parking_instructions,
+        )
+
+    async def knowledge_image_file_ids(self, entry_ids: Iterable[int]) -> list[str]:
+        """按条目给定顺序、条目内配图顺序返回启用条目的配图文件名（Spec G2）。"""
+        ordered = list(dict.fromkeys(entry_ids))
+        if not ordered:
+            return []
+        rows = (
+            await self._session.execute(
+                select(KnowledgeImage.knowledge_entry_id, KnowledgeImage.file_id)
+                .join(KnowledgeEntry, KnowledgeEntry.id == KnowledgeImage.knowledge_entry_id)
+                .where(
+                    KnowledgeImage.knowledge_entry_id.in_(ordered),
+                    # 回复生成到出站之间条目可能被停用，停用后不再附图。
+                    KnowledgeEntry.is_enabled.is_(True),
+                )
+                .order_by(KnowledgeImage.sort_order, KnowledgeImage.id)
+            )
+        ).all()
+        by_entry: dict[int, list[str]] = {}
+        for entry_id, file_id in rows:
+            by_entry.setdefault(int(entry_id), []).append(str(file_id))
+        return [file_id for entry_id in ordered for file_id in by_entry.get(entry_id, [])]
+
+    async def welcome_image_file_id(self, property_id: int) -> str | None:
+        """读取房源欢迎图片（Spec G3）；未设置时为空。"""
+        return cast(
+            str | None,
+            await self._session.scalar(
+                select(PropertyProfile.welcome_image_file_id).where(
+                    PropertyProfile.id == property_id
+                )
+            ),
         )
 
     async def record_hostex_event(

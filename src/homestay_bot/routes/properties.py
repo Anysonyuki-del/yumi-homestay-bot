@@ -72,6 +72,22 @@ class PropertyAdminServicePort(Protocol):
     ) -> StoredPrivateFile:
         """授权后返回当前私有二维码。"""
 
+    async def replace_welcome_image(
+        self,
+        property_id: int,
+        employee: Employee,
+        stream: Any | None,
+        content_type: str = "",
+    ) -> None:
+        """上传或清除欢迎图片。"""
+
+    async def welcome_image_for(
+        self,
+        property_id: int,
+        employee: Employee,
+    ) -> StoredPrivateFile:
+        """授权后返回欢迎图片。"""
+
 
 def _get_service(request: Request) -> PropertyAdminServicePort:
     """从应用状态读取房源管理服务。"""
@@ -237,6 +253,69 @@ async def replace_property_credentials(
         f"/employee/properties/{property_id}?tab=credentials",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+@router.post("/{property_id}/welcome-image")
+async def upload_welcome_image(
+    request: Request,
+    property_id: int,
+    image: Annotated[UploadFile, File()],
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """上传欢迎图片（Spec G3）：欢迎消息发出后接着发这张图，替换时旧图随之清理。"""
+    administrator = await _current_admin(request)
+    await _consume_csrf(request, property_id, csrf_token)
+    try:
+        await _get_service(request).replace_welcome_image(
+            property_id,
+            administrator,
+            image.file,
+            image.content_type or "application/octet-stream",
+        )
+    except ValueError as error:
+        # 格式、大小校验的提示都是固定文案，回显给管理员便于换图重传。
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        _raise_page_error(error)
+    finally:
+        await image.close()
+    return RedirectResponse(
+        f"/employee/properties/{property_id}?tab=profile#welcome-image",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{property_id}/welcome-image/delete")
+async def delete_welcome_image(
+    request: Request,
+    property_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """清除欢迎图片，之后欢迎消息只发文字。"""
+    administrator = await _current_admin(request)
+    await _consume_csrf(request, property_id, csrf_token)
+    try:
+        await _get_service(request).replace_welcome_image(property_id, administrator, None)
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        f"/employee/properties/{property_id}?tab=profile#welcome-image",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/{property_id}/welcome-image")
+async def view_welcome_image(request: Request, property_id: int) -> Response:
+    """只向管理员返回欢迎图片。"""
+    administrator = await _current_admin(request)
+    try:
+        stored = await _get_service(request).welcome_image_for(property_id, administrator)
+    except Exception as error:
+        _raise_page_error(error)
+    response = FileResponse(stored.path, media_type=stored.content_type, filename=None)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @router.post("/{property_id}/room-status")
