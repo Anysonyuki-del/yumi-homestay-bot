@@ -521,6 +521,51 @@ def _knowledge_part(question: str, entry: Any) -> ReplyPart:
     )
 
 
+# 追问判定（Spec F3，借鉴世界书的扫描深度）：去掉指代、语气和常见属性问法后，
+# 剩下的实义字不超过 2 个，才算是接着上文在问。「黄鹤楼在哪」剩下「黄鹤楼」，
+# 是新问题，不借上文话题。
+_FOLLOW_UP_FILLERS = re.compile(
+    r"那个|这个|那|这|它|他|她|个|也|还|又|再|要|能|可以|可不可以|吗|呢|吧|啊|呀|哦|的|是|有没有|有|"
+    r"多少|几点|几|在哪里|在哪儿|在哪|哪里|哪儿|怎么|如何|收费|费用|免费|钱|价格|多久|时间|"
+    r"\b(?:is|it|that|this|there|how|much|what|time|where|when|can|could|i|we|do|does|"
+    r"you|the|a|an|cost|free|price|any|also|too)\b|[\s\W_]+",
+    re.IGNORECASE,
+)
+# 单纯的回应不是追问：「ok」「好的」不能把上一轮的早餐话题再答一遍（回归 MT-ok语言）。
+_ACKNOWLEDGEMENT = re.compile(
+    r"^(?:ok|okay|好|好的|好滴|嗯|嗯嗯|行|可以|收到|谢谢|多谢|thanks?|thank you|知道了|明白了)"
+    r"[\s。.!！~～]*$",
+    re.IGNORECASE,
+)
+_FOLLOW_UP_MAX_CHARS = 20
+
+
+def carry_followup_topic(question: str, earlier_guest_messages: Sequence[str]) -> str:
+    """最后一句认不出本店话题、又像追问时，借用这位客人更早消息里最近的话题。
+
+    用户决定（2026-09-28）：往前看这位客人在本会话里的所有消息。话题识别在本地
+    完成，不增加模型 token。只借话题：返回「话题词：原问题」，问什么属性（时间、
+    费用、位置）仍由原问题决定，例如「早餐几点？」之后问「那要钱吗」，答的是早餐
+    的费用。认不出、不像追问或找不到上文话题时原样返回。
+    """
+    text = question.strip()
+    if (
+        not text
+        or len(text) > _FOLLOW_UP_MAX_CHARS
+        or _ACKNOWLEDGEMENT.match(text)
+        or detect_property_topics(text)
+        or len(_FOLLOW_UP_FILLERS.sub("", text)) > 2
+    ):
+        return question
+    for earlier in reversed(earlier_guest_messages):
+        normalized = normalize_text(earlier)
+        for topic in detect_property_topics(earlier):
+            match = topic.aliases.search(normalized)
+            word = match.group(0) if match else topic.name
+            return f"{word}：{text}"
+    return question
+
+
 def build_evidence_plan(
     question_text: str,
     knowledge: Sequence[Any],
@@ -670,7 +715,10 @@ def _build_evidence_plan_for_period(
                 _attribute_evidence_text(topic, question_text, attribute, item.answer)
                 for item in covering_items
             ]
-            conflict = _conflicting_fee_claims(evidence_texts)
+            # 「免费还是收费」互相矛盾只对费用问题有意义。问位置时若也检查，一条
+            # 「30分钟内免费、超过按2元/小时」的收费条目会被判成自相矛盾，连带把
+            # 停车位置也判为未确认（春和景明知识导入后「开车停哪里」回「尚未确认」）。
+            conflict = attribute == "fee" and _conflicting_fee_claims(evidence_texts)
             times = {
                 tuple(_TIME_EVIDENCE.findall(text))
                 for text in evidence_texts

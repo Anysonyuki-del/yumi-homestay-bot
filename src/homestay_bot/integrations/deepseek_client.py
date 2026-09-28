@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from time import monotonic
@@ -49,6 +49,7 @@ from homestay_bot.services.knowledge_evidence_policy import (
     EvidencePlan,
     already_clarified,
     build_evidence_plan,
+    carry_followup_topic,
 )
 from homestay_bot.services.knowledge_service import (
     KnowledgeService,
@@ -1129,6 +1130,7 @@ class DeepSeekGuestAssistant:
             "open_tasks": raw_customer_payload.pop("open_tasks", []),
             "stay_confirmation": raw_customer_payload.pop("stay_confirmation", None),
             "confirmed_stay": raw_customer_payload.pop("confirmed_stay", None),
+            "current_stay_from_order": raw_customer_payload.pop("resolved_stay", None),
         }
         operational_context = bound_json_value(
             raw_operational_context,
@@ -1994,15 +1996,31 @@ class DeepSeekGuestAssistant:
         request_context: AssistantRequestContext | None = None,
         tool_trace_sink: Callable[[AssistantToolTrace], None] | None = None,
         stage_timing_sink: Callable[[str, int], None] | None = None,
+        guest_history: Sequence[str] | None = None,
     ) -> AssistantDecision:
         """调用 DeepSeek，并把连续失败收敛为统一领域异常。
 
         `stage_timing_sink` 收到（阶段名, 毫秒），只用于耗时观测（1.40.2），不影响回复、
         分支、异常或重试；为空时行为与之前完全一致。
+        `guest_history` 是这位客人本会话更早的全部消息（不含本轮），只用于追问沿用
+        话题（Spec F3）；为空时退回用 `messages` 里的客人消息。
         """
         question_text = latest_user_question(messages)["content"]
+        earlier_guest = (
+            list(guest_history)
+            if guest_history is not None
+            else [str(m.get("content", "")) for m in messages[:-1] if m.get("role") == "user"]
+        )
+        # 追问沿用上文话题：只用于知识检索、证据判定与本店事实过滤；模型看到的
+        # 问题、工具开放和交易判断仍用客人原话（Spec F3）。
+        knowledge_question = carry_followup_topic(question_text, earlier_guest)
         local_today = self._local_date_provider()
-        confirmed_stay = getattr(customer_context, "confirmed_stay", None) or {}
+        # 客人确认的住宿优先；没有确认时，用会话层按订单识别出的住宿（Spec F1）。
+        confirmed_stay = (
+            getattr(customer_context, "confirmed_stay", None)
+            or getattr(customer_context, "resolved_stay", None)
+            or {}
+        )
         property_id = (
             request_context.property_id if request_context else confirmed_stay.get("property_id")
         )
@@ -2064,10 +2082,10 @@ class DeepSeekGuestAssistant:
         knowledge_started = monotonic()
         try:
             knowledge = self._scope_knowledge(
-                question_text,
+                knowledge_question,
                 await self._knowledge.retrieve(
                     language,
-                    question_text,
+                    knowledge_question,
                     property_id=property_id,
                     target_date=target_date,
                     target_end_date=(
@@ -2125,7 +2143,7 @@ class DeepSeekGuestAssistant:
                 reply_text="", language=language, intent="tourism", confidence=0.95
             )
             plan = self._static_evidence_plan(
-                question_text,
+                knowledge_question,
                 knowledge,
                 messages,
                 target_date=target_date or local_today,
@@ -2134,7 +2152,7 @@ class DeepSeekGuestAssistant:
                     ),
             )
             if plan is not None and plan.handles_reply:
-                decision = self._apply_evidence_plan(decision, plan, question_text)
+                decision = self._apply_evidence_plan(decision, plan, knowledge_question)
             public_parts = [public_part]
             parts = [*decision.reply_parts, *public_parts]
             remaining_question = "；".join(
@@ -2195,8 +2213,9 @@ class DeepSeekGuestAssistant:
             "武汉近期活动、天气、票价、开放时间、实时交通和精确路线属于时效信息，"
             "本轮没有查询结果时不给出具体数值或安排，说明需要以当日查询为准；"
             "经典景点、美食和普通推荐优先使用审核知识及谨慎常识，不得伪装为实时结果。"
-            "active_orders 仅为已核实归属的候选订单，不能自动当成本次入住；"
-            "confirmed_stay 才是客人确认的住宿。仅在 stay_confirmation 有待确认内容且本轮"
+            "active_orders 仅为已核实归属的候选订单；confirmed_stay 是客人确认的住宿；"
+            "没有 confirmed_stay 时，current_stay_from_order 是按客人名下唯一当前订单识别的"
+            "本次住宿，可以按它回答房间相关问题。仅在 stay_confirmation 有待确认内容且本轮"
             "明确肯定、否定或选择时填写 stay_confirmation_intent；孤立好的不能确认。"
             "stay_order_id 只能选择可信候选中的订单编号。"
             "最后一条 user 消息是 JSON 数据信封：current_question 才是本轮问题；"
@@ -2299,11 +2318,11 @@ class DeepSeekGuestAssistant:
                 )
             )
         property_knowledge_grounded = self._has_relevant_property_knowledge(
-            question_text,
+            knowledge_question,
             knowledge,
         )
         evidence_plan = self._static_evidence_plan(
-            question_text,
+            knowledge_question,
             knowledge,
             messages,
             target_date=target_date or local_today,
@@ -2362,7 +2381,7 @@ class DeepSeekGuestAssistant:
                     if not tool_calls:
                         decision = self._validate_decision(
                             message.content or "",
-                            question_text,
+                            knowledge_question,
                             property_knowledge_grounded=property_knowledge_grounded,
                             faq_candidate_ids=faq_candidate_ids,
                             knowledge_evidence=knowledge,
@@ -2394,7 +2413,7 @@ class DeepSeekGuestAssistant:
                                 refined_reply = await self._refine_reply(decision.reply_text)
                             finally:
                                 _record_stage(stage_timing_sink, "refine", refine_started)
-                        if not is_property_specific(question_text):
+                        if not is_property_specific(knowledge_question):
                             refined_reply = self._remove_property_promotion(
                                 refined_reply,
                                 decision.language,

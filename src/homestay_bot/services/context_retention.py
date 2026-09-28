@@ -56,6 +56,8 @@ class CustomerModelContext:
     open_tasks: list[dict[str, str | int | None]] = field(default_factory=list)
     stay_confirmation: dict[str, object] | None = None
     confirmed_stay: dict[str, object] | None = None
+    # 客人未确认、但名下恰好一张当前有效订单时按订单识别的住宿（1.48.0，Spec F1）。
+    resolved_stay: dict[str, object] | None = None
 
 
 class ContextRepository(Protocol):

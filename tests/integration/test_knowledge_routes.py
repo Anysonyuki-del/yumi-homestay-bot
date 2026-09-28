@@ -48,6 +48,8 @@ class EntryStub:
     property_id: int | None = None
     valid_from: date | None = None
     valid_until: date | None = None
+    trigger_any: list[str] | None = None
+    trigger_exclude: list[str] | None = None
 
 
 @dataclass
@@ -109,6 +111,7 @@ class KnowledgeAdminStub:
         query: str | None = None,
         enabled: bool | None = None,
         category: str | None = None,
+        room: str | None = None,
     ) -> list[EntryStub]:
         """按管理页筛选返回条目并记录分页边界。"""
         self.list_all_calls.append((offset, limit))
@@ -117,6 +120,7 @@ class KnowledgeAdminStub:
             for entry in self.entries
             if (enabled is None or entry.is_enabled is enabled)
             and (not category or entry.category == category)
+            and (not room or str(getattr(entry, "property_id", None)) == room)
             and (not query or query in entry.question_zh or query in entry.answer_zh)
         ]
         return entries * (limit if offset == 50 else 1)

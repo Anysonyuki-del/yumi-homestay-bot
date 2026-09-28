@@ -573,6 +573,9 @@ class KnowledgeEntry(TimestampMixin, Base):
     question_en: Mapped[str] = mapped_column(Text, nullable=False)
     answer_en: Mapped[str] = mapped_column(Text, nullable=False)
     keywords: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Spec F5：附加条件词（问题里出现其一才命中）与排除词（出现任一就不命中）；空表示不限制。
+    trigger_any: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    trigger_exclude: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
 

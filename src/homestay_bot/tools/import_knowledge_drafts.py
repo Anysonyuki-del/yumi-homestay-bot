@@ -31,11 +31,14 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.domain.enums import EmployeeRole
-from homestay_bot.domain.models import AuditLog, Employee, KnowledgeEntry
+from homestay_bot.domain.models import AuditLog, Employee, KnowledgeEntry, PropertyProfile
 from homestay_bot.services.knowledge_service import normalize_text, validate_knowledge_scope
 
 TEXT_FIELDS = ("category", "question_zh", "answer_zh", "question_en", "answer_en")
 ALLOWED_FIELDS = frozenset((*TEXT_FIELDS, "keywords", "is_enabled"))
+# Spec F6：可选字段。property_id 给出时按「指定房间」导入（仍为停用，由管理员启用）；
+# 触发词对应后台的附加条件词与排除词。
+OPTIONAL_FIELDS = frozenset(("property_id", "trigger_any", "trigger_exclude"))
 CATEGORY_MAX_CHARS = 64
 AUDIT_ACTION = "knowledge.import_draft"
 # 事务级咨询锁的固定编号，只用于让两次导入不能并发执行。
@@ -61,23 +64,37 @@ class DraftEntry:
     question_en: str
     answer_en: str
     keywords: tuple[str, ...]
+    property_id: int | None = None
+    trigger_any: tuple[str, ...] | None = None
+    trigger_exclude: tuple[str, ...] | None = None
 
     @property
-    def identity(self) -> tuple[str, str, str]:
-        """同一条知识的身份：分类与中英文问题，统一全半角、大小写和空白后比较。"""
+    def identity(self) -> tuple[str, str, str, int | None]:
+        """同一条知识的身份：分类、中英文问题与所属房间。
+
+        房间也算进身份（Spec F6）：不同房间的「地址在哪」是两条知识，不能判冲突。
+        """
         return (
             _canonical(self.category),
             _canonical(self.question_zh),
             _canonical(self.question_en),
+            self.property_id,
         )
 
     def same_content(self, entry: KnowledgeEntry) -> bool:
-        """判断数据库里的条目与草稿正文、关键词是否完全一致。"""
+        """判断数据库里的条目与草稿正文、关键词、触发词是否完全一致。"""
         return (
             entry.answer_zh.strip() == self.answer_zh
             and entry.answer_en.strip() == self.answer_en
             and tuple(entry.keywords or ()) == self.keywords
+            and _words_or_none(entry.trigger_any) == self.trigger_any
+            and _words_or_none(entry.trigger_exclude) == self.trigger_exclude
         )
+
+
+def _words_or_none(value: Sequence[str] | None) -> tuple[str, ...] | None:
+    """把数据库里的词表统一成元组；空表视同未配置。"""
+    return tuple(value) if value else None
 
 
 @dataclass(frozen=True)
@@ -122,10 +139,17 @@ def parse_drafts(raw: bytes) -> list[DraftEntry]:
         raise DraftError("输入必须是非空的 JSON 数组")
 
     drafts: list[DraftEntry] = []
-    seen: dict[tuple[str, str, str], int] = {}
+    seen: dict[tuple[str, str, str, int | None], int] = {}
     for index, item in enumerate(data, start=1):
-        if not isinstance(item, dict) or set(item) != ALLOWED_FIELDS:
-            raise DraftError(f"第 {index} 条字段不符：必须恰好包含 {sorted(ALLOWED_FIELDS)}")
+        if (
+            not isinstance(item, dict)
+            or not set(item) >= ALLOWED_FIELDS
+            or set(item) - ALLOWED_FIELDS - OPTIONAL_FIELDS
+        ):
+            raise DraftError(
+                f"第 {index} 条字段不符：必须包含 {sorted(ALLOWED_FIELDS)}，"
+                f"可选 {sorted(OPTIONAL_FIELDS)}"
+            )
         if item["is_enabled"] is not False:
             raise DraftError(f"第 {index} 条是启用状态：草稿必须全部停用")
         values: dict[str, str] = {}
@@ -141,7 +165,29 @@ def parse_drafts(raw: bytes) -> list[DraftEntry]:
             isinstance(word, str) and word.strip() for word in keywords
         ):
             raise DraftError(f"第 {index} 条关键词必须是非空文本组成的列表")
-        draft = DraftEntry(keywords=tuple(word.strip() for word in keywords), **values)
+        property_id = item.get("property_id")
+        if property_id is not None and (type(property_id) is not int or property_id <= 0):
+            raise DraftError(f"第 {index} 条 property_id 必须是正整数或省略")
+        triggers: dict[str, tuple[str, ...] | None] = {}
+        for name in ("trigger_any", "trigger_exclude"):
+            words = item.get(name)
+            if words is not None and (
+                not isinstance(words, list)
+                or not all(isinstance(word, str) and word.strip() for word in words)
+            ):
+                raise DraftError(f"第 {index} 条 {name} 必须是非空文本组成的列表或省略")
+            triggers[name] = tuple(word.strip() for word in words) if words else None
+        draft = DraftEntry(
+            category=values["category"],
+            question_zh=values["question_zh"],
+            answer_zh=values["answer_zh"],
+            question_en=values["question_en"],
+            answer_en=values["answer_en"],
+            keywords=tuple(word.strip() for word in keywords),
+            property_id=property_id,
+            trigger_any=triggers["trigger_any"],
+            trigger_exclude=triggers["trigger_exclude"],
+        )
         if draft.identity in seen:
             raise DraftError(f"第 {index} 条与第 {seen[draft.identity]} 条重复")
         seen[draft.identity] = index
@@ -160,6 +206,9 @@ def summarize(drafts: Sequence[DraftEntry]) -> DraftSummary:
                 draft.question_en,
                 draft.answer_en,
                 list(draft.keywords),
+                draft.property_id,
+                list(draft.trigger_any or ()),
+                list(draft.trigger_exclude or ()),
             ]
             for draft in drafts
         ],
@@ -185,6 +234,7 @@ async def plan_import(session: AsyncSession, drafts: Sequence[DraftEntry]) -> Im
             _canonical(entry.category),
             _canonical(entry.question_zh),
             _canonical(entry.question_en),
+            entry.property_id,
         ): entry
         for entry in await session.scalars(select(KnowledgeEntry))
     }
@@ -243,8 +293,14 @@ async def apply_import(
             raise ImportConflictError(f"第 {plan.conflicts} 条与已有知识冲突，未写入任何条目")
         created: list[KnowledgeEntry] = []
         for draft in plan.new:
-            # 草稿不接受外部输入的已审核范围，必须由管理员在表单确认。
-            validate_knowledge_scope("unreviewed", None, None, None)
+            # 没给房间的草稿不接受外部输入的已审核范围，必须由管理员在表单确认；
+            # 给了房间的按「指定房间」写入（范围更窄），但同样停用，由管理员启用。
+            scope = "property" if draft.property_id is not None else "unreviewed"
+            validate_knowledge_scope(scope, draft.property_id, None, None)
+            if draft.property_id is not None and (
+                await session.get(PropertyProfile, draft.property_id) is None
+            ):
+                raise DraftError(f"房间 {draft.property_id} 不存在，未写入任何条目")
             entry = KnowledgeEntry(
                 category=draft.category,
                 question_zh=draft.question_zh,
@@ -252,9 +308,12 @@ async def apply_import(
                 question_en=draft.question_en,
                 answer_en=draft.answer_en,
                 keywords=list(draft.keywords),
+                trigger_any=list(draft.trigger_any) if draft.trigger_any else None,
+                trigger_exclude=list(draft.trigger_exclude) if draft.trigger_exclude else None,
                 # 从第一次提交起就是停用：客人检索与向量补齐都只读启用条目。
                 is_enabled=False,
-                scope="unreviewed",
+                scope=scope,
+                property_id=draft.property_id,
                 updated_by=admin.id,
             )
             session.add(entry)

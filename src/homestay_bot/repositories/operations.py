@@ -63,6 +63,7 @@ from homestay_bot.domain.task_lifecycle import (
     manual_contact_expires_at,
 )
 from homestay_bot.integrations.hostex_client import Reservation
+from homestay_bot.services.knowledge_service import PropertyCard
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
@@ -1607,6 +1608,46 @@ class SQLAlchemyOperationsRepository:
         )
         await self._session.flush()
 
+    async def stay_welcome_sent(self, conversation_id: int, order_id: int) -> bool:
+        """本会话是否已为这张订单发过欢迎入住消息（Spec F1/D2，每张订单只发一次）。"""
+        return await self._session.scalar(
+            select(AuditLog.id).where(
+                AuditLog.action == "stay_welcome_sent",
+                AuditLog.target_type == "conversation",
+                AuditLog.target_id == str(conversation_id),
+                AuditLog.details["order_id"].as_integer() == order_id,
+            ).limit(1)
+        ) is not None
+
+    async def record_stay_welcome(
+        self, *, conversation_id: int, customer_id: int | None, order_id: int
+    ) -> None:
+        """记录欢迎入住消息已随回复入队；只存内部编号，不存正文。"""
+        self._session.add(
+            AuditLog(
+                actor_employee_id=None,
+                action="stay_welcome_sent",
+                target_type="conversation",
+                target_id=str(conversation_id),
+                details={"customer_id": customer_id, "order_id": order_id},
+            )
+        )
+        await self._session.flush()
+
+    async def get_property_card(self, property_id: int) -> PropertyCard | None:
+        """读取欢迎消息要用的房源卡片（后台房源页的现有字段）。"""
+        room = await self._session.get(PropertyProfile, property_id)
+        if room is None:
+            return None
+        return PropertyCard(
+            property_id=room.id,
+            title=room.title,
+            room_type=room.room_type,
+            district=room.district,
+            address_hint=room.address_hint,
+            parking_instructions=room.parking_instructions,
+        )
+
     async def record_hostex_event(
         self,
         *,
@@ -1661,6 +1702,28 @@ class SQLAlchemyOperationsRepository:
         if event is None:
             raise LookupError("百居易事件不存在或已经处理")
         return event
+
+    async def sync_property_titles(self, properties: list[Any]) -> int:
+        """按百居易房源覆盖本地房名；本地缺的房源补建（Spec F4）。
+
+        用户决定房名一律以百居易为准，员工在后台改过的也覆盖。标题为空的跳过，
+        不会把已有房名清空。返回新建或改名的条数。
+        """
+        changed = 0
+        for item in properties:
+            title = str(getattr(item, "title", "") or "").strip()[:128]
+            property_id = getattr(item, "id", None)
+            if not title or not isinstance(property_id, int):
+                continue
+            room = await self._session.get(PropertyProfile, property_id)
+            if room is None:
+                self._session.add(PropertyProfile(id=property_id, title=title))
+                changed += 1
+            elif room.title != title:
+                room.title = title
+                changed += 1
+        await self._session.flush()
+        return changed
 
     async def upsert_reservation(self, reservation: Reservation) -> StayOrder:
         """按订单编号 upsert 房间、百居易客户身份和入住订单。"""

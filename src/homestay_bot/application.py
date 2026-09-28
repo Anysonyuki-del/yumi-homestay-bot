@@ -42,6 +42,7 @@ from homestay_bot.domain.models import (
     Employee,
     ExternalRequest,
     Message,
+    PropertyProfile,
 )
 from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot, RuntimeConfigView
 from homestay_bot.domain.schemas import ConfirmBookingCommand
@@ -160,7 +161,7 @@ from homestay_bot.services.knowledge_embeddings import (
     PendingVector,
     StoredVector,
 )
-from homestay_bot.services.knowledge_service import KnowledgeService
+from homestay_bot.services.knowledge_service import KnowledgeService, PropertyCard
 from homestay_bot.services.lifecycle_reminders import (
     LifecycleReminderService,
 )
@@ -934,6 +935,21 @@ class SessionKnowledgeRepository:
         """读取启用知识并在返回前关闭会话。"""
         async with self._factory() as session:
             return await SQLAlchemyKnowledgeRepository(session).list_active()
+
+    async def get_property_card(self, property_id: int) -> PropertyCard | None:
+        """读取房源卡片（后台房源页的现有字段）并在返回前关闭会话。"""
+        async with self._factory() as session:
+            room = await session.get(PropertyProfile, property_id)
+            if room is None or not room.is_active:
+                return None
+            return PropertyCard(
+                property_id=room.id,
+                title=room.title,
+                room_type=room.room_type,
+                district=room.district,
+                address_hint=room.address_hint,
+                parking_instructions=room.parking_instructions,
+            )
 
 
 class SessionKnowledgeVectorStore:

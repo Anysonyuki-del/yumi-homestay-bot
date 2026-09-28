@@ -1,12 +1,15 @@
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from homestay_bot.domain.models import BusinessTask, HostexWebhookEvent, StayOrder
 from homestay_bot.integrations.hostex_client import (
     Reservation,
     ReservationQuery,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class HostexSyncConflict(RuntimeError):
@@ -57,6 +60,22 @@ class OperationsSyncPort(Protocol):
         self, reservations: list[Reservation]
     ) -> int:
         """批量 upsert 对账窗口订单。"""
+
+
+@runtime_checkable
+class PropertyTitleSourcePort(Protocol):
+    """可选：能读取百居易房源列表的客户端（用于同步房名）。"""
+
+    async def list_properties(self) -> list[Any]:
+        """返回百居易房源（编号与标题）。"""
+
+
+@runtime_checkable
+class PropertyTitleSinkPort(Protocol):
+    """可选：能按百居易房源更新本地房名的仓储。"""
+
+    async def sync_property_titles(self, properties: list[Any]) -> int:
+        """按百居易覆盖本地房名，返回变更条数。"""
 
 
 class LifecycleSchedulePort(Protocol):
@@ -135,7 +154,29 @@ class HostexSyncService:
             merged[(reservation.reservation_code, reservation.stay_code)] = reservation
         for reservation in merged.values():
             await self._sync_reservation(reservation)
+        await self._sync_property_titles()
         return len(merged)
+
+    async def _sync_property_titles(self) -> None:
+        """顺带把房名同步成百居易的标题（Spec F4）。
+
+        用户决定（2026-09-28）：房名一律以百居易为准，员工在后台改过的也覆盖。
+        房名只影响显示和房源卡片，同步失败只记日志，不能让订单对账整体失败。
+        """
+        if not isinstance(self._hostex, PropertyTitleSourcePort) or not isinstance(
+            self._operations, PropertyTitleSinkPort
+        ):
+            return
+        try:
+            changed = await self._operations.sync_property_titles(
+                await self._hostex.list_properties()
+            )
+        except Exception as error:
+            logger.warning("百居易房名同步失败，订单对账不受影响：error_type=%s",
+                           type(error).__name__)
+            return
+        if changed:
+            logger.info("百居易房名已同步：changed=%s", changed)
 
     async def _sync_reservation(self, reservation: Reservation) -> StayOrder:
         """写入一笔订单，并为未取消订单创建唯一周转保洁任务。"""

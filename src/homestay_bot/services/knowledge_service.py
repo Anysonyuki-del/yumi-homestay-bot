@@ -3,7 +3,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
 from homestay_bot.domain.enums import Language
@@ -405,6 +405,74 @@ class ActiveKnowledgeRepository(Protocol):
         """返回当前全部已启用且已审核的知识。"""
 
 
+@dataclass(frozen=True)
+class PropertyCard:
+    """一间房的常驻资料（借鉴世界书的常驻条目），来自后台房源页的现有字段。"""
+
+    property_id: int
+    title: str
+    room_type: str | None = None
+    district: str | None = None
+    address_hint: str | None = None
+    parking_instructions: str | None = None
+
+
+@runtime_checkable
+class PropertyCardRepository(Protocol):
+    """可选：按房间读取房源卡片的仓储。没实现时检索不附卡片。"""
+
+    async def get_property_card(self, property_id: int) -> PropertyCard | None:
+        """返回房源卡片；房间不存在时返回空。"""
+
+
+# 房源卡片以负的房源编号作为来源编号，与知识条目编号区分，便于审计时认出是卡片。
+PROPERTY_CARD_CATEGORY = "房源资料"
+
+
+def property_card_snippet(card: PropertyCard, language: Language) -> "KnowledgeSnippet | None":
+    """把房源卡片写成一条本房间审核资料；除房名外没有任何内容时不生成。
+
+    卡片只放「住这间就该知道」的地址、楼层、停车等信息，由员工在后台房源页填写；
+    Wi-Fi 与门锁密码不在这些字段里，也不应填进来。
+    """
+    english = language is Language.EN
+    fields = (
+        ("Room type" if english else "房型", card.room_type),
+        ("Area" if english else "区域", card.district),
+        ("Address and floor" if english else "地址与楼层", card.address_hint),
+        ("Parking" if english else "停车", card.parking_instructions),
+    )
+    lines = [f"{label}：{value.strip()}" for label, value in fields if value and value.strip()]
+    if not lines:
+        return None
+    title = f"Room: {card.title}" if english else f"房源：{card.title}"
+    return KnowledgeSnippet(
+        source_id=-card.property_id,
+        category=PROPERTY_CARD_CATEGORY,
+        question=(f"Basic information about {card.title}" if english
+                  else f"{card.title}的基本信息（地址、楼层、停车）"),
+        answer="\n".join([title, *lines]),
+        scope="property",
+        property_id=card.property_id,
+    )
+
+
+def _passes_triggers(entry: object, normalized_query: str) -> bool:
+    """按条目的附加条件词与排除词判断本轮能否命中（借鉴世界书的次要关键词、排除词）。
+
+    排除词出现任一就不命中，比如「停车」条目配「黄鹤楼」，客人问黄鹤楼停车时不用
+    本店停车答案；附加条件词非空时问题里至少出现其一才命中。都为空时不限制。
+    """
+    excluded = [
+        normalize_text(str(word)) for word in (getattr(entry, "trigger_exclude", None) or [])
+    ]
+    if any(word and word in normalized_query for word in excluded):
+        return False
+    required = [normalize_text(str(word)) for word in (getattr(entry, "trigger_any", None) or [])]
+    required = [word for word in required if word]
+    return not required or any(word in normalized_query for word in required)
+
+
 class SemanticRankerPort(Protocol):
     """按语义相似度给启用知识排序的可选组件。"""
 
@@ -564,6 +632,13 @@ class KnowledgeService:
         适用条件，把「需收费」截成「可以」，比不给证据更危险。因此只整条放入，
         剩余预算不够就跳过换下一条；同分时按编号排序只为结果可复现。
         """
+        card_snippet = await self._property_card_snippet(property_id, language)
+        if card_snippet is not None:
+            # 房源卡片是常驻条目：确定了房间就排在首位，占用同一份字数预算。
+            char_budget -= (
+                len(card_snippet.category) + len(card_snippet.question) + len(card_snippet.answer)
+            )
+            limit -= 1
         start = target_date or datetime.now(ZoneInfo("Asia/Shanghai")).date()
         end = target_end_date or start
         if end < start:
@@ -581,6 +656,9 @@ class KnowledgeService:
             and (entry.valid_from is None or entry.valid_from <= end)
             and (entry.valid_until is None or entry.valid_until >= start)
         ]
+        # Spec F5：附加条件词与排除词由员工在后台配置，改了不用发版。
+        normalized_query = normalize_text(query)
+        entries = [entry for entry in entries if _passes_triggers(entry, normalized_query)]
         query_tokens = self._query_tokens(query)
         keyword_ranked = [
             entry
@@ -628,10 +706,23 @@ class KnowledgeService:
                 len(snippets),
             )
         return KnowledgeRetrieval(
-            snippets=snippets,
+            snippets=[card_snippet, *snippets] if card_snippet is not None else snippets,
             budget_skipped=budget_skipped,
             matched=matched,
         )
+
+    async def _property_card_snippet(
+        self, property_id: int | None, language: Language
+    ) -> KnowledgeSnippet | None:
+        """确定了房间且仓储支持时读取房源卡片；读取失败不影响知识检索。"""
+        if property_id is None or not isinstance(self._repository, PropertyCardRepository):
+            return None
+        try:
+            card = await self._repository.get_property_card(property_id)
+        except Exception as error:
+            logger.warning("房源卡片读取失败，本轮不附卡片：error_type=%s", type(error).__name__)
+            return None
+        return property_card_snippet(card, language) if card is not None else None
 
     @staticmethod
     def _fuse(

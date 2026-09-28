@@ -36,6 +36,7 @@ class KnowledgeAdminServicePort(Protocol):
         query: str | None = None,
         enabled: bool | None = None,
         category: str | None = None,
+        room: str | None = None,
     ) -> list[Any]:
         """分页返回包括停用项在内的知识。"""
 
@@ -94,8 +95,13 @@ class KnowledgeAdminService:
         query: str | None = None,
         enabled: bool | None = None,
         category: str | None = None,
+        room: str | None = None,
     ) -> list[KnowledgeEntry]:
-        """按关键词、分类和启用状态稳定分页返回知识。"""
+        """按关键词、分类、启用状态和房间稳定分页返回知识。
+
+        `room`（Spec F6，借鉴世界书按角色分组）：空为全部；`shared` 为不指定房间的
+        本店通用与店外公开知识；数字为指定房间的专属知识。
+        """
         statement = select(KnowledgeEntry)
         cleaned_query = (query or "").strip()[:100]
         if cleaned_query:
@@ -113,6 +119,11 @@ class KnowledgeAdminService:
         cleaned_category = (category or "").strip()[:64]
         if cleaned_category:
             statement = statement.where(KnowledgeEntry.category == cleaned_category)
+        cleaned_room = (room or "").strip()
+        if cleaned_room == "shared":
+            statement = statement.where(KnowledgeEntry.property_id.is_(None))
+        elif cleaned_room.isdigit():
+            statement = statement.where(KnowledgeEntry.property_id == int(cleaned_room))
         result = await self._session.scalars(
             statement.order_by(KnowledgeEntry.id).offset(offset).limit(limit)
         )
@@ -181,6 +192,8 @@ class KnowledgeAdminService:
             "property_id",
             "valid_from",
             "valid_until",
+            "trigger_any",
+            "trigger_exclude",
         }
         for key, value in fields.items():
             if key in allowed:
@@ -406,6 +419,8 @@ def _fields(
     property_id: str = "",
     valid_from: str = "",
     valid_until: str = "",
+    trigger_any: str = "",
+    trigger_exclude: str = "",
 ) -> dict[str, Any]:
     """清理表单并复用所有入口一致的范围、日期约束。"""
     try:
@@ -425,10 +440,17 @@ def _fields(
         "answer_zh": answer_zh.strip(),
         "question_en": question_en.strip(),
         "answer_en": answer_en.strip(),
-        "keywords": [
-            item.strip() for item in keywords.replace("，", ",").split(",") if item.strip()
-        ],
+        "keywords": _word_list(keywords) or [],
+        # Spec F5：空表示不限制，存为空值而不是空列表，便于区分「没配置」。
+        "trigger_any": _word_list(trigger_any),
+        "trigger_exclude": _word_list(trigger_exclude),
     }
+
+
+def _word_list(value: str) -> list[str] | None:
+    """把逗号分隔（中英文逗号均可）的词表清理成列表；没有有效词时返回空值。"""
+    words = [item.strip() for item in value.replace("，", ",").split(",") if item.strip()]
+    return words or None
 
 
 @router.get("", response_class=HTMLResponse)
@@ -442,6 +464,7 @@ async def knowledge_index(
         BeforeValidator(empty_query_to_none),
     ] = None,
     category: str | None = Query(None, max_length=64),
+    room: str | None = Query(None, max_length=20),
 ) -> Response:
     """允许全部已登录员工查看知识及启停状态。"""
     _, role = await require_employee_session(request)
@@ -453,6 +476,7 @@ async def knowledge_index(
         query=query,
         enabled=enabled_value,
         category=category,
+        room=room,
     )
     candidates = (
         await service.list_candidates(
@@ -469,6 +493,7 @@ async def knowledge_index(
             "query": query or "",
             "enabled": enabled or "",
             "category": category or "",
+            "room": room or "",
         }.items()
         if value
     }
@@ -498,6 +523,7 @@ async def knowledge_index(
             "query": query or "",
             "enabled_filter": enabled or "",
             "category_filter": category or "",
+            "room_filter": room or "",
             "previous_page": page - 1 if page > 1 else None,
             "next_page": page + 1 if len(entries) > 50 else None,
             "previous_url": (list_url(page - 1, candidate_page) if page > 1 else None),
@@ -551,6 +577,8 @@ async def create_knowledge(
     property_id: str = Form("", max_length=20),
     valid_from: str = Form("", max_length=10),
     valid_until: str = Form("", max_length=10),
+    trigger_any: str = Form("", max_length=1000),
+    trigger_exclude: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
@@ -570,6 +598,8 @@ async def create_knowledge(
             property_id,
             valid_from,
             valid_until,
+            trigger_any,
+            trigger_exclude,
         ),
     )
     return RedirectResponse(
@@ -592,6 +622,8 @@ async def convert_candidate(
     property_id: str = Form("", max_length=20),
     valid_from: str = Form("", max_length=10),
     valid_until: str = Form("", max_length=10),
+    trigger_any: str = Form("", max_length=1000),
+    trigger_exclude: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
@@ -612,6 +644,8 @@ async def convert_candidate(
             property_id,
             valid_from,
             valid_until,
+            trigger_any,
+            trigger_exclude,
         ),
     )
     return RedirectResponse(
@@ -651,6 +685,8 @@ async def update_knowledge(
     property_id: str = Form("", max_length=20),
     valid_from: str = Form("", max_length=10),
     valid_until: str = Form("", max_length=10),
+    trigger_any: str = Form("", max_length=1000),
+    trigger_exclude: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> RedirectResponse:
@@ -671,6 +707,8 @@ async def update_knowledge(
             property_id,
             valid_from,
             valid_until,
+            trigger_any,
+            trigger_exclude,
         ),
     )
     return RedirectResponse(

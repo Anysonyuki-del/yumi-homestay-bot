@@ -80,6 +80,14 @@ def test_knowledge_scope_upgrade_preserves_old_content_and_constraints(tmp_path)
             "7点",
         )
 
+    # 仓储和复核工具用的是最新模型：先迁到最新版本（含 0032 触发词两列）再读，
+    # 同时确认 0032 只加可空列，0029 迁移出的范围不受影响。
+    migrate("upgrade", "head")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT trigger_any, trigger_exclude FROM knowledge_entries WHERE id=1"
+        ).fetchone() == (None, None)
+
     async def verify_readers():
         """真实仓储和复核工具读取迁移结果，保证启用知识不会被范围默认值吞掉。"""
         from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine

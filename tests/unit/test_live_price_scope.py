@@ -385,3 +385,31 @@ def test_room_floor_question_uses_reviewed_stairs_answer() -> None:
         messages=[{"role": "user", "content": "401要爬几层楼啊，箱子很重"}],
     ))
     assert "四楼" in decision.reply_text and "楼梯" in decision.reply_text
+
+
+def test_fee_conflict_check_does_not_block_location_answer() -> None:
+    """同主题有「位置」和「收费」两条知识时，问位置不能因收费条目含免费与收费而判冲突。
+
+    春和景明知识导入后的生产模拟：「开车停哪里」判为证据不足，回「尚未确认」。
+    """
+    from homestay_bot.services.knowledge_evidence_policy import build_evidence_plan
+    from homestay_bot.services.knowledge_service import KnowledgeSnippet
+
+    location = KnowledgeSnippet(
+        1, "停车", "开车来停哪里？", "可以停小区地下停车场的负一层或负二层。", scope="property"
+    )
+    fee = KnowledgeSnippet(
+        2, "停车", "停车收费吗？",
+        "小区停车场30分钟内免费；超过30分钟按2元/小时计费。", scope="property",
+    )
+    plan = build_evidence_plan(
+        "开车停哪里", [location, fee], is_property_question=True,
+        supporting_for_topic=DeepSeekGuestAssistant._supporting_knowledge,
+    )
+    assert plan.status == "grounded"
+    assert any("负一层" in answer for answer in plan.answers)
+    fee_plan = build_evidence_plan(
+        "停车怎么收费", [location, fee], is_property_question=True,
+        supporting_for_topic=DeepSeekGuestAssistant._supporting_knowledge,
+    )
+    assert fee_plan.status == "grounded" and "2元" in fee_plan.answers[0]

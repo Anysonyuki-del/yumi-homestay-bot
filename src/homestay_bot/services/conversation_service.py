@@ -1,7 +1,7 @@
 import hashlib
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
@@ -53,6 +53,7 @@ from homestay_bot.services.guest_reply_policy import (
     split_guest_reply,
 )
 from homestay_bot.services.guest_verification import GuestVerificationService
+from homestay_bot.services.knowledge_service import PropertyCard, property_card_snippet
 from homestay_bot.services.message_service import (
     GuestMessageBatch,
     IncomingMessage,
@@ -149,6 +150,15 @@ async def resolve_notification_identity(
 
 # 员工通知入队时客人回复还没发出、但紧接着会发（回复内容取决于通知是否入队成功）。
 _REPLYING_NOTICE = "正在回复客人（回复内容含本次登记结果）"
+def _guest_date_zh(value: object) -> str:
+    """把 ISO 日期写成「10月3日」；解析不了原样返回。"""
+    try:
+        day = date.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    return f"{day.month}月{day.day}日"
+
+
 _GUEST_MESSAGE_DEBOUNCE_SECONDS = 3
 # 联网查询要等十几秒，先让客人知道在查。固定话术不调用模型，不增加等待；
 # 不传问题原文，出口不会补天气开场白，也不标记人工，不会追加转人工收尾。
@@ -186,6 +196,22 @@ class ConversationRepository(Protocol):
 
     async def lock_activity(self, conversation_id: int) -> None:
         """锁定会话行，串行化入站活动与静默任务消费。"""
+
+
+@runtime_checkable
+class StayWelcomePort(Protocol):
+    """欢迎入住消息的去重记录与房源卡片读取（Spec F1/D2）。"""
+
+    async def stay_welcome_sent(self, conversation_id: int, order_id: int) -> bool:
+        """本会话是否已为这张订单发过欢迎消息。"""
+
+    async def record_stay_welcome(
+        self, *, conversation_id: int, customer_id: int | None, order_id: int
+    ) -> None:
+        """记录欢迎消息已随回复入队。"""
+
+    async def get_property_card(self, property_id: int) -> PropertyCard | None:
+        """读取房源卡片。"""
 
 
 @runtime_checkable
@@ -280,8 +306,10 @@ class GuestAssistantPort(Protocol):
         messages: list[dict[str, str]],
         customer_context: CustomerModelContext | None = None,
         stage_timing_sink: Callable[[str, int], None] | None = None,
+        guest_history: Sequence[str] | None = None,
     ) -> AssistantDecision:
-        """返回经过结构校验的客服决定；stage_timing_sink 只用于耗时观测。"""
+        """返回经过结构校验的客服决定；stage_timing_sink 只用于耗时观测，
+        guest_history 是客人本会话更早的消息，只用于追问沿用话题。"""
 
     async def respond_ack(
         self,
@@ -1126,6 +1154,8 @@ class ConversationService:
         today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
         pending = dict(conversation.stay_confirmation or {})
         confirmed = None
+        # 没有客人确认的住宿时，按名下唯一当前订单识别的住宿（Spec F1）。
+        resolved: dict[str, object] | None = None
         progress_reply = ""
         try:
             context_started = monotonic()
@@ -1190,6 +1220,9 @@ class ConversationService:
                     stay_confirmation=pending or None,
                     confirmed_stay=confirmed,
                 )
+            resolved = self._resolve_stay_from_order(model_context, confirmed)
+            if resolved is not None and model_context is not None:
+                model_context = replace(model_context, resolved_stay=resolved)
             merged_guest_count_text = str((message.metadata or {}).get("merged_guest_count", "1"))
             merged_guest_count = (
                 int(merged_guest_count_text) if merged_guest_count_text.isdigit() else 1
@@ -1212,6 +1245,7 @@ class ConversationService:
                     messages=context_messages,
                     customer_context=model_context,
                     stage_timing_sink=timing.add_stage,
+                    guest_history=await self._earlier_guest_messages(conversation, message),
                 )
             finally:
                 timing.respond_ms = max(0, round((monotonic() - respond_started) * 1000))
@@ -1274,9 +1308,11 @@ class ConversationService:
             )
             return
         confirmation_reply = ""
+        current_stay: dict[str, Any] | None = None
         if stay_repository is not None:
             # 不把过时肯定回复套用到新提示；订单变化时不用旧事实发送个性化答复。
             current = await stay_repository.get_confirmed_stay(conversation.id, today=today)
+            current_stay = current
             if confirmed is not None and current != confirmed:
                 confirmation_reply = await stay_repository.prepare_stay_confirmation(
                     conversation.id,
@@ -1301,6 +1337,11 @@ class ConversationService:
                      ("本次入住日期和房间已确认。" if accepted
                       else "入住资料发生变化，请重新确认。")
                 )
+                if accepted:
+                    # 客人刚确认住宿，本轮就能发欢迎消息，不必等下一条。
+                    current_stay = await stay_repository.get_confirmed_stay(
+                        conversation.id, today=today
+                    )
                 if not accepted:
                     confirmation_reply += await stay_repository.prepare_stay_confirmation(
                         conversation.id,
@@ -1324,6 +1365,8 @@ class ConversationService:
             elif (
                 current is None
                 and not pending
+                # 已按唯一订单识别出房间，不再多问一轮确认（Spec F1）。
+                and resolved is None
                 and (
                     (model_context is not None and model_context.active_orders)
                     or re.search(
@@ -1385,10 +1428,18 @@ class ConversationService:
             and not progress_reply
             and hashlib.sha256(decision.reply_text.encode("utf-8")).hexdigest() == fast_ack_sha256
         )
+        welcome_stay = None if high_risk else (current_stay or resolved)
+        welcome = await self._stay_welcome_text(conversation, welcome_stay)
+        if welcome:
+            prepared_reply = f"{welcome}\n\n{prepared_reply}"
+            prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
+            unchanged_ack = False
         if fast_ack_sha256 != prepared_sha256 and not unchanged_ack:
             await self._send_prepared_guest_reply(
                 conversation, prepared_reply, stale_exempt=high_risk
             )
+            if welcome and welcome_stay is not None:
+                await self._record_stay_welcome(conversation, welcome_stay)
         else:
             # 快速确认已经发过同样的正文，通知照实写这段已发内容。
             self._last_guest_reply = prepared_reply
@@ -1538,6 +1589,94 @@ class ConversationService:
             logger.warning(
                 "高频 FAQ 统计失败，已保留客人回复：error_type=%s",
                 type(error).__name__,
+            )
+
+    async def _earlier_guest_messages(
+        self, conversation: Conversation, message: IncomingMessage
+    ) -> list[str]:
+        """这位客人本会话里本轮之前的全部文本消息，供追问沿用话题（Spec F3）。
+
+        用户决定往前看所有消息；话题识别在本地完成，不发给模型、不增加 token。
+        上限 200 条只防极端长会话拖慢查询，找到最近的话题就会停下。
+        """
+        history = await self._messages.build_context(
+            conversation.id,
+            limit=200,
+            through_external_message_id=message.msgid,
+        )
+        guest = [item["content"] for item in history if item.get("role") == "user"]
+        return guest[:-1]
+
+    @staticmethod
+    def _resolve_stay_from_order(
+        model_context: CustomerModelContext | None,
+        confirmed: dict[str, Any] | None,
+    ) -> dict[str, object] | None:
+        """没有客人确认的住宿时，按名下唯一一张当前有效订单识别本次住宿（Spec F1）。
+
+        订单只会经管理员合并客户后挂到微信客人名下（`merge_locked` 要求管理员），
+        关联由员工确认过，所以可以直接使用；名下有多张当前订单时不猜，仍请客人确认。
+        `active_orders` 已按 `is_current_stay` 过滤掉取消、退房和过期订单。
+        """
+        if confirmed is not None or model_context is None:
+            return None
+        if len(model_context.active_orders) != 1:
+            return None
+        order = model_context.active_orders[0]
+        if order.get("property_id") is None or order.get("order_id") is None:
+            return None
+        return {
+            "source": "order",
+            "order_id": order["order_id"],
+            "property_id": order["property_id"],
+            "property_title": order.get("property_title"),
+            "check_in_date": order.get("check_in_date"),
+            "check_out_date": order.get("check_out_date"),
+        }
+
+    async def _stay_welcome_text(
+        self, conversation: Conversation, stay: dict[str, Any] | None
+    ) -> str:
+        """识别出房间后，每张订单第一次回复时附上欢迎入住消息（Spec D2）。
+
+        内容：房名、入住与退房日期，以及房源卡片里的房型、地址楼层、停车等信息。
+        已发过、没有订单编号或仓储不支持时返回空。门锁密码不在房源卡片里。
+        """
+        if not stay or not isinstance(self._audit_events, StayWelcomePort):
+            return ""
+        order_id = stay.get("order_id")
+        property_id = stay.get("property_id")
+        if not isinstance(order_id, int) or not isinstance(property_id, int):
+            return ""
+        if await self._audit_events.stay_welcome_sent(conversation.id, order_id):
+            return ""
+        card = await self._audit_events.get_property_card(property_id)
+        english = conversation.language is Language.EN
+        title = (card.title if card else None) or stay.get("property_title") or ""
+        dates = ""
+        start, end = stay.get("check_in_date"), stay.get("check_out_date")
+        if start and end:
+            dates = (f"Your stay: check in {start}, check out {end}." if english
+                     else f"本次住宿：{_guest_date_zh(start)}入住，{_guest_date_zh(end)}退房。")
+        lines = [f"Welcome to {title}!" if english else f"欢迎入住{title}！"]
+        if dates:
+            lines.append(dates)
+        snippet = property_card_snippet(card, conversation.language) if card else None
+        if snippet is not None:
+            # 卡片第一行是房名，欢迎语已经写过。
+            lines.extend(snippet.answer.split("\n")[1:])
+        return "\n".join(lines)
+
+    async def _record_stay_welcome(
+        self, conversation: Conversation, stay: dict[str, Any]
+    ) -> None:
+        """欢迎消息随回复入队后记一笔，保证同一张订单只发一次。"""
+        order_id = stay.get("order_id")
+        if isinstance(order_id, int) and isinstance(self._audit_events, StayWelcomePort):
+            await self._audit_events.record_stay_welcome(
+                conversation_id=conversation.id,
+                customer_id=conversation.customer_id,
+                order_id=order_id,
             )
 
     async def _activate_human(
