@@ -237,3 +237,43 @@ def test_service_fee_followup_is_not_treated_as_a_room_price_question() -> None:
     ))
     assert "Which dates" not in decision.reply_text
     assert "10 yuan" in decision.reply_text
+
+
+def test_property_card_never_becomes_the_whole_fixed_answer() -> None:
+    """房源卡片不能被当成整段固定回答发出去（2026-09-29 测试号实测：问停车回了整张卡片）。
+
+    同话题有专门知识时用专门知识；只有卡片时只取与话题相关的那一行。
+    """
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+    from homestay_bot.services.knowledge_evidence_policy import build_evidence_plan
+    from homestay_bot.services.knowledge_service import property_card_snippet
+
+    card = property_card_snippet(PropertyCard(
+        7, "合成江景房", room_type="合成套房", address_hint="合成小区2栋23层",
+        parking_instructions="地下一层A区。收费以现场公示为准（目前3元/小时）。",
+    ), Language.ZH)
+    parking = KnowledgeSnippet(1, "停车", "开车来停哪里？", "停车场在地下一层A区，右转到电梯。",
+                               scope="property", property_id=7)
+    fee = KnowledgeSnippet(2, "停车", "停车收费吗？", "停车目前3元/小时，每日封顶40元。",
+                           scope="property", property_id=7)
+
+    def plan(question: str, knowledge: list) -> tuple[str, str]:
+        """返回证据判定状态与固定回答正文。"""
+        result = build_evidence_plan(
+            question, knowledge, is_property_question=True,
+            supporting_for_topic=DeepSeekGuestAssistant._supporting_knowledge,
+        )
+        return result.status, "\n".join(result.answers)
+
+    # 答案里顺带提到停车场的其他条目（门禁卡）不能抢在停车条目前面作答。
+    access = KnowledgeSnippet(3, "客房设施", "门禁卡在哪里？",
+                              "门禁卡在鞋柜上，可以进出停车场和一楼大门。",
+                              scope="property", property_id=7)
+    status, answer = plan("开车停哪里", [card, access, parking, fee])
+    assert status == "grounded" and answer == "停车场在地下一层A区，右转到电梯。"
+    status, answer = plan("停车：那要钱吗", [card, parking, fee])
+    assert status == "grounded" and answer == "停车目前3元/小时，每日封顶40元。"
+    status, answer = plan("开车停哪里", [card])
+    assert status == "grounded"
+    assert answer == "停车：地下一层A区。收费以现场公示为准（目前3元/小时）。"
+    assert "合成小区" not in answer and "房型" not in answer

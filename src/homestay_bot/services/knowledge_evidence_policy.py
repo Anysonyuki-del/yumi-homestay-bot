@@ -503,22 +503,51 @@ def already_clarified(messages: Sequence[dict[str, str]]) -> bool:
     )
 
 
-def _knowledge_part(question: str, entry: Any) -> ReplyPart:
-    """审核答案原文和来源绑定为不可拆散的事实单元。"""
+def _knowledge_part(question: str, entry: Any, *, text: str | None = None) -> ReplyPart:
+    """审核答案原文和来源绑定为不可拆散的事实单元；房源卡片只取与话题相关的行。"""
+    answer = entry.answer if text is None else text
     return ReplyPart(
         question=question,
         status="grounded",
-        text=entry.answer,
+        text=answer,
         evidence=(
             ReplyEvidence(
                 source_kind="knowledge",
                 source_id=str(getattr(entry, "source_id", getattr(entry, "id", ""))),
                 property_id=getattr(entry, "property_id", None),
                 fetched_at=datetime.now(UTC),
-                conditions=(entry.answer,),
+                conditions=(answer,),
             ),
         ),
     )
+
+
+def _bigrams(text: str) -> set[str]:
+    """归一化后按相邻两字切分，用于比较两句问法的重合程度。"""
+    compact = re.sub(r"[\s\W_]+", "", normalize_text(text))
+    return {compact[index:index + 2] for index in range(len(compact) - 1)}
+
+
+def _is_property_card(entry: Any) -> bool:
+    """房源卡片以负的房源编号作来源编号（knowledge_service.property_card_snippet）。"""
+    source_id = getattr(entry, "source_id", None)
+    return isinstance(source_id, int) and source_id < 0
+
+
+def _answer_for_topic(topic: PropertyTopic, entry: Any) -> str:
+    """固定回答的正文：知识条目用原文；房源卡片只取点名该话题的行，不整张发出。
+
+    卡片每行一项（「停车：……」「地址与楼层：……」），按行过滤不会切断同一项内的
+    条件；一行都没点名时退回原文，交由证据判定照常处理。
+    """
+    if not _is_property_card(entry):
+        return str(entry.answer)
+    lines = [
+        line
+        for line in str(entry.answer).split("\n")
+        if topic.aliases.search(normalize_text(line))
+    ]
+    return "\n".join(lines) or str(entry.answer)
 
 
 # 追问判定（Spec F3，借鉴世界书的扫描深度）：去掉指代、语气和常见属性问法后，
@@ -711,6 +740,18 @@ def _build_evidence_plan_for_period(
                 item for item in covering_items if getattr(item, "scope", None) == "property"
             ]
             covering_items = specific or covering_items
+            # 房源卡片只作兜底：同一属性有专门知识条目时不参与，既不抢固定回答，也不
+            # 因为写法不同（「3元/小时」与「3元/小时，每日封顶40元」）被判成收费冲突。
+            # 2026-09-29 测试号实测：卡片排在首位被选中，问停车回了整张卡片。
+            dedicated = [item for item in covering_items if not _is_property_card(item)]
+            covering_items = dedicated or covering_items
+            # 多条都能作答时，问法与客人问题重合最多的条目优先：「门禁卡在哪里」的答案
+            # 顺带提到停车场，不能抢在「开车来停哪里」前面回答停车问题。排序稳定，
+            # 重合相同时保持检索给出的相关度顺序。
+            asked = _bigrams(question_text)
+            covering_items.sort(
+                key=lambda item: -len(asked & _bigrams(str(getattr(item, "question", ""))))
+            )
             evidence_texts = [
                 _attribute_evidence_text(topic, question_text, attribute, item.answer)
                 for item in covering_items
@@ -736,9 +777,10 @@ def _build_evidence_plan_for_period(
             if covering is None:
                 parts.append(ReplyPart(question=topic.name + label, status="missing", text=""))
                 continue
-            if covering.answer not in chosen:
-                chosen.append(covering.answer)
-                parts.append(_knowledge_part(topic.name, covering))
+            answer_text = _answer_for_topic(topic, covering)
+            if answer_text not in chosen:
+                chosen.append(answer_text)
+                parts.append(_knowledge_part(topic.name, covering, text=answer_text))
 
     if any(_INSTRUCTION_INJECTION.search(item) for item in chosen):
         # 需要人工复核的条目不原样转发，也不让模型改写后发出。
