@@ -213,3 +213,27 @@ async def test_import_by_room_and_room_filter_in_admin_list(tmp_path) -> None:
         shared = await KnowledgeAdminService(session).list_all(offset=0, limit=10, room="shared")
         assert shared == []
     await engine.dispose()
+
+
+def test_service_fee_followup_is_not_treated_as_a_room_price_question() -> None:
+    """F3：「Do you have parking?」后问「How much is it?」答停车费，不追问入住日期（MT-停车EN）。"""
+    from tests.unit.test_deepseek_client import ChatClientStub, decision_payload
+    from tests.unit.test_reply_evidence_boundaries import Knowledge, make_assistant
+
+    parking = ("Parking at the synthetic car park costs 10 yuan per hour; "
+               "free for the first 30 minutes.")
+    client = ChatClientStub([json.dumps({
+        **decision_payload(), "language": "en", "reply_text": "It is free.",
+    })])
+    decision = asyncio.run(make_assistant(Knowledge([
+        KnowledgeSnippet(1, "停车", "Is parking free? How much?", parking, scope="global")
+    ]), client=client).respond(
+        guest_identifier="synthetic", language=Language.EN,
+        messages=[
+            {"role": "user", "content": "Do you have parking?"},
+            {"role": "assistant", "content": "Yes, there is a car park nearby."},
+            {"role": "user", "content": "How much is it?"},
+        ],
+    ))
+    assert "Which dates" not in decision.reply_text
+    assert "10 yuan" in decision.reply_text

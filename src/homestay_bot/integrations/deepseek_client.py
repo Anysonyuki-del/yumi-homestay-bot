@@ -2066,7 +2066,14 @@ class DeepSeekGuestAssistant:
             for clause in re.split(r"[，,。；;！？!?\n]|另外|以及|同时", question_text)
             if clause.strip() not in public_clauses
         )
-        if self._price_question_needs_dates(price_question, messages, request_context):
+        # 追问接上的话题是服务收费（「Do you have parking?」→「How much is it?」）时，
+        # 问的是停车费而不是房价：不追问入住日期，也不强制查参考价（回归 MT-停车EN）。
+        service_fee_followup = knowledge_question != question_text and is_static_service_fee(
+            knowledge_question
+        )
+        if not service_fee_followup and self._price_question_needs_dates(
+            price_question, messages, request_context
+        ):
             # 问价没有日期时查不了参考价：直接问住哪天，不回「尚未确认」，也不调用模型。
             return AssistantDecision(
                 reply_text=(
@@ -2261,7 +2268,7 @@ class DeepSeekGuestAssistant:
             str(item.get("content", "")) for item in minimized_messages[:-1]
         )
         allowed_tool_names = self._allowed_tool_names(
-            question_text,
+            knowledge_question if service_fee_followup else question_text,
             previous_context,
             request_context,
         )
