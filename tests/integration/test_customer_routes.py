@@ -103,6 +103,12 @@ class CustomerAdminStub:
             return [self.card, self.target_card]
         return [self.card] * (limit if offset == 50 else 1)
 
+    async def clear_test_data(self, customer_id, administrator):
+        """记录清空测试数据的调用。"""
+        self._require_admin(administrator)
+        self.cleared = [*getattr(self, "cleared", []), customer_id]
+        return {"messages": 1}
+
     async def get_detail(self, customer_id, administrator):
         """返回不包含手机号明文和密文的客户详情。"""
         self._require_admin(administrator)
@@ -154,6 +160,8 @@ class CustomerAdminStub:
                         "updated_at_label": "2026年8月14日 09:30",
                     }
                 ],
+                # 7 号模拟带「测试专用号」标签的测试客户。
+                "is_test_account": customer_id == 7,
             }
         if tab == "governance":
             return {
@@ -957,3 +965,21 @@ def test_a_non_admin_cannot_reach_the_customer_page_at_all() -> None:
 
     assert page.status_code == 403
     assert "archive-selected" not in page.text
+
+
+def test_clear_test_data_button_only_for_test_accounts_and_requires_csrf():
+    """「清空测试数据」只在测试号的接待页出现；提交需一次性 CSRF，员工角色无权限。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    login(client)
+    assert "清空测试数据" in client.get("/employee/customers/7?tab=service").text
+    assert "清空测试数据" not in client.get("/employee/customers/8?tab=service").text
+    path = "/employee/customers/7/test-data/clear"
+    assert client.post(path, data={"csrf_token": "forged"}).status_code == 409
+    token = detail_csrf(client)
+    response = client.post(path, data={"csrf_token": token}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/customers/7?tab=service"
+    assert service.cleared == [7]
+    other, _ = build_client(EmployeeRole.STAFF)
+    login(other)
+    assert other.post(path, data={"csrf_token": token}).status_code == 403

@@ -1843,3 +1843,87 @@ async def test_context_refresh_cooldown_survives_new_request_transactions() -> N
             assert await session.scalar(select(func.count(Job.id))) == 3
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_clear_test_customer_data_removes_chat_and_orders_only_for_test_accounts():
+    """清空测试号：删消息、记忆、摘要、客诉复核与订单，会话复位；非测试号拒绝且不删。"""
+    from datetime import UTC, date, datetime
+
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from homestay_bot.domain.enums import ConversationMode, MessageOrigin
+    from homestay_bot.domain.models import (
+        AuditLog,
+        Base,
+        Conversation,
+        Customer,
+        CustomerContextSummary,
+        CustomerTag,
+        CustomerTagLink,
+        Message,
+        PropertyProfile,
+        StayOrder,
+    )
+    from homestay_bot.repositories.customers import TEST_ACCOUNT_TAG, SQLAlchemyCustomerRepository
+    from homestay_bot.services.customer_errors import CustomerPermissionError
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        tag = CustomerTag(name=TEST_ACCOUNT_TAG, is_active=True)
+        session.add_all([
+            Customer(id=1, display_name="合成测试号"), Customer(id=2, display_name="合成真客人"),
+            PropertyProfile(id=1, title="合成房"), tag,
+        ])
+        await session.flush()
+        session.add(CustomerTagLink(customer_id=1, tag_id=tag.id))
+        for customer_id in (1, 2):
+            conversation = Conversation(
+                customer_id=customer_id, open_kfid="kf", external_userid=f"u{customer_id}",
+                mode=ConversationMode.HUMAN_ACTIVE, stay_confirmation={"status": "pending"},
+            )
+            session.add(conversation)
+            await session.flush()
+            session.add_all([
+                Message(conversation_id=conversation.id, external_message_id=f"m{customer_id}",
+                        origin=MessageOrigin.GUEST, message_type="text", content="合成",
+                        sent_at=datetime.now(UTC)),
+                StayOrder(customer_id=customer_id, property_id=1,
+                          hostex_reservation_code=f"synthetic-{customer_id}",
+                          stay_code=f"synthetic-{customer_id}", check_in_date=date(2026, 10, 1),
+                          check_out_date=date(2026, 10, 2), status="confirmed"),
+                CustomerContextSummary(customer_id=customer_id),
+            ])
+        await session.commit()
+        repo = SQLAlchemyCustomerRepository(session)
+        with pytest.raises(CustomerPermissionError):
+            await repo.clear_test_customer_data(2, administrator_id=1)
+        await session.rollback()
+        counts = await repo.clear_test_customer_data(1, administrator_id=1)
+        await session.commit()
+        assert counts["messages"] == 1 and counts["stay_orders"] == 1
+        assert counts["context_summaries"] == 1
+
+        async def count(model, **where):
+            """按客户或会话统计剩余行数。"""
+            statement = select(func.count()).select_from(model)
+            for key, value in where.items():
+                statement = statement.where(getattr(model, key) == value)
+            return await session.scalar(statement)
+
+        assert await count(StayOrder, customer_id=1) == 0
+        assert await count(StayOrder, customer_id=2) == 1
+        assert await count(Message) == 1
+        assert await count(CustomerContextSummary, customer_id=2) == 1
+        cleared = await session.scalar(select(Conversation).where(Conversation.customer_id == 1))
+        assert cleared.mode is ConversationMode.BOT_ACTIVE and cleared.stay_confirmation is None
+        kept = await session.scalar(select(Conversation).where(Conversation.customer_id == 2))
+        assert kept.mode is ConversationMode.HUMAN_ACTIVE
+        audit = await session.scalar(
+            select(AuditLog).where(AuditLog.action == "customer.test_data_cleared")
+        )
+        assert audit.target_id == "1" and audit.details["messages"] == 1
+    await engine.dispose()

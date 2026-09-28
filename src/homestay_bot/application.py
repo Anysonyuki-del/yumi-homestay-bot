@@ -2216,6 +2216,13 @@ class SessionCustomerAdminService:
             ),
         )
 
+    async def clear_test_data(self, customer_id: int, administrator: Employee) -> dict[str, int]:
+        """在一个事务里清空测试号的聊天与订单，失败整批回滚。"""
+        async with self._factory() as session:
+            counts = await self._service(session).clear_test_data(customer_id, administrator)
+            await session.commit()
+            return counts
+
     async def release_conversation(
         self, customer_id: int, conversation_id: int, administrator: Employee,
     ) -> None:

@@ -77,6 +77,11 @@ class MergeCustomerCard:
 class CustomerAdminRepositoryPort(Protocol):
     """定义管理员 CRM 页面所需的查询和写操作。"""
 
+    async def clear_test_customer_data(
+        self, customer_id: int, administrator_id: int
+    ) -> dict[str, int]:
+        """清空测试号的聊天与订单；非测试号拒绝。"""
+
     async def latest_context_refresh_at(self, customer_id: int) -> datetime | None:
         """锁定客户并返回最近重算作业时间，锁保持到入队事务结束。"""
 
@@ -404,6 +409,11 @@ class CustomerAdminService:
             actor_employee_id=administrator.id, now=datetime.now(UTC),
         ):
             raise CustomerConflictError("会话状态已变化，请刷新后重试")
+
+    async def clear_test_data(self, customer_id: int, administrator: Employee) -> dict[str, int]:
+        """管理员清空测试号的聊天与订单（「测试专用号」标签由仓储锁内复核）。"""
+        self._require_admin(administrator)
+        return await self._repository.clear_test_customer_data(customer_id, administrator.id)
 
     async def update_note(
         self,

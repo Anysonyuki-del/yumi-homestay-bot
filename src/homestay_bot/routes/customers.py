@@ -41,6 +41,9 @@ class CustomerAdminServicePort(Protocol):
     ) -> None:
         """交还属于该客户的人工会话。"""
 
+    async def clear_test_data(self, customer_id: int, administrator: Employee) -> dict[str, int]:
+        """清空测试号的聊天与订单。"""
+
     async def list_customers(
         self,
         query: str | CustomerListFilters | None,
@@ -604,6 +607,20 @@ async def review_customer_memory(
     except Exception as error:
         _raise_page_error(error)
     return _customer_redirect(customer_id, "memory")
+
+
+@router.post("/{customer_id}/test-data/clear")
+async def clear_customer_test_data(
+    request: Request, customer_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """清空测试号的聊天与订单；只对带「测试专用号」标签的客户生效，权限沿用客户后台。"""
+    administrator, service = await _customer_form_context(request, customer_id, csrf_token)
+    try:
+        await service.clear_test_data(customer_id, administrator)
+    except Exception as error:
+        _raise_page_error(error)
+    return _customer_redirect(customer_id, "service")
 
 
 @router.post("/{customer_id}/conversations/{conversation_id}/release")

@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select, update
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from homestay_bot.domain.enums import (
     BusinessTaskStatus,
     ComplaintReviewStatus,
+    ConversationMode,
     CustomerIdentityProvider,
     CustomerMemoryCategory,
     CustomerMemoryEvidenceType,
@@ -22,6 +24,7 @@ from homestay_bot.domain.models import (
     BusinessTask,
     ComplaintReview,
     Conversation,
+    CredentialDelivery,
     Customer,
     CustomerContextSummary,
     CustomerIdentity,
@@ -32,6 +35,7 @@ from homestay_bot.domain.models import (
     CustomerTagLink,
     Employee,
     Job,
+    Message,
     PropertyProfile,
     StayOrder,
 )
@@ -44,6 +48,9 @@ from homestay_bot.services.latest_stay_note import (
     LatestStayCandidate,
     select_latest_stay_note,
 )
+
+# 允许「清空测试数据」的客户标签名；只有带这个标签的客户能被清空。
+TEST_ACCOUNT_TAG = "测试专用号"
 
 logger = logging.getLogger(__name__)
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -730,6 +737,8 @@ class SQLAlchemyCustomerRepository:
                     "complaints": [dict(row) for row in complaint_rows],
                     # 会话只返回处理模式、负责人和时间，禁止选择消息表正文。
                     "conversations": [dict(row) for row in conversation_rows],
+                    # 只有带「测试专用号」标签的客户才显示「清空测试数据」按钮。
+                    "is_test_account": await self._is_test_account(customer_id),
                 }
             )
             return detail
@@ -1333,6 +1342,111 @@ class SQLAlchemyCustomerRepository:
             link.sync_pending = True
             link.last_sync_error_code = error_code[:64]
         await self._session.flush()
+
+    async def _is_test_account(self, customer_id: int) -> bool:
+        """客户是否带启用中的「测试专用号」标签；清空测试数据只对这类客户开放。"""
+        return await self._session.scalar(
+            select(CustomerTagLink.tag_id)
+            .join(CustomerTag, CustomerTag.id == CustomerTagLink.tag_id)
+            .where(
+                CustomerTagLink.customer_id == customer_id,
+                CustomerTag.name == TEST_ACCOUNT_TAG,
+                CustomerTag.is_active.is_(True),
+            )
+            .limit(1)
+        ) is not None
+
+    async def clear_test_customer_data(
+        self, customer_id: int, administrator_id: int
+    ) -> dict[str, int]:
+        """清空测试号的聊天与订单，恢复会话初始状态；只允许带「测试专用号」标签的客户。
+
+        用户要求（2026-09-29）：「把测试号的消息和订单清空，而且应该有个清空按钮」。
+        清空：各会话的消息、客诉复核；从聊天提炼的记忆、记忆来源与长期摘要；名下订单；
+        会话的住宿确认与人工模式复位。保留：客户档案与标签、任务（在任务页单独处理）
+        和审计日志。锁住客户行后再核对标签，与合并客户等操作串行；由调用方事务提交。
+        """
+        customer = await self._session.scalar(
+            select(Customer).where(Customer.id == customer_id).with_for_update()
+        )
+        if customer is None:
+            raise CustomerNotFoundError("客户不存在")
+        if not await self._is_test_account(customer_id):
+            raise CustomerPermissionError("只能清空带「测试专用号」标签的客户")
+        conversation_ids = list(
+            (
+                await self._session.scalars(
+                    select(Conversation.id).where(Conversation.customer_id == customer_id)
+                )
+            ).all()
+        )
+        counts: dict[str, int] = {}
+
+        async def remove(label: str, statement: Any) -> None:
+            """执行一次批量删除并记下条数。"""
+            result = await self._session.execute(
+                statement.execution_options(synchronize_session=False)
+            )
+            counts[label] = int(getattr(result, "rowcount", 0) or 0)
+
+        await remove("memory_events", delete(CustomerMemoryEvent).where(
+            CustomerMemoryEvent.customer_id == customer_id))
+        await remove("memory_items", delete(CustomerMemoryItem).where(
+            CustomerMemoryItem.customer_id == customer_id))
+        await remove("context_summaries", delete(CustomerContextSummary).where(
+            CustomerContextSummary.customer_id == customer_id))
+        if conversation_ids:
+            await remove("complaint_reviews", delete(ComplaintReview).where(
+                ComplaintReview.conversation_id.in_(conversation_ids)))
+            await remove("messages", delete(Message).where(
+                Message.conversation_id.in_(conversation_ids)))
+            for conversation in (
+                await self._session.scalars(
+                    select(Conversation).where(Conversation.id.in_(conversation_ids))
+                )
+            ).all():
+                conversation.stay_confirmation = None
+                conversation.mode = ConversationMode.BOT_ACTIVE
+                conversation.assigned_employee_id = None
+        # 订单上挂着任务或门锁凭证发放时不删，避免破坏这些记录；测试号正常不会有。
+        order_ids = list(
+            (
+                await self._session.scalars(
+                    select(StayOrder.id).where(StayOrder.customer_id == customer_id)
+                )
+            ).all()
+        )
+        blocked = set(
+            (
+                await self._session.scalars(
+                    select(BusinessTask.order_id).where(BusinessTask.order_id.in_(order_ids))
+                )
+            ).all()
+        ) | set(
+            (
+                await self._session.scalars(
+                    select(CredentialDelivery.order_id).where(
+                        CredentialDelivery.order_id.in_(order_ids)
+                    )
+                )
+            ).all()
+        ) if order_ids else set()
+        removable = [order_id for order_id in order_ids if order_id not in blocked]
+        counts["stay_orders"] = 0
+        if removable:
+            await remove("stay_orders", delete(StayOrder).where(StayOrder.id.in_(removable)))
+        counts["stay_orders_kept"] = len(order_ids) - len(removable)
+        self._session.add(
+            AuditLog(
+                actor_employee_id=administrator_id,
+                action="customer.test_data_cleared",
+                target_type="customer",
+                target_id=str(customer_id),
+                details=counts,
+            )
+        )
+        await self._session.flush()
+        return counts
 
     async def merge_locked(
         self,
