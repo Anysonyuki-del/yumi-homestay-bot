@@ -161,6 +161,31 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
         "距离 distance",
         english="the distance",
     ),
+    # 2026-09-29 测试号实测：「怎么登记」「到了小区门口怎么进」认不出主题，挽江的
+    # 登记和进门条目只能由模型转述，配图也发不出去。「保安要登记吗」是进门时的访客
+    # 登记，归「进小区」，不算入住实名登记。
+    PropertyTopic(
+        "入住登记",
+        _topic_pattern(
+            r"(?<!保安)(?<!门卫)(?<!保安要)(?<!门卫要)(?<!保安会)(?<!门卫会)登记"
+            r"|实名|网约房|(?:入住|办理).{0,6}(?:身份证|证件)|(?:身份证|证件).{0,6}入住"
+            r"|\b(?:police|guest|real-?name|id)\s+registration\b"
+            r"|\bhow\s+(?:do|should|can)\s+(?:i|we)\s+register\b"
+        ),
+        "登记 实名 身份证 registration",
+        english="check-in registration",
+    ),
+    PropertyTopic(
+        "进小区",
+        _topic_pattern(
+            r"小区的?(?:门口|大门|正门|入口|门禁)|进小区|(?:门卫|保安)|闸机|单元门"
+            r"|\b(?:compound|community|complex|estate)\s+(?:gate|entrance)\b"
+            r"|\b(?:enter|get\s+into)\s+the\s+(?:compound|community|complex|estate)\b"
+            r"|\bsecurity\s+guard"
+        ),
+        "小区 大门 门口 保安 闸机 entrance gate",
+        english="getting into the residential compound",
+    ),
     PropertyTopic(
         "网络",
         _topic_pattern(r"wi-?fi|无线网|上网|网速|internet"),

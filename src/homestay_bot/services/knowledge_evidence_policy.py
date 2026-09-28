@@ -57,6 +57,18 @@ _ATTRIBUTE_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
+    (
+        # 办事流程：「怎么登记」「到了门口怎么进」「怎么上楼」。此前这类问法认不出属性，
+        # 判成 unknown，认得出主题也拿不到固定回答（2026-09-29 测试号实测）。
+        # 收费、走法、用法、故障求助另有归属，不算流程。
+        "procedure",
+        re.compile(
+            r"怎么(?!样|办|收|算|付|走|用|开|关|调|卖)|如何(?!使用|收)|要做什么|需要做什么"
+            r"|流程|步骤|手续"
+            r"|how\s+(?:do|can|should)\s+(?:i|we)\s+(?!use|turn|adjust|set|get\s+to)",
+            re.IGNORECASE,
+        ),
+    ),
     ("voltage", re.compile(r"电压|\d+\s*[vV]|多少伏")),
     ("contents", re.compile(r"(?:有什么|有哪些)\s*$|what.+(?:contain|include)\s*$", re.I)),
     ("distance", re.compile(r"多远|距离|how\s+far|distance", re.IGNORECASE)),
@@ -249,6 +261,13 @@ _LOCATION_EVIDENCE = re.compile(
     r"|\bon\b|\bin\b|\bnext\s+to\b|\bbeside\b|floor|lobby|entrance|rack|shelf",
     re.IGNORECASE,
 )
+# 流程答案要写出具体动作，只说「可以」「支持」不算回答了怎么做。
+_PROCEDURE_EVIDENCE = re.compile(
+    r"扫|填|登记|联系|进入|进门|刷|按|输入|提交|点击|出示|前往|乘|坐|直走|左转|右转|左边|右边"
+    r"|\b(?:scan|fill|register|contact|enter|press|show|take|go|turn)\b",
+    re.IGNORECASE,
+)
+
 _OPERATION_EVIDENCE = re.compile(
     r"调(?:节|到|整|高|低)|可调|设置|操作|使用|开关|按(?:钮|键)?|遥控|面板|旋钮"
     r"|\badjust\b|\bset\b|\bswitch\b|\bpanel\b|\bremote\b|\bcontrol\b|\buse\b",
@@ -395,6 +414,8 @@ def _covers_attribute(attribute: str, answer: str) -> bool:
         return _LOCATION_EVIDENCE.search(answer) is not None
     if attribute == "operation":
         return _OPERATION_EVIDENCE.search(answer) is not None
+    if attribute == "procedure":
+        return _PROCEDURE_EVIDENCE.search(answer) is not None
     if attribute == "fee":
         # 再检查当前主题正文，避免调用方漏认口语费用问法后用位置资料作证。
         return (
@@ -583,7 +604,10 @@ def carry_followup_topic(question: str, earlier_guest_messages: Sequence[str]) -
         or len(text) > _FOLLOW_UP_MAX_CHARS
         or _ACKNOWLEDGEMENT.match(text)
         or detect_property_topics(text)
-        or len(_FOLLOW_UP_FILLERS.sub("", text)) > 2
+        # 去掉虚词后什么都不剩才算追问（「那要钱吗」「几点」）。此前留 2 个字的余量，
+        # 「怎么登记」剩下「登记」被当成追问，借用上文的停车话题，回了「尚未确认
+        # 停车信息」（2026-09-29 测试号实测）。
+        or _FOLLOW_UP_FILLERS.sub("", text)
     ):
         return question
     for earlier in reversed(earlier_guest_messages):
@@ -748,9 +772,15 @@ def _build_evidence_plan_for_period(
             # 多条都能作答时，问法与客人问题重合最多的条目优先：「门禁卡在哪里」的答案
             # 顺带提到停车场，不能抢在「开车来停哪里」前面回答停车问题。排序稳定，
             # 重合相同时保持检索给出的相关度顺序。
+            # 重合相同时，问法本身点名这个主题的条目优先：进门条目的答案写了「登记表」，
+            # 不能和入住实名登记条目打平后靠检索顺序碰运气（2026-09-29）。只作次序，
+            # 「开车来停哪里」这种问法认不出别名，不能因此排到收费条目后面。
             asked = _bigrams(question_text)
             covering_items.sort(
-                key=lambda item: -len(asked & _bigrams(str(getattr(item, "question", ""))))
+                key=lambda item: (
+                    -len(asked & _bigrams(str(getattr(item, "question", "")))),
+                    not topic.aliases.search(normalize_text(str(getattr(item, "question", "")))),
+                )
             )
             evidence_texts = [
                 _attribute_evidence_text(topic, question_text, attribute, item.answer)
@@ -773,7 +803,9 @@ def _build_evidence_plan_for_period(
             }
             conflict = conflict or (attribute == "fee" and len(fees) > 1)
             covering = covering_items[0] if covering_items and not conflict else None
-            label = {"time": "时间", "fee": "费用", "location": "位置"}.get(attribute, "")
+            label = {"time": "时间", "fee": "费用", "location": "位置", "procedure": "流程"}.get(
+                attribute, ""
+            )
             if covering is None:
                 parts.append(ReplyPart(question=topic.name + label, status="missing", text=""))
                 continue

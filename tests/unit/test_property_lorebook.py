@@ -277,3 +277,46 @@ def test_property_card_never_becomes_the_whole_fixed_answer() -> None:
     assert status == "grounded"
     assert answer == "停车：地下一层A区。收费以现场公示为准（目前3元/小时）。"
     assert "合成小区" not in answer and "房型" not in answer
+
+
+def test_registration_and_gate_questions_get_fixed_answers_and_are_not_followups() -> None:
+    """2026-09-29 测试号实测：「到了小区门口怎么进」「怎么登记」认不出主题和「怎么做」属性，
+    带图条目发不出；「怎么登记」还被当成追问，借用上文停车话题回了「尚未确认停车信息」。
+    """
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+    from homestay_bot.services.knowledge_evidence_policy import build_evidence_plan
+
+    gate = KnowledgeSnippet(
+        1, "地址交通", "到了小区大门怎么进？保安要登记吗？",
+        "保安可能会给一份登记表，填写真实楼栋和房号即可。进门左边是1栋，右边是2栋。",
+        scope="property", property_id=7,
+    )
+    registration = KnowledgeSnippet(
+        2, "入住退房", "入住前要做什么登记？怎么拿到房间密码？",
+        "入住前需要完成公安实名登记：扫描二维码，进入网约房登记系统填写身份信息。",
+        scope="property", property_id=7,
+    )
+    parking = KnowledgeSnippet(3, "停车", "开车来停哪里？", "停车场在地下一层A区，右转到电梯。",
+                               scope="property", property_id=7)
+    fee = KnowledgeSnippet(4, "停车", "停车收费吗？", "停车目前3元/小时，每日封顶40元。",
+                           scope="property", property_id=7)
+    knowledge = [gate, registration, parking, fee]
+
+    def chosen(question: str) -> tuple[str, list[str]]:
+        """返回证据判定状态与作为固定回答的条目编号。"""
+        result = build_evidence_plan(
+            question, knowledge, is_property_question=True,
+            supporting_for_topic=DeepSeekGuestAssistant._supporting_knowledge,
+        )
+        return result.status, [part.evidence[0].source_id for part in result.parts]
+
+    assert chosen("怎么登记") == ("grounded", ["2"])
+    assert chosen("到了小区门口怎么进") == ("grounded", ["1"])
+    assert chosen("How do I register?") == ("grounded", ["2"])
+    # 「怎么收费」问的是费用，不当成办事流程再拼上停车位置条目。
+    assert chosen("停车怎么收费") == ("grounded", ["4"])
+
+    history = ["开车停哪里", "到了小区门口怎么进"]
+    assert carry_followup_topic("怎么登记", history) == "怎么登记"
+    assert carry_followup_topic("那晚上呢", history) == "那晚上呢"
+    assert carry_followup_topic("那要钱吗", ["开车停哪里"]).endswith("：那要钱吗")
