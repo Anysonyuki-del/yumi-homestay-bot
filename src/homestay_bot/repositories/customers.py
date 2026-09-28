@@ -1362,7 +1362,8 @@ class SQLAlchemyCustomerRepository:
         """清空测试号的聊天与订单，恢复会话初始状态；只允许带「测试专用号」标签的客户。
 
         用户要求（2026-09-29）：「把测试号的消息和订单清空，而且应该有个清空按钮」。
-        清空：各会话的消息、客诉复核；从聊天提炼的记忆、记忆来源与长期摘要；名下订单；
+        清空：各会话消息的正文（行与编号保留作去重，见下）、客诉复核；从聊天提炼的记忆、
+        记忆来源与长期摘要；名下订单；
         会话的住宿确认与人工模式复位。保留：客户档案与标签、任务（在任务页单独处理）
         和审计日志。锁住客户行后再核对标签，与合并客户等操作串行；由调用方事务提交。
         """
@@ -1398,8 +1399,14 @@ class SQLAlchemyCustomerRepository:
         if conversation_ids:
             await remove("complaint_reviews", delete(ComplaintReview).where(
                 ComplaintReview.conversation_id.in_(conversation_ids)))
-            await remove("messages", delete(Message).where(
-                Message.conversation_id.in_(conversation_ids)))
+            # 消息行不能删：企业微信拉取按「消息编号是否已存在」去重，删了行，最近几天的
+            # 历史消息会被当成新消息重新处理并回复（2026-09-29 清空测试号时实际发生：
+            # 15 条旧消息重放，旧的「燃气味好重」触发紧急升级）。只抹正文并标记已清空，
+            # 编号保留作去重；正文为空的消息本来就不进入模型上下文与追问话题。
+            await remove("messages", update(Message).where(
+                Message.conversation_id.in_(conversation_ids),
+                Message.content.is_not(None),
+            ).values(content=None, message_metadata={"cleared_by": "test_data_reset"}))
             for conversation in (
                 await self._session.scalars(
                     select(Conversation).where(Conversation.id.in_(conversation_ids))

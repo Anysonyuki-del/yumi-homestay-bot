@@ -1916,7 +1916,25 @@ async def test_clear_test_customer_data_removes_chat_and_orders_only_for_test_ac
 
         assert await count(StayOrder, customer_id=1) == 0
         assert await count(StayOrder, customer_id=2) == 1
-        assert await count(Message) == 1
+        # 消息行保留、只抹正文：企业微信重复拉到同一编号时必须被认出是旧消息，
+        # 不能再当新消息回复（2026-09-29 清空测试号后 15 条旧消息被重放）。
+        assert await count(Message) == 2
+        assert await session.scalar(
+            select(Message.content).where(Message.external_message_id == "m1")
+        ) is None
+        from homestay_bot.repositories.conversations import SQLAlchemyMessageRepository
+        from homestay_bot.services.message_service import IncomingMessage, MessageService
+
+        replay = IncomingMessage(
+            msgid="m1", open_kfid="kf", external_userid="u1", origin=MessageOrigin.GUEST,
+            msgtype="text", content="合成", sent_at=datetime.now(UTC),
+        )
+        test_conversation_id = await session.scalar(
+            select(Conversation.id).where(Conversation.customer_id == 1)
+        )
+        assert await MessageService(SQLAlchemyMessageRepository(session)).record_incoming(
+            test_conversation_id, replay
+        ) is False
         assert await count(CustomerContextSummary, customer_id=2) == 1
         cleared = await session.scalar(select(Conversation).where(Conversation.customer_id == 1))
         assert cleared.mode is ConversationMode.BOT_ACTIVE and cleared.stay_confirmation is None
