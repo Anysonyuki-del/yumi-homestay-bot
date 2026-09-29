@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -14,7 +15,10 @@ from homestay_bot.integrations.deepseek_delivery_rewriter import DeepSeekDeliver
 from homestay_bot.integrations.tourism import (
     TourismSearchError,
     classify_tourism_query,
+    evidence_footer,
+    group_live_questions,
     latest_user_question,
+    live_reply_category,
     split_tourism_reply,
 )
 from homestay_bot.services.answer_policy import (
@@ -380,8 +384,9 @@ class TourismSearcher(Protocol):
         language: Language,
         queried_on: date,
         evidence_sink: Callable[[tuple[ReplyEvidence, ...]], None] | None = None,
+        footer: bool = True,
     ) -> str:
-        """返回带查询日期和来源名称的无链接旅游回复。"""
+        """返回无链接旅游回复；`footer` 为真时末尾带查询日期的时效说明。"""
 
 
 class ReadOnlyToolExecutor(Protocol):
@@ -2118,49 +2123,80 @@ class DeepSeekGuestAssistant:
         finally:
             _record_stage(stage_timing_sink, "knowledge", knowledge_started)
         public_parts: list[ReplyPart] = []
+        # 联网小句之外客人还问了什么；交给后面的模型只答这部分，联网部分不再重答。
+        remaining_question = "；".join(
+            clause.strip()
+            for clause in re.split(r"[，,。；;！？!?\n]|另外|以及|同时", question_text)
+            if clause.strip() and clause.strip() not in public_clauses
+        )
         if public_clauses:
             started = monotonic()
-            succeeded = False
-            search_evidence: list[ReplyEvidence] = []
+            groups = group_live_questions(public_clauses)
+
+            async def search_group(group: str) -> ReplyPart:
+                """一组同类小句联网搜一次；失败只影响本组。多组时不带时效说明，搜完统一补。"""
+                group_started = monotonic()
+                succeeded = False
+                search_evidence: list[ReplyEvidence] = []
+                try:
+                    reply = await self._tourism_searcher.search(
+                        question=group,
+                        language=language,
+                        queried_on=local_today,
+                        evidence_sink=search_evidence.extend,
+                        footer=len(groups) == 1,
+                    )
+                    reply = self._remove_property_promotion(
+                        reply, language, fallback_on_empty=False
+                    )
+                    if not reply:
+                        raise TourismSearchError("degraded")
+                    succeeded = True
+                    # 已有搜索证据原文不再承担另一次语义精炼成本。
+                    return ReplyPart(
+                        question=group,
+                        status="grounded",
+                        text=reply,
+                        evidence=tuple(search_evidence),
+                    )
+                except TourismSearchError:
+                    return ReplyPart(
+                        question=group,
+                        status="query_failed",
+                        text=(
+                            "Live travel information is unavailable at the moment; "
+                            "please check before setting out."
+                            if language is Language.EN
+                            else "暂时未能查到可靠的实时出行信息，出发前请再确认。"
+                        ),
+                    )
+                finally:
+                    if tool_trace_sink is not None:
+                        tool_trace_sink(
+                            AssistantToolTrace(
+                                name="tourism_search",
+                                succeeded=succeeded,
+                                duration_ms=max(0, round((monotonic() - group_started) * 1000)),
+                            )
+                        )
+
             try:
-                reply = await self._tourism_searcher.search(
-                    question="；".join(public_clauses),
-                    language=language,
-                    queried_on=local_today,
-                    evidence_sink=search_evidence.extend,
-                )
-                reply = self._remove_property_promotion(reply, language, fallback_on_empty=False)
-                if not reply:
-                    raise TourismSearchError("degraded")
-                # 已有搜索证据原文不再承担另一次语义精炼成本。
-                public_part = ReplyPart(
-                    question=question_text,
-                    status="grounded",
-                    text=reply,
-                    evidence=tuple(search_evidence),
-                )
-                succeeded = True
-            except TourismSearchError:
-                public_part = ReplyPart(
-                    question=question_text,
-                    status="query_failed",
-                    text=(
-                        "Live travel information is unavailable at the moment; "
-                        "please check before setting out."
-                        if language is Language.EN
-                        else "暂时未能查到可靠的实时出行信息，出发前请再确认。"
-                    ),
+                # 各组同时搜索，总耗时约等于最慢的一组（2026-09-30：一句多问逐项回答）。
+                public_parts = list(
+                    await asyncio.gather(*(search_group(group) for group in groups))
                 )
             finally:
                 _record_stage(stage_timing_sink, "tourism_search", started)
-                if tool_trace_sink is not None:
-                    tool_trace_sink(
-                        AssistantToolTrace(
-                            name="tourism_search",
-                            succeeded=succeeded,
-                            duration_ms=max(0, round((monotonic() - started) * 1000)),
-                        )
+            grounded = [i for i, part in enumerate(public_parts) if part.status == "grounded"]
+            if len(groups) > 1 and grounded:
+                # 时效说明整条只写一次，放在最后一段成功回答之后；那一组失败也不会丢。
+                last = public_parts[grounded[-1]]
+                public_parts[grounded[-1]] = last.model_copy(update={"text": (
+                    f"{last.text}\n\n" + evidence_footer(
+                        queried_on=local_today, language=language.value,
+                        category=live_reply_category(last.question),
                     )
+                )})
             decision = AssistantDecision(
                 reply_text="", language=language, intent="tourism", confidence=0.95
             )
@@ -2175,15 +2211,16 @@ class DeepSeekGuestAssistant:
             )
             if plan is not None and plan.handles_reply:
                 decision = self._apply_evidence_plan(decision, plan, knowledge_question)
-            public_parts = [public_part]
             parts = [*decision.reply_parts, *public_parts]
-            remaining_question = "；".join(
-                clause.strip()
-                for clause in re.split(r"[，,。；;！？!?\n]|另外|以及|同时", question_text)
-                if clause.strip() not in public_clauses
+            # 剩下的小句没有被知识固定答案覆盖时不能提前返回：此前「武汉最近有啥玩的，
+            # 天气咋样」只把天气送去联网，玩法这句既不联网也不进模型，直接丢了
+            # （2026-09-30 测试号）。继续走模型，只让它回答剩下的部分。
+            remaining_answered = not remaining_question or (
+                plan is not None and plan.handles_reply
             )
             if (
-                not is_service_request(remaining_question)
+                remaining_answered
+                and not is_service_request(remaining_question)
                 and not is_transaction_sensitive(remaining_question)
                 and not getattr(customer_context, "stay_confirmation", None)
             ):
@@ -2293,6 +2330,14 @@ class DeepSeekGuestAssistant:
             if item["function"]["name"] in allowed_tool_names
         ]
         minimized_question = str(minimized_messages[-1].get("content", ""))
+        if public_parts and remaining_question:
+            # 联网部分已经查好并会原样拼在回复里，模型只回答其余小句，避免在没有
+            # 实时依据的情况下把天气、活动等再答一遍。
+            minimized_question = str(
+                self._minimize_personal_data([{"role": "user", "content": remaining_question}])[
+                    -1
+                ].get("content", "")
+            )
         envelope = self._build_context_envelope(
             question_text=minimized_question,
             knowledge=knowledge,
@@ -2411,7 +2456,22 @@ class DeepSeekGuestAssistant:
                             language=language,
                         )
                         if tool_parts or public_parts:
-                            parts = [*decision.reply_parts, *tool_parts, *public_parts]
+                            model_parts = list(decision.reply_parts)
+                            if (
+                                not model_parts
+                                and public_parts
+                                and remaining_question
+                                and decision.reply_text.strip()
+                            ):
+                                # 模型只被问了联网之外的小句，它的正文就是那部分的回答；
+                                # 没有证据，出口仍按普通正文过滤承诺。工具结果流程不在此列：
+                                # 那里只拼经本地校验的工具分项。
+                                model_parts = [ReplyPart(
+                                    question=remaining_question,
+                                    status="grounded",
+                                    text=decision.reply_text,
+                                )]
+                            parts = [*model_parts, *tool_parts, *public_parts]
                             return decision.model_copy(
                                 update={
                                     "reply_parts": parts,

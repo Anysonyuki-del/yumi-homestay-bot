@@ -3317,3 +3317,76 @@ async def test_stage_timing_sink_reports_live_search_without_refinement() -> Non
     )
 
     assert stages == ["knowledge", "tourism_search"]
+
+
+@pytest.mark.asyncio
+async def test_live_question_mixed_with_other_question_answers_both() -> None:
+    """联网小句之外的问题不能被丢掉：天气去联网，「武汉最近有啥玩的」交给模型，而且模型
+    只看到剩下这句，不会在没有实时依据的情况下重答天气（2026-09-30 测试号只答了天气）。"""
+    searched: list[str] = []
+
+    class WeatherStub:
+        """天气组的联网结果。"""
+
+        async def search(self, *, question, **_kwargs) -> str:
+            searched.append(question)
+            return "明天武汉阴有阵雨，15～21℃。\n\n这是我今天帮您查到的最新预报。"
+
+    payload = {**decision_payload(), "reply_text": "可以去东湖绿道骑行，傍晚去江滩散步。"}
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=WeatherStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "武汉最近有啥玩的，天气咋样"}],
+    )
+
+    assert searched == ["天气咋样"]
+    envelope = json.loads(client.chat.completions.requests[0]["messages"][-1]["content"])
+    assert "玩" in envelope["current_question"] and "天气" not in envelope["current_question"]
+    assert "东湖绿道" in decision.reply_text and "15～21℃" in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_two_kinds_of_live_question_are_searched_separately_with_one_footer() -> None:
+    """天气与门票分两组各搜一次、都要回答；最后一组失败时，时效说明仍只写一次，
+    跟在最后一段成功回答后面。"""
+    from homestay_bot.integrations.tourism import TourismSearchError
+
+    calls: list[tuple[str, bool]] = []
+
+    class GroupedTourismStub:
+        """天气组成功，门票组失败。"""
+
+        async def search(self, *, question, footer=True, **_kwargs) -> str:
+            calls.append((question, footer))
+            if "门票" in question:
+                raise TourismSearchError("degraded")
+            return "明天武汉阴有阵雨，15～21℃。"
+
+    assistant = DeepSeekGuestAssistant(
+        chat_client=ChatClientStub([]),
+        tourism_searcher=GroupedTourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "明天天气怎么样，黄鹤楼门票多少"}],
+    )
+
+    assert sorted(calls) == [("明天天气怎么样", False), ("黄鹤楼门票多少", False)]
+    text = decision.reply_text
+    assert "15～21℃" in text and "暂时未能查到可靠的实时出行信息" in text
+    assert text.count("帮您查到的") == 1
+    assert text.index("帮您查到的") < text.index("暂时未能查到")

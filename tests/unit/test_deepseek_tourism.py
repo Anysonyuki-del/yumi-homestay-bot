@@ -5,7 +5,11 @@ import pytest
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
-from homestay_bot.integrations.tourism import TourismSearchError
+from homestay_bot.integrations.tourism import (
+    TourismSearchError,
+    group_live_questions,
+    live_reply_category,
+)
 
 
 class MessagesStub:
@@ -231,7 +235,7 @@ def test_reply_category_does_not_confuse_close_or_open_with_tickets(
     expected: str,
 ) -> None:
     """英文距离与活动表达不能被宽泛 open/close 误判为票务。"""
-    assert DeepSeekTourismSearcher._reply_category(question) == expected
+    assert live_reply_category(question) == expected
 
 
 @pytest.mark.asyncio
@@ -800,3 +804,17 @@ def test_search_narration_and_inline_sources_are_not_part_of_the_answer() -> Non
     assert text.startswith(long_middle)
     assert "来源" not in text and "最低气温23℃。出门请带伞。" in text
     assert citations == [("2026年天气", "https://example.com/weather")]
+
+
+def test_live_clauses_are_grouped_by_kind_in_asking_order() -> None:
+    """一句多问按类别分组、各搜一次：玩法和天气不能被拼成一次天气查询；同类的门票与
+    开门时间仍合成一组（2026-09-30 测试号「武汉最近有啥玩的，天气咋样」只答了天气）。"""
+    assert group_live_questions(["武汉最近有啥玩的", "天气咋样"]) == [
+        "武汉最近有啥玩的",
+        "天气咋样",
+    ]
+    assert group_live_questions(["黄鹤楼门票多少", "几点开门"]) == ["黄鹤楼门票多少；几点开门"]
+    assert group_live_questions(["明天下雨吗", "有什么演出", "后天气温多少"]) == [
+        "明天下雨吗；后天气温多少",
+        "有什么演出",
+    ]

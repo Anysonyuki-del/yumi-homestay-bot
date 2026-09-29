@@ -139,6 +139,51 @@ class WebSearchState:
         self._status = status
 
 
+# 联网问题的类别关键词：天气、票务与开放时间、演出活动；其余归一般出行。
+EVENT_PATTERN = re.compile(
+    r"演出|活动|展览|音乐会|演唱会|话剧|相声|戏曲|音乐节|"
+    r"show|event|exhibition|concert|musical|opera|festival",
+    re.IGNORECASE,
+)
+WEATHER_PATTERN = re.compile(
+    r"天气|气温|温度|降雨|下雨|weather|forecast|temperature|rain",
+    re.IGNORECASE,
+)
+TICKET_PATTERN = re.compile(
+    r"门票|票价|预订|开放时间|营业时间|开门|关门|闭馆|"
+    r"\btickets?\b|\bticket prices?\b|\badmission (?:fees?|prices?)\b|"
+    r"\bbook admission\b|\bopening hours?\b|\bclosing hours?\b",
+    re.IGNORECASE,
+)
+
+# 一条消息最多分几组联网搜索；类别只有天气、票务、活动、一般出行四种，上限只防意外。
+MAX_LIVE_GROUPS = 4
+
+
+def live_reply_category(question: str) -> TourismReplyCategory:
+    """按问题选类别：决定搜索提示（天气补目标日期）和末尾的时效说明措辞。"""
+    if WEATHER_PATTERN.search(question):
+        return "weather"
+    if TICKET_PATTERN.search(question):
+        return "ticket"
+    if EVENT_PATTERN.search(question):
+        return "event"
+    return "tourism"
+
+
+def group_live_questions(clauses: list[str]) -> list[str]:
+    """把一条消息里要联网的小句按类别分组，每组各搜一次，按客人提问顺序排列。
+
+    联网搜索每次只搜一轮，此前把所有小句拼成一句：「武汉最近有啥玩的；天气咋样」
+    因含「天气」被整句改写成天气查询，玩法没搜也没答（2026-09-30 测试号）。同类
+    小句仍合成一组，如「黄鹤楼门票多少；几点开门」只搜一次。
+    """
+    groups: dict[TourismReplyCategory, list[str]] = {}
+    for clause in clauses:
+        groups.setdefault(live_reply_category(clause), []).append(clause)
+    return ["；".join(items) for items in groups.values()][:MAX_LIVE_GROUPS]
+
+
 def latest_user_question(messages: list[dict[str, str]]) -> dict[str, str]:
     """只返回最后一条客人文本，隔离历史中的个人资料。"""
     for message in reversed(messages):
@@ -306,6 +351,16 @@ def _natural_evidence_footer(
     )
 
 
+def evidence_footer(
+    *,
+    queried_on: date,
+    language: TourismReplyLanguage,
+    category: TourismReplyCategory,
+) -> str:
+    """整条联网回复末尾的时效说明；多组回复由调用方在最后一段成功回答后补一次。"""
+    return _natural_evidence_footer(queried_on=queried_on, language=language, category=category)
+
+
 def format_tourism_reply(
     reply_text: str,
     citations: list[tuple[str, str]],
@@ -313,8 +368,12 @@ def format_tourism_reply(
     *,
     language: TourismReplyLanguage = "zh",
     category: TourismReplyCategory = "tourism",
+    footer: bool = True,
 ) -> str:
-    """生成无链接、带自然时效依据的客人可见旅游纯文本。"""
+    """生成无链接、带自然时效依据的客人可见旅游纯文本。
+
+    `footer=False` 用于一句多问分组搜索时的非末段：时效说明整条回复只在最后写一次。
+    """
     body, _existing_footer = split_tourism_reply(reply_text)
     clean_reply = _plain_text_tourism_body(body)
     if not clean_reply:
@@ -322,9 +381,11 @@ def format_tourism_reply(
     # 仍然要求确有搜索结果：可以不点名来源，但不能在没查到任何东西时说「我查到的」。
     if not citations:
         raise ValueError("联网结果没有搜索来源")
-    footer = _natural_evidence_footer(
+    if not footer:
+        return clean_reply
+    footer_text = _natural_evidence_footer(
         queried_on=queried_on,
         language=language,
         category=category,
     )
-    return f"{clean_reply}\n\n{footer}"
+    return f"{clean_reply}\n\n{footer_text}"

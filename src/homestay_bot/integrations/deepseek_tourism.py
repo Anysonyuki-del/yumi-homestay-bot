@@ -7,10 +7,16 @@ from typing import Any
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.tourism import (
-    TourismReplyCategory,
+    EVENT_PATTERN as _EVENT_PATTERN,
+)
+from homestay_bot.integrations.tourism import (
+    WEATHER_PATTERN as _WEATHER_PATTERN,
+)
+from homestay_bot.integrations.tourism import (
     TourismSearchError,
     WebSearchStatus,
     format_tourism_reply,
+    live_reply_category,
 )
 from homestay_bot.services.fact_policy import FACT_SOURCE_RULE_EN, FACT_SOURCE_RULE_ZH
 from homestay_bot.services.reply_plan import ReplyEvidence
@@ -35,23 +41,8 @@ _RECENT_PATTERN = re.compile(
     r"recent|upcoming|this week|this month|today|tomorrow",
     re.IGNORECASE,
 )
-_EVENT_PATTERN = re.compile(
-    r"演出|活动|展览|音乐会|演唱会|话剧|相声|戏曲|音乐节|"
-    r"show|event|exhibition|concert|musical|opera|festival",
-    re.IGNORECASE,
-)
 _DISTANCE_PATTERN = re.compile(
     r"距离|多远|公里|路程|怎么到|how far|distance|kilometer|km",
-    re.IGNORECASE,
-)
-_WEATHER_PATTERN = re.compile(
-    r"天气|气温|温度|降雨|下雨|weather|forecast|temperature|rain",
-    re.IGNORECASE,
-)
-_TICKET_PATTERN = re.compile(
-    r"门票|票价|预订|开放时间|营业时间|开门|关门|闭馆|"
-    r"\btickets?\b|\bticket prices?\b|\badmission (?:fees?|prices?)\b|"
-    r"\bbook admission\b|\bopening hours?\b|\bclosing hours?\b",
     re.IGNORECASE,
 )
 _EXPLICIT_LOCATION_PATTERN = re.compile(
@@ -82,7 +73,7 @@ _MONTH_ONLY_PATTERN = re.compile(r"\d{1,2}月(?!\d{1,2}日)")
 _YEAR_MONTH_PATTERN = re.compile(r"(?P<year>20\d{2})年(?P<month>\d{1,2})月")
 logger = logging.getLogger(__name__)
 
-TourismCacheKey = tuple[str, str, date]
+TourismCacheKey = tuple[str, str, date, bool]
 TourismCacheValue = tuple[float, str, tuple[ReplyEvidence, ...]]
 
 
@@ -116,25 +107,15 @@ class DeepSeekTourismSearcher:
             self._status_setter(status)
 
     @staticmethod
-    def _reply_category(question: str) -> TourismReplyCategory:
-        """按客人问题选择自然证据收尾，不改变搜索意图与证据校验。"""
-        if _WEATHER_PATTERN.search(question):
-            return "weather"
-        if _TICKET_PATTERN.search(question):
-            return "ticket"
-        if _EVENT_PATTERN.search(question):
-            return "event"
-        return "tourism"
-
-    @staticmethod
     def _cache_key(
         question: str,
         language: Language,
         queried_on: date,
+        footer: bool,
     ) -> TourismCacheKey:
-        """生成不含客人身份的稳定缓存键，并统一空白与大小写。"""
+        """生成不含客人身份的稳定缓存键，并统一空白与大小写；带不带时效说明分开缓存。"""
         normalized_question = " ".join(question.split()).casefold()
-        return normalized_question, language.value, queried_on
+        return normalized_question, language.value, queried_on, footer
 
     def _get_cached_reply(self, key: TourismCacheKey) -> str | None:
         """返回未过期的已校验回复，并及时删除过期项。"""
@@ -396,9 +377,14 @@ class DeepSeekTourismSearcher:
         language: Language,
         queried_on: date,
         evidence_sink: Callable[[tuple[ReplyEvidence, ...]], None] | None = None,
+        footer: bool = True,
     ) -> str:
-        """执行有限武汉搜索，要求正文和搜索证据同时存在。"""
-        cache_key = self._cache_key(question, language, queried_on)
+        """执行有限武汉搜索，要求正文和搜索证据同时存在。
+
+        `question` 应是同一类别的一组小句（见 `group_live_questions`）；`footer=False`
+        时不加末尾时效说明，供多组回复的非末段使用。
+        """
+        cache_key = self._cache_key(question, language, queried_on, footer)
         cached_reply = self._get_cached_reply(cache_key)
         if cached_reply is not None:
             if evidence_sink is not None:
@@ -437,6 +423,14 @@ class DeepSeekTourismSearcher:
             "每项活动日期必须注明完整年份。"
             "简单推荐要精简选优，优先选出最值得推荐的3项，正文控制在"
             "400至600字；规划问题给出半日或一日路线。"
+            # 2026-09-30 测试号天气回复：开头复述问题和查询口径、并列两种气温口径、
+            # 结尾两处反问再加系统时效说明。以下对所有类别生效。
+            "客人一句话里问了几件事时逐一回答，不要只答其中一项，"
+            "也不要把没答的部分改成反问客人要不要再查。"
+            "直接给答案：不要复述客人的问题，不要说明你按哪天、用什么来源或怎样查询。"
+            "不同来源的数字不一致时只采用最可靠来源的一组，不要并列写出多个口径。"
+            "结尾最多一句主动询问；不要自己写“信息可能变化、以实际为准”一类提醒，"
+            "系统会统一补上时效说明。"
             + (
                 "距离问题必须直接回答起点和终点、约距离及可行交通方式；"
                 "如果房源名称无法从可靠来源确认位置，要明确说明正在核实，"
@@ -467,7 +461,13 @@ class DeepSeekTourismSearcher:
                 "For recent requests, prioritize events that have not ended "
                 "within this window, include the full year for every event "
                 "date, and label later events clearly. Select the three best "
-                "recommendations and keep the answer concise at 120-180 words."
+                "recommendations and keep the answer concise at 120-180 words. "
+                "If the guest asks several things, answer each one; do not turn an "
+                "unanswered part into an offer to search later. Answer directly: do not "
+                "restate the question or describe which date, source or method you used. "
+                "When sources disagree on a figure, give only the most reliable one. End "
+                "with at most one follow-up offer, and do not add your own 'information "
+                "may change' caveat; the system appends one."
                 " Unspecified tourism locations default to Wuhan, China; "
                 "only an explicitly named location overrides that default."
                 + location_instruction
@@ -562,7 +562,8 @@ class DeepSeekTourismSearcher:
                 citations,
                 queried_on,
                 language=language.value,
-                category=self._reply_category(question),
+                category=live_reply_category(question),
+                footer=footer,
             )
         except ValueError as error:
             # 没有可读来源名称时不能把域名或模型常识冒充客人侧实时依据。

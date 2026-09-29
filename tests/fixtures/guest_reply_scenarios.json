@@ -4737,6 +4737,40 @@
    }
   },
   {
+   "id": "W-天气玩法",
+   "category": "live_search",
+   "messages": [
+    {
+     "role": "user",
+     "content": "武汉最近有啥玩的，天气咋样"
+    }
+   ],
+   "expect": {
+    "route": "live_search",
+    "must_include": [
+     [
+      "℃",
+      "气温",
+      "度"
+     ],
+     [
+      "黄鹤楼",
+      "东湖",
+      "户部巷",
+      "江汉路",
+      "江滩",
+      "博物馆",
+      "楚河汉街"
+     ]
+    ],
+    "must_not_include": [
+     "口径"
+    ],
+    "handoff": false,
+    "notes": "一句问两件事：天气联网，玩法由模型回答，两部分都要有；2026-09-30 测试号只答了天气、并列两种气温口径（1.59.0）。"
+   }
+  },
+  {
    "id": "F-空调",
    "category": "facility",
    "messages": [
