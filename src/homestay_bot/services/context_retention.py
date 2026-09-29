@@ -138,10 +138,15 @@ class ContextRetentionService:
         repository: ContextRepository,
         summarizer: ContextSummarizer,
         *,
-        raw_limit: int = 3,
+        raw_limit: int = 0,
         before_external: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """注入仓储、摘要器、事务边界和模型最近原文数量。"""
+        """注入仓储、摘要器、事务边界和摘要暂不处理的最近原文条数。
+
+        默认 0：摘要是给接手员工看的要点（1.56.0），必须包含最新消息。原来留出最近
+        3 条不摘要，测试号实测转人工的那句「能便宜点吗」恰好落在这 3 条里，员工打开
+        页面看不到转人工的原因。回复模型另有最近原文，不依赖这个窗口。
+        """
         self._repository = repository
         self._summarizer = summarizer
         self._raw_limit = raw_limit

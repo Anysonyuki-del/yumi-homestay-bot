@@ -164,15 +164,15 @@ async def test_summary_version_conflict_keeps_source_message_unprocessed() -> No
 
 @pytest.mark.asyncio
 async def test_single_recent_message_becomes_cross_conversation_memory() -> None:
-    """最近原文无需等待退出三条窗口，也能在维护后供新会话召回。"""
+    """刚发的一条消息当轮就进接手要点和记忆，并能在新会话召回（1.56.0 起不再留最近三条）。"""
 
     class RecentMemorySummarizer:
         """从单条最近原文返回确定的明示记忆。"""
 
         async def summarize(self, *, tier, existing_summary, messages):
-            """验证最近消息只参与观察，不进入短摘要。"""
-            assert tier == "memory"
-            assert messages[0].summary_eligible is False
+            """最新一条消息也参与短摘要，员工能看到转人工等最新情况。"""
+            assert tier == "short"
+            assert messages[0].summary_eligible is True
             return ContextSummaryResult(
                 summary="无新增摘要",
                 unresolved_items=[],
@@ -210,7 +210,7 @@ async def test_single_recent_message_becomes_cross_conversation_memory() -> None
         context = await repository.load_model_context(customer.id, query="我的狗叫什么？")
 
         assert source.content == "我的狗叫查理"
-        assert source.short_summarized_at is None
+        assert source.short_summarized_at == now
         assert source.memory_processed_at == now
         assert context.memories[0]["statement"] == "客户的狗叫查理"
 
