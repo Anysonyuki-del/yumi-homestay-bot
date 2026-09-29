@@ -516,3 +516,23 @@ def test_asking_for_help_is_never_sent_to_web_search(question: str) -> None:
     被送去联网，3 次都回了烟花秀、艺术季等活动推荐。
     """
     assert classify_tourism_query([{"role": "user", "content": question}]) != "live"
+
+
+def test_answer_preamble_is_removed_but_ordinary_sentences_stay() -> None:
+    """段首「您问的"…"，我按…给您答复：」是答题说明，删到冒号为止；夹在多段回复中间的
+    也删。样本取自 2026-09-30 测试号与门禁 W-天气玩法。不以「给您答复」收口的普通句子不动。"""
+    formatted = format_tourism_reply(
+        "武汉值得逛的地方不少，东湖绿道适合骑行。\n\n"
+        "您问的“天气咋样”，我按今天（2026年9月30日）和明天（10月1日）两天，"
+        "用武汉市气象台的实时预报给您答复：\n\n"
+        "9月30日（今天）：阴天有阵雨，20～26℃。\n\n"
+        "我按您的行程看了一下，傍晚适合去江滩。",
+        [("武汉市气象台", "https://example.com")],
+        date(2026, 9, 30),
+        category="weather",
+    )
+
+    assert "您问的" not in formatted and "给您答复" not in formatted
+    assert formatted.startswith("武汉值得逛的地方不少")
+    assert "9月30日（今天）：阴天有阵雨，20～26℃。" in formatted
+    assert "我按您的行程看了一下，傍晚适合去江滩。" in formatted

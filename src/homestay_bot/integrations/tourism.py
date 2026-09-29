@@ -252,6 +252,28 @@ _MODEL_SOURCE_NOTE_PATTERN = re.compile(
 )
 
 
+# 段首的「答题说明」：复述客人问题、交代按哪天或什么来源作答，冒号后才是答案。
+# 2026-09-30 测试号与门禁 W-天气玩法：「您问的"天气咋样"，我按今天（…）和明天（…）
+# 两天，用武汉市气象台的实时预报给您答复：」。提示词已禁止，模型仍会写，这里兜底删掉，
+# 只删到冒号为止；没有「给您答复/回答」收口的普通句子不动。
+_ANSWER_PREAMBLE_PATTERN = re.compile(
+    r"(?m)^[ \t]*(?:您问的?[“\"「][^”\"」\n]{1,40}[”\"」][，,]?\s*)?"
+    r"我(?:按|根据|结合|用|先按|就按|帮您按)[^\n：:]{0,120}?"
+    r"(?:给您|为您|帮您|跟您)(?:答复|回答|作答|答|说明|整理)(?:一下|如下)?"
+    r"[：:，,。]?[ \t]*"
+)
+_QUESTION_ECHO_PATTERN = re.compile(
+    r"(?m)^[ \t]*(?:关于)?您问的?[“\"「][^”\"」\n]{1,40}[”\"」](?:这个问题)?[，,：:]\s*"
+)
+
+
+def _strip_answer_preamble(content: str) -> str:
+    """删掉段首复述问题、交代作答口径的开场白，只留答案；删空的段落一并去掉。"""
+    cleaned = _ANSWER_PREAMBLE_PATTERN.sub("", content)
+    cleaned = _QUESTION_ECHO_PATTERN.sub("", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 def _plain_text_tourism_body(content: str) -> str:
     """只移除明确 Markdown 结构，保留正文中的普通星号与下划线。"""
     cleaned = _MARKDOWN_LINK_PATTERN.sub(r"\1", content)
@@ -279,7 +301,7 @@ def _plain_text_tourism_body(content: str) -> str:
     cleaned = re.sub(r"\*(?=\S)([^\n*]*?\S)\*", r"\1", cleaned)
     cleaned = re.sub(r"_(?=\S)([^\n_]*?\S)_", r"\1", cleaned)
     cleaned = re.sub(r"(?m)^(\s*)[-*+]\s+", r"\1• ", cleaned)
-    return cleaned.rstrip()
+    return _strip_answer_preamble(cleaned).rstrip()
 
 
 def split_tourism_reply(reply_text: str) -> tuple[str, str]:

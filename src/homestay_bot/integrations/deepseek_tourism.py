@@ -172,9 +172,10 @@ class DeepSeekTourismSearcher:
                     "只回答这个目标日期，不要用今天或其他日期替代。"
                 )
             else:
+                # 客人没说哪天时只报今天和明天：门禁 W-天气玩法 曾把未来一周逐日列出。
                 instruction = (
                     f"请查询{location_hint or '问题中指定地点'}的天气预报；"
-                    "先识别并明确回答客人要求的目标日期。"
+                    "客人没有说日期，只回答今天和明天两天，不要逐日列出更多天。"
                 )
         else:
             if target_date is not None:
@@ -186,8 +187,8 @@ class DeepSeekTourismSearcher:
             else:
                 instruction = (
                     "Search the weather forecast for "
-                    f"{location_hint or 'the location in the question'} "
-                    "and state the target date explicitly."
+                    f"{location_hint or 'the location in the question'}; "
+                    "the guest named no date, so cover only today and tomorrow."
                 )
         prepared_question = (
             f"{instruction}\n原始问题：{question}"
