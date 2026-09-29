@@ -236,3 +236,24 @@ async def test_callback_service_enqueues_card_button_click() -> None:
         "userid": "duty-1", "key": "accept:7", "task_id": "handoff-abc",
         "response_code": "rc-1", "agent_id": "1000002",
     })]
+
+
+@pytest.mark.asyncio
+async def test_callback_service_acknowledges_unhandled_app_events_without_enqueue() -> None:
+    """验签通过但不处理的应用事件（如员工进入应用）直接应答，不入队也不报错；
+    报错会让企业微信按失败反复重推。"""
+    token = "callback-token"
+    aes_key = base64.b64encode(os.urandom(32)).decode().rstrip("=")
+    encrypted, signature = encrypt_fixture(
+        b"<xml><MsgType>event</MsgType><Event>enter_agent</Event></xml>",
+        token=token, encoding_aes_key=aes_key, receive_id="corp-id",
+        timestamp="100", nonce="200",
+    )
+    queue = CaptureSyncQueue()
+    service = WeComCallbackService.from_credentials(token, aes_key, "corp-id", queue)
+
+    await service.verify_and_enqueue(
+        f"<xml><Encrypt>{encrypted}</Encrypt></xml>".encode(), signature, "100", "200"
+    )
+
+    assert queue.calls == []

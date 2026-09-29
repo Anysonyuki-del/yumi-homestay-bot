@@ -20,7 +20,6 @@ from typing import Any, Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from homestay_bot.domain.enums import ConversationMode
 from homestay_bot.domain.models import Conversation
 from homestay_bot.integrations.wecom.api_client import WeComApiError
 from homestay_bot.repositories.conversations import SQLAlchemyMessageRepository
@@ -184,7 +183,9 @@ class HumanSessionService:
     async def on_servicer_ended(self, open_kfid: str, external_userid: str, msg_code: str) -> None:
         """管家在企业微信里点了「结束聊天」：交还机器人，并凭事件 msg_code 发结束语。
 
-        本系统自己调接口结束时会话已先切回机器人模式，这里据此跳过，避免结束语发两次。
+        只响应管家经按钮接入、仍在原生人工接待的会话：本系统自己调接口结束时会话已先
+        切回机器人模式；补拉还可能带来很久以前的结束事件——1.58.1 测试号上，13:3x 的
+        「结束聊天」事件在 14:21 客人刚转人工 11 秒后才被拉到，把新的转人工误交还了。
         """
         conversation = await self._session.scalar(
             select(Conversation).where(
@@ -192,7 +193,9 @@ class HumanSessionService:
                 Conversation.external_userid == external_userid,
             )
         )
-        if conversation is None or conversation.mode is not ConversationMode.HUMAN_ACTIVE:
+        if conversation is None or not await self._operations.native_session_active(
+            conversation.id
+        ):
             return
         await self._operations.release_conversation(
             conversation.id, now=datetime.now(UTC), reason="servicer_end"

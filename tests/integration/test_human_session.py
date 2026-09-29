@@ -148,13 +148,17 @@ async def test_accept_refused_or_taken_does_not_switch_session(tmp_path):
 
 
 async def test_servicer_end_releases_and_skips_when_system_already_released(tmp_path):
-    """管家点「结束聊天」：交还机器人并凭事件 msg_code 发结束语；本系统先结束的不重复发。"""
+    """管家点「结束聊天」：交还机器人并凭事件 msg_code 发结束语；本系统先结束的不重复发；
+    管家没接入过的会话（补拉到的旧事件）不响应。"""
     engine, session, conversation = await _setup(tmp_path)
     kf = KfStub(state=3, servicer="duty-1")
+    service = HumanSessionService(session, kf, agent_id=1000002, duty_userids=("duty-1",))
+    # 补拉带来的旧「结束聊天」事件：客人刚转人工、管家还没接入，不能被它交还。
+    await service.on_servicer_ended("wk", "wm", "code-stale")
+    assert conversation.mode is ConversationMode.HUMAN_ACTIVE and kf.event_texts == []
     await SQLAlchemyOperationsRepository(session).accept_handoff(
         conversation.id, servicer_userid="duty-1", now=datetime.now(UTC)
     )
-    service = HumanSessionService(session, kf, agent_id=1000002, duty_userids=("duty-1",))
 
     await service.on_servicer_ended("wk", "wm", "code-native")
     await service.on_servicer_ended("wk", "wm", "code-native-again")

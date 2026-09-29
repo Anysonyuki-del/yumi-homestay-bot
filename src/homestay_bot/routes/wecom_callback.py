@@ -130,10 +130,14 @@ class WeComCallbackService:
                 raise InvalidCallbackPayload("企业微信卡片回调字段缺失或过长")
             await self._queue.enqueue_card_action(action)
             return
+        if event != "kf_msg_or_event":
+            # 验签已通过的其他应用事件（员工给应用发消息、进入应用等）本系统不处理，
+            # 直接应答成功；返回失败会让企业微信反复重推同一事件。
+            return
         sync_token = inner_root.findtext("Token")
         open_kfid = inner_root.findtext("OpenKfId")
-        if event != "kf_msg_or_event" or not sync_token or not open_kfid:
-            raise InvalidCallbackPayload("企业微信回调不是可同步的客服事件")
+        if not sync_token or not open_kfid:
+            raise InvalidCallbackPayload("企业微信客服事件缺少同步 Token 或客服账号")
         if len(sync_token) > 4096 or len(open_kfid) > 128:
             raise InvalidCallbackPayload("企业微信回调字段过长")
         await self._queue.enqueue_wecom_sync(sync_token, open_kfid)
