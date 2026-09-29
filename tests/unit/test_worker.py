@@ -787,3 +787,39 @@ def test_wecom_poll_limit_uses_exponential_backoff() -> None:
 
     assert first_delay == 60
     assert second_delay == 120
+
+
+@pytest.mark.asyncio
+async def test_wecom_sync_routes_servicer_end_event_only_for_session_end() -> None:
+    """管家点「结束聊天」（change_type=3）交给会话结束处理；接入、转接等其他变更不处理。"""
+
+    def event(change_type):
+        return SimpleNamespace(
+            msgid=f"evt-{change_type}", open_kfid=None, external_userid=None,
+            send_time=1785283200, origin=4, msgtype="event", text=None,
+            event={"event_type": "session_status_change", "open_kfid": "wk-1",
+                   "external_userid": "wm-1", "change_type": change_type,
+                   "msg_code": f"code-{change_type}"},
+        )
+
+    page = SimpleNamespace(msg_list=[event(1), event(2), event(3)], has_more=0, next_cursor="")
+
+    class ApiStub:
+        async def sync_messages(self, **kwargs):
+            return page
+
+    ended = []
+
+    async def handle_session_end(open_kfid, external_userid, msg_code):
+        ended.append((open_kfid, external_userid, msg_code))
+
+    async def ignore(*_args):
+        """不应被调用或无需处理。"""
+
+    handler = WeComSyncJobHandler(
+        api=ApiStub(), handle_message=ignore, enqueue=ignore,
+        handle_session_end=handle_session_end,
+    )
+    await handler.sync_page(cursor="", token="", open_kfid="wk-1")
+
+    assert ended == [("wk-1", "wm-1", "code-3")]

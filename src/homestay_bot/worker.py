@@ -86,12 +86,16 @@ class WeComSyncJobHandler:
         handle_send_failure: (
             Callable[[str, int], Awaitable[None]] | None
         ) = None,
+        handle_session_end: (
+            Callable[[str, str, str], Awaitable[None]] | None
+        ) = None,
     ) -> None:
-        """注入企业微信读取、消息、发送失败和续页处理边界。"""
+        """注入企业微信读取、消息、发送失败、会话结束和续页处理边界。"""
         self._api = api
         self._handle_message = handle_message
         self._enqueue = enqueue
         self._handle_send_failure = handle_send_failure
+        self._handle_session_end = handle_session_end
 
     async def sync_page(
         self,
@@ -124,6 +128,19 @@ class WeComSyncJobHandler:
                             failed_message_id,
                             fail_type,
                         )
+                if (
+                    event.get("event_type") == "session_status_change"
+                    and event.get("change_type") == 3
+                    and self._handle_session_end is not None
+                    and event.get("open_kfid")
+                    and event.get("external_userid")
+                ):
+                    # 管家在企业微信里点了「结束聊天」：交还机器人并凭 msg_code 发结束语。
+                    await self._handle_session_end(
+                        str(event["open_kfid"]),
+                        str(event["external_userid"]),
+                        str(event.get("msg_code", "")),
+                    )
                 continue
             origin = (
                 self._origins.get(item.origin)

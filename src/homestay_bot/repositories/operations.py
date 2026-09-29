@@ -30,6 +30,7 @@ from homestay_bot.domain.enums import (
     BusinessTaskType,
     ConversationMode,
     CustomerIdentityProvider,
+    JobStatus,
     MessageOrigin,
     RoomOperationalStatus,
     TaskClosureReason,
@@ -81,6 +82,15 @@ def _wuhan_today() -> date:
 PURGED_MARK_RETENTION_DAYS = 180
 
 
+
+
+# 结束企业微信原生人工会话的任务类型；处理器在 application 里装配。
+KF_SESSION_END_JOB_TYPE = "wecom_kf_session_end"
+
+
+def _accepted_by(details: object) -> str:
+    """从接管审计里取接入的管家；没有接入时为空。"""
+    return str(details.get("accepted_by") or "") if isinstance(details, dict) else ""
 
 
 class SQLAlchemyOperationsRepository:
@@ -1537,9 +1547,15 @@ class SQLAlchemyOperationsRepository:
     async def release_conversation(
         self, conversation_id: int, *, now: datetime,
         actor_employee_id: int | None = None, customer_id: int | None = None,
-        automatic: bool = False,
+        automatic: bool = False, reason: str | None = None,
     ) -> bool:
-        """与入站共用会话行锁，锁内复核最新接管和员工活动后交还并审计。"""
+        """与入站共用会话行锁，锁内复核最新接管和员工活动后交还并审计。
+
+        管家已接入企业微信原生会话时，同事务登记一次「结束原生会话」任务：
+        自动交还、后台按钮、卡片按钮都经过这里，客人都能收到结束语，机器人也
+        才能重新发出消息（人工接待状态下 send_msg 会被拒）。`reason` 为空时
+        按原口径写 auto_idle_Xm 或 employee。
+        """
         conversation = await self._session.scalar(
             select(Conversation).where(Conversation.id == conversation_id)
             .with_for_update().execution_options(populate_existing=True)
@@ -1551,23 +1567,86 @@ class SQLAlchemyOperationsRepository:
             self._idle_human_query(now).where(Conversation.id == conversation_id)
         ) is None:
             return False
-        handoff_id = await self._session.scalar(
-            select(AuditLog.id).where(
-                AuditLog.action == "conversation_handoff",
-                AuditLog.target_type == "conversation",
-                AuditLog.target_id == str(conversation_id),
-            ).order_by(AuditLog.id.desc()).limit(1)
-        )
+        handoff = await self._latest_handoff(conversation_id)
+        handoff_id = handoff.id if handoff is not None else None
         conversation.mode = ConversationMode.BOT_ACTIVE
+        default_reason = f"auto_idle_{IDLE_RELEASE_MINUTES}m" if automatic else "employee"
         self._session.add(AuditLog(
             actor_employee_id=actor_employee_id,
             action="conversation_release", target_type="conversation",
             target_id=str(conversation_id), created_at=now,
-            details={"reason": f"auto_idle_{IDLE_RELEASE_MINUTES}m" if automatic else "employee",
+            details={"reason": reason or default_reason,
                      "handoff_id": handoff_id, "customer_id": conversation.customer_id},
         ))
+        end_key = f"kf-end:{handoff.id}" if handoff is not None else ""
+        if handoff is not None and _accepted_by(handoff.details) and await self._session.scalar(
+            select(Job.id).where(Job.dedupe_key == end_key)
+        ) is None:
+            # 按接管编号去重：同一次接入只结束一次；任务里再按真实会话状态复核。
+            self._session.add(Job(
+                job_type=KF_SESSION_END_JOB_TYPE, dedupe_key=end_key,
+                payload={"conversation_id": conversation_id},
+                status=JobStatus.PENDING, attempts=0, available_at=now,
+            ))
         await self._session.flush()
         return True
+
+    async def _latest_handoff(self, conversation_id: int) -> AuditLog | None:
+        """本会话最近一次接管审计（含管家接入时补记的那条）。"""
+        return cast(AuditLog | None, await self._session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "conversation_handoff",
+                AuditLog.target_type == "conversation",
+                AuditLog.target_id == str(conversation_id),
+            ).order_by(AuditLog.id.desc()).limit(1)
+        ))
+
+    async def native_session_active(self, conversation_id: int) -> bool:
+        """管家是否已点「接入人工」、会话正由企业微信原生人工接待。
+
+        判据：会话处于人工模式，且最近一次接管审计带 accepted_by。此时平台拒绝
+        机器人发消息，入站消息只记录、不回复，排队中的回复也要跳过。
+        """
+        mode = await self._session.scalar(
+            select(Conversation.mode).where(Conversation.id == conversation_id)
+        )
+        return mode == ConversationMode.HUMAN_ACTIVE and await self.handoff_accepted(
+            conversation_id
+        )
+
+    async def handoff_accepted(self, conversation_id: int) -> bool:
+        """最近一次接管是否已有管家点过「接入人工」（不看当前模式）。"""
+        handoff = await self._latest_handoff(conversation_id)
+        return handoff is not None and bool(_accepted_by(handoff.details))
+
+    async def accept_handoff(
+        self, conversation_id: int, *, servicer_userid: str, now: datetime
+    ) -> None:
+        """记录管家已接入原生会话：会话锁内切到人工模式，补记一条带 accepted_by 的接管。
+
+        原因沿用上一次接管（没有时记 servicer_accept）：客诉、紧急情况接入后仍不参与
+        自动交还；审计时间同时重置空闲计时，接入后 5 分钟内没人说话才会自动交还。
+        """
+        conversation = await self._session.scalar(
+            select(Conversation).where(Conversation.id == conversation_id)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        if conversation is None:
+            return
+        previous = await self._latest_handoff(conversation_id)
+        previous_reason = (
+            previous.details.get("reason") if previous is not None
+            and isinstance(previous.details, dict) else None
+        )
+        conversation.mode = ConversationMode.HUMAN_ACTIVE
+        self._session.add(AuditLog(
+            actor_employee_id=None, action="conversation_handoff",
+            target_type="conversation", target_id=str(conversation_id), created_at=now,
+            details={"customer_id": conversation.customer_id,
+                     "reason": str(previous_reason or "servicer_accept")[:64],
+                     "accepted_by": servicer_userid[:64]},
+        ))
+        await self._session.flush()
 
     async def latest_handoff_reason(self, conversation_id: int) -> str | None:
         """读取本会话最近一次接管审计的原因代码，不读取聊天正文。"""

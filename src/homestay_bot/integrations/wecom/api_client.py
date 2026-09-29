@@ -324,6 +324,105 @@ class WeComApiClient:
         self._raise_for_error(payload)
         return str(payload["msg_code"])
 
+    async def get_service_state(self, open_kfid: str, external_userid: str) -> tuple[int, str]:
+        """读取微信客服会话状态与当前接待人员。
+
+        状态：0 未处理、1 智能助手接待、2 待接入池、3 人工接待、4 已结束。
+        只有 0 和 1 能用 send_msg 给客人发消息，3 会被拒（95018，2026-09-29 测试号实测）。
+        """
+        access_token = await self._get_access_token(self._kf_secret)
+        response = await self._client.post(
+            "/cgi-bin/kf/service_state/get",
+            params={"access_token": access_token},
+            json={"open_kfid": open_kfid, "external_userid": external_userid},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._raise_for_error(payload)
+        return int(payload.get("service_state", 0)), str(payload.get("servicer_userid", ""))
+
+    async def end_service_state(self, open_kfid: str, external_userid: str) -> str:
+        """结束会话（状态 4），返回可发一条结束语的一次性 msg_code；平台未给时为空。
+
+        人工接待不能直接改回智能助手接待（95016），只能先结束；客人下一条消息
+        会让会话回到「未处理」，机器人随即可以正常回复。
+        """
+        access_token = await self._get_access_token(self._kf_secret)
+        response = await self._client.post(
+            "/cgi-bin/kf/service_state/trans",
+            params={"access_token": access_token},
+            json={
+                "open_kfid": open_kfid,
+                "external_userid": external_userid,
+                "service_state": 4,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._raise_for_error(payload)
+        return str(payload.get("msg_code", ""))
+
+    async def send_event_text(self, code: str, content: str) -> str:
+        """用状态变更得到的一次性 msg_code 给客人发一句文字，返回 msgid。
+
+        这是人工接待、已结束状态下唯一能让客人收到系统提示的途径。
+        """
+        access_token = await self._get_access_token(self._kf_secret)
+        response = await self._client.post(
+            "/cgi-bin/kf/send_msg_on_event",
+            params={"access_token": access_token},
+            json={"code": code, "msgtype": "text", "text": {"content": content}},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        self._raise_for_error(payload)
+        return str(payload.get("msgid", ""))
+
+    async def send_internal_template_card(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        template_card: dict[str, Any],
+    ) -> None:
+        """发送员工模板卡片（按钮交互型等）；卡片结构由调用方按业务组装。"""
+        access_token = await self._get_access_token(self._agent_secret)
+        response = await self._client.post(
+            "/cgi-bin/message/send",
+            params={"access_token": access_token},
+            json={
+                "touser": "|".join(employee_userids),
+                "msgtype": "template_card",
+                "agentid": agent_id,
+                "template_card": template_card,
+            },
+        )
+        response.raise_for_status()
+        self._raise_for_error(response.json())
+
+    async def update_template_card(
+        self,
+        *,
+        agent_id: int,
+        userids: list[str],
+        response_code: str,
+        template_card: dict[str, Any],
+    ) -> None:
+        """用按钮点击回调里的 ResponseCode 更新点击人看到的卡片（72 小时内、仅一次）。"""
+        access_token = await self._get_access_token(self._agent_secret)
+        response = await self._client.post(
+            "/cgi-bin/message/update_template_card",
+            params={"access_token": access_token},
+            json={
+                "userids": userids,
+                "agentid": agent_id,
+                "response_code": response_code,
+                "template_card": template_card,
+            },
+        )
+        response.raise_for_status()
+        self._raise_for_error(response.json())
+
     async def send_internal_text(
         self,
         *,

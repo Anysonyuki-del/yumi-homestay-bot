@@ -1497,6 +1497,15 @@ async def test_queued_guest_reply_is_checked_for_staleness_before_it_goes_out() 
         async def has_newer_conversation_activity(self, conversation_id, boundary):
             return self.stale
 
+    class NativeSessionStub:
+        """原生人工会话是否进行中。"""
+
+        def __init__(self, active):
+            self.active = active
+
+        async def native_session_active(self, conversation_id):
+            return self.active
+
     payload = {
         "open_kfid": "wk-1",
         "external_userid": "wm-1",
@@ -1504,12 +1513,28 @@ async def test_queued_guest_reply_is_checked_for_staleness_before_it_goes_out() 
     }
 
     with patch(
+        "homestay_bot.application.SQLAlchemyOperationsRepository",
+        return_value=NativeSessionStub(False),
+    ), patch(
         "homestay_bot.application.SQLAlchemyMessageRepository",
         return_value=RepositoryStub(7, True),
     ):
         assert await _guest_reply_is_stale(object(), payload) is True
 
+    # 管家已接入原生人工会话：平台会拒绝机器人消息，连紧急提示这类豁免回复也跳过。
     with patch(
+        "homestay_bot.application.SQLAlchemyOperationsRepository",
+        return_value=NativeSessionStub(True),
+    ), patch(
+        "homestay_bot.application.SQLAlchemyMessageRepository",
+        return_value=RepositoryStub(7, False),
+    ):
+        assert await _guest_reply_is_stale(object(), {**payload, "stale_exempt": True}) is True
+
+    with patch(
+        "homestay_bot.application.SQLAlchemyOperationsRepository",
+        return_value=NativeSessionStub(False),
+    ), patch(
         "homestay_bot.application.SQLAlchemyMessageRepository",
         return_value=RepositoryStub(7, False),
     ):
@@ -1752,6 +1777,7 @@ async def test_release_notice_uses_handoff_identity_and_no_reply_line(monkeypatc
         id=1, open_kfid="wk-1", external_userid="wm-1", customer_id=42
     )
     sent: list[str] = []
+    guest_texts: list[str] = []
 
     class SessionStub:
         """只提供按主键读取会话。"""
@@ -1803,12 +1829,16 @@ async def test_release_notice_uses_handoff_identity_and_no_reply_line(monkeypatc
     class OutboxStub:
         """记录员工通知正文。"""
 
-        def __init__(self, _session, *, source_message_id: str) -> None:
+        def __init__(self, _session, *, source_message_id: str, **_kwargs) -> None:
             """忽略来源编号。"""
 
         async def send_internal_markdown(self, *, agent_id, employee_userids, content) -> None:
             """记录正文。"""
             sent.append(content)
+
+        async def send_text(self, open_kfid, external_userid, content, **_kwargs) -> None:
+            """记录给客人的正文。"""
+            guest_texts.append(content)
 
     class ContextRepositoryStub:
         """返回固定接手简报：一条要点、一条偏好、名下唯一订单。"""
@@ -1835,6 +1865,10 @@ async def test_release_notice_uses_handoff_identity_and_no_reply_line(monkeypatc
             """固定为讲价。"""
             return "price"
 
+        async def handoff_accepted(self, conversation_id: int) -> bool:
+            """管家一直没点「接入人工」。"""
+            return False
+
     monkeypatch.setattr(application, "SQLAlchemyContextRepository", ContextRepositoryStub)
     monkeypatch.setattr(application, "SQLAlchemyOperationsRepository", OperationsRepositoryStub)
     monkeypatch.setattr(application, "SQLAlchemyConversationRepository", StayRepositoryStub)
@@ -1850,7 +1884,9 @@ async def test_release_notice_uses_handoff_identity_and_no_reply_line(monkeypatc
     )
 
     assert len(sent) == 1
-    assert sent[0].startswith("**已交还机器人：5 分钟内没有管家回复**")
+    assert sent[0].startswith("**已交还机器人：5 分钟内没有管家接入**")
+    # 没人接入过：客人还停在「我会联系管家」，要补一句说明（2026-09-29 用户确认文案）。
+    assert guest_texts == [application.TIMEOUT_TEXT]
     assert "客人备注：8.14-8.16《春和景明》" in sent[0]
     assert "合成江景房 · 2026-09-30 入住" in sent[0]
     assert "转人工原因「价格协商」，问题仍待处理" in sent[0]

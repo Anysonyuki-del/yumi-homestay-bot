@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, BinaryIO, cast
 from zoneinfo import ZoneInfo
@@ -84,7 +84,10 @@ from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
 from homestay_bot.repositories.lifecycle_reminders import (
     SQLAlchemyLifecycleReminderRepository,
 )
-from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
+from homestay_bot.repositories.operations import (
+    KF_SESSION_END_JOB_TYPE,
+    SQLAlchemyOperationsRepository,
+)
 from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
 from homestay_bot.repositories.runtime_config import (
     RuntimeConfigConflictError,
@@ -158,7 +161,9 @@ from homestay_bot.services.faq_candidate_context import (
 from homestay_bot.services.faq_candidate_service import FrequentFaqService
 from homestay_bot.services.faq_draft_job import FaqDraftJobService
 from homestay_bot.services.guest_verification import GuestVerificationService
+from homestay_bot.services.handoff_card import TIMEOUT_TEXT, HandoffCard, build_handoff_card
 from homestay_bot.services.hostex_sync import HostexSyncService
+from homestay_bot.services.human_session import HumanSessionService
 from homestay_bot.services.knowledge_embeddings import (
     KnowledgeEmbeddingSync,
     PendingVector,
@@ -222,7 +227,12 @@ from homestay_bot.worker import (
 
 logger = logging.getLogger(__name__)
 
-_MODEL_JOB_TYPES = {"wecom_process_message", "guest_delivery_rewrite"}
+# 转人工卡片：发送前要先调模型整理接手要点，放在模型 worker，不拖慢客人消息的发送。
+HANDOFF_CARD_JOB_TYPE = "wecom_send_handoff_card"
+# 员工点击转人工卡片按钮（接入人工、交还 AI 助手）。
+CARD_ACTION_JOB_TYPE = "wecom_card_action"
+
+_MODEL_JOB_TYPES = {"wecom_process_message", "guest_delivery_rewrite", HANDOFF_CARD_JOB_TYPE}
 
 
 def _log_runtime_task_result(task: asyncio.Task[None]) -> None:
@@ -288,6 +298,18 @@ class DurableJobQueue:
             {"cursor": "", "token": token, "open_kfid": open_kfid},
         )
 
+    async def enqueue_card_action(self, action: dict[str, str]) -> None:
+        """员工点击卡片按钮转成任务；平台重推同一次点击时按 ResponseCode 去重。"""
+        async with self._factory() as session:
+            await SQLAlchemyJobRepository(session).enqueue(
+                CARD_ACTION_JOB_TYPE,
+                dict(action),
+                dedupe_key="card-action:" + hashlib.sha256(
+                    (action.get("response_code") or json.dumps(action, sort_keys=True)).encode()
+                ).hexdigest(),
+            )
+            await session.commit()
+
 
 class SessionHostexEventRecorder:
     """用短会话原子保存百居易事件和后台任务。"""
@@ -329,15 +351,25 @@ async def _guest_reply_is_stale(
     版本系统。只有带来源客人消息的回复才参与判定：重试、客诉投递和员工通知各有
     自己的幂等与审批边界，不该被这条规则拦下。
     """
+    open_kfid = payload.get("open_kfid")
+    external_userid = payload.get("external_userid")
+    repository = SQLAlchemyMessageRepository(session)
+    if open_kfid and external_userid:
+        native_conversation_id = payload.get("conversation_id") or (
+            await repository.find_conversation_id(str(open_kfid), str(external_userid))
+        )
+        # 管家已接入原生人工会话：平台会拒绝机器人消息（95018），发出去只会触发失败
+        # 补偿。接入前排好的回复一律跳过，紧急提示也一样——管家此刻正在会话里。
+        if native_conversation_id and await SQLAlchemyOperationsRepository(
+            session
+        ).native_session_active(int(native_conversation_id)):
+            return True
     if payload.get("stale_exempt"):
         # 紧急安全提示、客诉首响、转人工确认：排队期间来了新消息也必须送达。
         return False
     boundary = payload.get("source_guest_message_id")
-    open_kfid = payload.get("open_kfid")
-    external_userid = payload.get("external_userid")
     if not boundary or not open_kfid or not external_userid:
         return False
-    repository = SQLAlchemyMessageRepository(session)
     conversation_id = await repository.find_conversation_id(
         str(open_kfid),
         str(external_userid),
@@ -753,6 +785,32 @@ class TransactionalOutboxWeCom:
                 "employee_userids": employee_userids,
                 "content": content,
                 "markdown": True,
+            },
+            dedupe_key=outbox_id,
+        )
+
+    async def send_handoff_card(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        customer_id: int | None,
+        card: HandoffCard,
+    ) -> None:
+        """事务内登记转人工按钮卡片；worker 发送前先重新整理接手要点。
+
+        task_id 由 outbox 编号派生：稳定、唯一，卡片点击回调会原样带回。
+        """
+        outbox_id = self._outbox_id("handoff-card")
+        await self._repository.enqueue(
+            HANDOFF_CARD_JOB_TYPE,
+            {
+                "outbox_id": outbox_id,
+                "task_id": "handoff-" + outbox_id.removeprefix("outbox:")[:40],
+                "agent_id": agent_id,
+                "employee_userids": employee_userids,
+                "customer_id": customer_id,
+                "card": asdict(card),
             },
             dedupe_key=outbox_id,
         )
@@ -3596,6 +3654,55 @@ async def _run_hostex_reconcile_loop(
         await asyncio.sleep(next_interval)
 
 
+async def _handoff_card_for(
+    session: AsyncSession,
+    conversation: Conversation,
+    *,
+    identity_resolver: Any,
+    public_base_url: str,
+) -> HandoffCard:
+    """按会话现状重建转人工卡片：原因取最近一次接管，要点与偏好取当前整理结果。
+
+    点击按钮后更新卡片时使用；首次发出的卡片由会话服务带上客人原话和机器人回复。
+    """
+    confirmed = await SQLAlchemyConversationRepository(session).get_confirmed_stay(
+        conversation.id,
+        today=datetime.now(ZoneInfo("Asia/Shanghai")).date(),
+        lock=False,
+    )
+    brief = (
+        await SQLAlchemyContextRepository(session).handover_brief(conversation.customer_id)
+        if conversation.customer_id is not None
+        else HandoverBrief()
+    )
+    stay = confirmed or brief.stay
+    reason = await SQLAlchemyOperationsRepository(session).latest_handoff_reason(conversation.id)
+    _account, guest = await resolve_notification_identity(
+        conversation,
+        identity_resolver=identity_resolver,
+        customer_notification=SQLAlchemyCustomerRepository(session),
+    )
+    return HandoffCard(
+        conversation_id=conversation.id,
+        # complaint:refund、emergency:fire 这类代码只取冒号后的类别再换中文。
+        reason="需要人工跟进："
+        + describe_handoff_reason((reason or "manual_request_or_media").rsplit(":", 1)[-1]),
+        guest=guest,
+        link=(
+            f"{public_base_url.rstrip('/')}/employee/customers/{conversation.customer_id}"
+            "?tab=chat#chat-latest"
+        ),
+        room=(
+            f"{stay.get('room_number') or stay.get('property_title') or '待核实'} · "
+            f"{stay.get('check_in_date')} 入住"
+            if stay
+            else ""
+        ),
+        handover=brief.handover,
+        preferences=brief.preferences,
+    )
+
+
 async def _notify_conversation_release(
     session: AsyncSession,
     *,
@@ -3625,7 +3732,22 @@ async def _notify_conversation_release(
         if stay
         else ""
     )
-    pending = await SQLAlchemyOperationsRepository(session).latest_handoff_reason(conversation_id)
+    operations = SQLAlchemyOperationsRepository(session)
+    pending = await operations.latest_handoff_reason(conversation_id)
+    # 管家接入过的会话由交还入口登记的任务结束原生会话并发结束语；没人接入过的，
+    # 客人还停在「我会联系管家」，这里补一句说明（用户 2026-09-29 确认文案）。
+    accepted = await operations.handoff_accepted(conversation_id)
+    if not accepted:
+        await TransactionalOutboxWeCom(
+            session,
+            source_message_id=f"release-guest:{conversation_id}:{now.isoformat()}",
+            conversation_id=conversation_id,
+        ).send_text(
+            conversation.open_kfid,
+            conversation.external_userid,
+            TIMEOUT_TEXT,
+            stale_exempt=True,
+        )
     async with registry.acquire() as bundle:
         # 与转人工通知共用取名：客服账号名、CRM 备注优先（1.46.0 起）。
         account, guest = await resolve_notification_identity(
@@ -3639,7 +3761,11 @@ async def _notify_conversation_release(
             agent_id=bundle.agent_id, employee_userids=list(bundle.duty_userids),
             content=format_employee_notification(
                 # 原标题「员工空闲满 5 分钟」读起来像员工处理完了，实际是没人回复。
-                reason=f"已交还机器人：{IDLE_RELEASE_MINUTES} 分钟内没有管家回复",
+                reason=(
+                    f"已交还机器人：接入后 {IDLE_RELEASE_MINUTES} 分钟内没有管家回复"
+                    if accepted
+                    else f"已交还机器人：{IDLE_RELEASE_MINUTES} 分钟内没有管家接入"
+                ),
                 account=account,
                 guest=guest,
                 room=room,
@@ -4284,6 +4410,20 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             before_external=session.commit,
         )
 
+    async def handle_session_end(
+        open_kfid: str,
+        external_userid: str,
+        msg_code: str,
+        bundle: RuntimeClientBundle,
+    ) -> None:
+        """管家在企业微信点「结束聊天」：独立事务交还机器人并发结束语。"""
+        async with factory() as session:
+            await HumanSessionService(
+                session, bundle.wecom, agent_id=bundle.agent_id,
+                duty_userids=bundle.duty_userids,
+            ).on_servicer_ended(open_kfid, external_userid, msg_code)
+            await session.commit()
+
     async def handle_send_failure(
         external_message_id: str,
         fail_type: int,
@@ -4339,6 +4479,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 message_id,
                 fail_type,
                 bundle,
+            ),
+            handle_session_end=lambda open_kfid, external_userid, msg_code: (
+                handle_session_end(open_kfid, external_userid, msg_code, bundle)
             ),
             enqueue=queue.enqueue,
         )
@@ -4546,6 +4689,97 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return handle
 
+    def build_handoff_handlers(
+        session: AsyncSession,
+        bundle: RuntimeClientBundle,
+    ) -> dict[str, JobHandler]:
+        """转人工卡片发送、卡片按钮点击、结束原生会话三个处理器。"""
+
+        def human_sessions() -> HumanSessionService:
+            """同一 worker 事务内的人工会话服务；更新卡片时按会话现状重建内容。"""
+            return HumanSessionService(
+                session, bundle.wecom, agent_id=bundle.agent_id,
+                duty_userids=bundle.duty_userids,
+                card_for=lambda conversation: _handoff_card_for(
+                    session, conversation, identity_resolver=bundle.wecom,
+                    public_base_url=bootstrap.public_base_url,
+                ),
+            )
+
+        async def send_handoff_card(payload: dict[str, Any]) -> None:
+            """先按最新对话整理接手要点，再发卡片；整理失败时附客人最近原话。
+
+            2026-09-29 用户审查：要点只随每小时维护更新，转人工那一刻常常还没整理，
+            员工只看到「客人刚说：转人工」。整理规则与每小时维护完全相同，只是提前触发。
+            """
+            card = HandoffCard(**payload["card"])
+            customer_id = payload.get("customer_id")
+            handover: tuple[str, ...] = ()
+            preferences: tuple[str, ...] = ()
+            if customer_id is not None:
+                try:
+                    await ContextRetentionService(
+                        SQLAlchemyContextRepository(session),
+                        bundle.context_summarizer,
+                        before_external=session.commit,
+                    ).maintain_customer(int(customer_id), datetime.now(UTC))
+                except Exception as error:
+                    # 整理失败不能挡住通知：丢弃半截写入，用已有要点或客人原话兜底。
+                    logger.warning("转人工前整理要点失败：error_type=%s", type(error).__name__)
+                    await session.rollback()
+                brief = await SQLAlchemyContextRepository(session).handover_brief(
+                    int(customer_id)
+                )
+                handover, preferences = brief.handover, brief.preferences
+            title = "接手要点"
+            if not handover:
+                recent = (await session.scalars(
+                    select(Message.content).where(
+                        Message.conversation_id == card.conversation_id,
+                        Message.origin == MessageOrigin.GUEST,
+                        Message.content != "",
+                    ).order_by(Message.id.desc()).limit(3)
+                )).all()
+                handover = tuple(str(item) for item in reversed(recent) if item)
+                title = "客人最近说"
+            card = replace(
+                card, handover=handover, preferences=preferences, handover_title=title
+            )
+            try:
+                await bundle.wecom.send_internal_template_card(
+                    agent_id=int(payload["agent_id"]),
+                    employee_userids=list(payload["employee_userids"]),
+                    template_card=build_handoff_card(
+                        card, stage="pending", task_id=str(payload["task_id"])
+                    ),
+                )
+            except httpx.ConnectError as error:
+                raise RetrySafeJobError("企业微信连接尚未建立") from error
+            except WeComApiError as error:
+                if error.error_code == 45009:
+                    raise RetrySafeJobError("企业微信明确限流") from error
+                raise
+
+        async def handle_card_action(payload: dict[str, Any]) -> None:
+            """员工点了「接入人工」或「交还 AI 助手」。"""
+            try:
+                await human_sessions().handle_card_action(payload)
+            except httpx.ConnectError as error:
+                raise RetrySafeJobError("企业微信连接尚未建立") from error
+
+        async def end_native_session(payload: dict[str, Any]) -> None:
+            """交还后结束仍在人工接待的原生会话，客人收到结束语、机器人恢复发送。"""
+            try:
+                await human_sessions().end_native_session(int(payload["conversation_id"]))
+            except httpx.ConnectError as error:
+                raise RetrySafeJobError("企业微信连接尚未建立") from error
+
+        return {
+            HANDOFF_CARD_JOB_TYPE: send_handoff_card,
+            CARD_ACTION_JOB_TYPE: handle_card_action,
+            KF_SESSION_END_JOB_TYPE: end_native_session,
+        }
+
     async def record_external_call(record: Any) -> None:
         """把一次外部调用结果写入独立短事务。
 
@@ -4601,6 +4835,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 bundle,
             ),
         }
+        handlers.update(build_handoff_handlers(session, bundle))
         if bundle.contact_client is not None:
             handlers["customer_tag_sync"] = build_customer_tag_handler(session, bundle)
         return RuntimeWorkerBindings(

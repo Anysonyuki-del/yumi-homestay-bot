@@ -3048,3 +3048,61 @@ async def test_handoff_notification_carries_the_handover_brief() -> None:
     assert "> 两位老人同行，需留意进出" in notification
     assert "**客人偏好**：客人对海鲜过敏" in notification
     assert "5 分钟内会话里没有管家回复，将交还机器人继续接待" in notification
+
+
+@pytest.mark.asyncio
+async def test_native_human_session_records_guest_messages_without_any_reply() -> None:
+    """管家已接入原生人工会话：客人消息照常记录，但不回复、不调模型、不再通知。
+
+    平台此时拒绝机器人消息（95018）；1.57.0 之前人工模式仍会回答独立低风险问题。
+    """
+
+    class NativeAudit(ConversationAuditStub):
+        """最近一次接管已被管家接入。"""
+
+        async def native_session_active(self, conversation_id: int) -> bool:
+            return True
+
+    service, conversations, assistant, wecom = build_service(audit_events=NativeAudit())
+    conversations.conversation.mode = ConversationMode.HUMAN_ACTIVE
+
+    for index, text in enumerate(["几点退房", "转人工", "房间着火了"]):
+        await service.handle_message(incoming(content=text, msgid=f"msg-{index}"))
+    await service.process_recorded_message(incoming(content="几点退房", msgid="msg-0"))
+
+    assert assistant.calls == 0
+    assert wecom.guest_messages == [] and wecom.internal_messages == []
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_handoff_card_leaves_out_a_bare_handoff_request() -> None:
+    """转人工卡片：只说「转人工」的原话对管家没有信息量，不单列；有内容的原话保留。"""
+    from homestay_bot.services.handoff_card import HandoffCard
+
+    class CardWeCom(WeComStub):
+        """能登记转人工卡片的发件箱。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.cards: list[HandoffCard] = []
+
+        async def send_handoff_card(self, *, agent_id, employee_userids, customer_id, card):
+            self.cards.append(card)
+
+    wecom = CardWeCom()
+    service, conversations, _, _ = build_service(wecom=wecom)
+    conversations.conversation.mode = ConversationMode.HUMAN_ACTIVE
+
+    await service._notify_employee(
+        conversations.conversation, incoming(content="转人工！"), "普通人工接管"
+    )
+    await service._notify_employee(
+        conversations.conversation, incoming(content="能便宜点吗"), "YuMi 接管：price"
+    )
+
+    assert wecom.internal_messages == []
+    bare, priced = wecom.cards
+    assert bare.original == "" and bare.reason == "需要人工跟进：客人要求人工"
+    assert priced.original == "能便宜点吗" and priced.reason == "需要人工跟进：价格协商"
+    assert "没有管家接入" in priced.footer

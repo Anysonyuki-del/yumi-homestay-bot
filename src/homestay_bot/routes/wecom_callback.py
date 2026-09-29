@@ -50,6 +50,9 @@ class CallbackSyncQueue(Protocol):
     async def enqueue_wecom_sync(self, token: str, open_kfid: str) -> None:
         """保存一项客服消息同步任务。"""
 
+    async def enqueue_card_action(self, action: dict[str, str]) -> None:
+        """保存一次员工点击卡片按钮的处理任务。"""
+
 
 class WeComCallbackService:
     """解密企业微信回调，并把耗时同步操作转入队列。"""
@@ -111,6 +114,22 @@ class WeComCallbackService:
             raise InvalidCallbackPayload("企业微信内层 XML 无法解析") from error
 
         event = inner_root.findtext("Event")
+        if event == "template_card_event":
+            # 员工点了转人工卡片上的按钮。这里只做验签后的字段搬运，身份（值班名单、
+            # 应用编号）和动作在 worker 里复核；回调必须 5 秒内应答，不能在这里调接口。
+            action = {
+                "userid": inner_root.findtext("FromUserName") or "",
+                "key": inner_root.findtext("EventKey") or "",
+                "task_id": inner_root.findtext("TaskId") or "",
+                "response_code": inner_root.findtext("ResponseCode") or "",
+                "agent_id": inner_root.findtext("AgentID") or "",
+            }
+            if not action["userid"] or not action["key"] or any(
+                len(value) > 512 for value in action.values()
+            ):
+                raise InvalidCallbackPayload("企业微信卡片回调字段缺失或过长")
+            await self._queue.enqueue_card_action(action)
+            return
         sync_token = inner_root.findtext("Token")
         open_kfid = inner_root.findtext("OpenKfId")
         if event != "kf_msg_or_event" or not sync_token or not open_kfid:

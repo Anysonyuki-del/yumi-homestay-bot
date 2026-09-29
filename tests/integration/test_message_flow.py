@@ -578,8 +578,9 @@ async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
         assert task.status is BusinessTaskStatus.PENDING_CONFIRMATION
         assert task.task_type is BusinessTaskType.MAINTENANCE
         assert task.source_message_id == message.msgid
+        # 员工通知是转人工按钮卡片，由 worker 整理要点后发出（2026-09-29）。
         assert [job.job_type for job in jobs] == [
-            "wecom_send_internal_text",
+            "wecom_send_handoff_card",
             "wecom_send_text",
         ]
         assert "检查水龙头是否开启" in jobs[1].payload["content"]

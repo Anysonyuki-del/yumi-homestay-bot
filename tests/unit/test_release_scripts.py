@@ -48,6 +48,8 @@ _GATE_INFRASTRUCTURE = {
     "src/homestay_bot/integrations/wecom/schemas.py",
     "src/homestay_bot/repositories/operations.py",
     "src/homestay_bot/repositories/runtime_config.py",
+    # 员工转人工卡片与固定状态提示，不经过模型也不改写机器人回复（1.58.0）。
+    "src/homestay_bot/services/handoff_card.py",
     "src/homestay_bot/services/runtime_config_cipher.py",
 }
 

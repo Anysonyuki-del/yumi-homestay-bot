@@ -25,6 +25,10 @@ class CaptureSyncQueue:
         """记录待同步的回调 Token 与客服账号。"""
         self.calls.append((token, open_kfid))
 
+    async def enqueue_card_action(self, action: dict[str, str]) -> None:
+        """记录员工点击卡片按钮的字段。"""
+        self.calls.append(("card", action))
+
 
 @pytest.mark.asyncio
 async def test_callback_service_decrypts_and_enqueues_sync() -> None:
@@ -203,3 +207,32 @@ def test_callback_service_verifies_url_echo() -> None:
     echo = service.verify_url(encrypted, signature, "100", "200")
 
     assert echo == "echo-value"
+
+
+@pytest.mark.asyncio
+async def test_callback_service_enqueues_card_button_click() -> None:
+    """员工点转人工卡片按钮：验签后原样搬运点击人、按钮 key、卡片与更新码，交给 worker 复核。"""
+    token = "callback-token"
+    aes_key = base64.b64encode(os.urandom(32)).decode().rstrip("=")
+    inner_xml = (
+        b"<xml><ToUserName>corp-id</ToUserName><FromUserName>duty-1</FromUserName>"
+        b"<MsgType>event</MsgType><Event>template_card_event</Event>"
+        b"<EventKey>accept:7</EventKey><TaskId>handoff-abc</TaskId>"
+        b"<CardType>button_interaction</CardType><ResponseCode>rc-1</ResponseCode>"
+        b"<AgentID>1000002</AgentID></xml>"
+    )
+    encrypted, signature = encrypt_fixture(
+        inner_xml, token=token, encoding_aes_key=aes_key, receive_id="corp-id",
+        timestamp="100", nonce="200",
+    )
+    queue = CaptureSyncQueue()
+    service = WeComCallbackService.from_credentials(token, aes_key, "corp-id", queue)
+
+    await service.verify_and_enqueue(
+        f"<xml><Encrypt>{encrypted}</Encrypt></xml>".encode(), signature, "100", "200"
+    )
+
+    assert queue.calls == [("card", {
+        "userid": "duty-1", "key": "accept:7", "task_id": "handoff-abc",
+        "response_code": "rc-1", "agent_id": "1000002",
+    })]

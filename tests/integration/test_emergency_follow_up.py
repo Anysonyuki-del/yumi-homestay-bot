@@ -97,8 +97,9 @@ async def test_follow_up_uses_reviewed_emergency_knowledge_in_production_wiring(
         jobs = list(await session.scalars(select(Job).order_by(Job.id)))
     assert conversation is not None and conversation.mode is ConversationMode.HUMAN_ACTIVE
     guest = [job.payload for job in jobs if job.job_type == "wecom_send_text"]
-    internal = [job.payload for job in jobs if job.job_type == "wecom_send_internal_text"]
+    # 员工通知是转人工按钮卡片（1.58.0），卡片标题即通知原因。
+    internal = [job.payload for job in jobs if job.job_type == "wecom_send_handoff_card"]
     assert "燃气总阀在一楼厨房门后" in guest[-1]["content"]
     assert guest[-1]["stale_exempt"] is True
     assert len(internal) == 2
-    assert "紧急情况后续" in internal[-1]["content"]
+    assert "紧急情况后续" in internal[-1]["card"]["reason"]

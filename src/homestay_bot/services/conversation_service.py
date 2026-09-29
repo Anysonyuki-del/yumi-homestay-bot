@@ -54,6 +54,7 @@ from homestay_bot.services.guest_reply_policy import (
     split_guest_reply,
 )
 from homestay_bot.services.guest_verification import GuestVerificationService
+from homestay_bot.services.handoff_card import HandoffCard
 from homestay_bot.services.knowledge_service import (
     PropertyCard,
     detect_property_topics,
@@ -476,6 +477,24 @@ class MarkdownNotifierPort(Protocol):
 
 
 @runtime_checkable
+class HandoffCardPort(Protocol):
+    """能登记转人工按钮卡片的发送器（生产事务 outbox）。
+
+    卡片由 worker 发送：发送前先按最新对话重新整理接手要点，所以这里不带要点。
+    """
+
+    async def send_handoff_card(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        customer_id: int | None,
+        card: HandoffCard,
+    ) -> None:
+        """登记一张转人工卡片。"""
+
+
+@runtime_checkable
 class HandoverBriefPort(Protocol):
     """读取员工接手通知用的客户简报（接手要点、偏好、唯一当前订单）。"""
 
@@ -775,6 +794,8 @@ class ConversationService:
             return
         if message.origin is not MessageOrigin.GUEST:
             return
+        if await self._in_native_session(conversation):
+            return
 
         detector = getattr(self._conversations, "detect_language", None)
         language = (
@@ -868,7 +889,7 @@ class ConversationService:
         if await self._messages.has_newer_conversation_activity(
             conversation.id,
             message.msgid,
-        ):
+        ) or await self._in_native_session(conversation):
             return
         batch = await self._messages.build_guest_batch(
             conversation.id,
@@ -937,6 +958,8 @@ class ConversationService:
     async def process_recorded_message(self, message: IncomingMessage) -> None:
         """处理已完成入站提交的消息，供后台最终回复任务调用。"""
         conversation = await self._conversations.get_or_create(message)
+        if await self._in_native_session(conversation):
+            return
         message = await self._resolve_fast_ack_delivery(message)
         # 人工接管期间只丢弃当前高风险事项；房态、旅游等独立问题仍应回复，
         # 同时保留人工模式，让正在处理的客诉继续由管家跟进。
@@ -1869,6 +1892,17 @@ class ConversationService:
         )
         await self._notify_employee(conversation, message, reason)
 
+    async def _in_native_session(self, conversation: Conversation) -> bool:
+        """管家已接入企业微信原生人工会话时返回真：机器人不再回复，也不调用模型。
+
+        这时平台拒绝机器人发消息（95018），客人消息管家在企业微信里实时看得到；
+        接入前排队的回复在发送出口另有同一判据拦截。
+        """
+        if conversation.mode is not ConversationMode.HUMAN_ACTIVE:
+            return False
+        checker = getattr(self._audit_events, "native_session_active", None)
+        return bool(checker is not None and await checker(conversation.id))
+
     async def _switch_to_human(
         self,
         conversation: Conversation,
@@ -2187,6 +2221,28 @@ class ConversationService:
         link = (f"{base}/employee/tasks/{self._notification_task_id}"
                 if self._notification_task_id else
                 f"{base}/employee/customers/{conversation.customer_id}?tab=chat#chat-latest")
+        if isinstance(self._wecom, HandoffCardPort):
+            # 2026-09-29 用户决定：转人工由管家点「接入人工」确认；卡片要让管家一眼看懂
+            # 客人要什么，只说「转人工」的原话没有信息量，不再单列。
+            original = " ".join(message.content.split())
+            if not self._handoff_pattern.sub("", original).strip(" ，。,.!！?？~～"):
+                original = ""
+            await self._wecom.send_handoff_card(
+                agent_id=self._agent_id, employee_userids=self._duty_employee_userids,
+                customer_id=conversation.customer_id,
+                card=HandoffCard(
+                    conversation_id=conversation.id, reason=reason_label,
+                    guest=display_identity, link=link,
+                    link_label="查看任务" if self._notification_task_id else "看对话记录",
+                    room=location, original=original,
+                    replied=self._last_guest_reply if replied is None else replied,
+                    footer=(
+                        f"{IDLE_RELEASE_MINUTES} 分钟内没有管家接入，将交还机器人继续接待。"
+                        if footer else ""
+                    ),
+                ),
+            )
+            return
         content = format_employee_notification(
             reason=reason_label, account=customer_service_name, guest=display_identity,
             room=location, link=link, original=" ".join(message.content.split()),

@@ -1329,11 +1329,11 @@ def test_unavailable_admin_bootstrap_keeps_workers_running_and_reports_degraded(
         assert worker_recovery_wiring == [
             (
                 None,
-                {"wecom_process_message", "guest_delivery_rewrite"},
+                {"wecom_process_message", "guest_delivery_rewrite", "wecom_send_handoff_card"},
                 True,
             ),
             (
-                {"wecom_process_message", "guest_delivery_rewrite"},
+                {"wecom_process_message", "guest_delivery_rewrite", "wecom_send_handoff_card"},
                 set(),
                 True,
             ),
