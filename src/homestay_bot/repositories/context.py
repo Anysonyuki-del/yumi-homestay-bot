@@ -33,6 +33,7 @@ from homestay_bot.services.customer_memory_policy import (
     is_dynamic_memory_text,
     is_explicit_correction,
     is_historical_query,
+    is_inquiry_memory,
     is_instruction_like_memory,
     memory_relevance_score,
     normalize_source_text,
@@ -46,6 +47,8 @@ from homestay_bot.services.customer_memory_policy import (
 from homestay_bot.services.stay_date_range import wuhan_today
 
 logger = logging.getLogger(__name__)
+# 摘要里的占位说明：没有可供模型参考的情节（2026-09-29 起摘要改为员工接手要点）。
+_EMPTY_EPISODES = frozenset({"", "无需关注事项", "无新增摘要"})
 
 
 class SQLAlchemyContextRepository:
@@ -608,6 +611,13 @@ class SQLAlchemyContextRepository:
                 candidate.confidence,
                 grounded=grounded,
             )
+            if status is CustomerMemoryStatus.CANDIDATE or is_inquiry_memory(
+                candidate.statement
+            ):
+                # 只保存能直接生效的记忆：客人或员工原话证明的稳定事实与偏好。
+                # 模型推断、「客人询问了××」这类候选此前进入待审核队列，员工逐条审完
+                # 也不会用到（2026-09-29 用户审查：测试号 5 条候选全是这种），现在不入库。
+                continue
             existing = list(
                 (
                     await self._session.scalars(
@@ -965,7 +975,8 @@ class SQLAlchemyContextRepository:
         allow_history: bool = False,
     ) -> str:
         """只在当前问题相关或明确查历史时返回限量情节摘要。"""
-        if budget <= 0 or not episode.strip():
+        if budget <= 0 or episode.strip() in _EMPTY_EPISODES:
+            # 「无需关注事项」等占位说明没有内容，不占模型上下文。
             return ""
         score = memory_relevance_score(
             query,

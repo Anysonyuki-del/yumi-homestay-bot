@@ -151,6 +151,14 @@ button:active:not(:disabled), .button:active { transform: translateY(1px); box-s
 .chat-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-sm); }
 .chat-meta strong { color: var(--text); }
 .chat-empty { color: var(--muted); }
+.handover-list { display: grid; gap: 6px; margin: 0 0 12px; padding-left: 20px; }
+.memory-list { display: grid; gap: 8px; margin: 0 0 12px; padding: 0; list-style: none; }
+.memory-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.memory-list li > div:first-child { display: grid; gap: 4px; min-width: 0; }
+.memory-list small { color: var(--muted); overflow-wrap: anywhere; }
+.memory-list form { margin: 0; }
+.memory-edit { margin: 12px 0; }
+.memory-edit > summary { cursor: pointer; color: var(--ink-mid); font-weight: 600; }
 .image-list { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 12px; padding: 0; list-style: none; }
 .image-list li { display: grid; gap: 8px; }
 .image-list img { display: block; width: 200px; max-width: 100%; height: 200px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-sunk); object-fit: contain; }

@@ -380,6 +380,11 @@ def test_admin_sees_masked_customer_and_multi_select_tags() -> None:
     assert "/employee/customers/merge/9" in governance.text
     assert "客户的狗叫查理" in memory.text
     assert "/employee/customers/7/memories/12/approve" in memory.text
+    # 2026-09-29 重做：要点按条列出，待审核记录归「待你确认」，主题名等只在折叠的技术详情里。
+    assert "<li>偏好安静</li>" in memory.text
+    assert "待你确认" in memory.text
+    details = memory.text.index("技术详情")
+    assert memory.text.index("pet_dog_name") > details
 
 
 def test_customer_pages_use_admin_shell_and_responsive_views() -> None:

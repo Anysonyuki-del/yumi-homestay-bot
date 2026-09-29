@@ -14,6 +14,7 @@ from homestay_bot.services.context_retention import (
     MemorySource,
 )
 from homestay_bot.services.customer_memory_policy import (
+    CONTROLLED_MEMORY_SUBJECTS,
     contains_sensitive_memory_text,
     is_dynamic_memory_text,
     is_instruction_like_memory,
@@ -83,16 +84,31 @@ class DeepSeekContextSummarizer:
                 {
                     "role": "system",
                     "content": (
-                        "你负责整理民宿客户上下文。只保留可跨会话复用的情节、稳定偏好和"
-                        "已确认事实；运营待办不得进入摘要。"
+                        # 2026-09-29 用户审查：原摘要复述机器人已答的停车、地址、登记，
+                        # 员工看不出客人要什么；记忆候选把「客人询问了××」也当事实。
+                        # 摘要改成给接手员工看的要点，记忆只收客人亲口说的个人情况。
+                        "你负责为接手的民宿员工整理客户要点。summary 最多 3 行，每行以"
+                        "「- 」开头，只写这三类：客人当前的诉求或打算；还没解决的事及"
+                        "处理状态（如讲价已转人工、投诉处理中、等管家确认）；需要特别"
+                        "注意的个人情况或偏好（如同行老人儿童、过敏、要发票）。"
+                        "机器人已用标准资料答完的问题（停车、地址、上楼、Wi-Fi、登记、"
+                        "入住退房时间、天气路线等）不要写，也不要复述对话。"
+                        "没有值得员工关注的内容时 summary 写「无需关注事项」。"
+                        "合并 existing_summary 时保留仍然有效的要点，删掉已经解决的。"
                         "禁止输出手机号、身份证、详细地址、门锁密码、验证码或二维码。"
                         "价格、房态、付款退款、当前订单状态和临时承诺不得成为记忆。"
-                        "memory_candidates 仅提取可跨会话复用的稳定客户事实；"
+                        "memory_candidates 只提取客人亲口说出、下次住宿仍然成立的个人"
+                        "事实或偏好（如对某食物过敏、带宠物出行、偏好高楼层、发票抬头"
+                        "类型），category 只用 preference 或 confirmed_fact。客人问过"
+                        "什么、机器人答了什么、本次行程怎么安排都不是记忆；不确定就不"
+                        "输出，宁缺毋滥。"
                         "summary 只能合并 summary_eligible=true 的消息；该字段为 false"
                         "的最近原文只用于提取 memory_candidates，不得写入 summary。"
                         "如果没有可进入 summary 的消息，保持 existing_summary；它为空时"
-                        "令 summary 为“无新增摘要”。"
-                        "subject_key 使用稳定简短的 snake_case 主题；source_message_id 必须"
+                        "令 summary 为「无需关注事项」。"
+                        "subject_key 只能取以下之一："
+                        + "、".join(CONTROLLED_MEMORY_SUBJECTS)
+                        + "；不属于这些主题的情况不要输出为记忆。source_message_id 必须"
                         "引用输入消息编号；source_excerpt 必须逐字引用该消息中能证明候选的"
                         "脱敏连续原文，不能改写或概括。"
                         # 原文只说了何时降级为 model_inference，没说何时该报

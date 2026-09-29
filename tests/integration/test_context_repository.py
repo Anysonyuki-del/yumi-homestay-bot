@@ -219,7 +219,7 @@ async def test_single_recent_message_becomes_cross_conversation_memory() -> None
 
 @pytest.mark.asyncio
 async def test_model_inference_stays_candidate_and_explicit_correction_supersedes() -> None:
-    """模型推断不得召回，客户明确纠正同主题时应覆盖旧有效记忆。"""
+    """模型推断不入库也不召回（2026-09-29 起不再进待审核队列），客户明确纠正同主题时覆盖旧记忆。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -307,9 +307,12 @@ async def test_model_inference_stays_candidate_and_explicit_correction_supersede
         )
         context = await repository.load_model_context(customer.id, query="我喜欢什么楼层？")
 
-        assert memories[0].status is CustomerMemoryStatus.CANDIDATE
-        assert memories[1].status is CustomerMemoryStatus.SUPERSEDED
-        assert memories[2].status is CustomerMemoryStatus.ACTIVE
+        assert [memory.subject_key for memory in memories] == [
+            "floor_preference",
+            "floor_preference",
+        ]
+        assert memories[0].status is CustomerMemoryStatus.SUPERSEDED
+        assert memories[1].status is CustomerMemoryStatus.ACTIVE
         assert context.memories[0]["statement"] == "客户喜欢低楼层"
 
     await engine.dispose()
@@ -401,10 +404,8 @@ async def test_guest_message_origin_does_not_prove_unrelated_memory_statement() 
             now,
         )
 
-        memory = await session.scalar(select(CustomerMemoryItem))
-        assert memory is not None
-        assert memory.status is CustomerMemoryStatus.CANDIDATE
-        assert memory.evidence_type is CustomerMemoryEvidenceType.MODEL_INFERENCE
+        # 原文证明不了的陈述降为推断，推断不入库。
+        assert await session.scalar(select(CustomerMemoryItem)) is None
 
     await engine.dispose()
 
@@ -633,7 +634,7 @@ async def test_a_weaker_new_statement_still_goes_to_dispute() -> None:
 
 @pytest.mark.asyncio
 async def test_expired_candidate_leaves_pending_review_pool() -> None:
-    """超过有效期的候选记忆必须退出待复核池。"""
+    """旧版本留下的候选记忆超过有效期后必须退出待复核池。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -647,25 +648,23 @@ async def test_expired_candidate_leaves_pending_review_pool() -> None:
             content="我可能喜欢喝茶",
         )
         repository = SQLAlchemyContextRepository(session)
-        await repository.save_memory_observations(
-            customer.id,
-            ContextSummaryResult(
-                "无新增摘要",
-                [],
-                [
-                    CustomerMemoryCandidate(
-                        "drink_preference",
-                        CustomerMemoryCategory.PREFERENCE,
-                        "客户可能喜欢茶",
-                        CustomerMemoryEvidenceType.MODEL_INFERENCE,
-                        source.external_message_id,
-                        0.7,
-                    )
-                ],
-            ),
-            [source],
-            now,
+        # 新版本不再产生候选，这里直接写一条旧版本留下的待审核记录。
+        session.add(
+            CustomerMemoryItem(
+                customer_id=customer.id,
+                subject_key="drink_preference",
+                category=CustomerMemoryCategory.PREFERENCE,
+                statement="客户可能喜欢茶",
+                status=CustomerMemoryStatus.CANDIDATE,
+                evidence_type=CustomerMemoryEvidenceType.MODEL_INFERENCE,
+                source_message_id=source.external_message_id,
+                confidence=0.7,
+                review_at=now + timedelta(days=30),
+                expires_at=now + timedelta(days=30),
+                status_reason="等待人工复核",
+            )
         )
+        await session.flush()
         await repository.expire_customer_memories(
             customer.id,
             now + timedelta(days=1_000),
@@ -1042,4 +1041,73 @@ async def test_recent_task_status_includes_terminal_only_for_owner() -> None:
         assert len(rows) == 1
         assert rows[0]["status"] == "completed"
         assert rows[0]["task_id"] is not None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_only_guest_stated_stable_facts_are_kept_as_memories() -> None:
+    """2026-09-29 用户审查：「客人询问了××」不是记忆，不入库；客人亲口说的过敏照常生效。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, question = await _customer_message(
+            session,
+            customer_name="记忆取舍客户",
+            external_message_id="memory-inquiry",
+            content="需要实名登记吗",
+        )
+        allergy = Message(
+            conversation_id=question.conversation_id,
+            external_message_id="memory-allergy",
+            origin=MessageOrigin.GUEST,
+            message_type="text",
+            content="我对海鲜过敏",
+            sent_at=now,
+        )
+        session.add(allergy)
+        await session.flush()
+        repository = SQLAlchemyContextRepository(session)
+        await repository.save_short_summary(
+            customer.id,
+            ContextSummaryResult(
+                "无需关注事项",
+                [],
+                [
+                    CustomerMemoryCandidate(
+                        "real_name_registration",
+                        CustomerMemoryCategory.CONFIRMED_FACT,
+                        "客人询问是否需要实名登记",
+                        CustomerMemoryEvidenceType.USER_EXPLICIT,
+                        question.external_message_id,
+                        0.95,
+                        source_excerpt="需要实名登记吗",
+                    ),
+                    CustomerMemoryCandidate(
+                        # 模型常用的同义主题收敛到受控的 dietary_preference。
+                        "food_allergy",
+                        CustomerMemoryCategory.CONFIRMED_FACT,
+                        "客人对海鲜过敏",
+                        CustomerMemoryEvidenceType.USER_EXPLICIT,
+                        allergy.external_message_id,
+                        0.95,
+                        source_excerpt="我对海鲜过敏",
+                    ),
+                ],
+            ),
+            [question, allergy],
+            now,
+        )
+
+        memories = list((await session.scalars(select(CustomerMemoryItem))).all())
+        assert [(item.subject_key, item.status) for item in memories] == [
+            ("dietary_preference", CustomerMemoryStatus.ACTIVE)
+        ]
+        # 摘要占位「无需关注事项」不进模型上下文。
+        context = await repository.load_model_context(customer.id, query="海鲜过敏吗")
+        assert context.recent_episode == ""
+        assert context.memories[0]["statement"] == "客人对海鲜过敏"
+
     await engine.dispose()

@@ -57,6 +57,9 @@ _SUBJECT_ALIASES = {
     "preferred_bed": "bed_preference",
     "contact_preference": "communication_preference",
     "food_preference": "dietary_preference",
+    "food_allergy": "dietary_preference",
+    "allergy": "dietary_preference",
+    "dietary_restriction": "dietary_preference",
 }
 _SUBJECT_QUERY_TERMS = {
     "pet_dog_name": ("狗", "小狗", "宠物", "dog", "puppy", "名字", "叫什么"),
@@ -67,6 +70,9 @@ _SUBJECT_QUERY_TERMS = {
     "communication_preference": ("联系", "沟通", "微信", "电话", "contact", "message"),
     "dietary_preference": ("饮食", "忌口", "过敏", "素食", "diet", "allergy"),
 }
+# 能从客人原话核验取值、可以自动生效的记忆主题。摘要提示词直接引用这份清单，
+# 模型不再自造 arrival_by_car 这类无法核验的主题（2026-09-29 用户审查）。
+CONTROLLED_MEMORY_SUBJECTS: tuple[str, ...] = tuple(_SUBJECT_QUERY_TERMS)
 _EVIDENCE_RANKS = {
     CustomerMemoryEvidenceType.MODEL_INFERENCE.value: 0,
     CustomerMemoryEvidenceType.USER_EXPLICIT.value: 1,
@@ -169,6 +175,19 @@ def normalize_subject_key(subject_key: str) -> str:
 def can_auto_activate_subject(subject_key: str) -> bool:
     """排除无法归类的 general，避免无关记忆共用主题后自动互相替代。"""
     return normalize_subject_key(subject_key) != _FALLBACK_SUBJECT
+
+
+# 「客人询问了地址」「客人咨询停车」记录的是提问本身，不是客人的事实或偏好。
+_INQUIRY_MEMORY_PATTERN = re.compile(
+    r"^(?:客人|客户|顾客)?(?:询问|咨询|问了|问到|想知道|想了解|了解|关注)"
+    r"|^(?:the\s+)?guest\s+(?:asked|inquired|wanted\s+to\s+know)",
+    re.IGNORECASE,
+)
+
+
+def is_inquiry_memory(statement: str) -> bool:
+    """判断一条记忆陈述是否只是在复述客人问过的问题。"""
+    return bool(_INQUIRY_MEMORY_PATTERN.search(statement.strip()))
 
 
 def is_dynamic_memory_text(text: str) -> bool:

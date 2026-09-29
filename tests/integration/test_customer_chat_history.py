@@ -112,7 +112,9 @@ def test_chat_tab_shows_the_whole_timeline_in_wuhan_time(tmp_path) -> None:
     assert page.status_code == 200
     text = page.text
     assert 'href="/employee/customers/7?tab=chat" aria-current="page"' in text
-    order = [text.index(item) for item in (
+    # 只在消息列表里比顺序：上方「最近活动」一行带当天日期，会随运行时间变化。
+    log = text[text.index('class="chat-log"'):]
+    order = [log.index(item) for item in (
         "2026年9月28日", "开车停哪里&lt;script&gt;", "停地下一层A区。",
         "[图片：知识配图或欢迎图片]",
         "2026年9月29日", "转人工", "您好，我是管家。",
