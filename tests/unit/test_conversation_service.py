@@ -3106,3 +3106,36 @@ async def test_handoff_card_leaves_out_a_bare_handoff_request() -> None:
     assert bare.original == "" and bare.reason == "需要人工跟进：客人要求人工"
     assert priced.original == "能便宜点吗" and priced.reason == "需要人工跟进：价格协商"
     assert "没有管家接入" in priced.footer
+
+
+@pytest.mark.asyncio
+async def test_servicer_reply_marks_native_session_accepted() -> None:
+    """管家在企业微信里发言即按已接入记录：机器人模式下记 servicer_reply；已在人工模式的
+    沿用原原因；已是原生会话的不重复记。1.58.2 测试号：交还后管家继续打字，企业微信
+    重新接入会话，机器人仍去回复被拒，交还也没结束会话。"""
+
+    class AcceptingAudit(ConversationAuditStub):
+        """记录接入调用；接入后即为原生会话。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.accepted: list[str | None] = []
+
+        async def accept_handoff(self, conversation_id, *, servicer_userid, now, reason=None):
+            self.accepted.append(reason)
+
+        async def native_session_active(self, conversation_id: int) -> bool:
+            return bool(self.accepted)
+
+    audit = AcceptingAudit()
+    service, conversations, assistant, wecom = build_service(audit_events=audit)
+
+    await service.handle_message(incoming(content="你好", origin=MessageOrigin.SERVICER))
+    await service.handle_message(
+        incoming(content="稍等", origin=MessageOrigin.SERVICER, msgid="msg-2")
+    )
+    await service.handle_message(incoming(content="几点退房", msgid="msg-3"))
+
+    assert audit.accepted == ["servicer_reply"]
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert assistant.calls == 0 and wecom.guest_messages == []

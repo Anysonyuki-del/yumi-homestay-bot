@@ -1,6 +1,6 @@
 """管家接入 / 交还企业微信原生人工会话的状态流转；企业微信接口用内存桩，不访问外部服务。"""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -154,14 +154,22 @@ async def test_servicer_end_releases_and_skips_when_system_already_released(tmp_
     kf = KfStub(state=3, servicer="duty-1")
     service = HumanSessionService(session, kf, agent_id=1000002, duty_userids=("duty-1",))
     # 补拉带来的旧「结束聊天」事件：客人刚转人工、管家还没接入，不能被它交还。
-    await service.on_servicer_ended("wk", "wm", "code-stale")
+    await service.on_servicer_ended("wk", "wm", "code-stale", datetime.now(UTC))
     assert conversation.mode is ConversationMode.HUMAN_ACTIVE and kf.event_texts == []
+    accepted_at = datetime.now(UTC)
     await SQLAlchemyOperationsRepository(session).accept_handoff(
-        conversation.id, servicer_userid="duty-1", now=datetime.now(UTC)
+        conversation.id, servicer_userid="duty-1", now=accepted_at
     )
+    # 空游标同步重放的、发生在这次接入之前的结束事件：不能结束刚接入的会话。
+    await service.on_servicer_ended(
+        "wk", "wm", "code-replayed", accepted_at - timedelta(minutes=50)
+    )
+    assert conversation.mode is ConversationMode.HUMAN_ACTIVE and kf.event_texts == []
 
-    await service.on_servicer_ended("wk", "wm", "code-native")
-    await service.on_servicer_ended("wk", "wm", "code-native-again")
+    await service.on_servicer_ended("wk", "wm", "code-native", accepted_at + timedelta(seconds=5))
+    await service.on_servicer_ended(
+        "wk", "wm", "code-native-again", accepted_at + timedelta(seconds=9)
+    )
 
     assert conversation.mode is ConversationMode.BOT_ACTIVE
     assert kf.event_texts == [("code-native", ENDED_TEXT)]

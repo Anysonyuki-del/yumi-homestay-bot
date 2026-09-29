@@ -180,12 +180,16 @@ class HumanSessionService:
         )
         await self._send_event_text(conversation, code, ENDED_TEXT)
 
-    async def on_servicer_ended(self, open_kfid: str, external_userid: str, msg_code: str) -> None:
+    async def on_servicer_ended(
+        self, open_kfid: str, external_userid: str, msg_code: str, occurred_at: datetime | None
+    ) -> None:
         """管家在企业微信里点了「结束聊天」：交还机器人，并凭事件 msg_code 发结束语。
 
         只响应管家经按钮接入、仍在原生人工接待的会话：本系统自己调接口结束时会话已先
         切回机器人模式；补拉还可能带来很久以前的结束事件——1.58.1 测试号上，13:3x 的
         「结束聊天」事件在 14:21 客人刚转人工 11 秒后才被拉到，把新的转人工误交还了。
+        1.58.2 又发现：空游标同步会重放几天内的全部事件，管家刚点「接入人工」，旧的
+        结束事件就把这次接入结束了。所以还要求事件发生在这次接入之后（事件时间只到秒）。
         """
         conversation = await self._session.scalar(
             select(Conversation).where(
@@ -193,9 +197,14 @@ class HumanSessionService:
                 Conversation.external_userid == external_userid,
             )
         )
-        if conversation is None or not await self._operations.native_session_active(
-            conversation.id
+        if (
+            conversation is None
+            or occurred_at is None
+            or not await self._operations.native_session_active(conversation.id)
         ):
+            return
+        accepted_at = await self._operations.accepted_at(conversation.id)
+        if accepted_at is None or occurred_at < accepted_at.replace(microsecond=0):
             return
         await self._operations.release_conversation(
             conversation.id, now=datetime.now(UTC), reason="servicer_end"

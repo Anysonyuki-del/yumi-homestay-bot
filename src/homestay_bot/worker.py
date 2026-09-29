@@ -87,7 +87,7 @@ class WeComSyncJobHandler:
             Callable[[str, int], Awaitable[None]] | None
         ) = None,
         handle_session_end: (
-            Callable[[str, str, str], Awaitable[None]] | None
+            Callable[[str, str, str, datetime | None], Awaitable[None]] | None
         ) = None,
     ) -> None:
         """注入企业微信读取、消息、发送失败、会话结束和续页处理边界。"""
@@ -136,10 +136,14 @@ class WeComSyncJobHandler:
                     and event.get("external_userid")
                 ):
                     # 管家在企业微信里点了「结束聊天」：交还机器人并凭 msg_code 发结束语。
+                    # 事件没有去重：空游标同步会从几天前重放，发生时间交给下游判断新旧。
                     await self._handle_session_end(
                         str(event["open_kfid"]),
                         str(event["external_userid"]),
                         str(event.get("msg_code", "")),
+                        datetime.fromtimestamp(item.send_time, UTC)
+                        if item.send_time is not None
+                        else None,
                     )
                 continue
             origin = (

@@ -4414,6 +4414,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         open_kfid: str,
         external_userid: str,
         msg_code: str,
+        occurred_at: datetime | None,
         bundle: RuntimeClientBundle,
     ) -> None:
         """管家在企业微信点「结束聊天」：独立事务交还机器人并发结束语。"""
@@ -4421,7 +4422,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             await HumanSessionService(
                 session, bundle.wecom, agent_id=bundle.agent_id,
                 duty_userids=bundle.duty_userids,
-            ).on_servicer_ended(open_kfid, external_userid, msg_code)
+            ).on_servicer_ended(open_kfid, external_userid, msg_code, occurred_at)
             await session.commit()
 
     async def handle_send_failure(
@@ -4480,8 +4481,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 fail_type,
                 bundle,
             ),
-            handle_session_end=lambda open_kfid, external_userid, msg_code: (
-                handle_session_end(open_kfid, external_userid, msg_code, bundle)
+            handle_session_end=lambda open_kfid, external_userid, msg_code, occurred_at: (
+                handle_session_end(open_kfid, external_userid, msg_code, occurred_at, bundle)
             ),
             enqueue=queue.enqueue,
         )

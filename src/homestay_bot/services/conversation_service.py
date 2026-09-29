@@ -786,7 +786,21 @@ class ConversationService:
             return
         if message.origin is MessageOrigin.SERVICER:
             # 一旦人工客服发言，立即锁定人工模式，防止客人下一条消息又触发机器人。
-            if conversation.mode is not ConversationMode.HUMAN_ACTIVE:
+            # 管家只能在企业微信人工接待中发言：会话此刻就是原生人工会话，按已接入
+            # 记录，机器人静默、交还时结束会话。1.58.2 测试号：交还后管家继续打字，
+            # 企业微信重新接入会话，机器人仍去回复被拒（95018），交还也没结束会话。
+            accept = getattr(self._audit_events, "accept_handoff", None)
+            if accept is not None:
+                if not await self._in_native_session(conversation):
+                    await accept(
+                        conversation.id, servicer_userid="servicer", now=datetime.now(UTC),
+                        reason=(
+                            None if conversation.mode is ConversationMode.HUMAN_ACTIVE
+                            else "servicer_reply"
+                        ),
+                    )
+                    conversation.mode = ConversationMode.HUMAN_ACTIVE
+            elif conversation.mode is not ConversationMode.HUMAN_ACTIVE:
                 await self._switch_to_human(
                     conversation,
                     "servicer_reply",

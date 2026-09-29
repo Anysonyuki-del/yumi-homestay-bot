@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -810,8 +811,8 @@ async def test_wecom_sync_routes_servicer_end_event_only_for_session_end() -> No
 
     ended = []
 
-    async def handle_session_end(open_kfid, external_userid, msg_code):
-        ended.append((open_kfid, external_userid, msg_code))
+    async def handle_session_end(open_kfid, external_userid, msg_code, occurred_at):
+        ended.append((open_kfid, external_userid, msg_code, occurred_at))
 
     async def ignore(*_args):
         """不应被调用或无需处理。"""
@@ -822,4 +823,5 @@ async def test_wecom_sync_routes_servicer_end_event_only_for_session_end() -> No
     )
     await handler.sync_page(cursor="", token="", open_kfid="wk-1")
 
-    assert ended == [("wk-1", "wm-1", "code-3")]
+    # 事件时间一并交出：空游标同步会重放旧事件，由下游按时间判断新旧。
+    assert ended == [("wk-1", "wm-1", "code-3", datetime.fromtimestamp(1785283200, UTC))]

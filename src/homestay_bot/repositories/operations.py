@@ -1614,18 +1614,28 @@ class SQLAlchemyOperationsRepository:
             conversation_id
         )
 
+    async def accepted_at(self, conversation_id: int) -> datetime | None:
+        """最近一次接管若已由管家接入，返回接入时间；否则为空。"""
+        handoff = await self._latest_handoff(conversation_id)
+        if handoff is None or not _accepted_by(handoff.details):
+            return None
+        created = handoff.created_at
+        return created.replace(tzinfo=UTC) if created.tzinfo is None else created
+
     async def handoff_accepted(self, conversation_id: int) -> bool:
         """最近一次接管是否已有管家点过「接入人工」（不看当前模式）。"""
         handoff = await self._latest_handoff(conversation_id)
         return handoff is not None and bool(_accepted_by(handoff.details))
 
     async def accept_handoff(
-        self, conversation_id: int, *, servicer_userid: str, now: datetime
+        self, conversation_id: int, *, servicer_userid: str, now: datetime,
+        reason: str | None = None,
     ) -> None:
         """记录管家已接入原生会话：会话锁内切到人工模式，补记一条带 accepted_by 的接管。
 
         原因沿用上一次接管（没有时记 servicer_accept）：客诉、紧急情况接入后仍不参与
         自动交还；审计时间同时重置空闲计时，接入后 5 分钟内没人说话才会自动交还。
+        `reason` 指定时覆盖沿用的原因（机器人模式下管家直接发言记 servicer_reply）。
         """
         conversation = await self._session.scalar(
             select(Conversation).where(Conversation.id == conversation_id)
@@ -1643,7 +1653,7 @@ class SQLAlchemyOperationsRepository:
             actor_employee_id=None, action="conversation_handoff",
             target_type="conversation", target_id=str(conversation_id), created_at=now,
             details={"customer_id": conversation.customer_id,
-                     "reason": str(previous_reason or "servicer_accept")[:64],
+                     "reason": str(reason or previous_reason or "servicer_accept")[:64],
                      "accepted_by": servicer_userid[:64]},
         ))
         await self._session.flush()
