@@ -23,11 +23,32 @@ cd "$REPO"
 STAGE="$REPO/.stage"
 mkdir -p "$STAGE"
 
-# 回复链路：模型调用、回复策略、会话编排与共用资料；依赖变化也算。
+# 回复链路：门禁运行器实际加载、能改变回复正文的模块，加上共用资料与依赖。
+# 2026-09-29 按用户要求收窄：原来整个 services/ 与 application.py 都算，改一个后台
+# 链接也要跑 20 分钟。清单由 reply_regression 的导入闭包减去基础设施得出，
+# tests/unit/test_release_scripts.py 会核对闭包里新增的模块有没有漏列。
 REPLY_PATHS=(
-  src/homestay_bot/integrations
-  src/homestay_bot/services
-  src/homestay_bot/application.py
+  src/homestay_bot/integrations/deepseek_client.py
+  src/homestay_bot/integrations/deepseek_delivery_rewriter.py
+  src/homestay_bot/integrations/deepseek_tourism.py
+  src/homestay_bot/integrations/tourism.py
+  src/homestay_bot/integrations/hostex_client.py
+  src/homestay_bot/services/answer_policy.py
+  src/homestay_bot/services/complaint_service.py
+  src/homestay_bot/services/context_retention.py
+  src/homestay_bot/services/conversation_service.py
+  src/homestay_bot/services/emergency_service.py
+  src/homestay_bot/services/fact_policy.py
+  src/homestay_bot/services/faq_candidate_context.py
+  src/homestay_bot/services/guest_reply_policy.py
+  src/homestay_bot/services/guest_verification.py
+  src/homestay_bot/services/knowledge_evidence_policy.py
+  src/homestay_bot/services/knowledge_service.py
+  src/homestay_bot/services/message_service.py
+  src/homestay_bot/services/model_budget.py
+  src/homestay_bot/services/reply_plan.py
+  src/homestay_bot/services/stay_date_range.py
+  src/homestay_bot/domain/stay_status.py
   src/homestay_bot/tools/reply_regression.py
   tests/fixtures/guest_reply_scenarios.json
   tests/fixtures/guest_reply_regression_baseline.json

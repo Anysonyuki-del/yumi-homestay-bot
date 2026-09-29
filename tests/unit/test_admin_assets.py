@@ -47,85 +47,18 @@ def test_no_javascript_navigation_reaches_every_core_admin_page() -> None:
         assert label in fallback
 
 
-def test_admin_javascript_contract_covers_accessible_progressive_enhancements() -> None:
-    """静态契约锁定抽屉、危险确认、脏表单和可感知提交状态。"""
-    script = (ASSET_ROOT / "static/admin.js").read_text()
+def test_admin_css_keeps_contrast_and_avoids_blanket_rules() -> None:
+    """主色对比度够用，不用 transition: all，页面不靠隐藏横向溢出掩盖排版问题。
 
-    assert 'event.key === "Escape"' in script
-    assert 'classList.add("js-enabled")' in script
-    assert "syncDrawerAccessibility" in script
-    assert "drawer.inert = !shouldExpose" in script
-    assert "focusBeforeDrawer" in script
-    assert "focusBeforeDrawer.focus()" in script
-    assert "window.confirm" in script
-    assert 'form[data-confirm], form[data-danger-confirm]' in script
-    assert 'addEventListener("beforeunload"' in script
-    assert "const dirtyForms = new Set();" in script
-    assert "dirtyForms.add(form)" in script
-    assert "dirtyForms.delete(form)" in script
-    assert "dirtyForms.size === 0" in script
-    assert 'form.dataset.submitting === "true"' in script
-    assert "setSubmittingState" in script
-    assert 'submitter.dataset.originalLabel' in script
-    assert 'submitter.textContent = "正在处理…"' in script
-    assert 'submitter.setAttribute("aria-busy", "true")' in script
-    assert 'form.setAttribute("aria-busy", "true")' in script
-    assert "event.preventDefault()" in script
-    assert 'workspace.setAttribute("aria-hidden", "true")' in script
-    assert "workspace.inert = true" in script
-    assert 'document.body.classList.add("drawer-is-open")' in script
-    assert 'workspace.removeAttribute("aria-hidden")' in script
-    assert "workspace.inert = false" in script
-    assert 'document.body.classList.remove("drawer-is-open")' in script
-    assert 'window.matchMedia("(min-width: 1024px)")' in script
-    assert 'window.matchMedia("(prefers-reduced-motion: reduce)")' in script
-    assert "drawerTransitionToken" in script
-    assert "finishDrawerClose" in script
-    assert 'addEventListener("transitionend"' in script
-    assert "requestAnimationFrame" in script
-    assert 'submitter.classList.add("is-submitting")' in script
-    assert "if (!event.defaultPrevented) dirtyForms.delete(form);" in script
-
-
-def test_admin_css_contract_covers_mobile_first_accessibility_and_breakpoints() -> None:
-    """静态契约锁定移动默认布局、四档断点和无障碍降级。"""
+    抽屉、提交状态、减少动效等交互由 tests/browser 在真实浏览器里验证；这里只留
+    浏览器测不到的计算与全局约束，不再逐条复述样式源码。
+    """
     css = (ASSET_ROOT / "static/app.css").read_text()
 
-    assert "transform: translateX(-105%)" in css
-    for width in (375, 768, 1024, 1440):
-        assert f"@media (min-width: {width}px)" in css
-    assert "--primary: #2563eb" in css
-    assert "--sidebar-width: 176px" in css
-    assert "--topbar-height: 56px" in css
-    assert ":focus-visible { outline: 3px solid var(--primary)" in css
-    assert "@media (prefers-reduced-motion: reduce)" in css
-    assert "--motion-fast: 160ms" in css
-    assert "--motion-panel: 180ms" in css
-    assert "@keyframes page-enter" in css
-    assert "@keyframes status-enter" in css
-    assert "@keyframes submit-spin" in css
-    assert ".drawer-backdrop.is-visible" in css
-    assert "button.is-submitting::before" in css
-    assert "transition: all" not in css
-    reduced_motion = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
-    assert "animation: none !important" in reduced_motion
-    assert "transition: none !important" in reduced_motion
-    assert "body {" in css and "overflow-x: clip" not in css and "overflow-x: hidden" not in css
-    assert "overflow-wrap: anywhere" in css
-    assert "pre, code" in css
-    assert "overflow: auto" in css
-    assert "white-space: pre-wrap" in css
-    assert "overscroll-behavior" in css
     assert _contrast_ratio("#2563eb", "#f7f8fa") >= 3
     assert _contrast_ratio("#2563eb", "#ffffff") >= 3
-    assert ".data-table" in css
-    assert ".app-version" in css
-    assert "font-variant-numeric: tabular-nums" in css
-    assert ".page-content > .panel + .panel" in css
-    assert "detail-section + .detail-section" in css
-    assert " .panel + .panel" not in css.replace(
-        ".page-content > .panel + .panel", ""
-    )
+    assert "transition: all" not in css
+    assert "overflow-x: clip" not in css and "overflow-x: hidden" not in css
 
 
 def test_narrow_room_cards_switch_to_the_mobile_timeline() -> None:

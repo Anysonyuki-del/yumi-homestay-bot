@@ -820,19 +820,6 @@ async def test_facility_scope_and_reply_share_the_existing_model_response() -> N
     assert decision.facility_issue is not None
     assert decision.facility_issue.scope == "homestay_facility"
     assert len(client.chat.completions.requests) == 1
-    system_prompt = client.chat.completions.requests[0]["messages"][0]["content"]
-    assert "官方客服渠道" in system_prompt
-    assert "私人物品" in system_prompt
-    assert "外部场所" in system_prompt
-    assert "不追问" in system_prompt
-    assert "facility_advice" in system_prompt
-    assert "条件句" in system_prompt
-    assert "无法正常使用" in system_prompt
-    assert "住宿环境异常" in system_prompt
-    assert "影响当前入住" in system_prompt
-    assert "查看或维修" in system_prompt
-    assert "不得拆卸" in system_prompt
-    assert "不得猜测故障原因" in system_prompt
     facility_schema = deepseek_client_module.assistant_decision_schema()["properties"][
         "facility_issue"
     ]
@@ -1276,8 +1263,11 @@ async def test_tourism_reply_is_refined_for_guest_readability() -> None:
 
 
 @pytest.mark.asyncio
-async def test_general_prompt_requires_homestay_host_tone_without_promises() -> None:
-    """普通模型入口应直接生成亲和管家表达，且不得为亲和感编造承诺。"""
+async def test_general_prompt_does_not_ask_for_a_tool_the_model_lacks() -> None:
+    """联网搜索在调用主模型前已分流，主模型没有该工具，提示词不能要求调用它。
+
+    语气、称呼等措辞由真实模型回归门禁按实际回复把关，这里不再逐句复述提示词。
+    """
     client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
@@ -1294,14 +1284,7 @@ async def test_general_prompt_requires_homestay_host_tone_without_promises() -> 
     )
 
     prompt = client.chat.completions.requests[0]["messages"][0]["content"]
-    assert "温暖、简洁、可靠的民宿管家口吻" in prompt
-    assert "使用“您”" in prompt
-    assert "不得使用“亲亲”" in prompt
-    assert "不得为了亲和而改变日期、数字、价格、房态或安全步骤" in prompt
-    assert "不得承诺处理结果、完成时间或人员已经出发" in prompt
-    # 联网搜索在调用主模型之前已按时效分流，主模型没有该工具，提示词不能要求调用它。
     assert "旅游联网搜索" not in prompt
-    assert "本轮没有查询结果时不给出具体数值或安排" in prompt
 
 
 @pytest.mark.asyncio
