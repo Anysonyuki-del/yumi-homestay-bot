@@ -347,6 +347,28 @@ class WeComApiClient:
         response.raise_for_status()
         self._raise_for_error(response.json())
 
+    async def send_internal_markdown(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        content: str,
+    ) -> None:
+        """发送员工 markdown 应用消息：加粗、引用、灰字和可点链接，企业微信客户端可读性更好。"""
+        access_token = await self._get_access_token(self._agent_secret)
+        response = await self._client.post(
+            "/cgi-bin/message/send",
+            params={"access_token": access_token},
+            json={
+                "touser": "|".join(employee_userids),
+                "msgtype": "markdown",
+                "agentid": agent_id,
+                "markdown": {"content": content},
+            },
+        )
+        response.raise_for_status()
+        self._raise_for_error(response.json())
+
     async def send_internal_card(
         self,
         *,

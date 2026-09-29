@@ -14,6 +14,12 @@ from homestay_bot.domain.enums import (
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
+
+# 低风险人工接管空闲多久后自动交还机器人。用户 2026-09-28 从 30 分钟改为 5 分钟；
+# 判定由每分钟一次的交还巡检执行（application._run_conversation_release_loop），
+# 员工通知里的交还提示也引用这个数。
+IDLE_RELEASE_MINUTES = 5
+
 @dataclass(frozen=True, slots=True)
 class TaskLifecycleCandidate:
     """保存任务失效判断所需的最小非敏感投影。"""

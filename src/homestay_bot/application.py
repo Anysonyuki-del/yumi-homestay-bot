@@ -46,6 +46,7 @@ from homestay_bot.domain.models import (
 )
 from homestay_bot.domain.runtime_config import RuntimeConfigSnapshot, RuntimeConfigView
 from homestay_bot.domain.schemas import ConfirmBookingCommand
+from homestay_bot.domain.task_lifecycle import IDLE_RELEASE_MINUTES
 from homestay_bot.integrations.hostex_client import HostexClient
 from homestay_bot.integrations.tourism import WebSearchState
 from homestay_bot.integrations.wecom.api_client import (
@@ -83,10 +84,7 @@ from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
 from homestay_bot.repositories.lifecycle_reminders import (
     SQLAlchemyLifecycleReminderRepository,
 )
-from homestay_bot.repositories.operations import (
-    IDLE_RELEASE_MINUTES,
-    SQLAlchemyOperationsRepository,
-)
+from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
 from homestay_bot.repositories.runtime_config import (
     RuntimeConfigConflictError,
@@ -136,9 +134,10 @@ from homestay_bot.services.complaint_review_job import (
     SQLAlchemyComplaintMessageContext,
 )
 from homestay_bot.services.complaint_service import ComplaintService
-from homestay_bot.services.context_retention import ContextRetentionService
+from homestay_bot.services.context_retention import ContextRetentionService, HandoverBrief
 from homestay_bot.services.conversation_service import (
     ConversationService,
+    describe_handoff_reason,
     format_employee_notification,
     resolve_notification_identity,
 )
@@ -733,6 +732,27 @@ class TransactionalOutboxWeCom:
                 "agent_id": agent_id,
                 "employee_userids": employee_userids,
                 "content": content,
+            },
+            dedupe_key=outbox_id,
+        )
+
+    async def send_internal_markdown(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        content: str,
+    ) -> None:
+        """事务内登记 markdown 员工通知；与文字通知同一作业类型，载荷带 markdown 标记。"""
+        outbox_id = self._outbox_id("internal")
+        await self._repository.enqueue(
+            "wecom_send_internal_text",
+            {
+                "outbox_id": outbox_id,
+                "agent_id": agent_id,
+                "employee_userids": employee_userids,
+                "content": content,
+                "markdown": True,
             },
             dedupe_key=outbox_id,
         )
@@ -3061,8 +3081,13 @@ async def _run_worker_loop(
                     client: WeComApiClient = cycle_wecom,
                 ) -> None:
                     """发送员工通知；连接失败或明确限流时才允许有限重试。"""
+                    send = (
+                        client.send_internal_markdown
+                        if payload.get("markdown")
+                        else client.send_internal_text
+                    )
                     try:
-                        await client.send_internal_text(
+                        await send(
                             agent_id=int(payload["agent_id"]),
                             employee_userids=list(payload["employee_userids"]),
                             content=str(payload["content"]),
@@ -3588,11 +3613,19 @@ async def _notify_conversation_release(
         today=now.astimezone(ZoneInfo("Asia/Shanghai")).date(),
         lock=False,
     )
-    room_name = (confirmed.get("room_number") or confirmed.get("property_title")
-                 if confirmed else None)
-    room = (f"房间：{room_name}；"
-            f"入住：{confirmed.get('check_in_date')}"
-            if confirmed else "房间与入住日期：尚未确认")
+    brief = (
+        await SQLAlchemyContextRepository(session).handover_brief(conversation.customer_id)
+        if conversation.customer_id is not None
+        else HandoverBrief()
+    )
+    stay = confirmed or brief.stay
+    room = (
+        f"{stay.get('room_number') or stay.get('property_title') or '待核实'} · "
+        f"{stay.get('check_in_date')} 入住"
+        if stay
+        else ""
+    )
+    pending = await SQLAlchemyOperationsRepository(session).latest_handoff_reason(conversation_id)
     async with registry.acquire() as bundle:
         # 与转人工通知共用取名：客服账号名、CRM 备注优先（1.46.0 起）。
         account, guest = await resolve_notification_identity(
@@ -3602,10 +3635,11 @@ async def _notify_conversation_release(
         )
         await TransactionalOutboxWeCom(
             session, source_message_id=f"release:{conversation_id}:{now.isoformat()}"
-        ).send_internal_text(
+        ).send_internal_markdown(
             agent_id=bundle.agent_id, employee_userids=list(bundle.duty_userids),
             content=format_employee_notification(
-                reason=f"员工空闲满{IDLE_RELEASE_MINUTES}分钟，会话已交还机器人",
+                # 原标题「员工空闲满 5 分钟」读起来像员工处理完了，实际是没人回复。
+                reason=f"已交还机器人：{IDLE_RELEASE_MINUTES} 分钟内没有管家回复",
                 account=account,
                 guest=guest,
                 room=room,
@@ -3613,9 +3647,14 @@ async def _notify_conversation_release(
                     f"{public_base_url}/employee/customers/{conversation.customer_id}"
                     "?tab=chat#chat-latest"
                 ),
-                original="巡检自动交还；原有任务状态不变。",
-                # 交还不涉及回复客人，不写「机器人已回复」。
+                original=(
+                    f"转人工原因「{describe_handoff_reason(pending) if pending else '未记录'}」，"
+                    "问题仍待处理；原有任务状态不变。"
+                ),
+                # 交还不涉及回复客人，不写「机器人已回」。
                 replied=None,
+                handover=brief.handover,
+                preferences=brief.preferences,
             ),
         )
 

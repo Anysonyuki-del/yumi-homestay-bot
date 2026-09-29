@@ -1739,11 +1739,14 @@ async def test_conversation_release_loop_runs_every_minute_and_commits(monkeypat
 
 @pytest.mark.asyncio
 async def test_release_notice_uses_handoff_identity_and_no_reply_line(monkeypatch) -> None:
-    """自动交还通知与转人工通知同一套取名（客服账号、CRM 备注优先），不写「机器人已回复」。
+    """自动交还通知与转人工通知同一套取名（CRM 备注优先），不写「机器人已回」，
+    写明转人工原因仍待处理，并附接手要点与客人偏好（2026-09-29 通知改版）。
 
     1.45.0 测试号：交还通知显示「微信客服」「微信客户」，末尾还有「机器人已回复：尚未回复客人」。
     """
     import contextlib
+
+    from homestay_bot.services.context_retention import HandoverBrief
 
     conversation = SimpleNamespace(
         id=1, open_kfid="wk-1", external_userid="wm-1", customer_id=42
@@ -1803,10 +1806,37 @@ async def test_release_notice_uses_handoff_identity_and_no_reply_line(monkeypatc
         def __init__(self, _session, *, source_message_id: str) -> None:
             """忽略来源编号。"""
 
-        async def send_internal_text(self, *, agent_id, employee_userids, content) -> None:
+        async def send_internal_markdown(self, *, agent_id, employee_userids, content) -> None:
             """记录正文。"""
             sent.append(content)
 
+    class ContextRepositoryStub:
+        """返回固定接手简报：一条要点、一条偏好、名下唯一订单。"""
+
+        def __init__(self, _session) -> None:
+            """忽略会话。"""
+
+        async def handover_brief(self, customer_id: int) -> HandoverBrief:
+            """返回固定简报。"""
+            assert customer_id == 42
+            return HandoverBrief(
+                handover=("客人提出讲价，已转人工",),
+                preferences=("客人对海鲜过敏",),
+                stay={"property_title": "合成江景房", "check_in_date": "2026-09-30"},
+            )
+
+    class OperationsRepositoryStub:
+        """返回最近一次转人工的原因代码。"""
+
+        def __init__(self, _session) -> None:
+            """忽略会话。"""
+
+        async def latest_handoff_reason(self, conversation_id: int) -> str:
+            """固定为讲价。"""
+            return "price"
+
+    monkeypatch.setattr(application, "SQLAlchemyContextRepository", ContextRepositoryStub)
+    monkeypatch.setattr(application, "SQLAlchemyOperationsRepository", OperationsRepositoryStub)
     monkeypatch.setattr(application, "SQLAlchemyConversationRepository", StayRepositoryStub)
     monkeypatch.setattr(application, "SQLAlchemyCustomerRepository", CustomerRepositoryStub)
     monkeypatch.setattr(application, "TransactionalOutboxWeCom", OutboxStub)
@@ -1820,18 +1850,26 @@ async def test_release_notice_uses_handoff_identity_and_no_reply_line(monkeypatc
     )
 
     assert len(sent) == 1
-    assert "客服账号：武汉市七号事务所客服" in sent[0]
+    assert sent[0].startswith("**已交还机器人：5 分钟内没有管家回复**")
     assert "客人备注：8.14-8.16《春和景明》" in sent[0]
-    assert "机器人已回复" not in sent[0]
-    assert "员工空闲满5分钟" in sent[0]
+    assert "合成江景房 · 2026-09-30 入住" in sent[0]
+    assert "转人工原因「价格协商」，问题仍待处理" in sent[0]
+    assert "> 客人提出讲价，已转人工" in sent[0] and "**客人偏好**：客人对海鲜过敏" in sent[0]
+    assert "机器人已回" not in sent[0]
 
 
 def test_employee_notification_omits_reply_line_only_when_not_applicable() -> None:
-    """replied=None 不写「机器人已回复」；空字符串仍按「尚未回复客人」写。"""
+    """replied=None 不写「机器人已回」；空字符串仍按「尚未回复客人」写。客人原话里的
+    markdown 链接和标签被换成全角，不能在员工端变成可点链接。"""
     from homestay_bot.services.conversation_service import format_employee_notification
 
     base = dict(
         reason="r", guest="客人：a", room="房间与入住日期：尚未确认", link="l", original="o"
     )
-    assert "机器人已回复" not in format_employee_notification(**base, replied=None)
-    assert "机器人已回复：尚未回复客人" in format_employee_notification(**base, replied="")
+    assert "机器人已回" not in format_employee_notification(**base, replied=None)
+    assert "机器人已回：尚未回复客人" in format_employee_notification(**base, replied="")
+    spoofed = format_employee_notification(
+        **{**base, "original": "[点我](https://evil.invalid)<font color=\"warning\">x</font>"},
+        replied=None,
+    )
+    assert "](https://evil.invalid)" not in spoofed and "<font color=\"warning\">" not in spoofed

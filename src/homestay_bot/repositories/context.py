@@ -25,6 +25,7 @@ from homestay_bot.domain.stay_status import is_current_stay
 from homestay_bot.services.context_retention import (
     ContextSummaryResult,
     CustomerModelContext,
+    HandoverBrief,
 )
 from homestay_bot.services.customer_memory_policy import (
     can_auto_activate_subject,
@@ -417,6 +418,35 @@ class SQLAlchemyContextRepository:
         await self._save_memory_candidates(customer_id, result, messages, now)
         await self._session.flush()
         return True
+
+    async def handover_brief(self, customer_id: int) -> HandoverBrief:
+        """给员工通知用的简报：接手要点逐行、最多 3 条生效偏好、唯一当前订单。
+
+        要点是最近一次整理的结果，可能略落后于最新消息；最新原话由通知单独给出。
+        名下有多张当前订单时不猜房间，stay 为空。
+        """
+        summary = await self.get_summary(customer_id)
+        handover = tuple(
+            line.strip().removeprefix("- ").strip()
+            for line in (summary.short_summary if summary else "").splitlines()
+            if line.strip() and line.strip() not in _EMPTY_EPISODES
+        )
+        preferences = tuple(
+            (
+                await self._session.scalars(
+                    select(CustomerMemoryItem.statement)
+                    .where(
+                        CustomerMemoryItem.customer_id == customer_id,
+                        CustomerMemoryItem.status == CustomerMemoryStatus.ACTIVE,
+                    )
+                    .order_by(CustomerMemoryItem.updated_at.desc(), CustomerMemoryItem.id.desc())
+                    .limit(3)
+                )
+            ).all()
+        )
+        orders = (await self.load_model_context(customer_id)).active_orders
+        stay: dict[str, object] | None = dict(orders[0]) if len(orders) == 1 else None
+        return HandoverBrief(handover=handover[:3], preferences=preferences, stay=stay)
 
     async def load_model_context(
         self, customer_id: int, *, query: str = ""

@@ -60,6 +60,7 @@ from homestay_bot.domain.stay_status import (
     is_excluded_stay_status,
 )
 from homestay_bot.domain.task_lifecycle import (
+    IDLE_RELEASE_MINUTES,
     TaskLifecycleCandidate,
     local_service_window_expires_at,
     manual_contact_expires_at,
@@ -80,9 +81,6 @@ def _wuhan_today() -> date:
 PURGED_MARK_RETENTION_DAYS = 180
 
 
-# 低风险人工接管空闲多久后自动交还机器人。用户 2026-09-28 从 30 分钟改为 5 分钟；
-# 判定由每分钟一次的交还巡检执行（application._run_conversation_release_loop）。
-IDLE_RELEASE_MINUTES = 5
 
 
 class SQLAlchemyOperationsRepository:

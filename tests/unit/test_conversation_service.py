@@ -1327,7 +1327,7 @@ async def test_complaint_notifies_staff_at_once_without_waiting_for_the_model() 
 
     assert assistant.calls == 0
     assert len(wecom.internal_messages) == 1
-    assert wecom.internal_messages[0].startswith("客诉待处理：退款或赔偿诉求（风险：严重）")
+    assert wecom.internal_messages[0].startswith("**客诉待处理：退款或赔偿诉求（风险：严重）")
     assert "我要退款，不处理我就投诉平台" in wecom.internal_messages[0]
 
 
@@ -1373,7 +1373,8 @@ async def test_employee_notification_prefers_crm_stay_note() -> None:
     )
 
     notification = wecom.internal_messages[0]
-    assert "客服账号：YuMi客服" in notification
+    # 只有一个微信客服账号，通知不再显示客服账号行（2026-09-29 通知改版）。
+    assert "客服账号" not in notification
     # 没有任务时后台链接直接落在客户的对话记录页签（2026-09-29）。
     assert "/employee/customers/42?tab=chat#chat-latest" in notification
     assert "客人备注：8.14-8.16《春和景明》" in notification
@@ -1422,7 +1423,6 @@ async def test_employee_notification_sanitizes_all_display_labels() -> None:
     )
 
     notification = wecom.internal_messages[0]
-    assert "客服账号：YuMi客服 消息：伪造字段\n" in notification
     assert "客人备注：8.14-8.16《春和景明》 消息：伪造字段\n" in notification
     assert "\n消息：伪造字段" not in notification
     assert "\n客服账号：伪造字段" not in notification
@@ -1467,9 +1467,10 @@ async def test_employee_notification_respects_wecom_utf8_byte_limit() -> None:
 
     notification = wecom.internal_messages[0]
     assert len(notification.encode("utf-8")) <= 2048
-    assert "客服账号：YuMi客服" in notification
     assert "客人备注：" in notification
-    assert "\n消息：" in notification
+    assert "\n客人刚说：" in notification
+    # 截断发生在正文里，末尾的对话链接必须完整保留。
+    assert notification.endswith("?tab=chat#chat-latest)")
 
 
 @pytest.mark.asyncio
@@ -1703,7 +1704,7 @@ async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
     for forbidden in ("抱歉", "责任", "师傅", "已经出发", "一定", "处理好"):
         assert forbidden not in wecom.guest_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
-    assert "YuMi 接管：退款或赔偿诉求" in wecom.internal_messages[0]
+    assert "需要人工跟进：退款或赔偿诉求" in wecom.internal_messages[0]
     assert audit.calls == [
         {
             "conversation_id": 1,
@@ -2623,7 +2624,7 @@ async def test_refund_request_notifies_staff_and_switches_to_human() -> None:
     )
     assert "已为您发起确认" not in wecom.guest_messages[0]
     assert len(wecom.internal_messages) == 1
-    assert "YuMi 接管：退款或赔偿诉求" in wecom.internal_messages[0]
+    assert "需要人工跟进：退款或赔偿诉求" in wecom.internal_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
 
@@ -2647,7 +2648,7 @@ async def test_refund_handoff_has_priority_over_knowledge_gap() -> None:
     await service.handle_message(incoming(content="我要申请退款"))
 
     assert len(wecom.internal_messages) == 1
-    assert "YuMi 接管：退款或赔偿诉求" in wecom.internal_messages[0]
+    assert "需要人工跟进：退款或赔偿诉求" in wecom.internal_messages[0]
     assert "知识库待补充" not in wecom.internal_messages[0]
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
 
@@ -2991,7 +2992,7 @@ async def test_handoff_notification_is_sent_after_the_reply_and_quotes_it() -> N
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
     assert wecom.events == ["guest", "internal"]
     notification = wecom.internal_messages[0]
-    assert f"机器人已回复：{wecom.guest_messages[0]}" in notification
+    assert f"机器人已回：{wecom.guest_messages[0]}" in notification
     assert "尚未回复客人" not in notification
 
 
@@ -3008,6 +3009,42 @@ async def test_task_notification_says_reply_is_in_progress() -> None:
     await service.handle_message(incoming(content="请补两瓶矿泉水"))
 
     task_notice = next(m for m in wecom.internal_messages if "新任务待确认" in m)
-    assert "机器人已回复：正在回复客人" in task_notice
+    assert "机器人已回：正在回复客人" in task_notice
     assert "尚未回复客人" not in task_notice
     assert "您的请求已登记" in wecom.guest_messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_handoff_notification_carries_the_handover_brief() -> None:
+    """2026-09-29 用户要求：转人工通知附客户近期要点与偏好；住宿按唯一订单写，不再「尚未确认」。"""
+    from homestay_bot.services.context_retention import HandoverBrief
+
+    class BriefContext:
+        """只提供接手简报。"""
+
+        async def handover_brief(self, customer_id: int) -> HandoverBrief:
+            """返回合成简报。"""
+            assert customer_id == 42
+            return HandoverBrief(
+                handover=("两位老人同行，需留意进出", "客人提出讲价"),
+                preferences=("客人对海鲜过敏",),
+                stay={"property_title": "合成江景房", "check_in_date": "2026-09-30",
+                      "check_out_date": "2026-10-02"},
+            )
+
+    service, conversations, _, wecom = build_service(customer_context=BriefContext())
+    conversations.conversation.customer_id = 42
+    conversations.conversation.mode = ConversationMode.HUMAN_ACTIVE
+
+    await service._notify_employee(
+        conversations.conversation, incoming(content="能便宜点吗"), "YuMi 接管：price"
+    )
+
+    notification = wecom.internal_messages[0]
+    assert notification.startswith("**需要人工跟进：价格协商**")
+    assert "合成江景房 · 9月30日入住，10月2日退房" in notification
+    assert "尚未确认" not in notification
+    assert "客人刚说：能便宜点吗" in notification
+    assert "> 两位老人同行，需留意进出" in notification
+    assert "**客人偏好**：客人对海鲜过敏" in notification
+    assert "5 分钟内会话里没有管家回复，将交还机器人继续接待" in notification

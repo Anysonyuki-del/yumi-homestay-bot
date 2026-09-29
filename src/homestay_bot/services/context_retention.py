@@ -60,6 +60,15 @@ class CustomerModelContext:
     resolved_stay: dict[str, object] | None = None
 
 
+@dataclass(frozen=True)
+class HandoverBrief:
+    """员工接手通知用的客户简报：接手要点、已生效偏好、名下唯一当前订单。"""
+
+    handover: tuple[str, ...] = ()
+    preferences: tuple[str, ...] = ()
+    stay: dict[str, object] | None = None
+
+
 class ContextRepository(Protocol):
     """定义摘要维护和模型上下文读取所需的持久化操作。"""
 

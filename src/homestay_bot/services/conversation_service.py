@@ -23,6 +23,7 @@ from homestay_bot.domain.models import (
     Customer,
 )
 from homestay_bot.domain.schemas import BookingRequest
+from homestay_bot.domain.task_lifecycle import IDLE_RELEASE_MINUTES
 from homestay_bot.integrations.deepseek_client import (
     AssistantDecision,
     AssistantUnavailableError,
@@ -40,7 +41,7 @@ from homestay_bot.services.answer_policy import (
 from homestay_bot.services.answer_policy import (
     handoff_reason as determine_handoff_reason,
 )
-from homestay_bot.services.context_retention import CustomerModelContext
+from homestay_bot.services.context_retention import CustomerModelContext, HandoverBrief
 from homestay_bot.services.emergency_service import (
     EmergencyClassification,
     EmergencyService,
@@ -72,25 +73,65 @@ from homestay_bot.services.reply_plan import (
 )
 from homestay_bot.worker import DeferredRetryJobError
 
+# 企业微信应用 markdown 消息正文上限 2048 字节（UTF-8）。
+_MARKDOWN_LIMIT_BYTES = 2048
+# 客人原话、摘要等外部文本里的 markdown 与标签符号换成全角：客人写的
+# 「[点我](链接)」「<font>」不能在员工端变成可点链接或伪造颜色。
+_MARKDOWN_NEUTRALIZE = str.maketrans({"[": "［", "]": "］", "<": "＜", ">": "＞", "`": "｀"})
+
+
+def _clip_utf8(value: str, budget: int) -> str:
+    """按 UTF-8 字节截断且不切断汉字；超出时补省略号。"""
+    encoded = value.encode()
+    if len(encoded) <= budget:
+        return value
+    return encoded[: max(0, budget - 3)].decode("utf-8", errors="ignore") + "…"
+
+
+def _markdown_safe(value: str) -> str:
+    """外部文本进 markdown 前去掉换行与可被解释的符号。"""
+    return " ".join(value.split()).translate(_MARKDOWN_NEUTRALIZE)
+
 
 def format_employee_notification(
     *, reason: str, guest: str, room: str, link: str, original: str,
     replied: str | None = "尚未回复客人", account: str = "微信客服",
+    handover: Sequence[str] = (), preferences: Sequence[str] = (),
+    footer: str = "",
 ) -> str:
-    """会话转交和自动交还共用六字段格式；先保留定位信息，再按字节平分摘要。
+    """员工通知的企业微信 markdown 正文：先说要做什么，再给接手所需的最少信息。
 
-    `replied=None` 表示这类通知与回复客人无关（如自动交还），不写「机器人已回复」行。
+    2026-09-29 用户审查：原纯文字通知标题写「YuMi 接管」像是机器人接手了，客人原话
+    排在第六行，也不告诉员工会自动交还。现在顺序是：标题 → 客人与住宿 → 客人刚说
+    → 机器人已回 → 接手要点 → 客人偏好 → 提示 → 对话链接。`account` 保留参数以兼容
+    调用方，只有一个客服账号时不再显示。`room` 为空时整行省略。
+    `replied=None` 表示这类通知与回复客人无关（如自动交还），不写「机器人已回」行。
     """
-    def clip(value: str, budget: int) -> str:
-        """UTF-8 截断不切断汉字，输出永不超过平台上限。"""
-        return value.encode()[:budget].decode("utf-8", errors="ignore")
-    prefix = (f"{clip(reason, 300)}\n客服账号：{clip(account, 240)}\n{clip(guest, 240)}"
-              f"\n{clip(room, 240)}\n后台：{clip(link, 400)}")
-    budget = max(0, 2048 - len(prefix.encode()) - 60) // 2
-    text = f"{prefix}\n消息：{clip(original, budget)}"
-    if replied is None:
-        return text
-    return f"{text}\n机器人已回复：{clip(replied or '尚未回复客人', budget)}"
+    del account  # 只有一个微信客服账号，这一行对员工没有信息量。
+    lines = [f"**{_clip_utf8(_markdown_safe(reason), 200)}**"]
+    lines.append(_clip_utf8(_markdown_safe(guest), 160))
+    if room:
+        lines.append(_clip_utf8(_markdown_safe(room), 160))
+    tail: list[str] = []
+    if handover:
+        tail.append("**接手要点**")
+        tail.extend(f"> {_clip_utf8(_markdown_safe(item), 240)}" for item in handover[:3])
+    if preferences:
+        tail.append(
+            "**客人偏好**："
+            + _clip_utf8("；".join(_markdown_safe(item) for item in preferences[:3]), 240)
+        )
+    if footer:
+        tail.append(f'<font color="comment">{_clip_utf8(_markdown_safe(footer), 200)}</font>')
+    tail.append(f"[查看对话]({link})")
+    fixed = "\n".join([*lines, *tail]).encode()
+    # 剩余字节平分给客人原话和机器人回复，整条永不超过平台上限。
+    budget = max(60, (_MARKDOWN_LIMIT_BYTES - len(fixed) - 80) // (1 if replied is None else 2))
+    lines.append(f"客人刚说：{_clip_utf8(_markdown_safe(original), budget)}")
+    if replied is not None:
+        lines.append(f"机器人已回：{_clip_utf8(_markdown_safe(replied or '尚未回复客人'), budget)}")
+    text = "\n".join([*lines, *tail])
+    return _clip_utf8(text, _MARKDOWN_LIMIT_BYTES)
 
 
 async def load_notification_names(
@@ -188,6 +229,23 @@ _EMERGENCY_CATEGORY_LABELS = {
     "violence": "人身安全威胁",
     "access": "无法进门",
 }
+
+
+def describe_handoff_reason(text: str) -> str:
+    """把转人工原因代码（price、refund、emergency 类别等）换成员工能读的中文。
+
+    转人工通知和自动交还通知共用；交还通知读的是审计里记下的原始代码。
+    """
+    labels = {
+        **_COMPLAINT_REASON_LABELS, **_EMERGENCY_CATEGORY_LABELS,
+        "manual_request_or_media": "客人请求人工协助",
+        "assistant_unavailable": "问答服务暂时不可用",
+        "early_check_in": "提前入住申请", "price": "价格协商",
+        "servicer_reply": "员工正在接待",
+    }
+    for code, label in labels.items():
+        text = re.sub(rf"(?<![a-z_]){re.escape(code)}(?![a-z_])", label, text)
+    return text
 logger = logging.getLogger(__name__)
 
 
@@ -401,6 +459,28 @@ class ImageChainSenderPort(Protocol):
         stale_exempt: bool = False,
     ) -> str | None:
         """只登记第一段文字，其余文字段和图片依次在前一条发送成功后入队。"""
+
+
+@runtime_checkable
+class MarkdownNotifierPort(Protocol):
+    """能发 markdown 员工通知的发送器（生产事务 outbox）。"""
+
+    async def send_internal_markdown(
+        self,
+        *,
+        agent_id: int,
+        employee_userids: list[str],
+        content: str,
+    ) -> None:
+        """登记一条 markdown 员工通知。"""
+
+
+@runtime_checkable
+class HandoverBriefPort(Protocol):
+    """读取员工接手通知用的客户简报（接手要点、偏好、唯一当前订单）。"""
+
+    async def handover_brief(self, customer_id: int) -> HandoverBrief:
+        """返回客户简报。"""
 
 
 class WeComIdentityPort(Protocol):
@@ -2074,36 +2154,51 @@ class ConversationService:
             )
             or "新任务待确认"
         )
-        # 原因与链接优先，原话和实际已登记回复分别限额，不能把排队说成已读。
-        labels = {
-            **_COMPLAINT_REASON_LABELS, **_EMERGENCY_CATEGORY_LABELS,
-            "manual_request_or_media": "客人请求人工协助",
-            "assistant_unavailable": "问答服务暂时不可用",
-            "early_check_in": "提前入住申请", "price": "价格协商",
-            "servicer_reply": "员工正在接待",
-        }
-        for code, label in labels.items():
-            reason_label = re.sub(rf"(?<![a-z_]){re.escape(code)}(?![a-z_])", label, reason_label)
-        location = "房间与入住日期：尚未确认"
+        reason_label = describe_handoff_reason(reason_label)
+        # 「YuMi 接管」读起来像机器人接手了，实际是请员工接手（2026-09-29 用户审查）。
+        reason_label = re.sub(r"^YuMi 接管[:：]\s*", "需要人工跟进：", reason_label)
+        reason_label = reason_label.replace("普通人工接管", "需要人工跟进：客人要求人工")
+        brief = HandoverBrief()
+        if conversation.customer_id is not None and isinstance(
+            self._customer_context, HandoverBriefPort
+        ):
+            brief = await self._customer_context.handover_brief(conversation.customer_id)
+        stay: dict[str, Any] | None = None
         if isinstance(self._conversations, StayConfirmationPort):
             stay = await self._conversations.get_confirmed_stay(
                 conversation.id, today=datetime.now(ZoneInfo("Asia/Shanghai")).date(),
                 lock=False,
             )
-            if stay:
-                room_name = stay.get("room_number") or stay.get("property_title") or "待核实"
-                location = (f"房间：{room_name}；"
-                            f"入住：{stay.get('check_in_date')}，退房：{stay.get('check_out_date')}")
+        # 没有客人确认的住宿时用名下唯一当前订单；此前只认确认过的，备注写着订单
+        # 下一行却是「房间与入住日期：尚未确认」，前后矛盾。两者都没有就不写这一行。
+        stay = stay or brief.stay
+        location = ""
+        if stay:
+            room_name = stay.get("room_number") or stay.get("property_title") or "待核实"
+            location = (f"{room_name} · {_guest_date_zh(stay.get('check_in_date'))}入住，"
+                        f"{_guest_date_zh(stay.get('check_out_date'))}退房")
+        footer = (
+            f"{IDLE_RELEASE_MINUTES} 分钟内会话里没有管家回复，将交还机器人继续接待。"
+            if conversation.mode is ConversationMode.HUMAN_ACTIVE
+            else ""
+        )
         base = self._approval_base_url.rstrip("/")
         # 没有任务时直接进客户的对话记录页签并滚到最新消息，员工接手前能先看完上下文。
         link = (f"{base}/employee/tasks/{self._notification_task_id}"
                 if self._notification_task_id else
                 f"{base}/employee/customers/{conversation.customer_id}?tab=chat#chat-latest")
-        await self._wecom.send_internal_text(
+        content = format_employee_notification(
+            reason=reason_label, account=customer_service_name, guest=display_identity,
+            room=location, link=link, original=" ".join(message.content.split()),
+            replied=self._last_guest_reply if replied is None else replied,
+            handover=brief.handover, preferences=brief.preferences, footer=footer,
+        )
+        send = (
+            self._wecom.send_internal_markdown
+            if isinstance(self._wecom, MarkdownNotifierPort)
+            else self._wecom.send_internal_text
+        )
+        await send(
             agent_id=self._agent_id, employee_userids=self._duty_employee_userids,
-            content=format_employee_notification(
-                reason=reason_label, account=customer_service_name, guest=display_identity,
-                room=location, link=link, original=" ".join(message.content.split()),
-                replied=self._last_guest_reply if replied is None else replied,
-            ),
+            content=content,
         )
