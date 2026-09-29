@@ -1,9 +1,12 @@
+
 """部署前真实模型回归的判定逻辑：只测纯函数与替身工具，不调用模型。"""
 
 import asyncio
 import json
 from datetime import UTC, date
 from pathlib import Path
+
+import pytest
 
 from homestay_bot.tools import reply_regression as rr
 
@@ -288,3 +291,25 @@ def test_mixed_weather_and_availability_keeps_inventory_route() -> None:
         )
         == "tool_availability"
     )
+
+
+def test_scoped_gate_only_judges_scenarios_it_ran() -> None:
+    """按范围运行：范围外的不退步场景没跑不算退步、已知未通过不会被纳入；范围内的
+    退步照样拦下。写错的场景编号或类别直接报错，不能静默少跑（2026-09-30）。"""
+    scenarios = {
+        "W-天气": {"category": "live_search"},
+        "K-退房": {"category": "knowledge_direct"},
+        "K-早餐": {"category": "knowledge_direct"},
+    }
+    baseline = {"must_pass": ["W-天气", "K-退房"], "known_failures": {"K-早餐": "x"}}
+    scope = rr.resolve_scope("live_search", scenarios)
+
+    passed = rr.gate_verdict(baseline, {"W-天气": [True]}, scenarios, scope)
+    failed = rr.gate_verdict(baseline, {"W-天气": [False, False, True]}, scenarios, scope)
+
+    assert scope == {"W-天气"}
+    assert passed["passed"] and passed["newly_stable"] == []
+    assert not failed["passed"] and failed["regressions"] == ["W-天气"]
+    assert rr.resolve_scope("", scenarios) is None
+    with pytest.raises(ValueError):
+        rr.resolve_scope("W-不存在", scenarios)

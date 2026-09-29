@@ -6,6 +6,13 @@
 #   DEPLOY_HOST、DEPLOY_KEY 由本机部署脚本传入，本脚本不写死、不入库任何地址或密钥。
 #   可选：REPLY_GATE_PREVIOUS_TAG（默认取标签之前最近的 v* 标签）、
 #         REPLY_GATE_CONTAINER（默认 yumi-homestay-bot-api-1）。
+#   范围（2026-09-30 用户要求：跑任何测试前先判断有没有必要）：
+#         REPLY_GATE_SCOPE=all（默认，全量）
+#                         | tourism（联网类场景 + 上次门禁里实际走过联网查询的场景）
+#                         | skip（不跑）
+#                         | 逗号分隔的场景编号或类别；
+#         非全量必须同时给 REPLY_GATE_SCOPE_REASON，写进摘要，发布记录照抄。
+#         问题分类、知识检索、主模型提示或公共流程有改动时一律全量。
 # 退出码：0 通过或无需运行；1 不通过；其他 无法运行，按不通过处理。
 # 产出：.stage/reply-gate-<标签>.json（完整结果）、.md（发版记录摘要）、
 #       .baseline.json（纳入新通过场景后的基线，发布后随现场记录提交）。
@@ -73,6 +80,44 @@ else
   echo "找不到上一个版本标签，按改了回复链路处理"
 fi
 
+SCOPE="${REPLY_GATE_SCOPE:-all}"
+ONLY=""
+if [ "$SCOPE" != "all" ]; then
+  : "${REPLY_GATE_SCOPE_REASON:?按范围运行门禁必须写明 REPLY_GATE_SCOPE_REASON}"
+  echo "门禁范围：$SCOPE（理由：$REPLY_GATE_SCOPE_REASON）"
+fi
+case "$SCOPE" in
+  all) ;;
+  skip)
+    echo "REPLY_GATE_SKIPPED_BY_JUDGMENT：$REPLY_GATE_SCOPE_REASON"
+    printf -- '- 门禁：按判断跳过（%s）；理由：%s\n' "$TAG" "$REPLY_GATE_SCOPE_REASON" \
+      > "$STAGE/reply-gate-$TAG.md"
+    exit 0
+    ;;
+  tourism)
+    # 联网问题不只在两个联网类别里：问距离、问位置的知识题也会走联网查询，
+    # 所以再并上一次门禁结果里真实调用过联网查询的场景。
+    PREV_RESULT="$(ls -t "$STAGE"/reply-gate-v*.json 2>/dev/null \
+      | grep -v -e '\.baseline\.json$' -e "reply-gate-$TAG\.json$" | head -1 || true)"
+    ONLY="$(git show "$TAG:tests/fixtures/guest_reply_scenarios.json" \
+      | python3 -c '
+import json, sys
+fixture = json.load(sys.stdin)
+ids = {s["id"] for s in fixture["scenarios"] if s.get("category") in ("live_search", "stable_tourism")}
+if len(sys.argv) > 1 and sys.argv[1]:
+    prev = json.load(open(sys.argv[1], encoding="utf-8"))
+    for sid, recs in prev.get("records", {}).items():
+        # 联网查询记在 traces（如 ["tourism_search"]），tools 只记业务工具。
+        if any("tourism_search" in (r.get("traces") or []) for r in recs):
+            ids.add(sid)
+known = {s["id"] for s in fixture["scenarios"]}
+print(",".join(sorted(ids & known)))
+' "$PREV_RESULT")"
+    echo "联网相关场景（依据：场景类别${PREV_RESULT:+ + $(basename "$PREV_RESULT")}）：$ONLY"
+    ;;
+  *) ONLY="$SCOPE" ;;
+esac
+
 SSH_OPTS=(-i "$DEPLOY_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new
   -o SendEnv=none -o ServerAliveInterval=30)
 REMOTE_DIR="/tmp/yumi-reply-gate-${TAG}-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -98,7 +143,7 @@ for file in cand.tgz fixture.json baseline.json; do
   scp -q "${SSH_OPTS[@]}" "$WORK/$file" "$DEPLOY_HOST:$REMOTE_DIR/$file"
 done
 
-echo "开始真实模型回归（约 15 至 25 分钟）……"
+echo "开始真实模型回归（全量约 15 至 25 分钟）……"
 set +e
 ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" "set -e; D='$REMOTE_DIR'; C='$CONTAINER'
   mkdir \"\$D/cand\" && tar -xzf \"\$D/cand.tgz\" -C \"\$D/cand\" 2>/dev/null && rm \"\$D/cand.tgz\"
@@ -107,7 +152,7 @@ ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" "set -e; D='$REMOTE_DIR'; C='$CONTAINER'
   docker exec -u 0 \"\$C\" chown -R 10001 \"\$D\"
   docker exec -w \"\$D\" -e PYTHONPATH=\"\$D/cand\" \"\$C\" \
     python -m homestay_bot.tools.reply_regression gate \
-    --fixture fixture.json --baseline baseline.json --out result.json"
+    --fixture fixture.json --baseline baseline.json --out result.json --only '$ONLY'"
 status=$?
 set -e
 
@@ -119,9 +164,9 @@ if ! ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" "docker exec '$CONTAINER' cat '$REMOTE_
 fi
 
 # 摘要与新基线在本机生成；只用标准库，兼容系统自带的 Python 3.9。
-python3 - "$RESULT" "$TAG" "$STAGE" <<'PY'
+python3 - "$RESULT" "$TAG" "$STAGE" "$SCOPE" "${REPLY_GATE_SCOPE_REASON:-}" <<'PY'
 import json, sys
-path, tag, stage = sys.argv[1:4]
+path, tag, stage, scope, reason = sys.argv[1:6]
 data = json.load(open(path, encoding="utf-8"))
 verdict = data["verdict"]
 counts = verdict["counts"]
@@ -134,6 +179,9 @@ lines = [
     f"- 新纳入不退步集合：{'、'.join(verdict['newly_stable']) or '无'}",
     f"- 仍未通过的安全类场景：{'、'.join(verdict['safety_known_failures']) or '无'}",
 ]
+if counts.get("scoped"):
+    lines.insert(1, f"- 范围：{scope}，只跑 {counts['scenarios']} 个（共 {counts['total_scenarios']} 个）；"
+                    f"理由：{reason}")
 open(f"{stage}/reply-gate-{tag}.md", "w", encoding="utf-8").write("\n".join(lines) + "\n")
 json.dump(verdict["proposed_baseline"], open(f"{stage}/reply-gate-{tag}.baseline.json", "w",
           encoding="utf-8"), ensure_ascii=False, indent=1)

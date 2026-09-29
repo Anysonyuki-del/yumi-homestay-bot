@@ -142,27 +142,51 @@ def needs_rerun(scenario_id: str, outcomes: list[bool], baseline: dict[str, Any]
     return all(outcomes)
 
 
+def resolve_scope(tokens: str, scenarios: dict[str, dict[str, Any]]) -> set[str] | None:
+    """把 `--only` 的逗号列表解析成场景编号集合：可写场景编号或类别；空表示全量。
+
+    写错的编号或类别直接报错，不能静默少跑。
+    """
+    wanted = [token.strip() for token in tokens.split(",") if token.strip()]
+    if not wanted:
+        return None
+    categories = {item.get("category") for item in scenarios.values()}
+    unknown = [t for t in wanted if t not in scenarios and t not in categories]
+    if unknown:
+        raise ValueError(f"门禁范围里有不存在的场景或类别：{unknown}")
+    return {
+        scenario_id
+        for scenario_id, item in scenarios.items()
+        if scenario_id in wanted or item.get("category") in wanted
+    }
+
+
 def gate_verdict(
     baseline: dict[str, Any],
     outcomes: dict[str, list[bool]],
     scenarios: dict[str, dict[str, Any]],
+    scope: set[str] | None = None,
 ) -> dict[str, Any]:
     """按「只进不退」给出门禁结论，并附可直接提交的新基线。
 
-    - 不退步集合里任何场景退步：不通过；集合里缺少运行结果同样不通过。
+    `scope` 为按范围运行时实际跑的场景（2026-09-30 用户要求按改动影响决定测试范围）：
+    范围外的不退步场景没跑，不算退步；范围外的已知未通过也不会被纳入。
+    - 不退步集合里任何场景退步：不通过；范围内缺少运行结果同样不通过。
     - 已知未通过的场景稳定通过：不挡发布，写进新基线，从此纳入不退步集合。
     - 仍未通过的安全类场景：逐条列出，供发版记录引用。
     """
     must_pass = list(baseline["must_pass"])
+    in_scope = (lambda scenario_id: True) if scope is None else scope.__contains__
     regressions = [
         scenario_id
         for scenario_id in must_pass
-        if scenario_id not in outcomes or is_regressed(outcomes[scenario_id])
+        if in_scope(scenario_id)
+        and (scenario_id not in outcomes or is_regressed(outcomes[scenario_id]))
     ]
     newly_stable = [
         scenario_id
         for scenario_id in baseline.get("known_failures", {})
-        if is_stable_pass(outcomes.get(scenario_id, []))
+        if in_scope(scenario_id) and is_stable_pass(outcomes.get(scenario_id, []))
     ]
     still_failing = {
         scenario_id: reason
@@ -190,6 +214,8 @@ def gate_verdict(
             "first_run_passes": first_run_passes,
             "must_pass": len(must_pass),
             "known_failures": len(baseline.get("known_failures", {})),
+            "total_scenarios": len(scenarios),
+            "scoped": scope is not None,
         },
         "proposed_baseline": proposed,
     }
@@ -654,10 +680,12 @@ def _sha256(path: str) -> str:
 
 
 async def _gate(args: argparse.Namespace) -> int:
-    """门禁：全部场景跑一轮，必要的补跑到 3 次，按基线给出结论。"""
+    """门禁：范围内（默认全部）场景跑一轮，必要的补跑到 3 次，按基线给出结论。"""
     fixture = _load_json(args.fixture)
     baseline = _load_json(args.baseline)
     scenarios = {item["id"]: item for item in fixture["scenarios"]}
+    scope = resolve_scope(args.only, scenarios)
+    selected = [key for key in scenarios if scope is None or key in scope]
     global_forbidden = fixture.get("global_must_not_include", [])
     runner = _Runner(fixture, await _load_runtime_snapshot())
     records: dict[str, list[dict[str, Any]]] = {}
@@ -667,13 +695,13 @@ async def _gate(args: argparse.Namespace) -> int:
         """进度只打印到标准输出。"""
         print(text, flush=True)
 
-    await _run_rounds(runner, scenarios, global_forbidden, scenarios, records, outcomes, progress)
+    await _run_rounds(runner, scenarios, global_forbidden, selected, records, outcomes, progress)
     for _ in range(RERUN_TOTAL - 1):
-        rerun = [key for key in scenarios if needs_rerun(key, outcomes[key], baseline)]
+        rerun = [key for key in selected if needs_rerun(key, outcomes[key], baseline)]
         if not rerun:
             break
         await _run_rounds(runner, scenarios, global_forbidden, rerun, records, outcomes, progress)
-    verdict = gate_verdict(baseline, outcomes, scenarios)
+    verdict = gate_verdict(baseline, outcomes, scenarios, scope)
     _write_json(
         args.out,
         {
@@ -730,6 +758,9 @@ def main(argv: list[str] | None = None) -> int:
     gate.add_argument("--fixture", required=True)
     gate.add_argument("--baseline", required=True)
     gate.add_argument("--out", required=True)
+    gate.add_argument(
+        "--only", default="", help="只跑这些场景：逗号分隔的场景编号或类别；默认全部"
+    )
     base = commands.add_parser("baseline", help="测量首次基线")
     base.add_argument("--fixture", required=True)
     base.add_argument("--runs", type=int, default=RERUN_TOTAL)
