@@ -112,6 +112,7 @@
   "T-早餐",
   "W-天气",
   "W-天气房态",
+  "W-天气玩法",
   "W-小吃",
   "W-黄鹤楼"
  ],
@@ -162,8 +163,7 @@
   "U-麻将": "0/3 次通过；路由 knowledge→unconfirmed",
   "UN-代码": "0/3 次通过；路由 unrelated→model",
   "UN-股票EN": "0/3 次通过；缺 ['homestay', 'Wuhan', 'stay']，出现 我主要协助",
-  "W-推荐": "0/3 次通过；路由 stable_tourism→unconfirmed，缺 ['黄鹤楼', '东湖', '户部巷', '江汉路']，出现 尚未确认",
-  "W-天气玩法": "1.59.0 新增，尚未实测；门禁首次通过后移入 must_pass"
+  "W-推荐": "0/3 次通过；路由 stable_tourism→unconfirmed，缺 ['黄鹤楼', '东湖', '户部巷', '江汉路']，出现 尚未确认"
  },
  "removed": {},
  "ratchet_log": [
