@@ -3319,20 +3319,19 @@ async def test_stage_timing_sink_reports_live_search_without_refinement() -> Non
     assert stages == ["knowledge", "tourism_search"]
 
 
-@pytest.mark.asyncio
-async def test_live_question_mixed_with_other_question_answers_both() -> None:
-    """联网小句之外的问题不能被丢掉：天气去联网，「武汉最近有啥玩的」交给模型，而且模型
-    只看到剩下这句，不会在没有实时依据的情况下重答天气（2026-09-30 测试号只答了天气）。"""
-    searched: list[str] = []
+def _mixed_question_assistant(model_reply: str):
+    """一句多问的装配：天气组联网返回固定结果，主模型返回给定正文。"""
 
     class WeatherStub:
-        """天气组的联网结果。"""
+        """天气组的联网结果（带系统时效说明）。"""
 
-        async def search(self, *, question, **_kwargs) -> str:
-            searched.append(question)
-            return "明天武汉阴有阵雨，15～21℃。\n\n这是我今天帮您查到的最新预报。"
+        async def search(self, **_kwargs) -> str:
+            return (
+                "明天武汉阴有阵雨，15～21℃。\n\n这是我今天（9月30日）帮您查到的最新预报。"
+                "天气可能临时变化，出门前可以再看一眼实时情况。"
+            )
 
-    payload = {**decision_payload(), "reply_text": "可以去东湖绿道骑行，傍晚去江滩散步。"}
+    payload = {**decision_payload(), "reply_text": model_reply}
     client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
@@ -3341,6 +3340,16 @@ async def test_live_question_mixed_with_other_question_answers_both() -> None:
         model="deepseek-v4-flash",
         safety_hmac_key=b"test-key",
     )
+    return assistant, client
+
+
+@pytest.mark.asyncio
+async def test_mixed_question_is_answered_in_one_reply_from_live_results() -> None:
+    """方案二：实时结果放进信封，模型把玩法和天气写成一段；时效说明只在末尾出现一次，
+    天气不再原文重复一遍（2026-09-30 测试号：模型不知道天气另查，写了「暂时查不到」）。"""
+    assistant, client = _mixed_question_assistant(
+        "可以去东湖绿道骑行，傍晚去江滩。\n\n明天阴有阵雨，15～21℃，记得带伞。"
+    )
 
     decision = await assistant.respond(
         guest_identifier="wm-guest",
@@ -3348,10 +3357,30 @@ async def test_live_question_mixed_with_other_question_answers_both() -> None:
         messages=[{"role": "user", "content": "武汉最近有啥玩的，天气咋样"}],
     )
 
-    assert searched == ["天气咋样"]
     envelope = json.loads(client.chat.completions.requests[0]["messages"][-1]["content"])
-    assert "玩" in envelope["current_question"] and "天气" not in envelope["current_question"]
-    assert "东湖绿道" in decision.reply_text and "15～21℃" in decision.reply_text
+    assert "天气" in envelope["current_question"]
+    assert envelope["live_search_results"][0]["result"] == "明天武汉阴有阵雨，15～21℃。"
+    text = decision.reply_text
+    assert text.startswith("可以去东湖绿道骑行")
+    assert text.count("15～21℃") == 1 and text.count("帮您查到的") == 1
+
+
+@pytest.mark.asyncio
+async def test_mixed_question_falls_back_to_search_text_when_figures_differ() -> None:
+    """模型转述的温度不在查询结果里：删掉它写的含数字段落，改用查询原文；玩法照常保留。"""
+    assistant, _client = _mixed_question_assistant(
+        "可以去东湖绿道骑行，傍晚去江滩。\n\n明天阴有阵雨，16～22℃，记得带伞。"
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "武汉最近有啥玩的，天气咋样"}],
+    )
+
+    text = decision.reply_text
+    assert "16～22℃" not in text and "15～21℃" in text
+    assert "东湖绿道" in text and text.count("帮您查到的") == 1
 
 
 @pytest.mark.asyncio
