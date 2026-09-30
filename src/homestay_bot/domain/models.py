@@ -777,6 +777,23 @@ class ExternalRequest(Base):
     )
 
 
+class WeComSyncCursor(Base):
+    """每个微信客服账号的消息同步游标：回调同步与定时补拉都从这里接着读。
+
+    此前回调同步每次用空游标、补拉游标只在内存里，企业微信会把几天内的消息和事件
+    整批重放；消息按编号去重，事件没有去重，旧的「结束聊天」曾把刚接入的会话结束
+    （1.58.x 测试号）。游标只是企业微信给的不透明字符串，不含客人信息。
+    """
+
+    __tablename__ = "wecom_sync_cursors"
+
+    open_kfid: Mapped[str] = mapped_column(String(128), primary_key=True)
+    cursor: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class PurgedTaskMark(Base):
     """记录已永久删除的系统任务来源，供同步创建前查重。
 

@@ -10,6 +10,7 @@ from homestay_bot.domain.enums import MessageOrigin
 from homestay_bot.integrations.wecom.api_client import WeComApiError
 from homestay_bot.worker import (
     DeferredRetryJobError,
+    InMemorySyncCursorStore,
     RetrySafeJobError,
     WeComMessagePoller,
     WeComSyncJobHandler,
@@ -679,8 +680,8 @@ async def test_wecom_poller_checkpoints_cursor_at_page_batch_limit() -> None:
             api=api,
             handle_message=handle_message,
             enqueue=enqueue,
+            max_pages=2,
         ),
-        max_pages_per_poll=2,
     )
 
     await poller.run_once()
@@ -825,3 +826,38 @@ async def test_wecom_sync_routes_servicer_end_event_only_for_session_end() -> No
 
     # 事件时间一并交出：空游标同步会重放旧事件，由下游按时间判断新旧。
     assert ended == [("wk-1", "wm-1", "code-3", datetime.fromtimestamp(1785283200, UTC))]
+
+
+@pytest.mark.asyncio
+async def test_callback_sync_resumes_from_the_cursor_the_poller_saved() -> None:
+    """回调同步和定时补拉共用保存的游标：补拉读过的位置，回调同步不再从头读，
+    旧事件不会被再处理一遍（1.58.x 空游标重放旧「结束聊天」事件的根因）。"""
+    requested: list[str] = []
+    pages = {
+        "": SimpleNamespace(msg_list=[], has_more=0, next_cursor="after-old-events"),
+        "after-old-events": SimpleNamespace(msg_list=[], has_more=0, next_cursor="after-new"),
+    }
+
+    class ApiStub:
+        """按游标返回固定页。"""
+
+        async def list_kf_account_ids(self) -> list[str]:
+            return ["wk-1"]
+
+        async def sync_messages(self, **kwargs):
+            requested.append(kwargs["cursor"])
+            return pages[kwargs["cursor"]]
+
+    async def ignore(*_args):
+        """本测试不处理消息与续页。"""
+
+    store = InMemorySyncCursorStore()
+    handler = WeComSyncJobHandler(
+        api=ApiStub(), handle_message=ignore, enqueue=ignore, cursor_store=store
+    )
+
+    await WeComMessagePoller(api=ApiStub(), handler=handler).run_once()
+    await handler({"cursor": "", "token": "callback-token", "open_kfid": "wk-1"})
+
+    assert requested == ["", "after-old-events"]
+    assert await store.load("wk-1") == "after-new"

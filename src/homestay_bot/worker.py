@@ -1,3 +1,4 @@
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -62,6 +63,43 @@ class WeComSyncApi(Protocol):
         """返回一页客服消息。"""
 
 
+class SyncCursorStore(Protocol):
+    """按客服账号保存消息同步游标。"""
+
+    async def load(self, open_kfid: str) -> str:
+        """返回上次同步到的位置；没有时为空字符串。"""
+
+    async def save(self, open_kfid: str, cursor: str) -> None:
+        """记录已处理完的位置。"""
+
+
+class InMemorySyncCursorStore:
+    """进程内游标，只供没有数据库的装配（测试）使用；生产用数据库实现。"""
+
+    def __init__(self) -> None:
+        """初始化空游标表。"""
+        self._cursors: dict[str, str] = {}
+
+    async def load(self, open_kfid: str) -> str:
+        """返回内存里的游标。"""
+        return self._cursors.get(open_kfid, "")
+
+    async def save(self, open_kfid: str, cursor: str) -> None:
+        """覆盖内存里的游标。"""
+        self._cursors[open_kfid] = cursor
+
+
+# 同一客服账号同一时间只允许一次同步：回调任务和定时补拉都在本进程里，若同时读到
+# 同一游标会把同一页处理两遍。ponytail: 进程内锁，只在单个 API 容器时成立；多实例
+# 部署时要换成数据库行锁。
+_SYNC_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _sync_lock(open_kfid: str) -> asyncio.Lock:
+    """取该客服账号的同步锁。"""
+    return _SYNC_LOCKS.setdefault(open_kfid, asyncio.Lock())
+
+
 class WeComPollingApi(WeComSyncApi, Protocol):
     """定义定时补拉发现客服账号所需的只读接口。"""
 
@@ -89,8 +127,12 @@ class WeComSyncJobHandler:
         handle_session_end: (
             Callable[[str, str, str, datetime | None], Awaitable[None]] | None
         ) = None,
+        cursor_store: SyncCursorStore | None = None,
+        max_pages: int = 100,
     ) -> None:
-        """注入企业微信读取、消息、发送失败、会话结束和续页处理边界。"""
+        """注入企业微信读取、消息、发送失败、会话结束、续页和游标存储边界。"""
+        self._cursor_store = cursor_store or InMemorySyncCursorStore()
+        self._max_pages = max_pages
         self._api = api
         self._handle_message = handle_message
         self._enqueue = enqueue
@@ -184,11 +226,35 @@ class WeComSyncJobHandler:
             )
         return page
 
+    async def sync_from_saved_cursor(self, *, token: str, open_kfid: str) -> None:
+        """从保存的游标接着同步到最新，每处理完一页立即保存游标。
+
+        回调同步与定时补拉共用。事件没有去重：只要不从头读，旧的「结束聊天」
+        「发送失败」就不会再被处理一遍。处理到一半中断时，最多重放未保存的那一页。
+        """
+        async with _sync_lock(open_kfid):
+            cursor = await self._cursor_store.load(open_kfid)
+            for _ in range(self._max_pages):
+                page = await self.sync_page(cursor=cursor, token=token, open_kfid=open_kfid)
+                if page.next_cursor and page.next_cursor != cursor:
+                    cursor = page.next_cursor
+                    await self._cursor_store.save(open_kfid, cursor)
+                if not page.has_more:
+                    return
+                if not page.next_cursor:
+                    raise RuntimeError("企业微信同步声明有更多页但缺少游标")
+
     async def __call__(self, payload: dict[str, Any]) -> None:
-        """处理回调触发的一页消息，并把剩余分页持久化入队。"""
+        """处理回调触发的同步：从保存的游标接着读完。
+
+        带游标的载荷是上线前入队的旧续页任务，仍按原方式处理这一页并续页。
+        """
         cursor = str(payload.get("cursor", ""))
         token = str(payload["token"])
         open_kfid = str(payload["open_kfid"])
+        if not cursor:
+            await self.sync_from_saved_cursor(token=token, open_kfid=open_kfid)
+            return
         page = await self.sync_page(
             cursor=cursor,
             token=token,
@@ -207,26 +273,23 @@ class WeComSyncJobHandler:
 
 
 class WeComMessagePoller:
-    """在回调缺失时定时补拉客服消息，并按账号维护内存游标。"""
+    """在回调缺失时定时补拉客服消息；游标与回调同步共用处理器里的存储。"""
 
     def __init__(
         self,
         *,
         api: WeComPollingApi,
         handler: WeComSyncJobHandler,
-        max_pages_per_poll: int = 100,
         account_refresh_seconds: float = 300.0,
         monotonic_provider: Callable[[], float] = time.monotonic,
     ) -> None:
         """注入企业微信接口、消息处理器和客服账号缓存时钟。"""
         self._api = api
         self._handler = handler
-        self._max_pages_per_poll = max_pages_per_poll
         self._account_refresh_seconds = account_refresh_seconds
         self._monotonic_provider = monotonic_provider
         self._account_ids: list[str] | None = None
         self._accounts_expires_at = 0.0
-        self._cursors: dict[str, str] = {}
 
     async def run_once(self) -> None:
         """发现全部客服账号并从各自上次游标补拉到最新页。"""
@@ -241,20 +304,7 @@ class WeComMessagePoller:
         rate_limit_error: WeComApiError | None = None
         for open_kfid in account_ids:
             try:
-                cursor = self._cursors.get(open_kfid, "")
-                for _ in range(self._max_pages_per_poll):
-                    page = await self._handler.sync_page(
-                        cursor=cursor,
-                        token="",
-                        open_kfid=open_kfid,
-                    )
-                    if page.next_cursor:
-                        cursor = page.next_cursor
-                    self._cursors[open_kfid] = cursor
-                    if not page.has_more:
-                        break
-                    if not page.next_cursor:
-                        raise RuntimeError("企业微信补拉声明有更多页但缺少游标")
+                await self._handler.sync_from_saved_cursor(token="", open_kfid=open_kfid)
             except Exception as error:
                 # 单个账号故障不得阻断其他客服账号的消息补拉。
                 # 限流需要至少 60 秒退避，优先级高于同轮次的普通异常。

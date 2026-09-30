@@ -93,6 +93,7 @@ from homestay_bot.repositories.runtime_config import (
     RuntimeConfigConflictError,
     SQLAlchemyRuntimeConfigRepository,
 )
+from homestay_bot.repositories.wecom_sync import SQLAlchemySyncCursorStore
 from homestay_bot.routes.employee_auth import AdminLoginRateLimiter
 from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.knowledge import (
@@ -4485,6 +4486,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 handle_session_end(open_kfid, external_userid, msg_code, occurred_at, bundle)
             ),
             enqueue=queue.enqueue,
+            # 回调同步与定时补拉共用数据库游标，不再每次从头读、重放旧事件。
+            cursor_store=SQLAlchemySyncCursorStore(factory),
         )
 
     def build_faq_draft_handler(
