@@ -3123,6 +3123,7 @@ async def test_servicer_reply_marks_native_session_accepted() -> None:
 
         async def accept_handoff(self, conversation_id, *, servicer_userid, now, reason=None):
             self.accepted.append(reason)
+            self.accepted_at = now
 
         async def native_session_active(self, conversation_id: int) -> bool:
             return bool(self.accepted)
@@ -3137,5 +3138,8 @@ async def test_servicer_reply_marks_native_session_accepted() -> None:
     await service.handle_message(incoming(content="几点退房", msgid="msg-3"))
 
     assert audit.accepted == ["servicer_reply"]
+    # 接入时间是员工消息的发送时间，不是处理时刻：同一次同步里随后处理的「结束聊天」
+    # 发生在发言之后，才能被认作本次接入之后的事件（Codex 审查 H1）。
+    assert audit.accepted_at == datetime(2026, 7, 29, tzinfo=UTC)
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
     assert assistant.calls == 0 and wecom.guest_messages == []

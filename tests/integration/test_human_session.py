@@ -179,3 +179,28 @@ async def test_servicer_end_releases_and_skips_when_system_already_released(tmp_
     assert release.details["reason"] == "servicer_end"
     await session.close()
     await engine.dispose()
+
+
+async def test_delayed_end_task_of_old_handoff_does_not_end_a_new_handoff(tmp_path):
+    """接入 A → 交还（登记 A 的结束任务）→ 任务延迟期间又接入 B → 执行 A 的任务：
+    不能结束 B 的原生会话，也不发结束语（Codex 审查 H2）。"""
+    engine, session, conversation = await _setup(tmp_path)
+    kf = KfStub()
+    service = HumanSessionService(session, kf, agent_id=1000002,
+                                  duty_userids=("duty-1",), card_for=_card)
+    operations = SQLAlchemyOperationsRepository(session)
+
+    await service.handle_card_action(_click(f"accept:{conversation.id}"))
+    await service.handle_card_action(_click(f"release:{conversation.id}"))
+    job = await session.scalar(select(Job).where(Job.job_type == KF_SESSION_END_JOB_TYPE))
+    assert job.payload["handoff_id"] == await operations.latest_handoff_id(conversation.id)
+    kf.state = 1  # 客人又说话，会话回到智能助手接待；管家再次接入 B
+    await service.handle_card_action(_click(f"accept:{conversation.id}"))
+    texts_before = list(kf.event_texts)
+
+    await service.end_native_session(conversation.id, handoff_id=job.payload["handoff_id"])
+
+    assert kf.state == 3 and kf.event_texts == texts_before
+    assert await operations.native_session_active(conversation.id)
+    await session.close()
+    await engine.dispose()

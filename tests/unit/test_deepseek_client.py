@@ -3419,3 +3419,38 @@ async def test_two_kinds_of_live_question_are_searched_separately_with_one_foote
     assert "15～21℃" in text and "暂时未能查到可靠的实时出行信息" in text
     assert text.count("帮您查到的") == 1
     assert text.index("帮您查到的") < text.index("暂时未能查到")
+
+
+@pytest.mark.asyncio
+async def test_mixed_question_keeps_failed_notice_and_restores_omitted_facts() -> None:
+    """天气组查询失败、门票组查到开放时间：模型只写了玩法。最终要有系统补的失败说明，
+    也要补回被漏掉的开放时间原文，时效说明只写一次（Codex 审查 R1）。"""
+    from homestay_bot.integrations.tourism import TourismSearchError
+
+    class Stub:
+        """天气失败，门票与开放时间成功。"""
+
+        async def search(self, *, question, **_kwargs) -> str:
+            if "天气" in question:
+                raise TourismSearchError("degraded")
+            return "黄鹤楼今天开放时间为08:30～18:00，成人票70元。"
+
+    payload = {**decision_payload(), "reply_text": "推荐去东湖绿道骑行，傍晚去江滩散步。"}
+    assistant = DeepSeekGuestAssistant(
+        chat_client=ChatClientStub([json.dumps(payload, ensure_ascii=False)]),
+        tourism_searcher=Stub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": "武汉最近有啥玩的，天气咋样，黄鹤楼门票多少"}],
+    )
+
+    text = decision.reply_text
+    assert "东湖绿道" in text and "08:30～18:00" in text
+    assert "暂时未能查到可靠的实时出行信息" in text
+    assert text.count("帮您查到的") == 1

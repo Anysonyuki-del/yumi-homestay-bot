@@ -4774,7 +4774,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         async def end_native_session(payload: dict[str, Any]) -> None:
             """交还后结束仍在人工接待的原生会话，客人收到结束语、机器人恢复发送。"""
             try:
-                await human_sessions().end_native_session(int(payload["conversation_id"]))
+                # 1.61.1 之前登记的任务没有接管编号，按原方式执行（上线时生产没有排队中的）。
+                handoff_id = payload.get("handoff_id")
+                await human_sessions().end_native_session(
+                    int(payload["conversation_id"]),
+                    handoff_id=int(handoff_id) if handoff_id is not None else None,
+                )
             except httpx.ConnectError as error:
                 raise RetrySafeJobError("企业微信连接尚未建立") from error
 

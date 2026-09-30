@@ -165,10 +165,23 @@ class HumanSessionService:
             await self.end_native_session(conversation.id)
         return "closed", "已交还，客人下一条消息起由机器人回复。", "已交还 AI 助手"
 
-    async def end_native_session(self, conversation_id: int) -> None:
-        """结束仍在人工接待的原生会话并发结束语；其他状态什么都不做（任务可重复执行）。"""
+    async def end_native_session(
+        self, conversation_id: int, *, handoff_id: int | None = None
+    ) -> None:
+        """结束仍在人工接待的原生会话并发结束语；其他状态什么都不做（任务可重复执行）。
+
+        `handoff_id` 是登记结束任务时对应的那次接管：任务延迟或重试期间若已有新的
+        接入（最新接管编号变了），这个任务就不属于当前会话，跳过，不能结束新接入的
+        管家会话（Codex 审查 H2）。卡片按钮对当前会话的直接交还不带编号。
+        """
         conversation = await self._session.get(Conversation, conversation_id)
         if conversation is None:
+            return
+        if (
+            handoff_id is not None
+            and await self._operations.latest_handoff_id(conversation_id) != handoff_id
+        ):
+            logger.info("跳过过期的结束会话任务：conversation_id=%s", conversation_id)
             return
         state, _ = await self._api.get_service_state(
             conversation.open_kfid, conversation.external_userid

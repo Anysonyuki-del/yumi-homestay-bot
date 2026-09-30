@@ -1111,3 +1111,42 @@ async def test_only_guest_stated_stable_facts_are_kept_as_memories() -> None:
         assert context.memories[0]["statement"] == "客人对海鲜过敏"
 
     await engine.dispose()
+
+
+async def test_handover_brief_preferences_skip_memories_past_review_or_expiry() -> None:
+    """员工卡片上的偏好与给模型的有效记忆同一口径：已过复核期或已过期的不再显示，
+    即使状态仍是 ACTIVE、还没等到下一次维护（Codex 审查 M1）。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        customer, _source = await _customer_message(
+            session, customer_name="偏好期限客户",
+            external_message_id="brief-expiry", content="我对海鲜过敏",
+        )
+
+        def memory(subject: str, statement: str, *, review_days: int, expire_days: int):
+            return CustomerMemoryItem(
+                customer_id=customer.id, subject_key=subject,
+                category=CustomerMemoryCategory.PREFERENCE, statement=statement,
+                status=CustomerMemoryStatus.ACTIVE,
+                evidence_type=CustomerMemoryEvidenceType.USER_EXPLICIT,
+                verified_at=now - timedelta(days=200), confidence=0.95,
+                confirmed_at=now - timedelta(days=200),
+                review_at=now + timedelta(days=review_days),
+                expires_at=now + timedelta(days=expire_days),
+            )
+
+        session.add_all([
+            memory("floor_preference", "客人喜欢高楼层", review_days=30, expire_days=60),
+            memory("dietary_preference", "客人对海鲜过敏", review_days=-1, expire_days=60),
+            memory("bed_preference", "客人要大床", review_days=30, expire_days=-1),
+        ])
+        await session.flush()
+
+        brief = await SQLAlchemyContextRepository(session).handover_brief(customer.id)
+
+    assert brief.preferences == ("客人喜欢高楼层",)
+    await engine.dispose()

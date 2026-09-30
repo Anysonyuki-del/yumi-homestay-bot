@@ -51,6 +51,7 @@ REPLY_PATHS=(
   src/homestay_bot/services/guest_verification.py
   src/homestay_bot/services/knowledge_evidence_policy.py
   src/homestay_bot/services/knowledge_service.py
+  src/homestay_bot/services/live_fact_check.py
   src/homestay_bot/services/message_service.py
   src/homestay_bot/services/model_budget.py
   src/homestay_bot/services/reply_plan.py

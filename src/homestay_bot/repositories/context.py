@@ -431,20 +431,11 @@ class SQLAlchemyContextRepository:
             for line in (summary.short_summary if summary else "").splitlines()
             if line.strip() and line.strip() not in _EMPTY_EPISODES
         )
-        preferences = tuple(
-            (
-                await self._session.scalars(
-                    select(CustomerMemoryItem.statement)
-                    .where(
-                        CustomerMemoryItem.customer_id == customer_id,
-                        CustomerMemoryItem.status == CustomerMemoryStatus.ACTIVE,
-                    )
-                    .order_by(CustomerMemoryItem.updated_at.desc(), CustomerMemoryItem.id.desc())
-                    .limit(3)
-                )
-            ).all()
-        )
-        orders = (await self.load_model_context(customer_id)).active_orders
+        # 偏好复用给模型的有效记忆召回（已核验、未到复核期和过期、过滤敏感与动态内容），
+        # 不另查 ACTIVE：此前卡片可能显示已过复核期的「海鲜过敏」（Codex 审查 M1）。
+        context = await self.load_model_context(customer_id)
+        preferences = tuple(str(item["statement"]) for item in context.memories[:3])
+        orders = context.active_orders
         stay: dict[str, object] | None = dict(orders[0]) if len(orders) == 1 else None
         return HandoverBrief(handover=handover[:3], preferences=preferences, stay=stay)
 

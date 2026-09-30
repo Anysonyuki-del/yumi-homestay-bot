@@ -1585,7 +1585,8 @@ class SQLAlchemyOperationsRepository:
             # 按接管编号去重：同一次接入只结束一次；任务里再按真实会话状态复核。
             self._session.add(Job(
                 job_type=KF_SESSION_END_JOB_TYPE, dedupe_key=end_key,
-                payload={"conversation_id": conversation_id},
+                # 带上对应的接管编号：任务延迟或重试期间若有新的接入，执行时据此跳过。
+                payload={"conversation_id": conversation_id, "handoff_id": handoff.id},
                 status=JobStatus.PENDING, attempts=0, available_at=now,
             ))
         await self._session.flush()
@@ -1600,6 +1601,11 @@ class SQLAlchemyOperationsRepository:
                 AuditLog.target_id == str(conversation_id),
             ).order_by(AuditLog.id.desc()).limit(1)
         ))
+
+    async def latest_handoff_id(self, conversation_id: int) -> int | None:
+        """本会话最近一次接管审计的编号；没有接管时为空。"""
+        handoff = await self._latest_handoff(conversation_id)
+        return handoff.id if handoff is not None else None
 
     async def native_session_active(self, conversation_id: int) -> bool:
         """管家是否已点「接入人工」、会话正由企业微信原生人工接待。

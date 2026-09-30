@@ -792,8 +792,12 @@ class ConversationService:
             accept = getattr(self._audit_events, "accept_handoff", None)
             if accept is not None:
                 if not await self._in_native_session(conversation):
+                    # 接入时间取员工消息的发送时间，不取处理时刻：同一次同步里先后处理
+                    # 「员工发言」和「结束聊天」时，结束事件晚于发言、却早于处理时刻，
+                    # 用处理时刻会被当成旧事件忽略，客人卡在人工接待（Codex 审查 H1）。
                     await accept(
-                        conversation.id, servicer_userid="servicer", now=datetime.now(UTC),
+                        conversation.id, servicer_userid="servicer",
+                        now=message.sent_at.astimezone(UTC),
                         reason=(
                             None if conversation.mode is ConversationMode.HUMAN_ACTIVE
                             else "servicer_reply"
