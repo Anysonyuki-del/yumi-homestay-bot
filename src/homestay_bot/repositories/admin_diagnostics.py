@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from homestay_bot.domain.enums import JobStatus, MessageOrigin
 from homestay_bot.domain.models import (
     AuditLog,
+    Conversation,
+    Customer,
     ExternalRequest,
     Job,
     Message,
@@ -62,6 +64,9 @@ class DeliveryChain:
     attempts: int
     error_codes: tuple[str, ...]
     last_failed_at: datetime
+    # 链根消息所属客户，供看板跳到该客户的对话（F05，用户确认的 D5）。只是内部编号，
+    # 不含正文或外部身份；会话没有关联客户时为空，页面据此降级说明。
+    customer_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +115,7 @@ def _roll_up_delivery_chains(
             "retry_of": row.retry_of,
             "pending": _is_true(row.pending),
             "notified": _is_true(row.notified),
+            "customer_id": getattr(row, "customer_id", None),
         }
         for row in rows
     ]
@@ -171,6 +177,7 @@ def _roll_up_delivery_chains(
                 last_failed_at=max(
                     cast(datetime, item["sent_at"]) for item in failures
                 ),
+                customer_id=cast(int | None, by_id[root_id]["customer_id"]),
             )
         )
 
@@ -294,7 +301,14 @@ class SQLAlchemyAdminDiagnosticsRepository:
                     Message.message_metadata["delivery_failure_notified"].label(
                         "notified"
                     ),
+                    # 合并后的客户跟到合并目标，档案与对话都已迁过去；外连接保证
+                    # 会话缺客户时这一行仍在统计里，只是没有跳转链接。
+                    func.coalesce(
+                        Customer.merged_into_customer_id, Conversation.customer_id
+                    ).label("customer_id"),
                 )
+                .outerjoin(Conversation, Conversation.id == Message.conversation_id)
+                .outerjoin(Customer, Customer.id == Conversation.customer_id)
                 .where(
                     Message.origin == MessageOrigin.BOT,
                     or_(

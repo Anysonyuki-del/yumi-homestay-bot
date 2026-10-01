@@ -111,7 +111,11 @@ def test_chat_tab_shows_the_whole_timeline_in_wuhan_time(tmp_path) -> None:
 
     assert page.status_code == 200
     text = page.text
-    assert 'href="/employee/customers/7?tab=chat" aria-current="page"' in text
+    # 页签链接带着进入档案前的来源（F10），没有来源时是客户列表。
+    assert (
+        'href="/employee/customers/7?tab=chat&amp;return_to=/employee/customers" '
+        'aria-current="page"'
+    ) in text
     # 只在消息列表里比顺序：上方「最近活动」一行带当天日期，会随运行时间变化。
     log = text[text.index('class="chat-log"'):]
     order = [log.index(item) for item in (
@@ -140,7 +144,9 @@ def test_chat_tab_pages_backwards_without_gaps_or_repeats(tmp_path) -> None:
 
     latest = client.get("/employee/customers/7?tab=chat").text
     link = re.search(
-        r'href="(/employee/customers/7\?tab=chat&(?:amp;)?before_message_id=\d+)#chat"', latest
+        r'href="(/employee/customers/7\?tab=chat&(?:amp;)?before_message_id=\d+'
+        r'(?:&(?:amp;)?return_to=[^"#]*)?)#chat"',
+        latest,
     )
     assert link is not None and "回到最新" not in latest
     older = client.get(link.group(1).replace("&amp;", "&")).text

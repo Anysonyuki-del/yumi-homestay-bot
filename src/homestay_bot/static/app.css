@@ -207,6 +207,14 @@ button:active:not(:disabled), .button:active { transform: translateY(1px); box-s
 .entry-card { display: grid; gap: 12px; }
 .entry-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .entry-card__actions button { min-width: 76px; }
+/* 批量选择栏：手机也有全选入口，计数紧跟其后（F12）。触控目标不小于 44px。 */
+.selection-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; width: 100%; }
+.selection-bar__all { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 600; }
+.selection-bar output { font-weight: 600; }
+/* display: flex 会盖过 hidden 属性；脚本未运行时这一栏必须真的隐藏。 */
+.selection-bar[hidden] { display: none; }
+/* 知识适用状态：启停与审核范围分成独立徽章，窄屏自动换行（F04）。 */
+.entry-state { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .record-list { gap: 0; }
 .record-link { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 8px; color: inherit; text-decoration: none; }
 .record-link small { display: block; margin-top: 3px; color: var(--muted); }
@@ -659,7 +667,8 @@ a.cal__bar:focus-visible { outline: 2px solid var(--primary); outline-offset: 2p
 .cal-m__day--today { background: var(--primary-soft); box-shadow: inset 0 0 0 1px var(--cal-future-line); }
 .cal-m__day--today .cal-m__dow, .cal-m__day--today .cal-m__dnum { color: var(--primary-hover); }
 /* 无人住的日期压低对比，让有人住的日子先被看到；数据来自 RoomDayOperation.occupied。 */
-.cal-m__day--free .cal-m__dnum { color: var(--line-soft); font-weight: 600; }
+/* 空闲日用次级正文色 --muted（约 5.9:1），不再借用边框色 --line-soft（仅 2.45:1，F07）；与占用日的区别靠字重和下方占用条，不靠把字变淡。 */
+.cal-m__day--free .cal-m__dnum { color: var(--muted); font-weight: 500; }
 
 .cal-m__rail { display: grid; gap: 3px; margin-top: 6px; }
 .cal-m__lane { position: relative; height: 8px; border-radius: 999px; background: var(--surface-sunk); }

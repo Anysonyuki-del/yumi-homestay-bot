@@ -35,3 +35,18 @@ def test_all_templates_compile_with_unified_environment() -> None:
     """统一环境应能编译现有与新增模板，避免迁移前破坏旧页面。"""
     for template_name in templates.env.list_templates():
         templates.env.get_template(template_name)
+
+
+def test_complaint_message_origin_and_risk_read_as_chinese() -> None:
+    """AC15：客诉页的消息来源与风险等级显示中文；未知风险显示「待核实」，不被误读成低风险。"""
+    from homestay_bot.domain.enums import MessageOrigin
+    from homestay_bot.web import complaint_risk_zh, status_zh
+
+    assert [status_zh(origin) for origin in MessageOrigin] == ["客人", "人工客服", "机器人"]
+    assert [complaint_risk_zh(level) for level in ("critical", "high", "normal")] == [
+        "严重",
+        "高",
+        "一般",
+    ]
+    assert complaint_risk_zh("something-new") == "待核实"
+    assert complaint_risk_zh(None) == "待核实"

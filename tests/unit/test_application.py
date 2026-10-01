@@ -490,12 +490,14 @@ async def test_complaint_delivery_callback_updates_real_result(monkeypatch) -> N
             """接受当前 worker 事务。"""
 
         async def mark_delivery_sent(
-            self, review_id: int, *, sent_at, external_message_id: str
+            self, review_id: int, *, sent_at, external_message_id: str, outbox_id=None
         ) -> None:
             """记录成功投递。"""
             calls.append(("sent", review_id, external_message_id))
 
-        async def mark_delivery_failed(self, review_id: int, *, error_code: str) -> None:
+        async def mark_delivery_failed(
+            self, review_id: int, *, error_code: str, outbox_id=None
+        ) -> None:
             """记录失败投递。"""
             calls.append(("failed", review_id, error_code))
 

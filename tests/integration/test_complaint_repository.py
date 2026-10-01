@@ -224,7 +224,9 @@ async def test_complaint_delivery_state_tracks_queue_failure_and_success(reposit
         external_message_id="wecom-msg-1",
     )
     assert sent.status is ComplaintReviewStatus.SENT
-    assert sent.sent_at == datetime(2026, 8, 2, tzinfo=UTC)
+    # 状态改用条件更新后按主键重新读取；SQLite 读回的时间不带时区，统一后再比较。
+    assert sent.sent_at is not None
+    assert sent.sent_at.replace(tzinfo=UTC) == datetime(2026, 8, 2, tzinfo=UTC)
     assert sent.delivery_error_code is None
     assert sent.delivery_external_message_id == "wecom-msg-1"
     await session.commit()
@@ -515,7 +517,7 @@ def test_complaint_page_uses_shell_and_safe_editing_controls() -> None:
                 "review": SimpleNamespace(
                     id=review_id,
                     version=2,
-                    status="ready_for_review",
+                    status=ComplaintReviewStatus.READY_FOR_REVIEW,
                     risk_level="high",
                     analysis={
                         "core_issue": "入住延迟",
@@ -528,10 +530,16 @@ def test_complaint_page_uses_shell_and_safe_editing_controls() -> None:
                     },
                     draft="请允许我们继续核实。",
                 ),
-                "messages": [SimpleNamespace(origin="guest", content="很长的客诉内容")],
+                "messages": [
+                    SimpleNamespace(origin="guest", content="很长的客诉内容", sent_at=None)
+                ],
                 "has_older_messages": False,
                 "older_before_message_id": None,
                 "is_latest_message_page": True,
+                "actions": {
+                    "edit": True, "save": True, "send": True, "return": True, "cancel": True,
+                },
+                "delivery_in_flight": False,
             }
 
     app = FastAPI()
@@ -555,8 +563,11 @@ def test_complaint_page_uses_shell_and_safe_editing_controls() -> None:
     assert "待核实事实" in response.text
     assert "平台升级风险" in response.text
     assert 'data-unsaved-warning' in response.text
-    for action in ("send", "return", "cancel"):
+    for action in ("return", "cancel"):
         assert f'action="/employee/complaints/7/{action}" data-confirm=' in response.text
+    # 发送与保存同一个表单，确认框带出回复框里将要发出的正文（D1-A）。
+    assert 'formaction="/employee/complaints/7/send"' in response.text
+    assert "{draft}" in response.text
 
 
 @pytest.mark.asyncio

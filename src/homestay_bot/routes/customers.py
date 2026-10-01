@@ -17,6 +17,7 @@ from homestay_bot.routes.admin_form_csrf import (
     issue_form_csrf,
 )
 from homestay_bot.routes.employee_auth import require_employee_session
+from homestay_bot.routes.page_errors import safe_return_path
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.routes.tasks import BULK_TASK_CSRF_ENTITY
 from homestay_bot.services.customer_admin_service import (
@@ -28,7 +29,7 @@ from homestay_bot.services.customer_errors import (
     CustomerNotFoundError,
     CustomerPermissionError,
 )
-from homestay_bot.web import templates
+from homestay_bot.web import pop_page_notice, set_page_error, set_page_notice, templates
 
 router = APIRouter(prefix="/employee/customers")
 
@@ -279,6 +280,10 @@ async def customer_index(
                 if len(customers) > 50
                 else None
             ),
+            # 进入档案时带上当前列表地址，返回时筛选与页码还在（F10）。
+            "current_view": (
+                "/employee/customers?" + urlencode({**active_params, "page": page})
+            ),
             "page_title": "客户管理",
             "active_nav": "customers",
         },
@@ -353,6 +358,7 @@ async def customer_detail(
     merge_query: Annotated[str | None, Query(max_length=100)] = None,
     tab: Literal["overview", "stays", "chat", "service", "memory", "governance"] | None = None,
     before_message_id: Annotated[int | None, Query(gt=0)] = None,
+    return_to: Annotated[str, Query(max_length=200)] = "",
 ) -> Response:
     """展示客户档案各页签；对话记录页签按 before_message_id 向前翻页。"""
     administrator = await _current_admin(request)
@@ -400,6 +406,10 @@ async def customer_detail(
                 family=TASK_CSRF_FAMILY,
                 entity_id=BULK_TASK_CSRF_ENTITY,
             ),
+            # 来源经 safe_return_path 限定在站内；页签、写表单和任务链接都带着它，
+            # 返回按钮因此回到进入档案前的列表或合并复核（F10）。
+            "return_to": safe_return_path(return_to, fallback="/employee/customers"),
+            "notice": pop_page_notice(request) or None,
             "page_title": detail["customer"].display_name,
             "active_nav": "customers",
         },
@@ -422,7 +432,8 @@ async def _customer_form_context(
     return administrator, _get_service(request)
 
 
-def _customer_redirect(
+async def _customer_redirect(
+    request: Request,
     customer_id: int,
     tab: str = "overview",
 ) -> RedirectResponse:
@@ -430,11 +441,18 @@ def _customer_redirect(
 
     写操作原先一律回到无 tab 的详情，保存完又是一整页长内容；连续审几条记忆
     时每次都要重新滚到记忆区。回跳带上标签页，人就留在刚才做事的地方。
+
+    表单里的 return_to（进入档案前的列表或合并复核）一并带回，否则做完一次操作
+    返回按钮就丢了来源（F10）。这里读取的是框架已解析并缓存的表单，不重复读请求体；
+    来源同样经 safe_return_path 限定在站内。
     """
-    return RedirectResponse(
-        f"/employee/customers/{customer_id}?tab={tab}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    target = f"/employee/customers/{customer_id}?tab={tab}"
+    source = (await request.form()).get("return_to")
+    if isinstance(source, str) and source:
+        target += "&" + urlencode(
+            {"return_to": safe_return_path(source, fallback="/employee/customers")}
+        )
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/{customer_id}/merge/manual")
@@ -485,7 +503,7 @@ async def update_customer_tags(
         )
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id, "overview")
+    return await _customer_redirect(request, customer_id, "overview")
 
 
 @router.post("/{customer_id}/note")
@@ -505,7 +523,7 @@ async def update_customer_note(
         await service.update_note(customer_id, note, administrator)
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id, "overview")
+    return await _customer_redirect(request, customer_id, "overview")
 
 
 @router.post("/{customer_id}/summary")
@@ -533,7 +551,7 @@ async def update_customer_summary(
         )
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id, "memory")
+    return await _customer_redirect(request, customer_id, "memory")
 
 
 @router.post("/{customer_id}/context-refresh")
@@ -558,9 +576,15 @@ async def refresh_customer_context(
             administrator,
             now=datetime.now(UTC),
         )
+    except CustomerConflictError as error:
+        # 冷却中不是故障：回到记忆页签说明还要等多久，不给一段 JSON（F14）。
+        set_page_error(request, str(error))
+        return await _customer_redirect(request, customer_id, "memory")
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id, "memory")
+    # 入队已提交才提示；完成与否看下方「最近一次整理」的任务状态，不在这里冒充完成。
+    set_page_notice(request, "已排队，完成后会更新接手要点；可稍后刷新查看任务状态。")
+    return await _customer_redirect(request, customer_id, "memory")
 
 
 @router.post("/{customer_id}/summary/delete")
@@ -579,7 +603,7 @@ async def delete_customer_summary(
         await service.delete_summary(customer_id, administrator)
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id, "memory")
+    return await _customer_redirect(request, customer_id, "memory")
 
 
 @router.post("/{customer_id}/memories/{memory_id}/{decision}")
@@ -607,7 +631,7 @@ async def review_customer_memory(
         )
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id, "memory")
+    return await _customer_redirect(request, customer_id, "memory")
 
 
 @router.post("/{customer_id}/test-data/clear")
@@ -621,7 +645,7 @@ async def clear_customer_test_data(
         await service.clear_test_data(customer_id, administrator)
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id, "service")
+    return await _customer_redirect(request, customer_id, "service")
 
 
 @router.post("/{customer_id}/conversations/{conversation_id}/release")
@@ -635,4 +659,4 @@ async def release_customer_conversation(
         await service.release_conversation(customer_id, conversation_id, administrator)
     except Exception as error:
         _raise_page_error(error)
-    return _customer_redirect(customer_id, "service")
+    return await _customer_redirect(request, customer_id, "service")

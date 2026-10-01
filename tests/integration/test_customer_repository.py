@@ -1026,16 +1026,23 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
                 record_sql,
             )
 
-        assert detail["source"] == {
-            "id": source.id,
-            "display_name": "来源客户",
-        }
-        assert detail["target"] == {
-            "id": target.id,
-            "display_name": "目标客户",
-        }
+        # 电话列是 D5（2026-10-01）确认加入的，其余字段仍按白名单收窄。
+        assert set(detail["source"]) == {"id", "display_name", "phone", "phone_ciphertext"}
+        assert (detail["source"]["id"], detail["source"]["display_name"]) == (
+            source.id,
+            "来源客户",
+        )
+        assert (detail["target"]["id"], detail["target"]["display_name"]) == (
+            target.id,
+            "目标客户",
+        )
         assert not isinstance(detail["source"], Customer)
         assert not isinstance(detail["target"], Customer)
+        # D5（2026-10-01）：电话密文只在仓储与服务之间传递，供服务层解密存量记录，
+        # 页面拿到的复核卡片里没有它（见 test_customer_admin_service）。除这一个
+        # 字段外，其余内容仍不得出现密文、备注或正文。
+        assert detail["source"].pop("phone_ciphertext") == b"source-secret-ciphertext"
+        assert detail["target"].pop("phone_ciphertext") == b"target-secret-ciphertext"
         serialized = repr(detail)
         assert "REPOSITORY_SOURCE_SECRET_NOTE" not in serialized
         assert "REPOSITORY_TARGET_SECRET_NOTE" not in serialized
@@ -1059,11 +1066,8 @@ async def test_merge_detail_returns_only_safe_association_counts() -> None:
             if " from customers " in f" {statement} "
         ]
         assert len(customer_queries) == 2
-        assert all(
-            "customers.phone_ciphertext" not in statement
-            and "customers.note" not in statement
-            for statement in customer_queries
-        )
+        # 电话列按 D5 放开；备注等其他客户字段仍不得查询。
+        assert all("customers.note" not in statement for statement in customer_queries)
         business_task_queries = [
             statement
             for statement in normalized_sql
@@ -1841,6 +1845,66 @@ async def test_context_refresh_cooldown_survives_new_request_transactions() -> N
         await service.refresh_context(7, administrator, now=start + timedelta(minutes=10))
         async with factory() as session:
             assert await session.scalar(select(func.count(Job.id))) == 3
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_memory_tab_shows_the_latest_manual_refresh_job_state() -> None:
+    """AC14：记忆页签读到这位客户最近一次手动整理的任务状态；自动维护与别人的任务不算。"""
+    from homestay_bot.application import SessionCustomerAdminService
+    from homestay_bot.domain.enums import JobStatus
+    from homestay_bot.domain.models import Job
+    from homestay_bot.services.customer_admin_service import CustomerDetailRequest
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    administrator = SimpleNamespace(id=1, role=EmployeeRole.ADMIN, is_active=True)
+    try:
+        async with factory() as session:
+            session.add_all([
+                Customer(id=7, display_name="客户甲"),
+                Customer(id=8, display_name="客户乙"),
+            ])
+            # 每小时自动维护用的是另一种去重键，不能冒充「这次手动整理」。
+            session.add(Job(
+                job_type="customer_context_refresh", payload={"customer_id": 7},
+                dedupe_key="customer-maintenance:7:hourly", status=JobStatus.COMPLETED,
+                attempts=1, available_at=datetime.now(UTC),
+            ))
+            await session.commit()
+        service = SessionCustomerAdminService(factory, cipher)
+
+        async def memory_tab():
+            detail = await service.get_detail(
+                CustomerDetailRequest(7, "memory", None), administrator
+            )
+            return detail["context_refresh_job"]
+
+        assert await memory_tab() is None
+
+        await service.refresh_context(8, administrator, now=datetime.now(UTC))
+        assert await memory_tab() is None
+
+        await service.refresh_context(7, administrator, now=datetime.now(UTC))
+        pending = await memory_tab()
+        assert pending["status"] is JobStatus.PENDING
+        assert pending["created_at"].tzinfo is not None
+
+        async with factory() as session:
+            job = await session.scalar(
+                select(Job).where(Job.dedupe_key.startswith("customer-context-refresh:7:"))
+            )
+            job.status = JobStatus.FAILED
+            job.last_error_code = "INTERNAL-DETAIL"
+            await session.commit()
+        failed = await memory_tab()
+        assert failed["status"] is JobStatus.FAILED
+        assert "INTERNAL-DETAIL" not in repr(failed)
+        assert set(failed) == {"status", "created_at", "updated_at"}
     finally:
         await engine.dispose()
 

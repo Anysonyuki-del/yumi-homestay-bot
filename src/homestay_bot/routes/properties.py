@@ -3,6 +3,7 @@ from typing import Annotated, Any, Literal, Protocol, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from pydantic import BeforeValidator
 
 from homestay_bot.domain.enums import EmployeeRole, RoomOperationalStatus
 from homestay_bot.domain.models import Employee
@@ -14,6 +15,7 @@ from homestay_bot.routes.admin_form_csrf import (
 )
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.page_errors import raise_page_error, safe_return_path
+from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.property_admin_service import PropertyFields
 from homestay_bot.web import templates
@@ -133,18 +135,33 @@ async def _consume_csrf(request: Request, property_id: int, token: str) -> None:
 
 
 @router.get("", response_class=HTMLResponse)
-async def property_index(request: Request) -> Response:
-    """展示管理员可配置的百居易房源。"""
+async def property_index(
+    request: Request,
+    active: Annotated[
+        Literal["active", "inactive"] | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
+) -> Response:
+    """展示管理员可配置的百居易房源；可按启用或停用筛选，默认全部（F13）。
+
+    在已有的有界投影上过滤：房源总数就是几间房，list_all 本就一次取全，不为筛选
+    另开查询路径。只读 is_active，不改它，也不访问百居易。
+    """
     administrator = await _current_admin(request)
     try:
         properties = await _get_service(request).list_all(administrator)
     except Exception as error:
         _raise_page_error(error)
+    if active is not None:
+        properties = [
+            item for item in properties if bool(item.is_active) is (active == "active")
+        ]
     return templates.TemplateResponse(
         request=request,
         name="properties/index.html",
         context={
             "properties": properties,
+            "active_filter": active or "",
             "page_title": "房源管理",
             "active_nav": "properties",
         },

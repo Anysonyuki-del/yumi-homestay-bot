@@ -1,0 +1,20 @@
+{% import "components/ui.html" as ui %}
+{# 知识条目的真实适用状态（F04）：启停、审核范围、有效期和条件词分开展示。
+   只读已持久化字段，不重算检索逻辑；是否用于某次回答仍由 KnowledgeService 按
+   客人问的日期、房间和条件词判断，这里的有效期文字因此写成「按所问日期判断」。 #}
+{% macro entry_state(entry, properties) %}
+{% set scope_labels = {"unreviewed": "范围待审核", "global": "本店通用", "property": "指定房间", "public": "店外公开知识"} %}
+<div class="entry-state">
+  {% if not entry.is_enabled %}{{ ui.badge("已停用", "neutral") }}
+  {% elif entry.scope == "unreviewed" %}{{ ui.badge("已启用 · 范围待审核，暂不参与回答", "warning") }}
+  {% else %}{{ ui.badge("已启用", "success") }}{% endif %}
+  {% if entry.scope != "unreviewed" %}
+    {% if entry.scope == "property" %}{% set owner = properties | selectattr("id", "equalto", entry.property_id) | first %}
+      {{ ui.badge("指定房间：" ~ (owner.title if owner else "房间 " ~ entry.property_id), "info") }}
+    {% else %}{{ ui.badge(scope_labels.get(entry.scope, entry.scope), "info") }}{% endif %}
+  {% endif %}
+</div>
+{% if entry.valid_from or entry.valid_until %}<p class="field-help">有效期：{{ entry.valid_from or "不限" }} 至 {{ entry.valid_until or "不限" }}（按客人所问的日期判断是否适用）</p>{% endif %}
+{% if entry.trigger_any %}<p class="field-help">附加条件词：{{ entry.trigger_any | join("、") }}</p>{% endif %}
+{% if entry.trigger_exclude %}<p class="field-help">排除词：{{ entry.trigger_exclude | join("、") }}</p>{% endif %}
+{% endmacro %}

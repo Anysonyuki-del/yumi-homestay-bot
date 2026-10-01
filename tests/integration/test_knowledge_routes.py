@@ -181,6 +181,11 @@ class KnowledgeAdminStub:
         """记录管理员关闭候选。"""
         self.snoozed = (candidate_id, employee_id)
 
+    async def delete_entry(self, entry_id: int, employee_id: int) -> None:
+        """删除条目；不存在时保持 LookupError 语义。"""
+        entry = await self.get_detail(entry_id)
+        self.entries.remove(entry)
+
 
 def build_client(
     role: EmployeeRole,
@@ -415,30 +420,65 @@ def test_admin_shell_navigation_is_trimmed_for_staff_role() -> None:
         assert forbidden in admin_page.text
 
 
-def test_knowledge_index_orders_filters_candidates_and_entries() -> None:
-    """列表页从上到下展示说明筛选、候选、新增与现有条目。"""
-    client, _ = build_client(EmployeeRole.ADMIN)
+def test_knowledge_index_defaults_to_entries_and_splits_candidates() -> None:
+    """AC11：默认只显示现有知识，候选在独立分区；两个分区互不加载对方。"""
+    client, service = build_client(EmployeeRole.ADMIN)
 
-    response = client.get("/employee/knowledge")
+    entries_page = client.get("/employee/knowledge")
+    assert entries_page.status_code == 200
+    assert 'id="knowledge-entries"' in entries_page.text
+    assert "新增知识条目" in entries_page.text
+    assert "能停车吗" not in entries_page.text
+    assert service.list_candidate_calls == []
+    assert 'action="/employee/knowledge/1/disable" data-confirm=' in entries_page.text
 
-    assert response.text.index("知识筛选") < response.text.index("待归纳问题")
-    assert response.text.index("待归纳问题") < response.text.index("新增知识")
-    assert response.text.index("新增知识") < response.text.index('id="knowledge-entries"')
-    assert "data-unsaved-warning" in response.text
-    assert 'action="/employee/knowledge/1/disable" data-confirm=' in response.text
+    candidates_page = client.get("/employee/knowledge?view=candidates")
+    assert candidates_page.status_code == 200
+    assert "能停车吗" in candidates_page.text
+    assert 'id="knowledge-entries"' not in candidates_page.text
+    assert service.list_all_calls == [(0, 51)]
+    assert 'aria-current="page">待审核候选' in candidates_page.text
+
+
+def test_staff_never_sees_the_candidate_partition() -> None:
+    """普通员工带 view=candidates 也只看到现有知识，不加载候选。"""
+    client, service = build_client(EmployeeRole.STAFF)
+
+    response = client.get("/employee/knowledge?view=candidates")
+
+    assert response.status_code == 200
+    assert 'id="knowledge-entries"' in response.text
+    assert "待审核候选" not in response.text
+    assert service.list_candidate_calls == []
 
 
 def test_knowledge_lists_use_independent_bounded_pagination() -> None:
-    """正式知识和 FAQ 候选必须分别分页且保留彼此页码。"""
+    """正式知识和候选分别分页，翻页链接保留分区与彼此页码。"""
     client, service = build_client(EmployeeRole.ADMIN)
 
-    response = client.get("/employee/knowledge?page=2&candidate_page=2")
+    entries = client.get("/employee/knowledge?page=2&candidate_page=2")
+    candidates = client.get("/employee/knowledge?view=candidates&page=2&candidate_page=2")
 
-    assert response.status_code == 200
+    assert entries.status_code == 200 and candidates.status_code == 200
     assert service.list_all_calls == [(50, 51)]
     assert service.list_candidate_calls == [(50, 51)]
-    assert 'href="/employee/knowledge?page=1&amp;candidate_page=2"' in response.text
-    assert 'href="/employee/knowledge?page=2&amp;candidate_page=3"' in response.text
+    assert 'href="/employee/knowledge?page=1&amp;candidate_page=2"' in entries.text
+    assert 'href="/employee/knowledge?page=3&amp;candidate_page=2"' in entries.text
+    assert (
+        'href="/employee/knowledge?page=2&amp;candidate_page=1&amp;view=candidates"'
+        in candidates.text
+    )
+    assert (
+        'href="/employee/knowledge?page=2&amp;candidate_page=3&amp;view=candidates"'
+        in candidates.text
+    )
+
+
+def test_invalid_partition_is_rejected_not_blank() -> None:
+    """分区参数只接受两个取值，错误值稳定拒绝，不渲染一个空白页。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+
+    assert client.get("/employee/knowledge?view=unknown").status_code == 422
 
 
 def test_knowledge_filter_form_accepts_empty_enabled_value() -> None:
@@ -503,9 +543,9 @@ def test_admin_can_view_and_edit_draft_before_conversion() -> None:
     """管理员页面应展示脱敏示例，并按修改后的双语内容转换候选。"""
     client, service = build_client(EmployeeRole.ADMIN)
 
-    page = client.get("/employee/knowledge")
+    page = client.get("/employee/knowledge?view=candidates")
     csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
-    assert "待归纳问题" in page.text
+    assert "待审核候选" in page.text
     assert "能停车吗" in page.text
     assert "停车位置和收费规则" in page.text
 
@@ -848,3 +888,178 @@ def test_knowledge_scope_dates_survive_form_save_and_edit_render():
     assert 'value="global" selected' in rendered
     assert 'name="valid_from" value="2026-09-25"' in rendered
     assert 'name="valid_until" value="2026-09-30"' in rendered
+
+
+def _token(html: str) -> str:
+    """从页面取出一次性表单令牌。"""
+    match = re.search(r'name="csrf_token" value="([^"]+)"', html)
+    assert match is not None
+    return match.group(1)
+
+
+_HTML = {"accept": "text/html"}
+_BAD_CREATE = {
+    "category": "早餐",
+    "question_zh": "早餐几点？",
+    "answer_zh": "七点到九点，餐厅在一楼。",
+    "question_en": "Breakfast?",
+    "answer_en": "7 to 9 AM.",
+    "scope": "property",
+    "property_id": "",
+}
+
+
+def test_create_error_rerenders_list_with_input_and_a_fresh_token() -> None:
+    """AC03：新建时范围填错，页面原地显示错误并保留已填内容；新令牌可纠正后成功。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    token = _token(client.get("/employee/knowledge?page=1").text)
+
+    failed = client.post(
+        "/employee/knowledge",
+        data={**_BAD_CREATE, "csrf_token": token, "return_to": "/employee/knowledge?page=1"},
+        headers=_HTML,
+    )
+
+    assert failed.status_code == 422
+    assert failed.headers["content-type"].startswith("text/html")
+    assert "知识适用范围或日期有误" in failed.text
+    assert "七点到九点，餐厅在一楼。" in failed.text
+    assert 'id="knowledge-create" open' in failed.text
+    assert len(service.entries) == 1
+    # 旧令牌已被消费，重放仍被拒。
+    replay = client.post(
+        "/employee/knowledge", data={**_BAD_CREATE, "csrf_token": token}, headers=_HTML
+    )
+    assert replay.status_code == 409
+
+    fixed = client.post(
+        "/employee/knowledge",
+        data={**_BAD_CREATE, "scope": "global", "csrf_token": _token(failed.text)},
+        headers=_HTML,
+        follow_redirects=False,
+    )
+    assert fixed.status_code == 303
+    assert len(service.entries) == 2
+
+
+def test_api_create_error_keeps_json_422() -> None:
+    """接口调用不带 text/html 时仍得到原来的 422 JSON。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    token = _token(client.get("/employee/knowledge").text)
+
+    response = client.post("/employee/knowledge", data={**_BAD_CREATE, "csrf_token": token})
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/json")
+
+
+def test_edit_error_rerenders_detail_with_submitted_text() -> None:
+    """详情页编辑出错时回填刚提交的内容，而不是库里的旧值。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    token = _token(client.get("/employee/knowledge/1").text)
+
+    response = client.post(
+        "/employee/knowledge/1/edit",
+        data={**_BAD_CREATE, "answer_zh": "改过但没保存的答案", "csrf_token": token},
+        headers=_HTML,
+    )
+
+    assert response.status_code == 422
+    assert "改过但没保存的答案" in response.text
+    assert "已保留你刚才填写的内容" in response.text
+    assert service.entries[0].answer_zh == "下午三点后。"
+
+
+def test_candidate_convert_error_reopens_that_candidate_with_input() -> None:
+    """候选转换出错时回到候选分区，展开出错的那一项并回填内容。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    token = _token(client.get("/employee/knowledge?view=candidates").text)
+
+    response = client.post(
+        "/employee/knowledge/candidates/8/convert",
+        data={
+            **_BAD_CREATE,
+            "answer_zh": "停车在院外",
+            "csrf_token": token,
+            "return_to": "/employee/knowledge?view=candidates",
+        },
+        headers=_HTML,
+    )
+
+    assert response.status_code == 422
+    assert "停车在院外" in response.text
+    assert '<details class="collapsible-section" open>' in response.text
+    assert service.converted is None
+
+
+def test_delete_reaches_its_handler_and_returns_to_the_source_view() -> None:
+    """AC08：删除请求经真实路由表到达删除处理器（不被启停路由截走），回到来源并提示。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    source = "/employee/knowledge?page=1&enabled=enabled"
+    token = _token(client.get(source).text)
+
+    response = client.post(
+        "/employee/knowledge/1/delete",
+        data={"csrf_token": token, "return_to": source},
+        headers=_HTML,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == source
+    assert service.entries == []
+    assert "已永久删除知识 #1" in client.get(source, headers=_HTML).text
+
+
+def test_delete_from_detail_page_lands_on_the_list() -> None:
+    """从详情页删除后详情已不存在，改回知识列表而不是 404。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    token = _token(client.get("/employee/knowledge/1").text)
+
+    response = client.post(
+        "/employee/knowledge/1/delete",
+        data={"csrf_token": token, "return_to": "/employee/knowledge/1"},
+        follow_redirects=False,
+    )
+
+    assert response.headers["location"] == "/employee/knowledge"
+
+
+def test_staff_cannot_delete_and_missing_entry_is_404() -> None:
+    """普通员工伪造删除被拒；重复删除得到稳定的 404，没有副作用。"""
+    staff, staff_service = build_client(EmployeeRole.STAFF)
+    assert staff.post("/employee/knowledge/1/delete", data={"csrf_token": "x"}).status_code == 403
+    assert len(staff_service.entries) == 1
+
+    admin, _ = build_client(EmployeeRole.ADMIN)
+    first = _token(admin.get("/employee/knowledge").text)
+    admin.post("/employee/knowledge/1/delete", data={"csrf_token": first})
+    second = _token(admin.get("/employee/knowledge").text)
+    again = admin.post("/employee/knowledge/1/delete", data={"csrf_token": second})
+    assert again.status_code == 404
+
+
+def test_detail_link_and_back_button_keep_the_source_view() -> None:
+    """F10：从带筛选的列表进详情，返回按钮和保存都回到原列表。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    source = "/employee/knowledge?page=1&candidate_page=1&enabled=enabled"
+
+    listing = client.get("/employee/knowledge?enabled=enabled").text
+    assert "/employee/knowledge/1?return_to=/employee/knowledge%3Fpage%3D1" in listing
+
+    detail = client.get("/employee/knowledge/1", params={"return_to": source}).text
+    assert f'href="{source.replace("&", "&amp;")}"' in detail
+    assert f'name="return_to" value="{source.replace("&", "&amp;")}"' in detail
+
+    foreign = client.get("/employee/knowledge/1", params={"return_to": "https://evil.example"})
+    assert 'href="/employee/knowledge">返回知识列表' in foreign.text
+
+
+def test_unreviewed_enabled_entry_is_not_shown_as_plain_enabled() -> None:
+    """AC04：启用但范围待审核的条目明确标出「暂不参与回答」。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    service.entries[0].scope = "unreviewed"
+
+    text = client.get("/employee/knowledge").text
+
+    assert "范围待审核，暂不参与回答" in text

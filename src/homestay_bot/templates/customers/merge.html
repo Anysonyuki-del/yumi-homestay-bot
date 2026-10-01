@@ -3,6 +3,9 @@
 {% block page_actions %}<a class="button button--secondary" href="/employee/customers">返回客户列表</a>{% endblock %}
 {% block content %}
 <div class="alert alert--warning" role="alert"><span>仅当确认是同一位客户时才合并。来源档案将停用，目标档案将保留。</span></div>
-<div class="compare-grid"><section class="panel panel--padded"><p class="eyebrow">来源档案将停用</p><h2>{{ source.display_name }}（客户 #{{ source.id }}）</h2><p>身份 {{ source.identity_count }} 个 · 会话 {{ source.conversation_count }} 个 · 订单 {{ source.order_count }} 笔 · 任务 {{ source.task_count }} 项</p></section><section class="panel panel--padded"><p class="eyebrow">目标档案将保留</p><h2>{{ target.display_name }}（客户 #{{ target.id }}）</h2><p>身份 {{ target.identity_count }} 个 · 会话 {{ target.conversation_count }} 个 · 订单 {{ target.order_count }} 笔 · 任务 {{ target.task_count }} 项</p></section></div>
+{# 判断是否同一人需要依据（F06）：电话并排显示，完整档案可在查看后回到本页。 #}
+{% set back = "/employee/customers/merge/" ~ suggestion.id %}
+<div class="compare-grid">{% for label, card in [("来源档案将停用", source), ("目标档案将保留", target)] %}<section class="panel panel--padded"><p class="eyebrow">{{ label }}</p><h2>{{ card.display_name }}（客户 #{{ card.id }}）</h2><dl class="detail-grid"><dt>电话</dt><dd>{{ card.phone }}</dd></dl><p>身份 {{ card.identity_count }} 个 · 会话 {{ card.conversation_count }} 个 · 订单 {{ card.order_count }} 笔 · 任务 {{ card.task_count }} 项</p><a href="/employee/customers/{{ card.id }}?return_to={{ back | urlencode }}">查看完整档案</a></section>{% endfor %}</div>
+<p class="field-help">电话相同也不代表一定是同一人，请结合住宿记录和对话判断；合并只能由管理员确认。</p>
 <section class="decision-panel panel panel--padded"><h2>最终决定</h2><div class="decision-grid"><form method="post" action="/employee/customers/merge/{{ suggestion.id }}/confirm" data-confirm="确定合并两份客户档案吗？来源档案将被停用。"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">确认是同一客户并合并</button></form><form method="post" action="/employee/customers/merge/{{ suggestion.id }}/reject" data-confirm="确定拒绝这条合并建议吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">拒绝合并</button></form></div></section>
 {% endblock %}

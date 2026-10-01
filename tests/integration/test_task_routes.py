@@ -1870,3 +1870,19 @@ def test_staff_cannot_post_manual_task_creation() -> None:
     )
     assert response.status_code in (403, 409)
     assert tasks.create_calls == []
+
+
+def test_task_detail_status_tone_follows_the_status() -> None:
+    """AC15：任务详情的状态徽章随状态变色，终态不再一律显示成警告色。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    expected = {
+        BusinessTaskStatus.COMPLETED: "badge--success",
+        BusinessTaskStatus.CANCELLED: "badge--neutral",
+        BusinessTaskStatus.PENDING_ASSIGNMENT: "badge--warning",
+    }
+    for status, tone in expected.items():
+        tasks.item.status = status
+        text = client.get("/employee/tasks/1").text
+        heading = text[text.index('<div class="section-heading"><h2>'):][:400]
+        assert tone in heading, status

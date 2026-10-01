@@ -922,11 +922,20 @@ class SQLAlchemyCustomerRepository:
         self,
         customer_id: int,
     ) -> dict[str, object] | None:
-        """只选择复核页允许展示的客户编号和名称列。"""
+        """只选择复核页允许展示的客户编号、名称和电话列。
+
+        电话是 2026-10-01 用户确认的 D5：完整号码自 1.41.0 起已在客户列表、详情
+        和合并目标搜索里向同一批管理员展示，放进复核页不扩大受众，却能帮人判断
+        两份档案是不是同一个人。这里只取明文列和存量密文列，由服务层沿用
+        _display_phone 同一套解密逻辑生成展示值；不加载备注、正文或整条客户记录。
+        """
         result = await self._session.execute(
-            select(Customer.id, Customer.display_name).where(
-                Customer.id == customer_id
-            )
+            select(
+                Customer.id,
+                Customer.display_name,
+                Customer.phone,
+                Customer.phone_ciphertext,
+            ).where(Customer.id == customer_id)
         )
         row = result.mappings().one_or_none()
         if row is None:
@@ -934,6 +943,8 @@ class SQLAlchemyCustomerRepository:
         return {
             "id": int(row["id"]),
             "display_name": str(row["display_name"]),
+            "phone": row["phone"],
+            "phone_ciphertext": row["phone_ciphertext"],
         }
 
     async def _association_counts(self, customer_id: int) -> dict[str, int]:
@@ -984,6 +995,40 @@ class SQLAlchemyCustomerRepository:
         )
         # SQLite 返回无时区时间；数据库创建时间统一按 UTC 解读。
         return last.replace(tzinfo=UTC) if last is not None and last.tzinfo is None else last
+
+    async def latest_context_refresh_job(self, customer_id: int) -> dict[str, Any] | None:
+        """只读返回最近一次手动重新整理任务的状态与时间（F14，用户确认的 D7 加强）。
+
+        只选状态和两列时间，不取 payload 与 last_error：页面要回答的是「这次整理
+        排上了没有、做完了没有」，错误原文可能带内部细节。手动作业靠 dedupe_key 前缀
+        识别（refresh_context 入队时写入），每小时的自动维护不在其中。任务行按保留期
+        清理后查不到，返回 None，页面显示「暂无本次作业状态」。
+        """
+        row = (
+            await self._session.execute(
+                select(Job.status, Job.created_at, Job.updated_at)
+                .where(
+                    Job.job_type == "customer_context_refresh",
+                    Job.dedupe_key.startswith(f"customer-context-refresh:{customer_id}:"),
+                )
+                .order_by(Job.created_at.desc(), Job.id.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+
+        def as_utc(value: datetime | None) -> datetime | None:
+            """SQLite 读回的时间不带时区，按入库时的 UTC 解读。"""
+            if value is not None and value.tzinfo is None:
+                return value.replace(tzinfo=UTC)
+            return value
+
+        return {
+            "status": row.status,
+            "created_at": as_utc(row.created_at),
+            "updated_at": as_utc(row.updated_at),
+        }
 
     async def replace_tags(
         self,

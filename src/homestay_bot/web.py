@@ -19,6 +19,7 @@ from homestay_bot.domain.enums import (
     JobStatus,
     KnowledgeCandidateDraftStatus,
     KnowledgeCandidateStatus,
+    MessageOrigin,
     ReminderStatus,
     ReminderType,
     RoomOccupancyStatus,
@@ -88,6 +89,9 @@ _STATUS_LABELS: dict[tuple[type[Enum], str], str] = (
         (ComplaintReviewStatus, "returned"): "已退回",
         (ComplaintReviewStatus, "analysis_failed"): "分析失败",
         (ComplaintReviewStatus, "cancelled"): "已取消",
+        (MessageOrigin, "guest"): "客人",
+        (MessageOrigin, "servicer"): "人工客服",
+        (MessageOrigin, "bot"): "机器人",
         (JobStatus, "pending"): "待执行",
         (JobStatus, "running"): "执行中",
         (JobStatus, "completed"): "已完成",
@@ -118,6 +122,16 @@ def status_zh(value: object) -> str:
     if value is None:
         return "—"
     return str(value)
+
+
+# 客诉风险等级是分类器写入的字符串，只认这三个取值；与员工通知里的
+# conversation_service._COMPLAINT_RISK_LABELS 同义。
+_COMPLAINT_RISK_LABELS = {"critical": "严重", "high": "高", "normal": "一般"}
+
+
+def complaint_risk_zh(value: object) -> str:
+    """把客诉风险等级转成中文；未知取值显示「待核实」，不能被误读成低风险。"""
+    return _COMPLAINT_RISK_LABELS.get(str(value or ""), "待核实")
 
 
 def date_zh(value: object) -> str:
@@ -213,6 +227,7 @@ templates = Jinja2Templates(
 )
 templates.env.filters.update(
     {
+        "complaint_risk_zh": complaint_risk_zh,
         "date_zh": date_zh,
         "datetime_zh": datetime_zh,
         "enum_zh": status_zh,

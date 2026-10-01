@@ -1362,3 +1362,231 @@ def test_mobile_timeline_cap_covers_the_whole_mid_band(
     )
     assert cal <= 420, f"卡宽 {card_width}px 下日历应封顶 420px，实际 {cal}"
     page.close()
+
+
+def _complaint_page_html() -> str:
+    """用真实客诉模板渲染一个可编辑的复核页。"""
+    from homestay_bot.domain.enums import ComplaintReviewStatus
+    from homestay_bot.web import templates
+
+    return templates.env.get_template("complaints/edit.html").render(
+        request=SimpleNamespace(session={"employee_role": "admin"}),
+        review=SimpleNamespace(
+            id=7,
+            version=3,
+            status=ComplaintReviewStatus.EDITING,
+            risk_level="high",
+            analysis={},
+            draft="已保存的旧稿",
+            delivery_error_code=None,
+            sent_at=None,
+        ),
+        messages=[],
+        has_older_messages=False,
+        is_latest_message_page=True,
+        actions={"edit": True, "save": True, "send": True, "return": True, "cancel": True},
+        delivery_in_flight=False,
+        csrf_token="token",
+        page_title="客诉复核 #7",
+        submitted_draft=None,
+        confirm_draft=None,
+    )
+
+
+def _load_complaint_page(page: Page, *, accept: bool) -> None:
+    """载入真实模板与脚本；记录确认文案和最终提交的表单数据，不真正跳转。"""
+    page.set_content(_complaint_page_html())
+    page.evaluate(
+        """(accept) => {
+          window.confirmCalls = [];
+          window.confirm = (text) => { window.confirmCalls.push(text); return accept; };
+        }""",
+        accept,
+    )
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    # 在后台脚本之后挂监听：拿到的是脚本处理过（含确认回写）的真实提交数据。
+    page.evaluate(
+        """() => {
+          window.submitted = null;
+          document.querySelectorAll("form").forEach((form) => {
+            form.addEventListener("submit", (event) => {
+              if (!event.defaultPrevented) {
+                window.submitted = Object.fromEntries(new FormData(form, event.submitter));
+              }
+              event.preventDefault();
+            });
+          });
+        }"""
+    )
+
+
+def test_complaint_send_confirm_shows_the_text_being_sent(browser: Browser) -> None:
+    """AC02：确认框显示回复框里的当前内容；确认后提交的正是这段内容并带确认标记。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_complaint_page(page, accept=True)
+    page.fill('textarea[name="draft"]', "刚改好的新回复")
+
+    page.click('button[formaction$="/send"]')
+
+    prompt = page.evaluate("() => window.confirmCalls.at(-1)")
+    assert "刚改好的新回复" in prompt
+    assert "已保存的旧稿" not in prompt
+    submitted = page.evaluate("() => window.submitted")
+    assert submitted["draft"] == "刚改好的新回复"
+    assert submitted["confirmed"] == "1"
+    page.close()
+
+
+def test_cancelling_the_send_confirm_keeps_the_edit(browser: Browser) -> None:
+    """取消确认不提交、不清空编辑内容，按钮仍可再次点击。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_complaint_page(page, accept=False)
+    page.fill('textarea[name="draft"]', "还在斟酌的回复")
+
+    page.click('button[formaction$="/send"]')
+
+    assert page.evaluate("() => window.submitted") is None
+    assert page.input_value('textarea[name="draft"]') == "还在斟酌的回复"
+    assert page.is_enabled('button[formaction$="/send"]')
+    page.close()
+
+
+def test_saving_a_complaint_draft_asks_no_send_question(browser: Browser) -> None:
+    """保存草稿不弹发送确认，也不带确认标记。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_complaint_page(page, accept=True)
+    page.fill('textarea[name="draft"]', "只是保存")
+
+    page.click('button[formaction$="/save"]')
+
+    assert page.evaluate("() => window.confirmCalls") == []
+    submitted = page.evaluate("() => window.submitted")
+    assert submitted["draft"] == "只是保存"
+    assert "confirmed" not in submitted
+    page.close()
+
+
+def _real_task_list_html() -> str:
+    """经真实任务路由与模板渲染的管理员任务列表（服务用既有路由测试的替身）。"""
+    from homestay_bot.domain.enums import EmployeeRole
+    from tests.integration.test_task_routes import build_client, login
+
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+    return client.get("/employee/tasks").text
+
+
+def _load_real_task_list(page: Page) -> None:
+    """载入真实任务列表页、CSS 与脚本，拦截真实提交并记录确认框。"""
+    page.set_content(_real_task_list_html())
+    page.add_style_tag(content=ADMIN_CSS)
+    page.evaluate(
+        """() => {
+          window.confirmCalls = [];
+          window.confirm = (message) => { window.confirmCalls.push(message); return true; };
+        }"""
+    )
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    page.evaluate(
+        """() => {
+          window.submitted = [];
+          document.querySelectorAll("form").forEach((form) => form.addEventListener(
+            "submit", (event) => {
+              if (!event.defaultPrevented) window.submitted.push(form.action);
+              event.preventDefault();
+            }));
+        }"""
+    )
+
+
+def _bar_count(page: Page) -> str:
+    """批量操作栏里的实时计数文字。"""
+    return page.inner_text("[data-selection-count]")
+
+
+def test_phone_layout_can_select_all_and_sees_the_live_count(browser: Browser) -> None:
+    """AC12：手机布局没有表头，也能全选本页、看到已选几项、一键清空。"""
+    page = browser.new_page(viewport={"width": 390, "height": 844})
+    _load_real_task_list(page)
+    bar_toggle = ".selection-bar [data-select-all]"
+    assert page.is_visible(bar_toggle)
+    assert _bar_count(page) == "已选 0 项"
+
+    page.check(bar_toggle)
+    visible = page.evaluate(
+        """() => document.querySelectorAll('input[name="task_ids"]:not(:disabled)').length"""
+    )
+    assert visible >= 1
+    assert _bar_count(page) == f"已选 {visible} 项"
+
+    page.click("[data-select-clear]")
+    assert _bar_count(page) == "已选 0 项"
+    assert not page.is_checked(bar_toggle)
+    page.close()
+
+
+def test_two_select_all_entries_stay_in_sync_on_desktop(browser: Browser) -> None:
+    """表头与操作栏两个全选入口共用一份选择，勾选状态与计数一致。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_real_task_list(page)
+
+    page.check("thead [data-select-all]")
+
+    assert page.is_checked(".selection-bar [data-select-all]")
+    count = page.evaluate(
+        """() => new Set([...document.querySelectorAll(
+              'input[name="task_ids"]:checked:not(:disabled)')].map((b) => b.value)).size"""
+    )
+    assert _bar_count(page) == f"已选 {count} 项"
+    page.close()
+
+
+def test_a_bulk_action_with_nothing_selected_asks_no_confirmation(browser: Browser) -> None:
+    """一条都没选就点批量动作：不弹确认、不提交，计数处说明要先勾选。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_real_task_list(page)
+
+    page.click('.selection-actions button[formaction$="assign-selected"]')
+
+    assert page.evaluate("() => window.confirmCalls") == []
+    assert page.evaluate("() => window.submitted") == []
+    assert _bar_count(page) == "请先勾选任务"
+    page.close()
+
+
+def _contrast(page: Page, selector: str) -> float:
+    """按浏览器最终计算出的前景色与所在格背景色，求 WCAG 相对亮度对比度。"""
+    return page.evaluate(
+        """(selector) => {
+          const text = document.querySelector(selector);
+          const cell = text.closest(".cal-m__day");
+          const rgb = (value) => value.match(/\\d+(\\.\\d+)?/g).slice(0, 3).map(Number);
+          const lum = ([r, g, b]) => {
+            const lin = (c) => {
+              c /= 255;
+              return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+            };
+            return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+          };
+          const fg = lum(rgb(getComputedStyle(text).color));
+          const bg = lum(rgb(getComputedStyle(cell).backgroundColor));
+          return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+        }""",
+        selector,
+    )
+
+
+def test_free_day_numbers_are_readable_on_phones(browser: Browser) -> None:
+    """AC07：手机日期条里空闲日的日期数字对比度至少 4.5:1，今天的标识仍与普通日不同。"""
+    # 没有住宿的窗口里每一天都是空闲日。
+    page = _mobile_page(browser, _render_room_timeline(0), width=390)
+    assert page.query_selector(".cal-m__day--free .cal-m__dnum") is not None
+
+    assert _contrast(page, ".cal-m__day--free .cal-m__dnum") >= 4.5
+    today = page.query_selector(".cal-m__day--today")
+    if today is not None:
+        normal = page.query_selector(".cal-m__day:not(.cal-m__day--today)")
+        assert today.evaluate("el => getComputedStyle(el).backgroundColor") != normal.evaluate(
+            "el => getComputedStyle(el).backgroundColor"
+        )
+    page.close()

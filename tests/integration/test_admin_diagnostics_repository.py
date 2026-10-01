@@ -186,3 +186,55 @@ async def test_debug_audit_rejects_hostile_intent_and_tool_names_in_sqlite() -> 
     for secret in ("13800138000", "UID", "token=", "secret", "send_text", "create_reservation"):
         assert secret not in serialized
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delivery_chain_links_to_the_right_customer_without_content() -> None:
+    """AC05：链根消息所属客户出现在投递链里；没客户的降级为空；合并后跟到目标客户。"""
+    from homestay_bot.domain.enums import MessageOrigin
+    from homestay_bot.domain.models import Conversation, Customer, Message
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 10, 1, tzinfo=UTC)
+    async with factory() as session:
+        target = Customer(id=3, display_name="合并目标")
+        session.add_all([Customer(id=1, display_name="客人甲"), target])
+        await session.flush()
+        session.add(Customer(id=2, display_name="已合并来源", merged_into_customer_id=3))
+        session.add_all(
+            [
+                Conversation(id=10, customer_id=1, open_kfid="wk", external_userid="EXT-A"),
+                Conversation(id=20, customer_id=None, open_kfid="wk", external_userid="EXT-B"),
+                Conversation(id=30, customer_id=2, open_kfid="wk", external_userid="EXT-C"),
+            ]
+        )
+        await session.flush()
+        for message_id, conversation_id in ((101, 10), (102, 20), (103, 30)):
+            session.add(
+                Message(
+                    id=message_id,
+                    conversation_id=conversation_id,
+                    external_message_id=f"synthetic-{message_id}",
+                    origin=MessageOrigin.BOT,
+                    message_type="text",
+                    content="RAW-MESSAGE-SECRET",
+                    sent_at=now,
+                    message_metadata={
+                        "delivery_status": "failed",
+                        "delivery_error_code": "wecom_async_13",
+                    },
+                )
+            )
+        await session.commit()
+
+        rollup = await SQLAlchemyAdminDiagnosticsRepository(session).delivery_failure_rollup()
+
+    by_root = {chain.root_id: chain.customer_id for chain in rollup.chains}
+    assert by_root == {101: 1, 102: None, 103: 3}
+    rendered = repr(rollup)
+    for secret in ("RAW-MESSAGE-SECRET", "EXT-A", "EXT-B", "EXT-C"):
+        assert secret not in rendered
+    await engine.dispose()

@@ -28,10 +28,38 @@ class Reviews:
     async def get(self, review_id: int):
         return self.review if review_id == self.review.id else None
 
-    async def mark_ready(self, review_id: int, *, analysis: dict, draft: str):
+    async def mark_ready(
+        self, review_id: int, *, analysis: dict, draft: str, expected_version=None
+    ):
+        """模拟条件更新：只写进仍待分析且版本未变的客诉。"""
+        if self.review.status not in {"pending_analysis", "returned", "analysis_failed"}:
+            return None
+        if expected_version is not None and expected_version != self.review.version:
+            return None
         self.ready = (analysis, draft)
         self.review.status = "ready_for_review"
+        self.review.version += 1
         return self.review
+
+
+class Savepoint:
+    """模拟 session.begin_nested：块内抛错时把客诉恢复到进入前的状态。"""
+
+    def __init__(self, reviews: "Reviews") -> None:
+        self._reviews = reviews
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        self._before = (self._reviews.review.status, self._reviews.review.version,
+                        self._reviews.ready)
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        if exc_type is not None:
+            (self._reviews.review.status, self._reviews.review.version,
+             self._reviews.ready) = self._before
+        return False
 
 
 class Analyzer:
@@ -112,7 +140,7 @@ async def test_completed_review_is_idempotent():
 
 @pytest.mark.asyncio
 async def test_notification_failure_keeps_review_retryable() -> None:
-    """员工卡片发送失败时保留待分析状态，重试应再次通知。"""
+    """员工卡片登记失败时保存点撤销就绪状态，重试应再次通知。"""
     reviews = Reviews()
     notifications = Notifications()
     notifications.fail = True
@@ -124,6 +152,7 @@ async def test_notification_failure_keeps_review_retryable() -> None:
         employee_userids=["admin"],
         agent_id=1000002,
         edit_url="https://example.test/employee/complaints",
+        atomic=Savepoint(reviews),
     )
 
     with pytest.raises(RuntimeError):
@@ -177,3 +206,34 @@ def test_sqlalchemy_context_filters_credentials_and_detailed_address():
     assert "A1B2C3" not in content
     assert "珞喻路12号" not in content
     assert "https://example.test/qr.png" not in content
+
+
+@pytest.mark.asyncio
+async def test_late_analysis_does_not_reopen_a_closed_review_or_notify() -> None:
+    """M2：分析期间客诉被关闭，迟到的结果不写入、不登记「待复核」卡片。"""
+    reviews = Reviews()
+    notifications = Notifications()
+
+    class ClosingAnalyzer(Analyzer):
+        async def generate(self, **kwargs):
+            # 模型等待期间，管理员关闭了客诉。
+            reviews.review.status = "cancelled"
+            reviews.review.version += 1
+            return await super().generate(**kwargs)
+
+    service = ComplaintReviewJobService(
+        reviews=reviews,
+        analyzer=ClosingAnalyzer(),
+        messages=Messages(),
+        notifications=notifications,
+        employee_userids=["admin"],
+        agent_id=1000002,
+        edit_url="https://example.test/employee/complaints",
+        atomic=Savepoint(reviews),
+    )
+
+    await service.handle({"review_id": 7})
+
+    assert reviews.review.status == "cancelled"
+    assert reviews.ready is None
+    assert notifications.calls == []

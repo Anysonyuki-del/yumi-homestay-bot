@@ -77,7 +77,7 @@
   {% if d.unattended %}
   <div class="alert alert--danger" role="alert"><div>
     <strong>{{ d.unattended }} 次未送达没有人知道</strong>
-    <p>这些客人消息既没有在途重试，也没有被受理的重发，而且从未通知过任何人。请按下方消息编号在企业微信会话里人工回复。</p>
+    <p>这些客人消息既没有在途重试，也没有被受理的重发，而且从未通知过任何人。请在下方逐条列表点「查看对话」找到这位客人，再到企业微信会话里人工回复。</p>
   </div></div>
   {% endif %}
   <dl class="diagnostics-list">
@@ -91,13 +91,15 @@
     <summary>逐条查看（{{ d.chains | length }} 条）</summary>
     <div class="table-scroll"><table class="data-table">
       <caption class="visually-hidden">未送达的客人消息及其处理阶段</caption>
-      <thead><tr><th scope="col">消息编号</th><th scope="col">处理阶段</th><th scope="col">尝试次数</th><th scope="col">错误码</th><th scope="col">最近失败</th></tr></thead>
+      <thead><tr><th scope="col">系统记录编号</th><th scope="col">处理阶段</th><th scope="col">尝试次数</th><th scope="col">错误码</th><th scope="col">最近失败</th><th scope="col">客人对话</th></tr></thead>
       <tbody>{% for chain in d.chains %}<tr>
         <th scope="row">#{{ chain.root_id }}</th>
         <td>{{ ui.badge(delivery_stage_labels[chain.stage], "danger" if chain.stage == "unattended" else "neutral") }}</td>
         <td>{{ chain.attempts }}</td>
         <td>{{ chain.error_codes | join("、") or "—" }}</td>
         <td>{{ chain.last_failed_at | datetime_zh }}</td>
+        {# 游标 root_id + 1 让这条消息成为该页最新一条；被「清空测试数据」清理过的消息不在页面中。 #}
+        <td>{% if chain.customer_id %}<a href="/employee/customers/{{ chain.customer_id }}?tab=chat&amp;before_message_id={{ chain.root_id + 1 }}">查看对话</a>{% else %}<span class="muted">未关联客户</span>{% endif %}</td>
       </tr>{% endfor %}</tbody>
     </table></div>
     {% if d.truncated %}<p class="field-help">只统计了最近若干条投递记录，更早的未计入。</p>{% endif %}

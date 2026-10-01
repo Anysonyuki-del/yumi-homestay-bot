@@ -251,3 +251,181 @@ async def test_session_service_passes_the_room_filter(tmp_path) -> None:
 
     assert [entry.answer_zh for entry in listed] == ["房2"]
     await engine.dispose()
+
+
+def _seed_derived_rows(factory) -> None:
+    """给条目 1 补一行向量和一个已转为该知识的候选。"""
+    from datetime import UTC, datetime
+
+    from homestay_bot.domain.enums import KnowledgeCandidateStatus
+    from homestay_bot.domain.models import KnowledgeCandidate, KnowledgeEmbedding
+
+    async def run() -> None:
+        async with factory() as session:
+            session.add(
+                KnowledgeEmbedding(
+                    entry_id=1, language="zh", model="synthetic", content_hash="h",
+                    dimensions=2, vector=[0.1, 0.2],
+                )
+            )
+            session.add(
+                KnowledgeCandidate(
+                    id=5, canonical_key="开车停哪里", canonical_question="开车停哪里",
+                    category="停车", status=KnowledgeCandidateStatus.CONVERTED,
+                    knowledge_entry_id=1, total_occurrences=9, last_threshold_total=9,
+                    last_reminded_total=9, last_reminded_at=datetime.now(UTC),
+                    draft_generation=4,
+                )
+            )
+            await session.commit()
+
+    asyncio.run(run())
+
+
+def test_delete_entry_removes_everything_and_reopens_its_candidate(tmp_path) -> None:
+    """AC08/D3/D4-A：删除一并清掉配图、向量；候选改回待处理并从零计数；文件提交后清理。"""
+    from homestay_bot.application import _build_attachment_cleanup_handler
+    from homestay_bot.domain.enums import KnowledgeCandidateStatus
+    from homestay_bot.domain.models import KnowledgeCandidate, KnowledgeEmbedding
+    from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
+
+    engine, factory, storage = _world(tmp_path)
+    client, _ = build_client(EmployeeRole.ADMIN)
+    client.app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory, storage)
+    for _ in range(2):
+        _upload(client, _token(client), PNG)
+    _seed_derived_rows(factory)
+    files_before = _files(tmp_path)
+
+    response = client.post(
+        "/employee/knowledge/1/delete",
+        data={"csrf_token": _token(client), "return_to": "/employee/knowledge"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert _query(factory, select(KnowledgeEntry)) == []
+    assert _query(factory, select(KnowledgeImage)) == []
+    assert _query(factory, select(KnowledgeEmbedding)) == []
+    [candidate] = _query(factory, select(KnowledgeCandidate))
+    assert candidate.status is KnowledgeCandidateStatus.OPEN
+    assert candidate.knowledge_entry_id is None
+    assert (candidate.total_occurrences, candidate.last_threshold_total) == (0, 0)
+    assert candidate.last_reminded_at is None
+    assert candidate.draft_generation == 5  # 只增不减，旧代次任务作废
+    [job] = _query(
+        factory, select(Job).where(Job.dedupe_key.startswith("knowledge-entry-cleanup:1:"))
+    )
+    assert sorted(job.payload["file_ids"]) == files_before
+    [audit] = _query(factory, select(AuditLog).where(AuditLog.action == "knowledge.delete"))
+    assert audit.details == {"entry_id": 1, "image_count": 2}
+    # 文件要等清理任务执行后才删：提交前删文件，事务一旦失败就无法恢复。
+    assert _files(tmp_path) == files_before
+    asyncio.run(_build_attachment_cleanup_handler(storage)(job.payload))
+    assert _files(tmp_path) == []
+
+    async def ask_again() -> bool:
+        async with factory() as session:
+            repository = SQLAlchemyFaqCandidateRepository(session)
+            same = await repository.get_or_create(
+                canonical_question="开车停哪里", category="停车"
+            )
+            from datetime import UTC, datetime
+
+            return await repository.add_occurrence(
+                same.id, source_message_id="m-1", occurred_at=datetime.now(UTC), example=None
+            )
+
+    # 候选重新开放后，同一问题再次出现会被计数，而不是被 CONVERTED 静默吞掉。
+    assert asyncio.run(ask_again()) is True
+    asyncio.run(engine.dispose())
+
+
+def test_failed_delete_rolls_back_and_keeps_files(tmp_path, monkeypatch) -> None:
+    """清理任务登记失败时整笔回滚：条目、配图、候选都不变，文件还在。"""
+    from homestay_bot.domain.enums import KnowledgeCandidateStatus
+    from homestay_bot.domain.models import KnowledgeCandidate
+    from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
+
+    engine, factory, storage = _world(tmp_path)
+    client, _ = build_client(EmployeeRole.ADMIN)
+    client.app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory, storage)
+    _upload(client, _token(client), PNG)
+    _seed_derived_rows(factory)
+    token = _token(client)
+
+    async def broken_enqueue(self, *args, **kwargs):
+        raise RuntimeError("injected")
+
+    monkeypatch.setattr(SQLAlchemyJobRepository, "enqueue", broken_enqueue)
+    with pytest.raises(RuntimeError):
+        client.post("/employee/knowledge/1/delete", data={"csrf_token": token})
+
+    assert len(_query(factory, select(KnowledgeEntry))) == 1
+    assert len(_query(factory, select(KnowledgeImage))) == 1
+    [candidate] = _query(factory, select(KnowledgeCandidate))
+    assert candidate.status is KnowledgeCandidateStatus.CONVERTED
+    assert len(_files(tmp_path)) == 1
+    asyncio.run(engine.dispose())
+
+
+@pytest.mark.parametrize("old_job_status", ["pending", "completed"])
+def test_reused_entry_number_still_registers_its_own_cleanup(tmp_path, old_job_status) -> None:
+    """M4：SQLite 复用被删的最大编号；第二次删除要为新文件另登记清理，两组文件都能清掉。"""
+    from homestay_bot.application import _build_attachment_cleanup_handler
+    from homestay_bot.domain.enums import JobStatus
+
+    engine, factory, storage = _world(tmp_path)
+    client, _ = build_client(EmployeeRole.ADMIN)
+    client.app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory, storage)
+
+    def create_entry() -> int:
+        token = re.search(
+            r'name="csrf_token" value="([^"]+)"', client.get("/employee/knowledge").text
+        ).group(1)
+        client.post("/employee/knowledge", data={
+            "csrf_token": token, "category": "早餐", "question_zh": "早餐？", "answer_zh": "7点",
+            "question_en": "Breakfast?", "answer_en": "At 7", "scope": "global",
+        })
+        return max(_query(factory, select(KnowledgeEntry.id)))
+
+    # 先删掉夹具自带的条目 1，让新建条目拿到可复用的最大编号。
+    client.post("/employee/knowledge/1/delete", data={"csrf_token": _token(client)})
+    first = create_entry()
+    _upload_to(client, first, PNG)
+    client.post(f"/employee/knowledge/{first}/delete", data={"csrf_token": _token(client)})
+    first_files = _files(tmp_path)
+
+    async def settle_old_job() -> None:
+        async with factory() as session:
+            for job in await session.scalars(select(Job)):
+                job.status = JobStatus(old_job_status)
+            await session.commit()
+
+    asyncio.run(settle_old_job())
+    second = create_entry()
+    assert second == first  # SQLite 复用了编号，正是这个反例的前提
+    _upload_to(client, second, PNG)
+    client.post(f"/employee/knowledge/{second}/delete", data={"csrf_token": _token(client)})
+
+    jobs = _query(factory, select(Job).where(Job.dedupe_key.startswith(
+        f"knowledge-entry-cleanup:{first}:")))
+    assert len(jobs) == 2
+    handler = _build_attachment_cleanup_handler(storage)
+    for job in jobs:
+        asyncio.run(handler(job.payload))
+    assert _files(tmp_path) == []
+    assert first_files
+    asyncio.run(engine.dispose())
+
+
+def _upload_to(client, entry_id: int, content: bytes):
+    """给指定条目上传一张配图。"""
+    page = client.get(f"/employee/knowledge/{entry_id}")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    return client.post(
+        f"/employee/knowledge/{entry_id}/images/upload",
+        data={"csrf_token": token},
+        files={"image": ("photo", content, "image/png")},
+        follow_redirects=False,
+    )

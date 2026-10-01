@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -89,6 +90,8 @@ class MergeCustomerCard:
     conversation_count: int
     order_count: int
     task_count: int
+    # 与客户详情页同一展示规则：完整号码，没有时为「未登记」（D5）。
+    phone: str = "未登记"
 
 
 class CustomerAdminRepositoryPort(Protocol):
@@ -110,6 +113,9 @@ class CustomerAdminRepositoryPort(Protocol):
 
     async def latest_context_refresh_at(self, customer_id: int) -> datetime | None:
         """锁定客户并返回最近重算作业时间，锁保持到入队事务结束。"""
+
+    async def latest_context_refresh_job(self, customer_id: int) -> dict[str, Any] | None:
+        """只读返回最近一次手动重新整理任务的状态与时间，没有时为 None。"""
 
     async def list_customers(
         self,
@@ -326,6 +332,14 @@ class CustomerAdminService:
                 "older_before_message_id": messages[0]["id"] if messages else None,
                 "is_latest_message_page": customer_id.before_message_id is None,
             }
+        if tab == "memory":
+            # 只在记忆页签查：这是「重新整理」按钮所在的地方（F14）。
+            detail = {
+                **detail,
+                "context_refresh_job": await self._repository.latest_context_refresh_job(
+                    actual_customer_id
+                ),
+            }
         customer = detail["customer"]
         notes = await self._repository.latest_stay_notes(
             [int(customer.id)],
@@ -406,7 +420,7 @@ class CustomerAdminService:
         suggestion_id: int,
         administrator: Employee,
     ) -> dict[str, Any]:
-        """返回不含电话、备注或正文的合并人工复核信息。"""
+        """返回合并人工复核信息：编号、名称、电话和关联数量，不含备注或正文。"""
         self._require_admin(administrator)
         detail = await self._repository.merge_detail(suggestion_id)
         return {
@@ -414,10 +428,12 @@ class CustomerAdminService:
             "source": self._merge_card(
                 detail["source"],
                 detail["source_counts"],
+                phone=self._display_phone(SimpleNamespace(**detail["source"])),
             ),
             "target": self._merge_card(
                 detail["target"],
                 detail["target_counts"],
+                phone=self._display_phone(SimpleNamespace(**detail["target"])),
             ),
         }
 
@@ -790,7 +806,7 @@ class CustomerAdminService:
         return self._cipher.decrypt(ciphertext)
 
     @staticmethod
-    def _merge_card(customer: Any, counts: Any) -> MergeCustomerCard:
+    def _merge_card(customer: Any, counts: Any, *, phone: str) -> MergeCustomerCard:
         """把安全列投影和计数收窄为专用复核卡片。"""
         return MergeCustomerCard(
             id=int(customer["id"]),
@@ -799,6 +815,7 @@ class CustomerAdminService:
             conversation_count=int(counts["conversations"]),
             order_count=int(counts["orders"]),
             task_count=int(counts["tasks"]),
+            phone=phone,
         )
 
     @staticmethod

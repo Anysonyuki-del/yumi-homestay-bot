@@ -1086,6 +1086,7 @@ class UnattendedDeliveryDiagnosticsStub(DiagnosticsStub):
                         root_id=70, stage="unattended", attempts=1,
                         error_codes=("wecom_async_13",),
                         last_failed_at=datetime(2026, 9, 9, tzinfo=UTC),
+                        customer_id=5,
                     ),
                 ),
             ),
@@ -1105,6 +1106,8 @@ def test_a_delivery_nobody_knows_about_raises_a_real_alarm() -> None:
     assert "没有人知道" in page.text
     assert "人工回复" in page.text, "光报警不说怎么处理，等于只给数字"
     assert "#70" in page.text
+    # F05：能从告警直接跳到这位客人的对话，并翻到这条消息所在的一页。
+    assert 'href="/employee/customers/5?tab=chat&amp;before_message_id=71"' in page.text
 
 
 def test_the_delivery_board_never_renders_message_content() -> None:
@@ -1117,7 +1120,9 @@ def test_the_delivery_board_never_renders_message_content() -> None:
 
     # 桩里没有正文字段可泄漏，真正要守的是视图模型的形状：投递链只暴露
     # 编号、阶段、次数、错误码与时间，任何一个新增字段都要重新审这条边界。
+    # customer_id 是 2026-10-01 用户确认的 D5 白名单变更：只是内部客户编号，用来
+    # 跳到该客户的对话页（目标页另做管理员认证），不含正文或外部身份。
     assert set(DeliveryChain.__dataclass_fields__) == {
-        "root_id", "stage", "attempts", "error_codes", "last_failed_at",
+        "root_id", "stage", "attempts", "error_codes", "last_failed_at", "customer_id",
     }
     assert "conversation" not in page.text.lower()

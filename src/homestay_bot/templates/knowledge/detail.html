@@ -1,14 +1,18 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
 {% from "knowledge/scope_fields.html" import scope_fields %}
+{% from "knowledge/entry_state.html" import entry_state %}
 
-{% block page_actions %}<a class="button button--secondary" href="/employee/knowledge">返回知识列表</a>{% endblock %}
+{% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">返回知识列表</a>{% endblock %}
 {% block content %}
 <section class="panel panel--padded detail-section">
-  <div class="section-heading"><div><p class="eyebrow">{{ entry.category }} · 条目 #{{ entry.id }}</p><h2>{{ entry.question_zh }}</h2></div>{{ ui.badge("已启用" if entry.is_enabled else "已停用", "success" if entry.is_enabled else "neutral") }}</div>
+  <div class="section-heading"><div><p class="eyebrow">{{ entry.category }} · 条目 #{{ entry.id }}</p><h2>{{ entry.question_zh }}</h2></div></div>
+  {{ entry_state(entry, properties) }}
+  {% if error %}<p class="alert alert--danger" role="alert" id="knowledge-edit-error" tabindex="-1">{{ error }}（已保留你刚才填写的内容，改正后重新保存即可。）</p>{% endif %}
   {% if can_edit %}
-  <form method="post" action="/employee/knowledge/{{ entry.id }}/edit" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties, entry) }}<label>分类<input name="category" value="{{ entry.category }}" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required>{{ entry.question_zh }}</textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ entry.answer_zh }}</textarea></label><label>English question<textarea name="question_en" maxlength="500" required>{{ entry.question_en }}</textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required>{{ entry.answer_en }}</textarea></label><label>关键词（逗号分隔）<input name="keywords" value="{{ entry.keywords | join(',') }}" maxlength="1000"></label><button type="submit">保存知识条目</button></form>
+  <form method="post" action="/employee/knowledge/{{ entry.id }}/edit" data-unsaved-warning><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties, form_entry) }}<label>分类<input name="category" value="{{ form_entry.category }}" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required>{{ form_entry.question_zh }}</textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ form_entry.answer_zh }}</textarea></label><label>English question<textarea name="question_en" maxlength="500" required>{{ form_entry.question_en }}</textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required>{{ form_entry.answer_en }}</textarea></label><label>关键词（逗号分隔）<input name="keywords" value="{{ form_entry.keywords | join(',') }}" maxlength="1000"></label><button type="submit">保存知识条目</button></form>
   <p class="help-text">启用或停用操作请返回知识列表执行，避免复用已提交的一次性表单令牌。</p>
+  <form method="post" action="/employee/knowledge/{{ entry.id }}/delete" data-confirm="确定永久删除知识 #{{ entry.id }}{% if images %}及其 {{ images | length }} 张配图{% endif %}吗？条目、配图和检索数据都会删除，无法恢复。只想暂停使用请回列表选择停用。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">永久删除这条知识</button></form>
   {% else %}
   <dl class="detail-grid"><dt>中文答案</dt><dd class="long-text">{{ entry.answer_zh }}</dd><dt>English question</dt><dd class="long-text" lang="en">{{ entry.question_en }}</dd><dt>English answer</dt><dd class="long-text" lang="en">{{ entry.answer_en }}</dd><dt>关键词</dt><dd>{{ entry.keywords | join('、') or "—" }}</dd></dl>
   {% endif %}

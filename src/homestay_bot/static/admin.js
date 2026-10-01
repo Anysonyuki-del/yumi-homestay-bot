@@ -151,7 +151,13 @@ function fillConfirmPlaceholders(text, form) {
   const chosen = employee instanceof HTMLSelectElement
     ? employee.options[employee.selectedIndex]?.textContent?.trim() || ""
     : "";
-  return text.replace("{n}", String(selected.size)).replace("{employee}", chosen);
+  // {draft}：客诉发送确认要让员工看到这次真正要发出去的正文，而不是泛泛一句「确定吗」。
+  const draft = form.querySelector('textarea[name="draft"]');
+  const draftText = draft instanceof HTMLTextAreaElement ? draft.value.trim() : "";
+  return text
+    .replace("{n}", String(selected.size))
+    .replace("{employee}", chosen)
+    .replace("{draft}", draftText);
 }
 
 // 确认文案必须跟随「这次点的是哪个动作」，而不是表单的默认动作。同一个表单上
@@ -166,7 +172,14 @@ document.querySelectorAll("form[data-confirm], form[data-danger-confirm]").forEa
       if (submitter.hasAttribute("data-typed-confirm")) return;
       const own = submitter.getAttribute("data-confirm");
       if (own) {
-        if (!window.confirm(fillConfirmPlaceholders(own, form))) event.preventDefault();
+        if (!window.confirm(fillConfirmPlaceholders(own, form))) {
+          event.preventDefault();
+          return;
+        }
+        // 确认通过后改写提交按钮的值，告诉服务端员工已经看过正文；没有脚本时
+        // 按钮保持原值，服务端会先渲染一个确认步骤，不会跳过确认直接发送。
+        const accepted = submitter.getAttribute("data-confirm-accept-value");
+        if (accepted !== null && submitter instanceof HTMLButtonElement) submitter.value = accepted;
         return;
       }
       // 改写了目标动作却没带自己的文案：表单级文案不属于它，宁可不问也不误导。
@@ -311,34 +324,78 @@ document.querySelectorAll('input[name="task_ids"]').forEach((box) => {
   if (box.form) selectionForms.add(box.form);
 });
 
+/** 本次会真正提交的任务编号：只算启用的勾选框，并按编号去重。 */
+function selectedTaskIds(form) {
+  return new Set(
+    selectableBoxes(form).filter((box) => box.checked).map((box) => box.value),
+  );
+}
+
 selectionForms.forEach((form) => {
-  const toggle = form.querySelector("[data-select-all]");
-  const refreshToggle = () => {
-    if (!(toggle instanceof HTMLInputElement)) return;
+  // 表头一个、批量操作栏一个（手机布局没有表头，F12）：两个入口共用同一份选择，
+  // 都按当前可提交的勾选框刷新勾选与不确定态，不各自维护状态。
+  const toggles = Array.from(form.querySelectorAll("[data-select-all]"))
+    .filter((toggle) => toggle instanceof HTMLInputElement);
+  const counter = form.querySelector("[data-selection-count]");
+  const clear = form.querySelector("[data-select-clear]");
+  // 这些控件只在脚本可用时有意义，模板里默认隐藏，避免无脚本时显示一个不会变的「已选 0 项」。
+  form.querySelectorAll("[data-selection-enhanced]").forEach((element) => {
+    element.hidden = false;
+  });
+  const refresh = () => {
     const all = selectableBoxes(form);
-    const checked = all.filter((box) => box.checked);
-    toggle.checked = checked.length === all.length && all.length > 0;
-    // 部分选中时显示不确定态，避免全选框看起来是「已全选」。
-    toggle.indeterminate = checked.length > 0 && checked.length < all.length;
+    const count = selectedTaskIds(form).size;
+    const checked = all.filter((box) => box.checked).length;
+    toggles.forEach((toggle) => {
+      toggle.checked = checked === all.length && all.length > 0;
+      // 部分选中时显示不确定态，避免全选框看起来是「已全选」。
+      toggle.indeterminate = checked > 0 && checked < all.length;
+    });
+    if (counter) counter.textContent = `已选 ${count} 项`;
   };
   syncMirroredSelection(form);
-  if (toggle instanceof HTMLInputElement) {
+  refresh();
+  toggles.forEach((toggle) => {
     toggle.addEventListener("change", () => {
       selectableBoxes(form).forEach((box) => {
         box.checked = toggle.checked;
       });
+      refresh();
+    });
+  });
+  if (clear instanceof HTMLButtonElement) {
+    clear.addEventListener("click", () => {
+      selectableBoxes(form).forEach((box) => {
+        box.checked = false;
+      });
+      refresh();
     });
   }
   form.addEventListener("change", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
     if (target.name !== "task_ids") return;
-    refreshToggle();
+    refresh();
   });
-  // 换断点会互换可见副本，重新对齐后全选框也要跟着回到正确状态。
+  // 一条都没选就点批量动作：在确认框弹出之前拦下并说清楚，而不是让人确认一个空操作
+  // 再收到服务端拒绝。捕获阶段注册，先于表单上的确认处理执行。
+  form.addEventListener("submit", (event) => {
+    if (selectedTaskIds(form).size > 0) return;
+    const submitter = event.submitter;
+    if (submitter instanceof HTMLElement && submitter.hasAttribute("data-typed-confirm")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (counter) {
+      counter.textContent = "请先勾选任务";
+      counter.focus();
+    } else {
+      window.alert("请先勾选任务。");
+    }
+  }, true);
+  // 换断点会互换可见副本，重新对齐后全选框与计数也要跟着回到正确状态。
   window.addEventListener("resize", () => {
     syncMirroredSelection(form);
-    refreshToggle();
+    refresh();
   });
 });
 

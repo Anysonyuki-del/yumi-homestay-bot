@@ -251,6 +251,32 @@ def test_property_index_shows_operational_health_summary(tmp_path) -> None:
     assert "资料完整度 67%" in response.text
 
 
+def test_inactive_property_is_marked_and_filterable(tmp_path) -> None:
+    """AC13：停用房源在桌面和手机布局都标「已停用」；筛选默认全部，不改 is_active。"""
+    client, stub = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+    inactive = SimpleNamespace(**{**vars(stub.property), "id": 102, "title": "停用房"})
+    inactive.is_active = False
+    stub.list_all = lambda employee: _async([stub.property, inactive])
+
+    everything = client.get("/employee/properties").text
+    only_inactive = client.get("/employee/properties?active=inactive").text
+    only_active = client.get("/employee/properties?active=active").text
+
+    # 桌面表格和手机卡片各出现一次。
+    assert everything.count("已停用</span>") >= 2
+    assert "长江中心" in everything and "停用房" in everything
+    assert "停用房" in only_inactive and "长江中心" not in only_inactive
+    assert "长江中心" in only_active and "停用房" not in only_active
+    assert stub.property.is_active is True and inactive.is_active is False
+    assert client.get("/employee/properties?active=unknown").status_code == 422
+
+
+async def _async(value):
+    """把同步值包成协程，替身方法签名保持为 async。"""
+    return value
+
+
 def test_property_detail_uses_url_tabs_and_keeps_writes_separate(tmp_path) -> None:
     """详情默认只读，资料和凭证表单只出现在对应 URL 页签。"""
     client, _ = build_client(EmployeeRole.ADMIN, tmp_path)

@@ -1,41 +1,59 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
 {% from "knowledge/scope_fields.html" import scope_fields %}
+{% from "knowledge/entry_state.html" import entry_state %}
 
 {% block content %}
-<section class="panel panel--padded knowledge-filter" aria-labelledby="knowledge-filter-title">
-  <div class="section-heading"><div><p class="eyebrow">内容边界</p><h2 id="knowledge-filter-title">知识筛选</h2></div>{{ ui.badge("只使用已启用内容", "success") }}</div>
-  <p>机器人只会使用已启用且经过审核的双语条目。筛选只影响管理页面，不改变模型使用范围。</p>
-  <form class="filter-toolbar" method="get" action="/employee/knowledge" data-filter-form><label>搜索内容<input type="search" name="query" value="{{ query }}" maxlength="100" placeholder="问题或答案"></label><label>启用状态<select name="enabled"><option value="">全部状态</option><option value="enabled" {% if enabled_filter == "enabled" %}selected{% endif %}>已启用</option><option value="disabled" {% if enabled_filter == "disabled" %}selected{% endif %}>已停用</option></select></label><label>分类<input name="category" value="{{ category_filter }}" maxlength="64" placeholder="精确分类"></label><label>房间<select name="room"><option value="">全部房间</option><option value="shared" {% if room_filter == "shared" %}selected{% endif %}>不限房间（通用与店外）</option>{% for item in properties %}<option value="{{ item.id }}" {% if room_filter == item.id|string %}selected{% endif %}>{{ item.title }}</option>{% endfor %}</select></label><div class="button-row"><button type="submit">筛选</button><a class="button button--secondary" href="/employee/knowledge">重置</a></div></form>
-  <nav class="filter-links" aria-label="知识页面分区"><a href="#knowledge-candidates">待归纳候选</a><a href="#knowledge-entries">现有条目</a></nav>
-</section>
+{% set failed = failed_form or {} %}
+{% set failed_values = failed.get("values") %}
+<nav class="tab-nav" aria-label="知识库分区">
+  <a href="{{ entries_url }}"{% if view == 'entries' %} aria-current="page"{% endif %}>现有知识</a>
+  {% if can_edit %}<a href="{{ candidates_url }}"{% if view == 'candidates' %} aria-current="page"{% endif %}>待审核候选</a>{% endif %}
+</nav>
 
-{% if can_edit %}
+{% if view == "candidates" %}
 <section class="panel panel--padded" id="knowledge-candidates">
-  <div class="section-heading"><div><p class="eyebrow">仅管理员可见</p><h2>待归纳问题</h2></div>{{ ui.badge(candidates | length ~ " 项", "warning") }}</div>
-  <p>以下草稿由模型生成，仅供核实和修改，不会自动回复客人。</p>
+  <div class="section-heading"><div><p class="eyebrow">仅管理员可见</p><h2>待审核候选</h2></div>{{ ui.badge("本页 " ~ (candidates | length) ~ " 项", "warning") }}</div>
+  <p>以下草稿由模型生成，仅供核实和修改，不会自动回复客人。展开一项即可编辑并转为知识。</p>
   <div class="candidate-list">
     {% for candidate in candidates %}{% set draft = candidate.draft_payload or {} %}
-    <article class="candidate-card">
+    {% set restoring = failed.get("kind") == "candidate" and failed.get("candidate_id") == candidate.id %}
+    {% set values = failed_values if restoring else none %}
+    <article class="candidate-card" id="candidate-{{ candidate.id }}">
       <div class="section-heading"><h3>{{ candidate.category }} · {{ candidate.canonical_question }}</h3>{{ ui.badge("累计 " ~ candidate.total_occurrences ~ " 次", "info") }}</div>
       {% if candidate.examples %}<h4>脱敏参考问法</h4><ul>{% for example in candidate.examples %}<li class="long-text">{{ example }}</li>{% endfor %}</ul>{% endif %}
       {% if draft.get("verification_items") %}<h4>待管理员核实</h4><ul class="verification-list">{% for item in draft.get("verification_items", []) %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+      <details class="collapsible-section"{% if restoring %} open{% endif %}><summary>编辑并转为知识</summary><div class="collapsible-section__content">
+      {% if restoring and error %}<p class="alert alert--danger" role="alert" id="candidate-{{ candidate.id }}-error" tabindex="-1">{{ error }}</p>{% endif %}
       <form method="post" action="/employee/knowledge/candidates/{{ candidate.id }}/convert" data-unsaved-warning>
         <input type="hidden" name="return_to" value="{{ current_view }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties) }}<label>分类<input name="category" value="{{ draft.get('category', candidate.category) }}" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required>{{ draft.get("question_zh", candidate.canonical_question) }}</textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ draft.get("answer_zh", "") }}</textarea></label><label>English question<textarea name="question_en" maxlength="500" required>{{ draft.get("question_en", "") }}</textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required>{{ draft.get("answer_en", "") }}</textarea></label><label>关键词（逗号分隔）<input name="keywords" value="{{ draft.get('keywords', []) | join(',') }}" maxlength="1000"></label><button type="submit">确认并转为知识</button>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties, values) }}<label>分类<input name="category" value="{{ values.category if values else draft.get('category', candidate.category) }}" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required>{{ values.question_zh if values else draft.get("question_zh", candidate.canonical_question) }}</textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ values.answer_zh if values else draft.get("answer_zh", "") }}</textarea></label><label>English question<textarea name="question_en" maxlength="500" required>{{ values.question_en if values else draft.get("question_en", "") }}</textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required>{{ values.answer_en if values else draft.get("answer_en", "") }}</textarea></label><label>关键词（逗号分隔）<input name="keywords" value="{{ (values.keywords if values else draft.get('keywords', [])) | join(',') }}" maxlength="1000"></label><button type="submit">确认并转为知识</button>
       </form>
+      </div></details>
       <form method="post" action="/employee/knowledge/candidates/{{ candidate.id }}/snooze" data-confirm="确定暂不收录该候选并关闭统计 30 天吗？"><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">暂不收录（30 天）</button></form>
     </article>
-    {% else %}{{ ui.empty("暂无待归纳问题") }}{% endfor %}
+    {% else %}{{ ui.empty("暂无待审核候选") }}{% endfor %}
   </div>
-  <nav class="pagination" aria-label="FAQ 候选分页">{% if previous_candidate_url %}<a class="button button--secondary" href="{{ previous_candidate_url }}">上一页</a>{% endif %}<span>候选第 {{ candidate_page }} 页</span>{% if next_candidate_url %}<a class="button button--secondary" href="{{ next_candidate_url }}">下一页</a>{% endif %}</nav>
+  <nav class="pagination" aria-label="候选分页">{% if previous_candidate_url %}<a class="button button--secondary" href="{{ previous_candidate_url }}">上一页</a>{% endif %}<span>候选第 {{ candidate_page }} 页</span>{% if next_candidate_url %}<a class="button button--secondary" href="{{ next_candidate_url }}">下一页</a>{% endif %}</nav>
+</section>
+{% else %}
+<section class="panel panel--padded knowledge-filter" aria-labelledby="knowledge-filter-title">
+  <div class="section-heading"><div><p class="eyebrow">内容边界</p><h2 id="knowledge-filter-title">知识筛选</h2></div></div>
+  <p>机器人只会使用已启用且范围已审核的双语条目。筛选只影响管理页面，不改变模型使用范围。</p>
+  <form class="filter-toolbar" method="get" action="/employee/knowledge" data-filter-form><label>搜索内容<input type="search" name="query" value="{{ query }}" maxlength="100" placeholder="问题或答案"></label><label>启用状态<select name="enabled"><option value="">全部状态</option><option value="enabled" {% if enabled_filter == "enabled" %}selected{% endif %}>已启用</option><option value="disabled" {% if enabled_filter == "disabled" %}selected{% endif %}>已停用</option></select></label><label>分类<input name="category" value="{{ category_filter }}" maxlength="64" placeholder="精确分类"></label><label>房间<select name="room"><option value="">全部房间</option><option value="shared" {% if room_filter == "shared" %}selected{% endif %}>不限房间（通用与店外）</option>{% for item in properties %}<option value="{{ item.id }}" {% if room_filter == item.id|string %}selected{% endif %}>{{ item.title }}</option>{% endfor %}</select></label><div class="button-row"><button type="submit">筛选</button><a class="button button--secondary" href="/employee/knowledge">重置</a></div></form>
 </section>
 
-<details class="panel collapsible-section"><summary>新增知识条目</summary><div class="collapsible-section__content"><p class="muted">展开后填写中英文问答，保存后启用；适用范围审核完成后才用于回复。</p><form method="post" action="/employee/knowledge" data-unsaved-warning><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties) }}<label>分类<input name="category" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required></textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required></textarea></label><label>English question<textarea name="question_en" maxlength="500" required></textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required></textarea></label><label>关键词（逗号分隔）<input name="keywords" maxlength="1000"></label><button type="submit">新增并启用</button></form></div></details>
+{% if can_edit %}
+{% set creating = failed.get("kind") == "create" %}
+<details class="panel collapsible-section" id="knowledge-create"{% if creating %} open{% endif %}><summary>新增知识条目</summary><div class="collapsible-section__content"><p class="muted">展开后填写中英文问答，保存后启用；适用范围审核完成后才用于回复。</p>
+{% if creating and error %}<p class="alert alert--danger" role="alert" id="knowledge-create-error" tabindex="-1">{{ error }}</p>{% endif %}
+{% set values = failed_values if creating else none %}
+<form method="post" action="/employee/knowledge" data-unsaved-warning><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties, values) }}<label>分类<input name="category" value="{{ values.category if values else '' }}" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required>{{ values.question_zh if values else '' }}</textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ values.answer_zh if values else '' }}</textarea></label><label>English question<textarea name="question_en" maxlength="500" required>{{ values.question_en if values else '' }}</textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required>{{ values.answer_en if values else '' }}</textarea></label><label>关键词（逗号分隔）<input name="keywords" value="{{ (values.keywords if values else []) | join(',') }}" maxlength="1000"></label><button type="submit">新增并启用</button></form></div></details>
 {% endif %}
 
-<section class="panel panel--padded" id="knowledge-entries"><div class="section-heading"><h2>现有条目</h2>{{ ui.badge(entries | length ~ " 项", "neutral") }}</div>
-  <div class="entry-list">{% for entry in entries %}<article class="entry-card"><div><p class="eyebrow">{{ entry.category }}{% if entry.property_id %}{% set owner = properties | selectattr("id", "equalto", entry.property_id) | first %} · {{ owner.title if owner else "房间 " ~ entry.property_id }}{% endif %}</p><h3><a href="/employee/knowledge/{{ entry.id }}">{{ entry.question_zh }}</a></h3><p class="long-text">{{ entry.answer_zh }}</p></div><div class="entry-card__actions">{{ ui.badge("已启用" if entry.is_enabled else "已停用", "success" if entry.is_enabled else "neutral") }}{% if can_edit %}<form method="post" action="/employee/knowledge/{{ entry.id }}/{{ 'disable' if entry.is_enabled else 'enable' }}" {% if entry.is_enabled %}data-confirm="确定停用该知识吗？机器人将立即停止使用。"{% endif %}><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button {{ 'button--danger' if entry.is_enabled else 'button--secondary' }}" type="submit">{{ "停用" if entry.is_enabled else "启用" }}</button></form>{% endif %}</div></article>{% else %}{{ ui.empty("暂无知识条目") }}{% endfor %}</div>
+<section class="panel panel--padded" id="knowledge-entries"><div class="section-heading"><h2>现有知识</h2>{{ ui.badge("本页 " ~ (entries | length) ~ " 项", "neutral") }}</div>
+  <div class="entry-list">{% for entry in entries %}<article class="entry-card"><div><p class="eyebrow">{{ entry.category }} · 条目 #{{ entry.id }}</p><h3><a href="/employee/knowledge/{{ entry.id }}?return_to={{ current_view | urlencode }}">{{ entry.question_zh }}</a></h3><p class="long-text">{{ entry.answer_zh }}</p>{{ entry_state(entry, properties) }}</div><div class="entry-card__actions">{% if can_edit %}<form method="post" action="/employee/knowledge/{{ entry.id }}/{{ 'disable' if entry.is_enabled else 'enable' }}" {% if entry.is_enabled %}data-confirm="确定停用该知识吗？机器人将立即停止使用。"{% endif %}><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button {{ 'button--danger' if entry.is_enabled else 'button--secondary' }}" type="submit">{{ "停用" if entry.is_enabled else "启用" }}</button></form><form method="post" action="/employee/knowledge/{{ entry.id }}/delete" data-confirm="确定永久删除知识 #{{ entry.id }}「{{ entry.question_zh | truncate(40) }}」吗？条目、配图和检索数据都会删除，无法恢复。只想暂停使用请选择停用。"><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">永久删除</button></form>{% endif %}</div></article>{% else %}{{ ui.empty("暂无知识条目") }}{% endfor %}</div>
   <nav class="pagination" aria-label="知识条目分页">{% if previous_url %}<a class="button button--secondary" href="{{ previous_url }}">上一页</a>{% endif %}<span>第 {{ page }} 页</span>{% if next_url %}<a class="button button--secondary" href="{{ next_url }}">下一页</a>{% endif %}</nav>
 </section>
+{% endif %}
 {% endblock %}

@@ -1,4 +1,6 @@
 import re
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Any, Protocol
 
 from homestay_bot.domain.enums import ComplaintReviewStatus
@@ -13,9 +15,14 @@ class ComplaintReviewRepositoryPort(Protocol):
         """读取客诉记录。"""
 
     async def mark_ready(
-        self, review_id: int, *, analysis: dict[str, Any], draft: str
-    ) -> Any:
-        """保存脱敏分析和回复草稿。"""
+        self,
+        review_id: int,
+        *,
+        analysis: dict[str, Any],
+        draft: str,
+        expected_version: int | None = None,
+    ) -> Any | None:
+        """保存脱敏分析和回复草稿；客诉已变化时返回 None。"""
 
 
 class ComplaintMessageContextPort(Protocol):
@@ -156,8 +163,14 @@ class ComplaintReviewJobService:
         employee_userids: list[str],
         agent_id: int,
         edit_url: str,
+        atomic: Callable[[], AbstractAsyncContextManager[Any]] | None = None,
     ) -> None:
-        """注入客诉记录、分析器、上下文读取和事务型通知。"""
+        """注入客诉记录、分析器、上下文读取和事务型通知。
+
+        atomic 把「写入就绪」与「登记复核卡片」包成一个保存点：worker 在任务失败时
+        不回滚，会连同已做的写入一起提交，两步之间任何一步失败都必须一起撤销。
+        生产装配传入 session.begin_nested。
+        """
         self._reviews = reviews
         self._analyzer = analyzer
         self._messages = messages
@@ -165,6 +178,7 @@ class ComplaintReviewJobService:
         self._employee_userids = employee_userids
         self._agent_id = agent_id
         self._edit_url = edit_url.rstrip("/")
+        self._atomic = atomic or nullcontext
 
     async def handle(self, payload: dict[str, Any]) -> None:
         """按客诉编号幂等生成分析并发送后台复核提醒。"""
@@ -190,27 +204,26 @@ class ComplaintReviewJobService:
             messages=context,
             customer_context={},
         )
-        if not self._employee_userids:
-            await self._reviews.mark_ready(
+        analysis = draft.model_dump()
+        async with self._atomic():
+            # 先用条件更新写入就绪，成功才登记卡片：迟到的分析（客诉已关闭或已被
+            # 改动）不会重新打开客诉，也不会发出一张指向过期内容的「待复核」卡片。
+            # 卡片登记失败时保存点撤销就绪状态，任务重试会重新生成入口。
+            ready = await self._reviews.mark_ready(
                 review_id,
                 analysis=draft.model_dump(exclude={"reply_draft"}),
                 draft=draft.reply_draft,
+                expected_version=review.version,
             )
-            return
-        analysis = draft.model_dump()
-        await self._notifications.send_internal_card(
-            agent_id=self._agent_id,
-            employee_userids=self._employee_userids,
-            title="客诉待复核",
-            description=(
-                f"风险：{review.risk_level}；核心：{analysis['core_issue']}；"
-                f"诉求：{analysis['customer_request']}"
-            ),
-            url=f"{self._edit_url}/{review_id}",
-        )
-        # 通知成功后才进入 READY；通知失败时任务重试仍会重新生成入口。
-        await self._reviews.mark_ready(
-            review_id,
-            analysis=draft.model_dump(exclude={"reply_draft"}),
-            draft=draft.reply_draft,
-        )
+            if ready is None or not self._employee_userids:
+                return
+            await self._notifications.send_internal_card(
+                agent_id=self._agent_id,
+                employee_userids=self._employee_userids,
+                title="客诉待复核",
+                description=(
+                    f"风险：{review.risk_level}；核心：{analysis['core_issue']}；"
+                    f"诉求：{analysis['customer_request']}"
+                ),
+                url=f"{self._edit_url}/{review_id}",
+            )

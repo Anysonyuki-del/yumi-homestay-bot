@@ -3,10 +3,12 @@
 
 {# 返回到进来时那个列表，而不是固定的默认列表：从「某房间的逾期队列第 2 页」
    进来，处理完却被丢回全部待办，等于每处理一条就要把筛选重设一遍。 #}
-{% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">返回任务列表</a>{% endblock %}
+{% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">{{ "返回客户档案" if return_to.startswith("/employee/customers/") else "返回任务列表" }}</a>{% endblock %}
 {% block content %}
 <section class="detail-section panel panel--padded">
-  <div class="section-heading"><h2>{{ task.task_type | status_zh }}</h2>{{ ui.badge(task.status | status_zh, "warning") }}</div>
+  {# 状态颜色随状态变化（F15）：终态不再一律警告色，待办类才用警告色。 #}
+  {% set task_tone = {"completed": "success", "cancelled": "neutral", "expired": "neutral", "assigned": "info", "in_progress": "info"}.get(task.status.value, "warning") %}
+  <div class="section-heading"><h2>{{ task.task_type | status_zh }}</h2>{{ ui.badge(task.status | status_zh, task_tone) }}</div>
   <dl class="detail-grid">
     <dt>房间</dt><dd>{{ property_title }}</dd>
     <dt>执行员工</dt><dd>{{ assigned_employee_name }}</dd>

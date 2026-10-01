@@ -192,6 +192,7 @@ class CustomerAdminStub:
                 conversation_count=2,
                 order_count=0,
                 task_count=1,
+                phone="13800138000",
             ),
             "target": SimpleNamespace(
                 id=8,
@@ -200,6 +201,7 @@ class CustomerAdminStub:
                 conversation_count=0,
                 order_count=3,
                 task_count=2,
+                phone="未登记",
             ),
         }
 
@@ -410,7 +412,8 @@ def test_customer_pages_use_admin_shell_and_responsive_views() -> None:
         'action="/employee/customers/merge/9/confirm" data-confirm='
         in merge.text
     )
-    assert "13800138000" not in index.text + detail.text + merge.text
+    # 这个替身的列表与详情只给脱敏号；合并复核按 D5 显示完整号码，另有专门测试。
+    assert "13800138000" not in index.text + detail.text
 
 
 def test_customer_pages_show_read_only_latest_stay_note() -> None:
@@ -813,13 +816,57 @@ def test_merge_review_explains_direction_and_safe_association_counts() -> None:
     assert "会话 2 个" in response.text
     assert "订单 3 笔" in response.text
     assert "任务 2 项" in response.text
-    assert "13800138000" not in response.text
-    assert "13900139000" not in response.text
+    # D5（2026-10-01）：两侧电话并排显示，帮助判断是否同一人；备注与密文仍不出现。
+    assert "13800138000" in response.text
+    assert "未登记" in response.text
     assert "phone_ciphertext" not in response.text
     assert "ROUTE_SOURCE_SECRET_NOTE" not in response.text
     assert "ROUTE_TARGET_SECRET_NOTE" not in response.text
-    assert "138****8000" not in response.text
-    assert "139****9000" not in response.text
+    # F06：两份档案都能打开查看，并能回到这条合并复核。
+    assert 'href="/employee/customers/7?return_to=/employee/customers/merge/9"' in response.text
+    assert 'href="/employee/customers/8?return_to=/employee/customers/merge/9"' in response.text
+
+
+def test_customer_source_survives_detail_tabs_and_writes() -> None:
+    """AC10：从带筛选的列表进档案，页签切换和写操作后返回按钮仍回到原列表。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+    source = "/employee/customers?q=abc&page=1"
+
+    listing = client.get("/employee/customers?q=abc").text
+    assert "/employee/customers/7?return_to=" in listing
+
+    detail = client.get("/employee/customers/7", params={"return_to": source}).text
+    assert f'href="{source.replace("&", "&amp;")}">返回客户列表' in detail
+    assert "tab=memory&amp;return_to=/employee/customers%3Fq%3Dabc%26page%3D1" in detail
+    token = re.search(r'name="csrf_token" value="([^"]+)"', detail).group(1)
+
+    response = client.post(
+        "/employee/customers/7/note",
+        data={"csrf_token": token, "note": "备注", "return_to": source},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert location.startswith("/employee/customers/7?tab=overview&return_to=")
+    assert "返回客户列表" in client.get(location).text
+    assert f'href="{source.replace("&", "&amp;")}"' in client.get(location).text
+
+
+def test_customer_source_from_merge_review_goes_back_to_it() -> None:
+    """从合并复核打开档案，返回按钮回到那条复核；站外来源退回客户列表。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    from_merge = client.get(
+        "/employee/customers/7", params={"return_to": "/employee/customers/merge/9"}
+    ).text
+    foreign = client.get(
+        "/employee/customers/7", params={"return_to": "https://evil.example/"}
+    ).text
+
+    assert 'href="/employee/customers/merge/9">返回合并复核' in from_merge
+    assert 'href="/employee/customers">返回客户列表' in foreign
 
 
 def test_customer_csrf_rejects_cross_entity_replay() -> None:
@@ -988,3 +1035,52 @@ def test_clear_test_data_button_only_for_test_accounts_and_requires_csrf():
     other, _ = build_client(EmployeeRole.STAFF)
     login(other)
     assert other.post(path, data={"csrf_token": token}).status_code == 403
+
+
+def test_context_refresh_says_queued_and_cooldown_is_a_page_message() -> None:
+    """AC14：入队成功后才提示「已排队」；冷却中回到记忆页签说明原因，不是 JSON。"""
+    from homestay_bot.services.customer_errors import CustomerConflictError
+
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    calls: list[int] = []
+
+    async def refresh_context(customer_id, administrator, *, now):
+        """第一次入队成功，第二次处于冷却。"""
+        calls.append(customer_id)
+        if len(calls) > 1:
+            raise CustomerConflictError("刚刚已经重算过，请 9 分钟后再试。")
+
+    customers.refresh_context = refresh_context
+
+    first = client.post(
+        "/employee/customers/7/context-refresh",
+        data={"csrf_token": detail_csrf(client)},
+        follow_redirects=False,
+    )
+    assert first.status_code == 303 and "tab=memory" in first.headers["location"]
+    assert "已排队" in client.get(first.headers["location"]).text
+
+    second = client.post(
+        "/employee/customers/7/context-refresh",
+        data={"csrf_token": detail_csrf(client)},
+        follow_redirects=False,
+    )
+    assert second.status_code == 303
+    page = client.get(second.headers["location"]).text
+    assert "请 9 分钟后再试" in page
+    assert "已排队" not in page
+
+
+def test_in_house_badge_uses_the_same_tone_on_desktop_and_phone() -> None:
+    """AC15：同一住宿状态在桌面表格和手机卡片用同一种语义色。"""
+    client, customers = build_client(EmployeeRole.ADMIN)
+    login(client)
+    from dataclasses import replace
+
+    customers.card = replace(customers.card, stay_status="in_house", stay_status_label="在住")
+
+    text = client.get("/employee/customers").text
+
+    assert "badge--info\">在住" not in text
+    assert text.count("badge--success\">在住") >= 2

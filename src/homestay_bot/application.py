@@ -893,8 +893,13 @@ async def _record_complaint_delivery(
     delivered: bool,
     error_code: str | None = None,
     external_message_id: str | None = None,
+    outbox_id: str | None = None,
 ) -> None:
-    """按事务型 outbox 来源回写客诉真实投递结果。"""
+    """按事务型 outbox 来源回写客诉真实投递结果。
+
+    outbox_id 是这次出站任务的编号；仓储只在它等于客诉当前记录的发送编号时才
+    写入，旧任务迟到的结果（例如自动重试期间员工已改为重发）不会覆盖新尝试。
+    """
     if not source_message_id.startswith("complaint:"):
         return
     # 客诉重试会在编号后追加阶段（例如 complaint:17:retry-2），
@@ -911,11 +916,13 @@ async def _record_complaint_delivery(
             review_id,
             sent_at=datetime.now(UTC),
             external_message_id=external_message_id,
+            outbox_id=outbox_id,
         )
     else:
         await repository.mark_delivery_failed(
             review_id,
             error_code=error_code or "unknown_delivery_error",
+            outbox_id=outbox_id,
         )
 
 
@@ -2786,6 +2793,11 @@ class SessionKnowledgeAdminService:
         async with self._factory() as session:
             await KnowledgeAdminService(session).set_enabled(entry_id, employee_id, enabled)
 
+    async def delete_entry(self, entry_id: int, employee_id: int) -> None:
+        """在独立事务中永久删除知识，配图文件由提交后的清理任务删除。"""
+        async with self._factory() as session:
+            await KnowledgeAdminService(session).delete_entry(entry_id, employee_id)
+
     async def list_candidates(self, *, offset: int, limit: int) -> list[Any]:
         """按分页边界返回管理员可审核的高频 FAQ 候选。"""
         async with self._factory() as session:
@@ -3065,6 +3077,7 @@ async def _run_worker_loop(
                         await _record_complaint_delivery(
                             session,
                             source_message_id,
+                            outbox_id=str(payload.get("outbox_id", "")) or None,
                             delivered=False,
                             error_code="superseded_before_send",
                         )
@@ -3079,6 +3092,7 @@ async def _run_worker_loop(
                         await _record_complaint_delivery(
                             session,
                             source_message_id,
+                            outbox_id=str(payload.get("outbox_id", "")) or None,
                             delivered=False,
                             error_code=type(error).__name__,
                         )
@@ -3090,6 +3104,7 @@ async def _run_worker_loop(
                     await _record_complaint_delivery(
                         session,
                         source_message_id,
+                        outbox_id=str(payload.get("outbox_id", "")) or None,
                         delivered=True,
                         external_message_id=real_message_id,
                     )
@@ -4564,6 +4579,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 employee_userids=list(bundle.duty_userids),
                 agent_id=bundle.agent_id,
                 edit_url=(f"{bootstrap.public_base_url.rstrip('/')}/employee/complaints"),
+                atomic=session.begin_nested,
             )
             await service.handle(payload)
 

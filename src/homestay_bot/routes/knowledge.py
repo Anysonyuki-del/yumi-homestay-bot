@@ -1,7 +1,9 @@
+import hashlib
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal, Protocol, cast
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from fastapi import (
     APIRouter,
@@ -16,13 +18,15 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BeforeValidator
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import EmployeeRole, KnowledgeCandidateStatus
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     AuditLog,
     KnowledgeCandidate,
+    KnowledgeEmbedding,
     KnowledgeEntry,
     KnowledgeImage,
     PropertyProfile,
@@ -37,7 +41,7 @@ from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
 from homestay_bot.services.knowledge_service import validate_knowledge_scope
 from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.task_page_service import ATTACHMENT_CLEANUP_JOB_TYPE
-from homestay_bot.web import templates
+from homestay_bot.web import pop_page_notice, set_page_notice, templates
 
 router = APIRouter(prefix="/employee/knowledge")
 _MAX_CSRF_TOKENS = 8
@@ -47,6 +51,15 @@ _KNOWLEDGE_CSRF_PURPOSE = "knowledge-write"
 MAX_KNOWLEDGE_IMAGES = 3
 KNOWLEDGE_IMAGE_MAX_BYTES = 2 * 1024 * 1024
 KNOWLEDGE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg"})
+
+
+class KnowledgeFormError(OperationRefused):
+    """知识表单的范围、日期或房间填写有误；文案写给管理员看，可以原样展示。
+
+    页面请求据此原地重新渲染表单并保留已填内容（Spec §4.3）；接口请求仍得到 422。
+    """
+
+    status_code = 422
 
 
 class KnowledgeAdminServicePort(Protocol):
@@ -78,6 +91,9 @@ class KnowledgeAdminServicePort(Protocol):
 
     async def set_enabled(self, entry_id: int, employee_id: int, enabled: bool) -> None:
         """启用或停用知识。"""
+
+    async def delete_entry(self, entry_id: int, employee_id: int) -> None:
+        """永久删除一条知识及其配图、向量，并把来源候选改回待处理。"""
 
     async def list_candidates(self, *, offset: int, limit: int) -> list[Any]:
         """分页返回管理员待归纳候选。"""
@@ -198,12 +214,12 @@ class KnowledgeAdminService:
                 fields.get("valid_until"),
             )
         except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            raise KnowledgeFormError(str(error)) from error
         if (
             fields.get("property_id") is not None
             and await self._session.get(PropertyProfile, fields["property_id"]) is None
         ):
-            raise HTTPException(status_code=422, detail="所选房间不存在，请重新选择")
+            raise KnowledgeFormError("所选房间不存在，请重新选择")
 
     async def get_detail(self, entry_id: int) -> KnowledgeEntry:
         """按主键读取知识详情，模板不得自行访问数据库。"""
@@ -257,6 +273,74 @@ class KnowledgeAdminService:
         entry.updated_by = employee_id
         action = "knowledge.enable" if enabled else "knowledge.disable"
         self._add_audit(employee_id, action, entry.id)
+        await self._session.commit()
+
+    async def delete_entry(self, entry_id: int, employee_id: int) -> None:
+        """永久删除一条知识（用户确认的 D3，2026-10-01），全部在同一事务内完成。
+
+        先按 add_image 同样的方式锁住条目：并发上传要么先完成（其配图在这里一并
+        清理），要么在删除后拿不到条目而失败，不会留下没有父条目的配图。
+        配图与向量表虽声明了级联删除，这里仍显式删除：不依赖 SQLite 是否开启
+        外键，两种数据库行为一致。私有文件在提交后由已有的附件清理任务删除；
+        事务失败时清理任务随之回滚，文件保持原样。审计只记编号和配图数量。
+        """
+        entry = await self._session.scalar(
+            select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id).with_for_update()
+        )
+        if entry is None:
+            raise LookupError(f"知识条目不存在: {entry_id}")
+        file_ids = list(
+            (
+                await self._session.scalars(
+                    select(KnowledgeImage.file_id).where(
+                        KnowledgeImage.knowledge_entry_id == entry_id
+                    )
+                )
+            ).all()
+        )
+        candidate_id = await self._session.scalar(
+            select(KnowledgeCandidate.id).where(
+                KnowledgeCandidate.knowledge_entry_id == entry_id
+            )
+        )
+        if candidate_id is not None:
+            # 必须先解除引用再删条目：候选外键没有级联，顺序反了会撞外键约束。
+            await SQLAlchemyFaqCandidateRepository(self._session).reopen_after_entry_deleted(
+                candidate_id
+            )
+            self._add_candidate_audit(
+                employee_id,
+                "faq_candidate.reopen",
+                candidate_id,
+                knowledge_entry_id=entry_id,
+            )
+        await self._session.execute(
+            delete(KnowledgeImage).where(KnowledgeImage.knowledge_entry_id == entry_id)
+        )
+        await self._session.execute(
+            delete(KnowledgeEmbedding).where(KnowledgeEmbedding.entry_id == entry_id)
+        )
+        await self._session.delete(entry)
+        if file_ids:
+            # 去重键带上这批文件的摘要：SQLite 主键没有 AUTOINCREMENT，删掉最大编号
+            # 后会被新条目复用，只用条目编号做键时，第二次删除会撞上旧任务、漏登记
+            # 新文件（Codex M4）。摘要对排序后的文件编号取 SHA-256，同一批文件重试
+            # 仍得到同一个键，长度固定，远在 jobs.dedupe_key 的 128 字符以内。
+            digest = hashlib.sha256(",".join(sorted(file_ids)).encode()).hexdigest()
+            await SQLAlchemyJobRepository(self._session).enqueue(
+                ATTACHMENT_CLEANUP_JOB_TYPE,
+                {"file_ids": file_ids},
+                dedupe_key=f"knowledge-entry-cleanup:{entry_id}:{digest}",
+            )
+        self._session.add(
+            AuditLog(
+                actor_employee_id=employee_id,
+                action="knowledge.delete",
+                target_type="knowledge_entry",
+                target_id=str(entry_id),
+                details={"entry_id": entry_id, "image_count": len(file_ids)},
+            )
+        )
         await self._session.commit()
 
     async def list_candidates(self, *, offset: int, limit: int) -> list[KnowledgeCandidate]:
@@ -579,7 +663,7 @@ def _fields(
         end = date.fromisoformat(valid_until) if valid_until else None
         validate_knowledge_scope(scope, room, start, end)
     except ValueError as error:
-        raise HTTPException(status_code=422, detail=f"知识适用范围或日期有误：{error}") from error
+        raise KnowledgeFormError(f"知识适用范围或日期有误：{error}") from error
     return {
         "scope": scope,
         "property_id": room,
@@ -603,6 +687,63 @@ def _word_list(value: str) -> list[str] | None:
     return words or None
 
 
+_VIEWS = ("entries", "candidates")
+_ENABLED_FILTERS = ("enabled", "disabled")
+
+
+def _wants_html(request: Request) -> bool:
+    """表单提交期望页面；接口调用继续得到 JSON。"""
+    return "text/html" in request.headers.get("accept", "")
+
+
+def _submitted_form(**raw: str) -> SimpleNamespace:
+    """把刚提交的原始字段整理成表单宏能读的对象，只用于失败后回填。
+
+    这里不做校验也不写库：值来自本次已认证请求，仅原样还给同一位管理员核对修改，
+    模板照常转义。房间编号能解析成整数时才回选，避免把任意文本当成下拉选项。
+    """
+    property_id = raw.get("property_id", "").strip()
+    return SimpleNamespace(
+        scope=raw.get("scope", "unreviewed"),
+        property_id=int(property_id) if property_id.isdigit() else None,
+        valid_from=raw.get("valid_from", ""),
+        valid_until=raw.get("valid_until", ""),
+        trigger_any=_word_list(raw.get("trigger_any", "")),
+        trigger_exclude=_word_list(raw.get("trigger_exclude", "")),
+        category=raw.get("category", ""),
+        question_zh=raw.get("question_zh", ""),
+        answer_zh=raw.get("answer_zh", ""),
+        question_en=raw.get("question_en", ""),
+        answer_en=raw.get("answer_en", ""),
+        keywords=_word_list(raw.get("keywords", "")) or [],
+    )
+
+
+def _index_params(return_to: str) -> dict[str, Any]:
+    """从列表页带来的来源地址还原分页、筛选和分区，供失败后在原处重新渲染。
+
+    来源先经 safe_return_path 限定在站内；每个参数再按列表路由同样的边界收窄，
+    不合法的值直接丢弃，退回默认视图。
+    """
+    target = urlparse(safe_return_path(return_to, fallback="/employee/knowledge"))
+    if target.path != "/employee/knowledge":
+        return {}
+    query = {key: values[0] for key, values in parse_qs(target.query).items() if values}
+    params: dict[str, Any] = {}
+    for name in ("page", "candidate_page"):
+        value = query.get(name, "")
+        if value.isdigit() and 1 <= int(value) <= 10_000:
+            params[name] = int(value)
+    if query.get("enabled") in _ENABLED_FILTERS:
+        params["enabled"] = query["enabled"]
+    if query.get("view") in _VIEWS:
+        params["view"] = query["view"]
+    for name, limit in (("query", 100), ("category", 64), ("room", 20)):
+        if query.get(name):
+            params[name] = query[name][:limit]
+    return params
+
+
 @router.get("", response_class=HTMLResponse)
 async def knowledge_index(
     request: Request,
@@ -615,28 +756,70 @@ async def knowledge_index(
     ] = None,
     category: str | None = Query(None, max_length=64),
     room: str | None = Query(None, max_length=20),
+    view: Annotated[
+        Literal["entries", "candidates"] | None,
+        BeforeValidator(empty_query_to_none),
+    ] = None,
 ) -> Response:
-    """允许全部已登录员工查看知识及启停状态。"""
-    _, role = await require_employee_session(request)
-    service = _get_service(request)
-    enabled_value = None if enabled is None else enabled == "enabled"
-    entries = await service.list_all(
-        offset=(page - 1) * 50,
-        limit=51,
+    """允许全部已登录员工查看知识及启停状态；管理员另有待审核候选分区。"""
+    return await _render_index(
+        request,
+        page=page,
+        candidate_page=candidate_page,
         query=query,
-        enabled=enabled_value,
+        enabled=enabled,
         category=category,
         room=room,
+        view=view,
+    )
+
+
+async def _render_index(
+    request: Request,
+    *,
+    page: int = 1,
+    candidate_page: int = 1,
+    query: str | None = None,
+    enabled: str | None = None,
+    category: str | None = None,
+    room: str | None = None,
+    view: str | None = None,
+    status_code: int = status.HTTP_200_OK,
+    error: str | None = None,
+    failed_form: dict[str, Any] | None = None,
+) -> Response:
+    """渲染知识列表；failed_form 给出时把出错的新建或候选表单展开并回填。
+
+    列表分「现有知识／待审核候选」两个分区（F11），默认现有知识，只加载当前分区：
+    候选的长表单不再把现有知识挤到页面底部。普通员工没有候选分区，
+    传入 view=candidates 也只看到现有知识。
+    """
+    _, role = await require_employee_session(request)
+    is_admin = role is EmployeeRole.ADMIN
+    current = "candidates" if view == "candidates" and is_admin else "entries"
+    service = _get_service(request)
+    enabled_value = None if enabled is None else enabled == "enabled"
+    entries = (
+        await service.list_all(
+            offset=(page - 1) * 50,
+            limit=51,
+            query=query,
+            enabled=enabled_value,
+            category=category,
+            room=room,
+        )
+        if current == "entries"
+        else []
     )
     candidates = (
         await service.list_candidates(
             offset=(candidate_page - 1) * 50,
             limit=51,
         )
-        if role is EmployeeRole.ADMIN
+        if current == "candidates"
         else []
     )
-    csrf_token = await _issue_csrf(request) if role is EmployeeRole.ADMIN else ""
+    csrf_token = await _issue_csrf(request) if is_admin else ""
     filters = {
         key: value
         for key, value in {
@@ -648,25 +831,29 @@ async def knowledge_index(
         if value
     }
 
-    def list_url(entry_page: int, faq_page: int) -> str:
-        """生成同时保留正式知识、候选页码与筛选条件的链接。"""
-        return "/employee/knowledge?" + urlencode(
-            {"page": entry_page, "candidate_page": faq_page, **filters}
-        )
+    def list_url(entry_page: int, faq_page: int, target_view: str = current) -> str:
+        """生成同时保留分区、两个页码与筛选条件的链接。"""
+        params: dict[str, Any] = {"page": entry_page, "candidate_page": faq_page, **filters}
+        if target_view == "candidates":
+            params["view"] = "candidates"
+        return "/employee/knowledge?" + urlencode(params)
 
+    current_view = list_url(page, candidate_page)
     return templates.TemplateResponse(
         request=request,
         name="knowledge/index.html",
+        status_code=status_code,
         context={
-            # 当前视图原样带给每个写操作表单：回来时筛选、两个分页都还在。
-            # 回跳时仍由 safe_return_path 复核，不接受站外目标。
-            "current_view": (
-                f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
-            ),
+            # 当前视图原样带给每个写操作表单与详情链接：回来时分区、筛选、两个
+            # 分页都还在。回跳时仍由 safe_return_path 复核，不接受站外目标。
+            "current_view": current_view,
+            "view": current,
+            "entries_url": list_url(page, candidate_page, "entries"),
+            "candidates_url": list_url(page, candidate_page, "candidates"),
             "properties": await service.list_properties(),
             "entries": entries[:50],
             "candidates": candidates[:50],
-            "can_edit": role is EmployeeRole.ADMIN,
+            "can_edit": is_admin,
             "csrf_token": csrf_token,
             "page": page,
             "candidate_page": candidate_page,
@@ -674,18 +861,17 @@ async def knowledge_index(
             "enabled_filter": enabled or "",
             "category_filter": category or "",
             "room_filter": room or "",
-            "previous_page": page - 1 if page > 1 else None,
-            "next_page": page + 1 if len(entries) > 50 else None,
             "previous_url": (list_url(page - 1, candidate_page) if page > 1 else None),
             "next_url": (list_url(page + 1, candidate_page) if len(entries) > 50 else None),
-            "previous_candidate_page": (candidate_page - 1 if candidate_page > 1 else None),
-            "next_candidate_page": (candidate_page + 1 if len(candidates) > 50 else None),
             "previous_candidate_url": (
                 list_url(page, candidate_page - 1) if candidate_page > 1 else None
             ),
             "next_candidate_url": (
                 list_url(page, candidate_page + 1) if len(candidates) > 50 else None
             ),
+            "error": error,
+            "failed_form": failed_form,
+            "notice": pop_page_notice(request) or None,
             "page_title": "民宿知识库",
             "active_nav": "knowledge",
         },
@@ -693,27 +879,55 @@ async def knowledge_index(
 
 
 @router.get("/{entry_id}", response_class=HTMLResponse)
-async def knowledge_detail(request: Request, entry_id: int) -> Response:
+async def knowledge_detail(
+    request: Request,
+    entry_id: int,
+    return_to: Annotated[str, Query(max_length=200)] = "",
+) -> Response:
     """允许员工只读知识详情，并向管理员提供原有编辑表单。"""
+    return await _render_detail(request, entry_id, return_to=return_to)
+
+
+async def _render_detail(
+    request: Request,
+    entry_id: int,
+    *,
+    return_to: str = "",
+    status_code: int = status.HTTP_200_OK,
+    error: str | None = None,
+    submitted: SimpleNamespace | None = None,
+) -> Response:
+    """渲染知识详情；submitted 给出时编辑表单回填刚提交的内容而不是库里的旧值。"""
     _, role = await require_employee_session(request)
     try:
         entry = await _get_service(request).get_detail(entry_id)
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail="知识条目不存在") from error
+    except LookupError as error_:
+        raise HTTPException(status_code=404, detail="知识条目不存在") from error_
     return templates.TemplateResponse(
         request=request,
         name="knowledge/detail.html",
+        status_code=status_code,
         context={
             "entry": entry,
+            "form_entry": submitted or entry,
             "images": await _get_service(request).list_images(entry_id),
             "max_images": MAX_KNOWLEDGE_IMAGES,
             "properties": await _get_service(request).list_properties(),
             "can_edit": role is EmployeeRole.ADMIN,
             "csrf_token": (await _issue_csrf(request) if role is EmployeeRole.ADMIN else ""),
+            # 返回与写操作都回到来源列表；来源不在本站时退回知识列表。
+            "return_to": safe_return_path(return_to, fallback="/employee/knowledge"),
+            "error": error,
             "page_title": f"知识条目 #{entry_id}",
             "active_nav": "knowledge",
         },
     )
+
+
+def _form_error_response(request: Request, error: KnowledgeFormError) -> None:
+    """接口请求保持原来的 422 JSON；页面请求由调用方原地重新渲染。"""
+    if not _wants_html(request):
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 
 @router.post("")
@@ -733,27 +947,28 @@ async def create_knowledge(
     trigger_exclude: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
-) -> RedirectResponse:
+) -> Response:
     """管理员新增一条同时包含中英文内容的审核知识。"""
     employee_id = await _require_admin(request)
     await _consume_csrf(request, csrf_token)
-    await _get_service(request).create(
-        employee_id,
-        **_fields(
-            category,
-            question_zh,
-            answer_zh,
-            question_en,
-            answer_en,
-            keywords,
-            scope,
-            property_id,
-            valid_from,
-            valid_until,
-            trigger_any,
-            trigger_exclude,
-        ),
-    )
+    raw = {
+        "category": category, "question_zh": question_zh, "answer_zh": answer_zh,
+        "question_en": question_en, "answer_en": answer_en, "keywords": keywords,
+        "scope": scope, "property_id": property_id, "valid_from": valid_from,
+        "valid_until": valid_until, "trigger_any": trigger_any,
+        "trigger_exclude": trigger_exclude,
+    }
+    try:
+        await _get_service(request).create(employee_id, **_fields(**raw))
+    except KnowledgeFormError as error:
+        _form_error_response(request, error)
+        return await _render_index(
+            request,
+            **{**_index_params(return_to), "view": "entries"},
+            status_code=error.status_code,
+            error=str(error),
+            failed_form={"kind": "create", "values": _submitted_form(**raw)},
+        )
     return RedirectResponse(
         safe_return_path(return_to, fallback="/employee/knowledge"),
         status_code=status.HTTP_303_SEE_OTHER,
@@ -778,30 +993,36 @@ async def convert_candidate(
     trigger_exclude: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
-) -> RedirectResponse:
+) -> Response:
     """管理员修改候选草稿后创建并启用正式双语知识。"""
     employee_id = await _require_admin(request)
     await _consume_csrf(request, csrf_token)
-    await _get_service(request).convert_candidate(
-        candidate_id,
-        employee_id,
-        **_fields(
-            category,
-            question_zh,
-            answer_zh,
-            question_en,
-            answer_en,
-            keywords,
-            scope,
-            property_id,
-            valid_from,
-            valid_until,
-            trigger_any,
-            trigger_exclude,
-        ),
-    )
+    raw = {
+        "category": category, "question_zh": question_zh, "answer_zh": answer_zh,
+        "question_en": question_en, "answer_en": answer_en, "keywords": keywords,
+        "scope": scope, "property_id": property_id, "valid_from": valid_from,
+        "valid_until": valid_until, "trigger_any": trigger_any,
+        "trigger_exclude": trigger_exclude,
+    }
+    try:
+        await _get_service(request).convert_candidate(
+            candidate_id, employee_id, **_fields(**raw)
+        )
+    except KnowledgeFormError as error:
+        _form_error_response(request, error)
+        return await _render_index(
+            request,
+            **{**_index_params(return_to), "view": "candidates"},
+            status_code=error.status_code,
+            error=str(error),
+            failed_form={
+                "kind": "candidate",
+                "candidate_id": candidate_id,
+                "values": _submitted_form(**raw),
+            },
+        )
     return RedirectResponse(
-        safe_return_path(return_to, fallback="/employee/knowledge"),
+        safe_return_path(return_to, fallback="/employee/knowledge?view=candidates"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -818,7 +1039,7 @@ async def snooze_candidate(
     await _consume_csrf(request, csrf_token)
     await _get_service(request).snooze_candidate(candidate_id, employee_id)
     return RedirectResponse(
-        safe_return_path(return_to, fallback="/employee/knowledge"),
+        safe_return_path(return_to, fallback="/employee/knowledge?view=candidates"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -841,32 +1062,57 @@ async def update_knowledge(
     trigger_exclude: str = Form("", max_length=1000),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
-) -> RedirectResponse:
+) -> Response:
     """管理员编辑指定双语知识。"""
     employee_id = await _require_admin(request)
     await _consume_csrf(request, csrf_token)
-    await _get_service(request).update(
-        entry_id,
-        employee_id,
-        **_fields(
-            category,
-            question_zh,
-            answer_zh,
-            question_en,
-            answer_en,
-            keywords,
-            scope,
-            property_id,
-            valid_from,
-            valid_until,
-            trigger_any,
-            trigger_exclude,
-        ),
-    )
+    raw = {
+        "category": category, "question_zh": question_zh, "answer_zh": answer_zh,
+        "question_en": question_en, "answer_en": answer_en, "keywords": keywords,
+        "scope": scope, "property_id": property_id, "valid_from": valid_from,
+        "valid_until": valid_until, "trigger_any": trigger_any,
+        "trigger_exclude": trigger_exclude,
+    }
+    try:
+        await _get_service(request).update(entry_id, employee_id, **_fields(**raw))
+    except KnowledgeFormError as error:
+        _form_error_response(request, error)
+        return await _render_detail(
+            request,
+            entry_id,
+            return_to=return_to,
+            status_code=error.status_code,
+            error=str(error),
+            submitted=_submitted_form(**raw),
+        )
     return RedirectResponse(
         safe_return_path(return_to, fallback="/employee/knowledge"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+# 删除必须注册在 `/{entry_id}/{action}` 启停路由之前：FastAPI 按注册顺序匹配，
+# 注册在后面的话 POST /1/delete 会先被启停路由截走并返回 404（Codex 探针 E9）。
+@router.post("/{entry_id}/delete")
+async def delete_knowledge(
+    request: Request,
+    entry_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
+) -> RedirectResponse:
+    """管理员永久删除一条知识；删除后回到来源列表并提示结果。"""
+    employee_id = await _require_admin(request)
+    await _consume_csrf(request, csrf_token)
+    try:
+        await _get_service(request).delete_entry(entry_id, employee_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="知识条目不存在或已删除") from error
+    set_page_notice(request, f"已永久删除知识 #{entry_id}")
+    target = safe_return_path(return_to, fallback="/employee/knowledge")
+    # 从详情页删除时来源是详情页本身，删完它已不存在，改回知识列表。
+    if urlparse(target).path == f"/employee/knowledge/{entry_id}":
+        target = "/employee/knowledge"
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
 
 def _images_anchor(entry_id: int) -> str:

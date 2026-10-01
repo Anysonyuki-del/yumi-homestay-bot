@@ -413,6 +413,29 @@ class SQLAlchemyFaqCandidateRepository:
             raise LookupError(f"FAQ 候选不存在: {candidate_id}")
         return candidate
 
+    async def reopen_after_entry_deleted(self, candidate_id: int) -> None:
+        """正式知识被删除后，把它来源的候选改回待处理（用户确认的 D4-A，2026-10-01）。
+
+        不改回的话，候选停在 CONVERTED：get_or_create 按规范化问题复用它，而
+        add_occurrence 只给 OPEN 计数，同一问题从此不再被发现——删掉错误答案后，
+        客人的问题往往还在。重置规则照搬 reopen_expired：新一轮从零开始，
+        必须重新攒满阈值才提醒，删除本身不触发提醒；旧冷却不沿用。
+        draft_generation 只增不减（在 _clear_private_content 里 +1），让已排队的
+        旧代次草稿任务被 FaqDraftJobService 的代次校验丢弃。
+        """
+        candidate = await self._require(candidate_id)
+        candidate.status = KnowledgeCandidateStatus.OPEN
+        candidate.knowledge_entry_id = None
+        candidate.snoozed_until = None
+        candidate.total_occurrences = 0
+        candidate.last_seen_at = None
+        candidate.last_threshold_total = 0
+        candidate.last_reminded_total = 0
+        candidate.last_reminded_at = None
+        self._clear_private_content(candidate)
+        await self._delete_occurrences(candidate_id)
+        await self._session.flush()
+
     async def reopen_expired(self, *, now: datetime) -> int:
         """关闭期满后清空旧周期的累计数、游标和出现明细。"""
         result = await self._session.execute(

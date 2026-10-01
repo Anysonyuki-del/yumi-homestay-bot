@@ -31,6 +31,10 @@ class CustomerAdminRepositoryStub:
         """入队单测默认没有历史作业；跨请求冷却由真实仓储集成测试覆盖。"""
         return None
 
+    async def latest_context_refresh_job(self, customer_id):
+        """单测默认没有手动整理作业；状态读取由真实仓储集成测试覆盖。"""
+        return None
+
     def __init__(self, cipher) -> None:
         """初始化一个带加密手机号的客户。"""
         self.customer = SimpleNamespace(
@@ -374,7 +378,7 @@ async def test_detail_request_only_loads_requested_tab() -> None:
 
 @pytest.mark.asyncio
 async def test_merge_detail_returns_dedicated_safe_cards() -> None:
-    """合并复核卡片只保留编号、名称和四类聚合计数。"""
+    """合并复核卡片只保留编号、名称、电话（D5）和四类聚合计数。"""
     cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
     service = CustomerAdminService(
         CustomerAdminRepositoryStub(cipher),
@@ -392,6 +396,7 @@ async def test_merge_detail_returns_dedicated_safe_cards() -> None:
         "conversation_count": 2,
         "order_count": 0,
         "task_count": 1,
+        "phone": "未登记",
     }
     assert vars(detail["target"]) == {
         "id": 8,
@@ -400,9 +405,9 @@ async def test_merge_detail_returns_dedicated_safe_cards() -> None:
         "conversation_count": 0,
         "order_count": 3,
         "task_count": 2,
+        "phone": "未登记",
     }
     assert "note" not in repr(detail)
-    assert "phone" not in repr(detail)
 
 
 @pytest.mark.asyncio
@@ -628,3 +633,29 @@ async def test_refreshing_context_enqueues_a_job_instead_of_calling_the_model() 
     assert len(jobs.items) == 1
     assert jobs.items[0]["job_type"] == "customer_context_refresh"
     assert jobs.items[0]["payload"] == {"customer_id": 7}
+
+
+@pytest.mark.asyncio
+async def test_merge_cards_show_decrypted_phone_but_never_ciphertext() -> None:
+    """D5：两侧电话按详情页同一规则展示（明文优先、存量密文解密），卡片不带密文。"""
+    cipher = SensitiveDataCipher(Fernet.generate_key().decode("ascii"))
+    repository = CustomerAdminRepositoryStub(cipher)
+    base = await repository.merge_detail(9)
+    ciphertext = cipher.encrypt("13900000000")
+
+    async def merge_detail(suggestion_id):
+        """来源只有存量密文，目标有明文。"""
+        return {
+            **base,
+            "source": {**base["source"], "phone": None, "phone_ciphertext": ciphertext},
+            "target": {**base["target"], "phone": "13800000000", "phone_ciphertext": None},
+        }
+
+    repository.merge_detail = merge_detail
+    service = CustomerAdminService(repository, cipher, JobQueueStub(), tag_sync_enabled=False)
+
+    detail = await service.get_merge_detail(9, employee())
+
+    assert detail["source"].phone == "13900000000"
+    assert detail["target"].phone == "13800000000"
+    assert repr(ciphertext) not in repr(detail)
