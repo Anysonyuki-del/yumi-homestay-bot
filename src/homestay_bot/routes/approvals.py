@@ -46,6 +46,19 @@ class ApprovalPageServicePort(Protocol):
     ) -> BookingApproval:
         """由授权员工拒绝审批并记录原因。"""
 
+    async def backfill_reservation(
+        self, approval_id: int, employee_id: int, reservation_code: str
+    ) -> BookingApproval:
+        """需复核且百居易已有订单：填入订单号标为已预订。"""
+
+    async def reopen_after_review(self, approval_id: int, employee_id: int) -> BookingApproval:
+        """需复核但百居易没建成：反查防重后回到待审批。"""
+
+    async def recheck_after_conflict(
+        self, approval_id: int, employee_id: int
+    ) -> BookingApproval:
+        """有冲突的审批回到待审批，下次确认时重新查房态。"""
+
 
 def _get_page_service(request: Request) -> ApprovalPageServicePort:
     """从应用状态读取审批页面业务服务。"""
@@ -109,6 +122,8 @@ async def approval_detail(request: Request, approval_id: int) -> Response:
             **detail,
             "confirmation_nonce": nonce,
             "employee_role": role,
+            # 人工核验入口只给管理员显示；服务端仍按角色独立校验。
+            "can_act": role is EmployeeRole.ADMIN,
             "page_title": f"预订审批 {detail['approval'].approval_code}",
             "active_nav": "approvals",
         },
@@ -183,3 +198,79 @@ async def reject_approval(
         f"/employee/approvals/{approval_id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+async def _review_action_context(
+    request: Request, approval_id: int, confirmation_nonce: str
+) -> int:
+    """人工核验动作的公共前置：只给管理员，并原子消费审批页的一次性令牌。"""
+    employee_id, role = await require_employee_session(request)
+    if role is not EmployeeRole.ADMIN:
+        raise HTTPException(status_code=403, detail="当前员工没有处理审批的权限")
+    await consume_form_csrf(
+        request,
+        family=APPROVAL_CSRF_FAMILY,
+        entity_id=approval_id,
+        token=confirmation_nonce,
+        detail="确认令牌无效或已使用",
+    )
+    return employee_id
+
+
+def _detail_redirect(approval_id: int) -> RedirectResponse:
+    """操作完成后回到审批详情。被拒的情况由 ApprovalActionRefused 经全局处理器回跳。"""
+    return RedirectResponse(
+        f"/employee/approvals/{approval_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{approval_id}/backfill")
+async def backfill_approval(
+    request: Request,
+    approval_id: int,
+    reservation_code: str = Form(min_length=1, max_length=128),
+    confirmation_nonce: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """需复核的审批：管理员填入百居易订单号，标为已预订（W5 A1）。"""
+    employee_id = await _review_action_context(request, approval_id, confirmation_nonce)
+    try:
+        await _get_page_service(request).backfill_reservation(
+            approval_id, employee_id, reservation_code
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="审批单不存在") from error
+    return _detail_redirect(approval_id)
+
+
+@router.post("/{approval_id}/reopen")
+async def reopen_approval(
+    request: Request,
+    approval_id: int,
+    not_created_confirmed: bool = Form(),
+    confirmation_nonce: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """需复核但百居易没建成：反查防重后回到待审批重新确认（W5 A2）。"""
+    if not not_created_confirmed:
+        raise HTTPException(status_code=422, detail="请先确认已在百居易后台核对过没有这笔订单")
+    employee_id = await _review_action_context(request, approval_id, confirmation_nonce)
+    try:
+        await _get_page_service(request).reopen_after_review(approval_id, employee_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="审批单不存在") from error
+    return _detail_redirect(approval_id)
+
+
+@router.post("/{approval_id}/recheck")
+async def recheck_approval(
+    request: Request,
+    approval_id: int,
+    confirmation_nonce: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """有冲突的审批回到待审批，下次确认时重新查实时房态（W5 A3）。"""
+    employee_id = await _review_action_context(request, approval_id, confirmation_nonce)
+    try:
+        await _get_page_service(request).recheck_after_conflict(approval_id, employee_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="审批单不存在") from error
+    return _detail_redirect(approval_id)

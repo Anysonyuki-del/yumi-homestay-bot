@@ -314,3 +314,157 @@ def test_degraded_reference_data_keeps_the_page_and_the_reject_path() -> None:
     assert "百居易参考数据暂不可用" in page.text
     # 下单入口必须真的消失，不能只是视觉禁用。
     assert 'action="/employee/approvals/1/confirm"' not in page.text
+
+
+class ReviewActionStub(ApprovalPageStub):
+    """记录人工核验动作；refuse 非空时按服务层方式拒绝。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple] = []
+        self.refuse: str | None = None
+
+    def _maybe_refuse(self, approval_id: int) -> None:
+        from homestay_bot.services.approval_page_service import ApprovalActionRefused
+
+        if self.refuse:
+            raise ApprovalActionRefused(
+                self.refuse, return_to=f"/employee/approvals/{approval_id}"
+            )
+
+    async def backfill_reservation(self, approval_id, employee_id, reservation_code):
+        self._maybe_refuse(approval_id)
+        self.calls.append(("backfill", approval_id, reservation_code))
+
+    async def reopen_after_review(self, approval_id, employee_id):
+        self._maybe_refuse(approval_id)
+        self.calls.append(("reopen", approval_id))
+
+    async def recheck_after_conflict(self, approval_id, employee_id):
+        self._maybe_refuse(approval_id)
+        self.calls.append(("recheck", approval_id))
+
+
+def _review_client(role: EmployeeRole, status: ApprovalStatus):
+    """装配真实审批路由、生产的业务拒绝处理器和人工核验替身。"""
+    from homestay_bot.domain.errors import OperationRefused
+    from homestay_bot.routes.page_errors import handle_operation_refused
+
+    app = FastAPI()
+    app.add_middleware(SessionMiddleware, secret_key="test-session-secret")
+    app.add_exception_handler(OperationRefused, handle_operation_refused)
+    app.include_router(employee_auth_router)
+    app.include_router(approvals_router)
+    configure_admin_auth(app, role)
+    stub = ReviewActionStub()
+    stub.approval = replace(stub.approval, status=status)
+    app.state.approval_page_service = stub
+    return TestClient(app), stub
+
+
+def _nonce(client: TestClient) -> str:
+    return re.search(
+        r'name="confirmation_nonce" value="([^"]+)"', client.get("/employee/approvals/1").text
+    ).group(1)
+
+
+def test_needs_review_page_offers_backfill_and_reopen_to_admins() -> None:
+    """W5：需复核页给管理员两个入口，确认框重复显示所填订单号；不出现建单表单。"""
+    client, _ = _review_client(EmployeeRole.ADMIN, ApprovalStatus.NEEDS_REVIEW)
+    login(client)
+
+    text = client.get("/employee/approvals/1").text
+
+    assert 'action="/employee/approvals/1/backfill"' in text
+    assert "{reservation_code}" in text
+    assert 'action="/employee/approvals/1/reopen"' in text
+    assert 'name="not_created_confirmed"' in text
+    assert 'action="/employee/approvals/1/confirm"' not in text
+    assert 'action="/employee/approvals/1/recheck"' not in text
+
+
+def test_conflict_page_offers_recheck_only() -> None:
+    """W5：有冲突页只给「回到待审批重新确认」，没有填订单号入口。"""
+    client, _ = _review_client(EmployeeRole.ADMIN, ApprovalStatus.CONFLICT)
+    login(client)
+
+    text = client.get("/employee/approvals/1").text
+
+    assert 'action="/employee/approvals/1/recheck"' in text
+    assert 'action="/employee/approvals/1/backfill"' not in text
+
+
+def test_review_actions_use_single_use_nonce_and_reach_the_service() -> None:
+    """三个动作都消费一次性令牌：成功后回详情页，同一令牌重放被拒。"""
+    client, stub = _review_client(EmployeeRole.ADMIN, ApprovalStatus.NEEDS_REVIEW)
+    login(client)
+    nonce = _nonce(client)
+
+    first = client.post(
+        "/employee/approvals/1/backfill",
+        data={"reservation_code": "HX-1", "confirmation_nonce": nonce},
+        follow_redirects=False,
+    )
+    replay = client.post(
+        "/employee/approvals/1/reopen",
+        data={"not_created_confirmed": "true", "confirmation_nonce": nonce},
+        follow_redirects=False,
+    )
+    recheck = client.post(
+        "/employee/approvals/1/recheck",
+        data={"confirmation_nonce": _nonce(client)},
+        follow_redirects=False,
+    )
+
+    assert first.status_code == 303
+    assert first.headers["location"] == "/employee/approvals/1"
+    assert replay.status_code == 409
+    assert recheck.status_code == 303
+    assert stub.calls == [("backfill", 1, "HX-1"), ("recheck", 1)]
+
+
+def test_reopen_requires_the_not_created_confirmation() -> None:
+    """没勾选「已确认没有这笔订单」不能回退。"""
+    client, stub = _review_client(EmployeeRole.ADMIN, ApprovalStatus.NEEDS_REVIEW)
+    login(client)
+
+    response = client.post(
+        "/employee/approvals/1/reopen",
+        data={"not_created_confirmed": "false", "confirmation_nonce": _nonce(client)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 422
+    assert stub.calls == []
+
+
+def test_refused_review_action_returns_to_the_page_with_the_reason() -> None:
+    """服务层拒绝（如反查到疑似订单）时回到详情页显示原因，不是 500 或 JSON。"""
+    client, stub = _review_client(EmployeeRole.ADMIN, ApprovalStatus.NEEDS_REVIEW)
+    login(client)
+    stub.refuse = "百居易里已有同一客人、同一日期的订单（HX-9），不能回到待审批"
+
+    response = client.post(
+        "/employee/approvals/1/reopen",
+        data={"not_created_confirmed": "true", "confirmation_nonce": _nonce(client)},
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/employee/approvals/1"
+    assert "HX-9" in client.get("/employee/approvals/1").text
+
+
+def test_staff_cannot_use_review_actions() -> None:
+    """普通员工看不到入口，直接构造请求也被拒。"""
+    client, stub = _review_client(EmployeeRole.STAFF, ApprovalStatus.NEEDS_REVIEW)
+    login(client)
+
+    response = client.post(
+        "/employee/approvals/1/recheck", data={"confirmation_nonce": "x"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in {401, 403}
+    assert stub.calls == []

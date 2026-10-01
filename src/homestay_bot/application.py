@@ -129,7 +129,7 @@ from homestay_bot.services.approval_page_service import (
 )
 from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.approval_service import ApprovalService
-from homestay_bot.services.booking_service import BookingService
+from homestay_bot.services.booking_service import CREATING_STALE_AFTER, BookingService
 from homestay_bot.services.business_task_service import BusinessTaskService
 from homestay_bot.services.cancellation import complete_cleanup
 from homestay_bot.services.complaint_admin_service import ComplaintAdminService
@@ -1823,6 +1823,37 @@ class SessionApprovalPageService:
             await session.commit()
             return result
 
+    async def backfill_reservation(
+        self, approval_id: int, employee_id: int, reservation_code: str
+    ) -> BookingApproval:
+        """在独立会话中填入订单号并标为已预订，审计同事务提交。"""
+        async with self._registry.acquire() as bundle, self._factory() as session:
+            result = await self._service(session, bundle.hostex).backfill_reservation(
+                approval_id, employee_id, reservation_code
+            )
+            await session.commit()
+            return result
+
+    async def reopen_after_review(self, approval_id: int, employee_id: int) -> BookingApproval:
+        """在独立会话中反查防重后回到待审批。"""
+        async with self._registry.acquire() as bundle, self._factory() as session:
+            result = await self._service(session, bundle.hostex).reopen_after_review(
+                approval_id, employee_id
+            )
+            await session.commit()
+            return result
+
+    async def recheck_after_conflict(
+        self, approval_id: int, employee_id: int
+    ) -> BookingApproval:
+        """在独立会话中把有冲突的审批放回待审批。"""
+        async with self._registry.acquire() as bundle, self._factory() as session:
+            result = await self._service(session, bundle.hostex).recheck_after_conflict(
+                approval_id, employee_id
+            )
+            await session.commit()
+            return result
+
 
 class SessionRoomReadinessService:
     """为房源房态写操作提供会话级门面。"""
@@ -2700,6 +2731,11 @@ class SessionKnowledgeAdminService:
         async with self._factory() as session:
             return await KnowledgeAdminService(session).list_images(entry_id)
 
+    async def image_counts(self, entry_ids: list[int]) -> dict[int, int]:
+        """在独立只读会话中统计一批条目的配图数量。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).image_counts(entry_ids)
+
     async def upload_image(
         self,
         entry_id: int,
@@ -3053,7 +3089,7 @@ async def _run_worker_loop(
                     # 预订审批没有任务类型分片，只由通用 worker 负责恢复。
                     if included_job_types is None:
                         await SQLAlchemyApprovalRepository(session).recover_stale_creating(
-                            before=datetime.now(UTC) - timedelta(minutes=5)
+                            before=datetime.now(UTC) - CREATING_STALE_AFTER
                         )
                     await repository.recover_stale(before=datetime.now(UTC) - timedelta(minutes=5))
                 await session.commit()

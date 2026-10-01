@@ -623,3 +623,35 @@ def test_credential_password_limit_is_consistent_end_to_end(tmp_path) -> None:
     page = client.get("/employee/properties/101?tab=credentials")
     assert 'name="password" maxlength="128"' in page.text
     assert 'name="password" maxlength="256"' not in page.text
+
+
+def test_property_detail_keeps_the_filtered_list_as_its_source(tmp_path) -> None:
+    """F10：从筛选后的房源列表进详情，页签与写操作之后返回按钮仍回到这份列表。"""
+    client, _ = build_client(EmployeeRole.ADMIN, tmp_path)
+    login(client)
+    source = "/employee/properties?active=active"
+
+    listing = client.get(source).text
+    assert "/employee/properties/101?return_to=/employee/properties%3Factive%3Dactive" in listing
+
+    detail = client.get("/employee/properties/101", params={"return_to": source}).text
+    assert f'href="{source}">返回房源列表' in detail
+    assert "tab=profile&amp;return_to=/employee/properties%3Factive%3Dactive" in detail
+
+    response = client.post(
+        "/employee/properties/101/profile",
+        data={
+            "title": "长江中心 101", "room_type": "江景大床房", "district": "武昌区",
+            "address_hint": "地铁站附近", "parking_instructions": "停车前联系管理员",
+            "is_active": "true", "csrf_token": detail_csrf(client), "source": source,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/employee/properties/101?tab=profile&return_to=%2Femployee%2Fproperties%3Factive%3Dactive"
+    )
+    assert f'href="{source}">返回房源列表' in client.get(response.headers["location"]).text
+
+    foreign = client.get("/employee/properties/101", params={"return_to": "https://evil.example"})
+    assert 'href="/employee/properties">返回房源列表' in foreign.text

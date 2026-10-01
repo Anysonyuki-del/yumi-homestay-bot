@@ -154,10 +154,14 @@ function fillConfirmPlaceholders(text, form) {
   // {draft}：客诉发送确认要让员工看到这次真正要发出去的正文，而不是泛泛一句「确定吗」。
   const draft = form.querySelector('textarea[name="draft"]');
   const draftText = draft instanceof HTMLTextAreaElement ? draft.value.trim() : "";
+  // {reservation_code}：审批回填订单号时，确认框里重复显示所填订单号，填错一眼能看出。
+  const code = form.querySelector('input[name="reservation_code"]');
+  const codeText = code instanceof HTMLInputElement ? code.value.trim() : "";
   return text
     .replace("{n}", String(selected.size))
     .replace("{employee}", chosen)
-    .replace("{draft}", draftText);
+    .replace("{draft}", draftText)
+    .replace("{reservation_code}", codeText);
 }
 
 // 确认文案必须跟随「这次点的是哪个动作」，而不是表单的默认动作。同一个表单上
@@ -188,7 +192,7 @@ document.querySelectorAll("form[data-confirm], form[data-danger-confirm]").forEa
     const prompt = form.getAttribute("data-confirm")
       || form.getAttribute("data-danger-confirm")
       || "确定继续吗？";
-    if (!window.confirm(prompt)) event.preventDefault();
+    if (!window.confirm(fillConfirmPlaceholders(prompt, form))) event.preventDefault();
   });
 });
 

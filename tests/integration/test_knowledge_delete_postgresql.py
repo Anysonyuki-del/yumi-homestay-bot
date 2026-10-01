@@ -62,3 +62,52 @@ async def test_delete_entry_on_postgresql_unlinks_candidate_before_deleting(pg_e
         assert job.payload == {"file_ids": ["a" * 32]}
         actions = set(await session.scalars(select(AuditLog.action)))
         assert {"knowledge.delete", "faq_candidate.reopen"} <= actions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("round_number", range(5))
+async def test_concurrent_delete_and_upload_leave_no_unowned_file(
+    pg_engine, tmp_path, round_number  # noqa: F811
+) -> None:
+    """删除与上传真正并发：两边都锁同一条目而串行。无论谁先，私有目录里的图片
+    要么已被上传失败时的补偿删掉，要么出现在删除登记的清理任务里，不会成为孤儿文件。
+    """
+    import asyncio
+    import io
+
+    from homestay_bot.application import SessionKnowledgeAdminService
+    from homestay_bot.services.private_file_storage import PrivateFileStorage
+
+    png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + b"\x00" * 17 + b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    factory = async_sessionmaker(pg_engine, expire_on_commit=False)
+    async with factory() as session:
+        session.add(Employee(id=1, wecom_userid="synthetic", name="合成管理员",
+                             role=EmployeeRole.ADMIN, is_active=True))
+        session.add(KnowledgeEntry(
+            id=1, scope="global", category="停车", question_zh="停哪里", answer_zh="地下一层。",
+            question_en="Parking?", answer_en="B1.", keywords=["停车"],
+        ))
+        await session.commit()
+    storage = PrivateFileStorage(tmp_path / "private")
+    service = SessionKnowledgeAdminService(factory, storage)
+
+    results = await asyncio.gather(
+        service.upload_image(1, 1, io.BytesIO(png), "image/png"),
+        service.delete_entry(1, 1),
+        return_exceptions=True,
+    )
+
+    assert results[1] is None, results  # 删除总能完成
+    on_disk = {path.name for path in (tmp_path / "private").iterdir()} if (
+        tmp_path / "private"
+    ).exists() else set()
+    async with factory() as session:
+        assert list(await session.scalars(select(KnowledgeEntry))) == []
+        assert list(await session.scalars(select(KnowledgeImage))) == []
+        queued = {
+            file_id
+            for job in await session.scalars(select(Job))
+            for file_id in job.payload.get("file_ids", [])
+        }
+    # 上传赢了锁：文件随删除登记了清理；上传输了锁：补偿已删除文件，目录为空。
+    assert on_disk <= queued, (round_number, results, on_disk, queued)

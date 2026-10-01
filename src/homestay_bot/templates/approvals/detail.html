@@ -37,8 +37,28 @@
   <p class="eyebrow">状态处理</p>
   <h2>当前审批需要人工处理</h2>
   {% if approval.status.value == "creating" %}<p>订单正在创建，请等待处理结果，不要重复提交。</p>
-  {% elif approval.status.value == "conflict" %}<p>房态或订单状态发生冲突，请先核对百居易中的实际订单和房态。</p>
-  {% elif approval.status.value == "needs_review" %}<p>订单创建结果需要人工核对，请先确认百居易是否已经生成订单。</p>
+  {% elif approval.status.value == "conflict" %}<p>确认时房态不满足，当时没有创建订单。房态有变化时，可以回到待审批重新确认；下次确认会照常实时检查房态，仍不满足会再次标为有冲突。</p>
+  {% if can_act %}<form method="post" action="/employee/approvals/{{ approval.id }}/recheck" data-confirm="确定回到待审批重新确认吗？上次填写的房间与金额会清空。"><input type="hidden" name="confirmation_nonce" value="{{ confirmation_nonce }}"><button class="button button--secondary" type="submit">回到待审批重新确认</button></form>{% endif %}
+  {% elif approval.status.value == "needs_review" %}<p>订单创建结果需要人工核对。请先到百居易后台查看是否已经生成这笔订单，再按下面两种情况处理。</p>
+  {% if can_act %}
+  <div class="decision-grid">
+    {# W5 A1：按用户决定不再向百居易核对，填入即标为已预订；确认框里重复显示所填订单号。 #}
+    <form method="post" action="/employee/approvals/{{ approval.id }}/backfill" data-confirm="确定把这张审批标为已预订，订单号为「{reservation_code}」吗？">
+      <input type="hidden" name="confirmation_nonce" value="{{ confirmation_nonce }}">
+      <h3>百居易里已有这笔订单</h3>
+      <label>百居易订单号<input name="reservation_code" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" required autocomplete="off"></label>
+      <p class="field-help">请从百居易后台复制订单号。填入后直接标为已预订，系统不再核对。</p>
+      <button type="submit">填入订单号并标为已预订</button>
+    </form>
+    {# W5 A2：回退前系统会反查百居易，有疑似订单或查询失败都不回退。 #}
+    <form method="post" action="/employee/approvals/{{ approval.id }}/reopen" data-confirm="确定回到待审批重新确认吗？上次填写的房间与金额会清空，需要重新填写。">
+      <input type="hidden" name="confirmation_nonce" value="{{ confirmation_nonce }}">
+      <h3>百居易里没有这笔订单</h3>
+      <label class="confirmation-check"><input name="not_created_confirmed" type="checkbox" value="true" required><span><strong>我已在百居易后台确认没有这笔订单</strong><small>系统还会再查一遍同一客人、同一日期的订单，查到或查询失败都不会回退。</small></span></label>
+      <button class="button button--secondary" type="submit">回到待审批重新确认</button>
+    </form>
+  </div>
+  {% endif %}
   {% else %}<p>该审批已结束，无需再次创建订单。</p>{% endif %}
 </section>
 {% endif %}

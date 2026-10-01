@@ -1590,3 +1590,40 @@ def test_free_day_numbers_are_readable_on_phones(browser: Browser) -> None:
             "el => getComputedStyle(el).backgroundColor"
         )
     page.close()
+
+
+def test_backfill_confirm_repeats_the_entered_reservation_code(browser: Browser) -> None:
+    """W5 A1：填订单号后点提交，确认框里重复显示所填订单号，填错一眼能看出。"""
+    from datetime import date
+
+    from homestay_bot.domain.enums import ApprovalStatus
+    from homestay_bot.services.approval_page_service import ApprovalPageView
+    from homestay_bot.web import templates
+
+    html = templates.env.get_template("approvals/detail.html").render(
+        request=SimpleNamespace(session={"employee_role": "admin"}),
+        approval=ApprovalPageView(
+            id=1, approval_code="APP-1", status=ApprovalStatus.NEEDS_REVIEW,
+            check_in_date=date(2026, 10, 10), check_out_date=date(2026, 10, 12),
+            number_of_guests=2, guest_name="张三", room_type_preference="江景房",
+            special_requests=None,
+        ),
+        masked_mobile="13800138000", properties=[], reference_prices=[], income_methods=[],
+        reference_unavailable=[], can_confirm=False, can_act=True,
+        confirmation_nonce="nonce", page_title="预订审批 APP-1",
+    )
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.set_content(html)
+    page.evaluate(
+        """() => {
+          window.confirmCalls = [];
+          window.confirm = (text) => { window.confirmCalls.push(text); return false; };
+        }"""
+    )
+    page.add_script_tag(content=ADMIN_SCRIPT)
+    page.fill('input[name="reservation_code"]', "HX-20261010-01")
+
+    page.click('form[action$="/backfill"] button[type="submit"]')
+
+    assert "HX-20261010-01" in page.evaluate("() => window.confirmCalls.at(-1)")
+    page.close()

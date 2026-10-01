@@ -429,3 +429,17 @@ def _upload_to(client, entry_id: int, content: bytes):
         files={"image": ("photo", content, "image/png")},
         follow_redirects=False,
     )
+
+
+def test_list_delete_confirm_states_how_many_images_go_with_it(tmp_path) -> None:
+    """列表页删除确认框写明会一并删除几张配图，与详情页一致。"""
+    engine, factory, storage = _world(tmp_path)
+    client, _ = build_client(EmployeeRole.ADMIN)
+    client.app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory, storage)
+    for _ in range(2):
+        _upload(client, _token(client), PNG)
+
+    listing = client.get("/employee/knowledge").text
+
+    assert "确定永久删除知识 #1「开车停哪里」及其 2 张配图吗？" in listing
+    asyncio.run(engine.dispose())

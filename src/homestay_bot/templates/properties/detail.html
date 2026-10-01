@@ -1,16 +1,16 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
 
-{% block page_actions %}<a class="button button--secondary" href="/employee/properties">返回房源列表</a>{% endblock %}
+{% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">返回房源列表</a>{% endblock %}
 {% block content %}
 <nav class="tab-nav" aria-label="房源详情页签">
-  <a href="/employee/properties/{{ property.id }}" {% if tab == "overview" %}aria-current="page"{% endif %}>运营概览</a>
-  <a href="/employee/properties/{{ property.id }}?tab=profile" {% if tab == "profile" %}aria-current="page"{% endif %}>公开资料</a>
-  <a href="/employee/properties/{{ property.id }}?tab=credentials" {% if tab == "credentials" %}aria-current="page"{% endif %}>入住凭证</a>
+  <a href="/employee/properties/{{ property.id }}?return_to={{ return_to | urlencode }}" {% if tab == "overview" %}aria-current="page"{% endif %}>运营概览</a>
+  <a href="/employee/properties/{{ property.id }}?tab=profile&amp;return_to={{ return_to | urlencode }}" {% if tab == "profile" %}aria-current="page"{% endif %}>公开资料</a>
+  <a href="/employee/properties/{{ property.id }}?tab=credentials&amp;return_to={{ return_to | urlencode }}" {% if tab == "credentials" %}aria-current="page"{% endif %}>入住凭证</a>
 </nav>
 
 {% if tab == "overview" %}
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}">
 <section class="detail-section panel panel--padded">
   <p class="eyebrow">百居易房间 #{{ property.id }}</p>
   <div class="section-heading"><h2>运营概览</h2>{{ ui.readiness_status_badge(overview.operational_status) }}</div>
@@ -21,7 +21,7 @@
   <h2>直接设定房态</h2>
   <p>用于维修、清洁等需要人工判断的情况，不要求检查清单与现场照片。设为可入住会绕过证据要求，操作会单独记入审计。</p>
   <form method="post" action="/employee/properties/{{ property.id }}/room-status" data-confirm="确定直接设定房态吗？该操作不经过检查清单与现场照片证据。">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}">
     <label>目标房态<select name="room_status" required>{% for state in room_statuses %}<option value="{{ state.value }}" {% if overview.operational_status == state %}selected{% endif %}>{{ state | status_zh }}</option>{% endfor %}</select></label>
     <button type="submit">设定房态</button>
   </form>
@@ -29,7 +29,7 @@
 {% elif tab == "profile" %}
 <section class="detail-section panel panel--padded"><p class="eyebrow">百居易房间 #{{ property.id }}</p><h2>公开运营资料</h2>
   <form method="post" action="/employee/properties/{{ property.id }}/profile" data-unsaved-warning>
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}">
     <div class="form-grid"><label>房源名称<input name="title" value="{{ property.title }}" maxlength="128" required></label><label>真实房间号<input name="room_number" value="{{ property.room_number or '' }}" maxlength="64"></label><label>房型<input name="room_type" value="{{ property.room_type or '' }}" maxlength="128"></label><label>区域<input name="district" value="{{ property.district or '' }}" maxlength="64"></label></div>
     <label>地址提示<textarea name="address_hint" maxlength="1000">{{ property.address_hint or "" }}</textarea></label><label>停车说明<textarea name="parking_instructions" maxlength="2000">{{ property.parking_instructions or "" }}</textarea></label><label class="checkbox"><input type="checkbox" name="is_active" value="true" {% if property.is_active %}checked{% endif %}>启用该房源</label><button type="submit">保存房源资料</button>
   </form>
@@ -38,15 +38,15 @@
   <p class="help-text">客人订单识别出本房后，欢迎消息发出时接着发这张图，每张订单只发一次。JPG 或 PNG，不超过 2MB。</p>
   {% if property.welcome_image_file_id %}
   <ul class="image-list"><li><a href="/employee/properties/{{ property.id }}/welcome-image" target="_blank" rel="noopener"><img src="/employee/properties/{{ property.id }}/welcome-image" alt="欢迎图片"></a>
-    <form method="post" action="/employee/properties/{{ property.id }}/welcome-image/delete" data-confirm="确定删除欢迎图片吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">删除欢迎图片</button></form></li></ul>
+    <form method="post" action="/employee/properties/{{ property.id }}/welcome-image/delete" data-confirm="确定删除欢迎图片吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}"><button class="button button--danger" type="submit">删除欢迎图片</button></form></li></ul>
   {% else %}<p>尚未设置欢迎图片。</p>{% endif %}
-  <form class="inline-form" method="post" enctype="multipart/form-data" action="/employee/properties/{{ property.id }}/welcome-image"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>{% if property.welcome_image_file_id %}替换欢迎图片{% else %}上传欢迎图片{% endif %}<input type="file" name="image" accept="image/png,image/jpeg" required></label><button type="submit">上传</button></form>
+  <form class="inline-form" method="post" enctype="multipart/form-data" action="/employee/properties/{{ property.id }}/welcome-image"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}"><label>{% if property.welcome_image_file_id %}替换欢迎图片{% else %}上传欢迎图片{% endif %}<input type="file" name="image" accept="image/png,image/jpeg" required></label><button type="submit">上传</button></form>
 </section>
 {% else %}
 <section class="detail-section panel panel--padded"><h2>入住凭证</h2>
   {% if credential %}<div class="alert alert--warning"><span>当前凭证版本 {{ credential.version }}。密码和入住指南不会在页面回显。</span></div><a href="/employee/properties/{{ property.id }}/qr" target="_blank" rel="noopener">查看当前二维码</a>{% else %}<p>尚未配置入住凭证。</p>{% endif %}
   <form method="post" enctype="multipart/form-data" action="/employee/properties/{{ property.id }}/credentials" data-confirm="确定替换整套入住凭证吗？旧版本将立即停用。" data-unsaved-warning>
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>新门锁密码<input type="password" name="password" maxlength="128" autocomplete="new-password" required></label><label>新入住指南<textarea name="guide" maxlength="10000" required></textarea></label><label>新入住二维码<input type="file" name="qr_image" accept="image/png,image/jpeg,image/webp" required></label><p class="help-text">提交后创建新版本并停用旧版本，请完整填写以上三项。</p><button class="button button--danger" type="submit">替换入住凭证</button>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}"><label>新门锁密码<input type="password" name="password" maxlength="128" autocomplete="new-password" required></label><label>新入住指南<textarea name="guide" maxlength="10000" required></textarea></label><label>新入住二维码<input type="file" name="qr_image" accept="image/png,image/jpeg,image/webp" required></label><p class="help-text">提交后创建新版本并停用旧版本，请完整填写以上三项。</p><button class="button button--danger" type="submit">替换入住凭证</button>
   </form>
 </section>
 {% endif %}

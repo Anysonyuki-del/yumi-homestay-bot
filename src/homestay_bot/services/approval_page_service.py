@@ -1,15 +1,19 @@
 import logging
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import ApprovalStatus
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import AuditLog, BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
+from homestay_bot.integrations.hostex_client import ReservationQuery
 from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.booking_service import BookingService
 
@@ -29,6 +33,9 @@ class ApprovalHostexPort(Protocol):
 
     async def list_income_methods(self) -> Sequence[Any]:
         """返回百居易账户可用的收入方式。"""
+
+    async def list_reservations(self, query: ReservationQuery) -> Sequence[Any]:
+        """只读查询订单；人工核验后回到待审批前用来防重复下单。"""
 
 
 @dataclass(frozen=True)
@@ -53,6 +60,64 @@ _REJECTABLE_STATUSES = frozenset(
         ApprovalStatus.CONFLICT,
     }
 )
+
+
+class ApprovalActionRefused(OperationRefused):
+    """审批人工核验动作被拒；文案写给管理员看，页面回到审批详情并显示原因。"""
+
+
+# 百居易订单号形如字母数字加连字符；限制字符集，避免把整段说明或网址当订单号存下。
+_RESERVATION_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+# 回到待审批时清空的上次确认字段：防止拿旧金额、旧房间直接重复下单（Spec R6）。
+_CONFIRMATION_FIELDS = (
+    "property_id",
+    "final_rate_amount",
+    "received_amount",
+    "income_method_id",
+    "approved_by",
+    "approved_at",
+    "hostex_request_id",
+    "failure_code",
+    "failure_message",
+)
+# 同一入住日的订单达到这个数就按查不清处理。百居易客户端会自动读完全部分页，这只是
+# 新增的保守阈值，不是客户端截断。
+_RESERVATION_LOOKUP_LIMIT = 100
+_PHONE_PREFIXES = ("0086", "86")
+
+
+def _attempt_fingerprint(approval: BookingApproval) -> tuple[object, ...]:
+    """标识「这一轮确认」：确认时间、房间与上游请求编号，任何一项变了就是新一轮。"""
+    return (approval.approved_at, approval.property_id, approval.hostex_request_id)
+
+
+def _normalize_name(value: str | None) -> str:
+    """姓名去掉全部空白、不分大小写后比较。"""
+    return re.sub(r"\s+", "", value or "").casefold()
+
+
+def _normalize_phone(value: str | None) -> str:
+    """手机只比数字，并去掉 +86、86、0086 国家码前缀（剩余 11 位时）。"""
+    digits = re.sub(r"\D", "", value or "")
+    for prefix in _PHONE_PREFIXES:
+        if digits.startswith(prefix) and len(digits) - len(prefix) == 11:
+            return digits[len(prefix):]
+    return digits
+
+
+def _maybe_same_guest(reservation: Any, guest_name: str, guest_mobile: str) -> bool:
+    """同日期订单是否可能就是这位客人（用户确认的 AR2 规则，2026-10-01）。
+
+    姓名一致、手机一致、或订单姓名与手机都缺失（无法排除），任一成立即算疑似。
+    宁可同日同名不同人也被挡住、由管理员改用填入订单号或拒绝，也不冒重复下单的险。
+    """
+    name = _normalize_name(getattr(reservation, "guest_name", None))
+    phone = _normalize_phone(getattr(reservation, "guest_phone", None))
+    if not name and not phone:
+        return True
+    if name and name == _normalize_name(guest_name):
+        return True
+    return bool(phone) and phone == _normalize_phone(guest_mobile)
 
 
 class ApprovalPageService:
@@ -218,6 +283,203 @@ class ApprovalPageService:
         )
         await self._session.flush()
         return approval
+
+    async def backfill_reservation(
+        self, approval_id: int, employee_id: int, reservation_code: str
+    ) -> BookingApproval:
+        """需复核的审批在百居易里确有订单：管理员填入订单号，直接标为已预订（A1）。
+
+        按用户决定（2026-10-01「1.直接标」）不再向百居易核对；页面要求从百居易后台
+        复制订单号并在确认框里重复显示。订单号有唯一约束，先查重给出可读提示，
+        并发时由约束兜底，同样转成提示而不是 500。
+        """
+        code = reservation_code.strip()
+        if not _RESERVATION_CODE.fullmatch(code):
+            raise ApprovalActionRefused(
+                "订单号格式不对：请从百居易后台复制订单号，只含字母、数字、连字符或下划线",
+                status_code=422,
+                return_to=self._detail_path(approval_id),
+            )
+        approval = await self._lock(approval_id)
+        self._require_status(approval, ApprovalStatus.NEEDS_REVIEW, "填入订单号")
+        duplicate = await self._session.scalar(
+            select(BookingApproval.id).where(
+                BookingApproval.hostex_reservation_code == code,
+                BookingApproval.id != approval_id,
+            )
+        )
+        if duplicate is not None:
+            raise self._duplicate_code(approval_id)
+        previous = approval.status
+        # 状态、订单号与审计在同一次 flush 里写入，一起提交或一起回滚（Spec §6 AR5）。
+        # 不用保存点：SQLite 的驱动不会因普通查询开启物理事务，最外层保存点一释放就
+        # 提交了，之后审计失败也撤不回状态。唯一键冲突时整个会话由调用方回滚。
+        approval.status = ApprovalStatus.BOOKED
+        approval.hostex_reservation_code = code
+        self._audit(
+            employee_id,
+            "booking_approval_backfilled",
+            approval_id,
+            {"from_status": previous.value, "reservation_code": code},
+        )
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            raise self._duplicate_code(approval_id) from error
+        return approval
+
+    async def reopen_after_review(self, approval_id: int, employee_id: int) -> BookingApproval:
+        """需复核但百居易确实没建成：先反查防重，再回到待审批重新确认（A2）。
+
+        反查放在加锁之前：不持有行锁去等外部接口。查完加锁后重新校验状态，期间被
+        别人处理过就拒绝。查到入住、退房日期与姓名、手机都一致的订单（不论订单
+        状态），或查询失败、结果取满，都不回退——宁可让管理员改用填入订单号或拒绝，
+        也不冒重复下单的险（Spec R3）。
+        """
+        approval = await self._session.get(BookingApproval, approval_id)
+        if approval is None:
+            raise LookupError(f"审批单不存在: {approval_id}")
+        self._require_status(approval, ApprovalStatus.NEEDS_REVIEW, "回到待审批")
+        # 这一轮确认的指纹：查询期间若别人已回退、重新确认并再次进入需复核，状态
+        # 仍是 NEEDS_REVIEW，只看状态会把新一轮的结果退回去、造成第二次建单（Codex AR1）。
+        # 每次确认都会写入新的 approved_at，现有字段足以区分轮次。
+        attempt = _attempt_fingerprint(approval)
+        try:
+            sensitive = self._sensitive_data.require_for_booking(approval)
+        except ValueError as error:
+            raise ApprovalActionRefused(
+                "客人资料已按保留期清理，无法反查是否已有订单，不能回到待审批；请拒绝后让客人重新申请",
+                return_to=self._detail_path(approval_id),
+            ) from error
+        try:
+            candidates = list(
+                await self._hostex.list_reservations(
+                    ReservationQuery(
+                        property_id=approval.property_id,
+                        start_check_in_date=approval.check_in_date,
+                        end_check_in_date=approval.check_in_date,
+                        limit=_RESERVATION_LOOKUP_LIMIT,
+                    )
+                )
+            )
+        except Exception as error:
+            logger.warning(
+                "审批回退前反查失败 approval_id=%s error_type=%s",
+                approval_id,
+                type(error).__name__,
+            )
+            raise ApprovalActionRefused(
+                "暂时查不到百居易订单，无法确认没有重复，请稍后再试",
+                return_to=self._detail_path(approval_id),
+            ) from error
+        if len(candidates) >= _RESERVATION_LOOKUP_LIMIT:
+            raise ApprovalActionRefused(
+                "同一入住日的订单太多，无法确认没有重复；请到百居易后台核对后填入订单号或拒绝",
+                return_to=self._detail_path(approval_id),
+            )
+        matches = [
+            item
+            for item in candidates
+            if item.check_in_date == approval.check_in_date
+            and item.check_out_date == approval.check_out_date
+            and _maybe_same_guest(item, sensitive.guest_name, sensitive.guest_mobile)
+        ]
+        if matches:
+            codes = "、".join(str(item.reservation_code) for item in matches[:3])
+            raise ApprovalActionRefused(
+                f"百居易里已有同一客人、同一日期的订单（{codes}），不能回到待审批；"
+                "确认是这一单的话请改用「填入订单号」",
+                return_to=self._detail_path(approval_id),
+            )
+        locked = await self._lock(approval_id)
+        self._require_status(locked, ApprovalStatus.NEEDS_REVIEW, "回到待审批")
+        if _attempt_fingerprint(locked) != attempt:
+            raise ApprovalActionRefused(
+                "查询期间这张审批已被重新确认过，刚才的核对结果已经过期，请刷新页面后重新判断",
+                return_to=self._detail_path(approval_id),
+            )
+        self._reset_to_pending(locked)
+        self._audit(
+            employee_id,
+            "booking_approval_reopened",
+            approval_id,
+            {
+                "from_status": ApprovalStatus.NEEDS_REVIEW.value,
+                "checked_reservations": len(candidates),
+            },
+        )
+        await self._session.flush()
+        return locked
+
+    async def recheck_after_conflict(self, approval_id: int, employee_id: int) -> BookingApproval:
+        """有冲突的审批回到待审批（A3）。这里不调用百居易：下次确认时照常实时查房态，
+        仍不满足会再次成为有冲突。"""
+        approval = await self._lock(approval_id)
+        self._require_status(approval, ApprovalStatus.CONFLICT, "回到待审批")
+        self._reset_to_pending(approval)
+        self._audit(
+            employee_id,
+            "booking_approval_recheck",
+            approval_id,
+            {"from_status": ApprovalStatus.CONFLICT.value},
+        )
+        await self._session.flush()
+        return approval
+
+    async def _lock(self, approval_id: int) -> BookingApproval:
+        """行锁读取审批单，两位管理员同时操作时串行（Spec R5）。"""
+        approval = await self._session.scalar(
+            select(BookingApproval)
+            .where(BookingApproval.id == approval_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if approval is None:
+            raise LookupError(f"审批单不存在: {approval_id}")
+        return approval
+
+    def _require_status(
+        self, approval: BookingApproval, expected: ApprovalStatus, action: str
+    ) -> None:
+        """状态已被别人改过时拒绝，并告诉管理员现在是什么状态。"""
+        if approval.status is not expected:
+            raise ApprovalActionRefused(
+                f"这张审批当前不能{action}：状态已经变化，请刷新页面查看最新状态",
+                return_to=self._detail_path(approval.id),
+            )
+
+    @staticmethod
+    def _reset_to_pending(approval: BookingApproval) -> None:
+        """回到待审批并清空上次确认填写的字段，由管理员重新填写确认。"""
+        approval.status = ApprovalStatus.PENDING
+        for field in _CONFIRMATION_FIELDS:
+            setattr(approval, field, None)
+
+    def _audit(
+        self, employee_id: int, action: str, approval_id: int, details: dict[str, Any]
+    ) -> None:
+        """审计只记动作、状态与订单号，不记客人信息。"""
+        self._session.add(
+            AuditLog(
+                actor_employee_id=employee_id,
+                action=action,
+                target_type="booking_approval",
+                target_id=str(approval_id),
+                details=details,
+            )
+        )
+
+    def _duplicate_code(self, approval_id: int) -> ApprovalActionRefused:
+        """订单号已登记在另一张审批上。"""
+        return ApprovalActionRefused(
+            "这个订单号已经登记在另一张审批上，请核对后再填",
+            return_to=self._detail_path(approval_id),
+        )
+
+    @staticmethod
+    def _detail_path(approval_id: int) -> str:
+        """操作被拒后回到的审批详情页。"""
+        return f"/employee/approvals/{approval_id}"
 
     def _to_view(self, approval: BookingApproval) -> ApprovalPageView:
         """解密模板所需字段并复制到不可变视图，禁止泄露 ORM 密文字段。"""

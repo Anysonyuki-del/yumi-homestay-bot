@@ -1,3 +1,4 @@
+import logging
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
@@ -15,6 +16,20 @@ from homestay_bot.integrations.hostex_client import (
     ReservationQuery,
 )
 from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
+
+logger = logging.getLogger(__name__)
+
+# 「创建中」多久没有结果才算卡住。确认页面的重复提交与后台 recover_stale_creating
+# 共用这一个阈值：不满时原建单可能仍在等百居易返回，此时去核验、转需复核，就会放开
+# A2 回退并发起第二次建单（Codex AR6）。
+CREATING_STALE_AFTER = timedelta(minutes=5)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """SQLite 读回的时间不带时区，按入库时的 UTC 解读，与内存里的值才能比较。"""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
 
 class ApprovalRepository(Protocol):
@@ -91,6 +106,13 @@ class BookingService:
             if approval.status is ApprovalStatus.BOOKED:
                 return approval
             if approval.status is ApprovalStatus.CREATING:
+                approved_at = _as_utc(approval.approved_at)
+                if (
+                    approved_at is not None
+                    and datetime.now(UTC) - approved_at < CREATING_STALE_AFTER
+                ):
+                    # 原建单可能还在进行：不核验、不改状态，原样返回「创建中」。
+                    return approval
                 recovering_creating = True
             elif approval.status is not ApprovalStatus.PENDING:
                 return approval
@@ -113,22 +135,31 @@ class BookingService:
                 approval.approved_at = datetime.now(UTC)
                 await self._approvals.save(approval)
 
+        # 本轮确认的标记：每次进入 CREATING 都写入新的 approved_at。写回结果前据此判断
+        # 审批是否仍属于这一轮，迟到的旧结果不能覆盖新一轮或终态（Codex AR6）。
+        attempt = _as_utc(approval.approved_at)
         if recovering_creating:
-            return await self._reconcile_or_mark_review(approval)
+            return await self._reconcile_or_mark_review(approval, attempt=attempt)
 
         try:
             result = await self._hostex.create_reservation(self._build_create_request(approval))
-            approval.hostex_request_id = result.request_id
         except HostexBusinessError as error:
             return await self._mark_needs_review(
                 approval,
+                attempt=attempt,
                 failure_code=error.error_code,
                 failure_message="百居易明确拒绝创建请求",
             )
         except HostexTransportError:
-            return await self._reconcile_or_mark_review(approval)
+            return await self._reconcile_or_mark_review(approval, attempt=attempt)
 
-        return await self._reconcile_or_mark_review(approval)
+        # 请求编号不能在这里直接赋给 approval：事务外修改已持久化对象会让会话自动开启
+        # 事务，随后 _reconcile_or_mark_review 再显式开事务就报「A transaction is already
+        # begun」，上游已建单而本地停在 CREATING（Codex AR3，首次确认同样触发）。
+        # 改为在写后核验的加锁事务里一并写入。
+        return await self._reconcile_or_mark_review(
+            approval, attempt=attempt, request_id=result.request_id
+        )
 
     async def _is_property_available(self, approval: BookingApproval, property_id: int) -> bool:
         """要求入住日至退房日前一天全部可用。"""
@@ -174,12 +205,24 @@ class BookingService:
             remarks=f"approval_code={approval.approval_code}",
         )
 
-    async def _reconcile_or_mark_review(self, approval: BookingApproval) -> BookingApproval:
-        """写后查询唯一精确订单；无法唯一确定时转人工核实。"""
+    async def _reconcile_or_mark_review(
+        self,
+        approval: BookingApproval,
+        *,
+        attempt: datetime | None,
+        request_id: str | None = None,
+    ) -> BookingApproval:
+        """写后查询唯一精确订单；无法唯一确定时转人工核实。
+
+        request_id 是本次建单的上游请求编号，与最终状态在同一加锁事务内写入。
+        attempt 是本轮确认时间，写入前核对，不属于本轮就丢弃结果。
+        """
         if approval.property_id is None:
             return await self._mark_needs_review(
                 approval,
+                attempt=attempt,
                 failure_message="审批单缺少核验所需房间",
+                request_id=request_id,
             )
 
         try:
@@ -195,7 +238,9 @@ class BookingService:
         except (HostexBusinessError, HostexTransportError):
             return await self._mark_needs_review(
                 approval,
+                attempt=attempt,
                 failure_message="创建结果暂时无法自动核验",
+                request_id=request_id,
             )
         sensitive = self._sensitive_data.require_for_booking(approval)
         matches = [
@@ -211,6 +256,10 @@ class BookingService:
 
         async with self._approvals.transaction():
             locked = await self._approvals.get_for_update(approval.id)
+            if not self._same_round(locked, attempt):
+                return locked
+            if request_id is not None:
+                locked.hostex_request_id = request_id
             if len(matches) == 1:
                 locked.status = ApprovalStatus.BOOKED
                 locked.hostex_reservation_code = matches[0].reservation_code
@@ -218,6 +267,25 @@ class BookingService:
                 locked.status = ApprovalStatus.NEEDS_REVIEW
             await self._approvals.save(locked)
             return locked
+
+    @staticmethod
+    def _same_round(locked: BookingApproval, attempt: datetime | None) -> bool:
+        """加锁后的数据库现值是否仍是本轮的「创建中」。
+
+        不是就说明期间已被别人处理（恢复转需复核、回退后新一轮确认、人工回填、拒绝），
+        本轮结果迟到，写入会覆盖更新的事实，因此丢弃，只记日志。
+        """
+        if (
+            locked.status is ApprovalStatus.CREATING
+            and _as_utc(locked.approved_at) == attempt
+        ):
+            return True
+        logger.warning(
+            "丢弃不属于当前确认轮次的建单结果 approval_id=%s status=%s",
+            locked.id,
+            locked.status.value,
+        )
+        return False
 
     @staticmethod
     def _matches_creation_window(
@@ -262,12 +330,18 @@ class BookingService:
         self,
         approval: BookingApproval,
         *,
+        attempt: datetime | None,
         failure_code: int | None = None,
         failure_message: str | None = None,
+        request_id: str | None = None,
     ) -> BookingApproval:
         """锁定审批并转人工核验，确保任何错误都不会遗留 CREATING。"""
         async with self._approvals.transaction():
             locked = await self._approvals.get_for_update(approval.id)
+            if not self._same_round(locked, attempt):
+                return locked
+            if request_id is not None:
+                locked.hostex_request_id = request_id
             locked.status = ApprovalStatus.NEEDS_REVIEW
             locked.failure_code = failure_code
             locked.failure_message = failure_message

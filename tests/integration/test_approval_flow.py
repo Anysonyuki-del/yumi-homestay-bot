@@ -17,7 +17,7 @@ from homestay_bot.integrations.hostex_client import (
 )
 from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.approval_service import ApprovalService
-from homestay_bot.services.booking_service import BookingService
+from homestay_bot.services.booking_service import CREATING_STALE_AFTER, BookingService
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode("ascii")
@@ -289,7 +289,9 @@ async def test_repeated_confirmation_reconciles_creating_without_new_write() -> 
     approval.final_rate_amount = 399
     approval.received_amount = 399
     approval.income_method_id = 1
-    approval.approved_at = datetime.now(UTC)
+    # 「遗留」指确认已超过创建中超时阈值；不满阈值时原建单可能仍在进行，
+    # 再次确认会原样返回而不核验（Spec §6 AR6）。
+    approval.approved_at = datetime.now(UTC) - CREATING_STALE_AFTER - timedelta(minutes=1)
     repository = InMemoryApprovalRepository(approval)
     hostex = HostexStub()
     service = BookingService(repository, AllowApprover(), hostex, sensitive_data())
@@ -311,7 +313,7 @@ async def test_reconciliation_does_not_link_an_old_matching_order() -> None:
     approval.final_rate_amount = 399
     approval.received_amount = 399
     approval.income_method_id = 1
-    approval.approved_at = datetime.now(UTC)
+    approval.approved_at = datetime.now(UTC) - CREATING_STALE_AFTER - timedelta(minutes=1)
     repository = InMemoryApprovalRepository(approval)
     hostex = HostexStub(
         reservation_created_at=(
@@ -325,4 +327,25 @@ async def test_reconciliation_does_not_link_an_old_matching_order() -> None:
     )
 
     assert result.status == ApprovalStatus.NEEDS_REVIEW
+    assert result.hostex_reservation_code is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_creating_is_left_alone_on_repeated_confirmation() -> None:
+    """创建中不满超时阈值时，原建单可能仍在进行：再次确认原样返回，不核验、不建单、不改状态。"""
+    approval = pending_approval()
+    approval.status = ApprovalStatus.CREATING
+    approval.property_id = 101
+    approval.final_rate_amount = 399
+    approval.received_amount = 399
+    approval.income_method_id = 1
+    approval.approved_at = datetime.now(UTC) - timedelta(minutes=1)
+    repository = InMemoryApprovalRepository(approval)
+    hostex = HostexStub()
+    service = BookingService(repository, AllowApprover(), hostex, sensitive_data())
+
+    result = await service.confirm_and_create(1, employee_id=1, command=valid_command())
+
+    assert result.status == ApprovalStatus.CREATING
+    assert hostex.create_calls == 0
     assert result.hostex_reservation_code is None

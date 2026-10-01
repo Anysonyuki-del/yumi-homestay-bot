@@ -1,7 +1,8 @@
 import logging
 from typing import Annotated, Any, Literal, Protocol, cast
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from pydantic import BeforeValidator
 
@@ -162,10 +163,34 @@ async def property_index(
         context={
             "properties": properties,
             "active_filter": active or "",
+            # 进详情时带上当前列表地址，返回时筛选还在（F10）。
+            "current_view": (
+                "/employee/properties?" + urlencode({"active": active})
+                if active
+                else "/employee/properties"
+            ),
             "page_title": "房源管理",
             "active_nav": "properties",
         },
     )
+
+
+async def _with_source(request: Request, target: str) -> str:
+    """把写表单里的列表来源（字段 source）带回详情页，返回按钮才能回到筛选后的列表。
+
+    不用 return_to 这个字段名：房态表单里的 return_to 是「提交后跳去哪」（运营页
+    靠它回到原视图），两者含义不同。读取的是框架已解析并缓存的表单；来源同样经
+    safe_return_path 限定在站内。
+    """
+    source = (await request.form()).get("source")
+    if not isinstance(source, str) or not source:
+        return target
+    path, _, fragment = target.partition("#")
+    separator = "&" if "?" in path else "?"
+    query = urlencode(
+        {"return_to": safe_return_path(source, fallback="/employee/properties")}
+    )
+    return f"{path}{separator}{query}" + (f"#{fragment}" if fragment else "")
 
 
 @router.get("/{property_id}", response_class=HTMLResponse)
@@ -173,6 +198,7 @@ async def property_detail(
     request: Request,
     property_id: int,
     tab: Literal["overview", "profile", "credentials"] = "overview",
+    return_to: Annotated[str, Query(max_length=200)] = "",
 ) -> Response:
     """展示公开配置和凭证版本，绝不回显密码或指南。"""
     administrator = await _current_admin(request)
@@ -191,6 +217,8 @@ async def property_detail(
             "tab": tab,
             "room_statuses": list(RoomOperationalStatus),
             "csrf_token": await _issue_csrf(request, property_id),
+            # 列表来源经 safe_return_path 限定在站内；页签与写表单都带着它。
+            "return_to": safe_return_path(return_to, fallback="/employee/properties"),
             "page_title": getattr(
                 detail["property"],
                 "title",
@@ -234,7 +262,7 @@ async def update_property_profile(
     except Exception as error:
         _raise_page_error(error)
     return RedirectResponse(
-        f"/employee/properties/{property_id}?tab=profile",
+        await _with_source(request, f"/employee/properties/{property_id}?tab=profile"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -267,7 +295,7 @@ async def replace_property_credentials(
     finally:
         await qr_image.close()
     return RedirectResponse(
-        f"/employee/properties/{property_id}?tab=credentials",
+        await _with_source(request, f"/employee/properties/{property_id}?tab=credentials"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -297,7 +325,9 @@ async def upload_welcome_image(
     finally:
         await image.close()
     return RedirectResponse(
-        f"/employee/properties/{property_id}?tab=profile#welcome-image",
+        await _with_source(
+            request, f"/employee/properties/{property_id}?tab=profile#welcome-image"
+        ),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -316,7 +346,9 @@ async def delete_welcome_image(
     except Exception as error:
         _raise_page_error(error)
     return RedirectResponse(
-        f"/employee/properties/{property_id}?tab=profile#welcome-image",
+        await _with_source(
+            request, f"/employee/properties/{property_id}?tab=profile#welcome-image"
+        ),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -360,10 +392,12 @@ async def set_room_operational_status(
     # 运营页与房间详情共用这一个提交口，回哪去由来源决定：跨房间调度时留在
     # 原来的 3/7/14 天视图和房间锚点上，房间内提交则留在该房间。兜底是这个
     # 房间而不是任务中心——把改房态的人甩去任务列表毫无道理。
-    return RedirectResponse(
-        safe_return_path(return_to, fallback=f"/employee/properties/{property_id}"),
-        status_code=status.HTTP_303_SEE_OTHER,
+    target = (
+        safe_return_path(return_to, fallback=f"/employee/properties/{property_id}")
+        if return_to
+        else await _with_source(request, f"/employee/properties/{property_id}")
     )
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/{property_id}/qr")

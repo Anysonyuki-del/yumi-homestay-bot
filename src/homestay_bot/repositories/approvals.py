@@ -44,9 +44,16 @@ class SQLAlchemyApprovalRepository:
         )
 
     async def get_for_update(self, approval_id: int) -> BookingApproval:
-        """使用数据库行锁读取审批单，阻止并发重复确认。"""
+        """使用数据库行锁读取审批单，阻止并发重复确认。
+
+        populate_existing：会话缓存里可能是本次请求更早读到的旧对象，加锁后必须以数据库
+        现值为准，写后核验才能判断结果是否仍属于当前确认轮次（Codex AR6）。
+        """
         statement = (
-            select(BookingApproval).where(BookingApproval.id == approval_id).with_for_update()
+            select(BookingApproval)
+            .where(BookingApproval.id == approval_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         approval = await self._session.scalar(statement)
         if approval is None:

@@ -372,24 +372,6 @@ class SQLAlchemyComplaintRepository:
         )
         return await self._require(review_id)
 
-    async def mark_delivery_failed_by_outbox_id(
-        self,
-        outbox_id: str,
-        *,
-        error_code: str,
-    ) -> ComplaintReview | None:
-        """按遗留出站任务编号回写 worker 崩溃导致的投递失败。"""
-        review_id = await self._session.scalar(
-            select(ComplaintReview.id).where(
-                ComplaintReview.delivery_outbox_id == outbox_id[:128]
-            )
-        )
-        if review_id is None:
-            return None
-        return await self.mark_delivery_failed(
-            review_id, error_code=error_code, outbox_id=outbox_id
-        )
-
     async def mark_returned(
         self, review_id: int, *, expected_version: int
     ) -> ComplaintReview:
