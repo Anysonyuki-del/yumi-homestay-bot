@@ -558,3 +558,50 @@ async def test_empty_reply_gets_a_recoverable_page_not_json(factory, action) -> 
         )
     assert fixed.status_code == 303
     assert (await _review(factory)).draft == "补好的回复"
+
+
+@pytest.mark.asyncio
+async def test_cleared_message_bodies_collapse_into_one_line_not_none(factory) -> None:
+    """正文已清除的消息不再一条条显示成「None」，连续的合并成一行说明；有正文的照常显示。"""
+    from datetime import UTC, datetime, timedelta
+
+    from homestay_bot.domain.enums import MessageOrigin
+    from homestay_bot.domain.models import Message
+
+    start = datetime(2026, 9, 25, 15, 30, tzinfo=UTC)
+    async with factory() as session:
+        review = await session.get(ComplaintReview, REVIEW_ID)
+        for index, (origin, content) in enumerate(
+            [
+                (MessageOrigin.GUEST, None),
+                (MessageOrigin.BOT, None),
+                (MessageOrigin.GUEST, None),
+                (MessageOrigin.GUEST, "我要退钱"),
+                (MessageOrigin.BOT, None),
+            ]
+        ):
+            session.add(
+                Message(
+                    conversation_id=review.conversation_id,
+                    external_message_id=f"synthetic-{index}",
+                    origin=origin,
+                    message_type="text",
+                    content=content,
+                    sent_at=start + timedelta(minutes=index),
+                )
+            )
+        await session.commit()
+
+    with _client(factory) as client:
+        client.get("/test/session")
+        text = client.get(f"/employee/complaints/{REVIEW_ID}", headers=HTML).text
+
+    conversation = text.split("完整对话", 1)[1].split("回复客人", 1)[0]
+    assert ">None<" not in conversation
+    assert "我要退钱" in conversation
+    assert conversation.count("message-cleared") == 2
+    assert "（3 条消息的正文已清除" in conversation
+    assert "（1 条消息的正文已清除" in conversation
+    assert conversation.index("3 条消息") < conversation.index("我要退钱") < conversation.index(
+        "1 条消息"
+    )

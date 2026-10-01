@@ -22,7 +22,24 @@
   </div>
   <p class="field-help">AI 分析仅用于整理信息，责任、退款、赔偿和最终回复均由管理员确认。</p>
 </section>
-<section class="detail-section panel panel--padded"><div class="section-heading"><h2>完整对话</h2><div>{% if has_older_messages %}<a href="/employee/complaints/{{ review.id }}?before_message_id={{ older_before_message_id }}">查看更早消息</a>{% endif %}{% if not is_latest_message_page %}<a href="/employee/complaints/{{ review.id }}">返回最新消息</a>{% endif %}</div></div><div class="message-list">{% for message in messages %}<article class="message-item"><strong>{{ message.origin | status_zh }}：</strong><small class="muted">{{ message.sent_at | datetime_zh if message.sent_at else "时间未知" }}</small><p class="long-text">{{ message.content }}</p></article>{% else %}<p>本页没有对话消息。</p>{% endfor %}</div></section>
+<section class="detail-section panel panel--padded"><div class="section-heading"><h2>完整对话</h2><div>{% if has_older_messages %}<a href="/employee/complaints/{{ review.id }}?before_message_id={{ older_before_message_id }}">查看更早消息</a>{% endif %}{% if not is_latest_message_page %}<a href="/employee/complaints/{{ review.id }}">返回最新消息</a>{% endif %}</div></div><div class="message-list">
+{# 正文为空的消息（超过 7 天整理进客户历史摘要后清除，或测试数据被清空）原先直接显示成「None」，
+   一页里能有几十行。连续的这类消息合并成一行说明，保留它们在时间线上的位置，只显示条数和时间范围。 #}
+{% set run = namespace(count=0, first=none, last=none) %}
+{% macro cleared_note(count, first, last) -%}
+<p class="muted message-cleared">（{{ count }} 条消息的正文已清除：{{ first | datetime_zh if first else "时间未知" }}{% if count > 1 %} 至 {{ last | datetime_zh if last else "时间未知" }}{% endif %}。超过 7 天的消息会整理进客户历史摘要后清除）</p>
+{%- endmacro %}
+{% for message in messages %}
+  {% if message.content is none %}
+    {% if run.count == 0 %}{% set run.first = message.sent_at %}{% endif %}
+    {% set run.count = run.count + 1 %}{% set run.last = message.sent_at %}
+  {% else %}
+    {% if run.count %}{{ cleared_note(run.count, run.first, run.last) }}{% set run.count = 0 %}{% endif %}
+    <article class="message-item"><strong>{{ message.origin | status_zh }}：</strong><small class="muted">{{ message.sent_at | datetime_zh if message.sent_at else "时间未知" }}</small><p class="long-text">{{ message.content }}</p></article>
+  {% endif %}
+{% else %}<p>本页没有对话消息。</p>{% endfor %}
+{% if run.count %}{{ cleared_note(run.count, run.first, run.last) }}{% endif %}
+</div></section>
 
 {% if confirm_draft is not none %}
 <section class="decision-panel panel panel--padded" aria-labelledby="confirm-send-title">
