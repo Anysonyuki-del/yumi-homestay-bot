@@ -1,3 +1,26 @@
+# 当前任务：SQLite 保存点与迟到建单结果（2026-10-02）
+
+依据 docs/specs/2026-10-02_sqlite-savepoint-and-late-result-spec.md；用户在复审后回复「开始」，包含 SP5 中性错误文案与 SP6 新提醒区隐私边界。
+
+- [x] 核实当前基线与调用链，同步 Spec 的两项复审意见及文件、符号级实施计划。
+- [x] F1：db.py::create_engine 的保存点父事务保护；六组引擎回归与真实 Job 仓储的撞键、提交和回滚。修复前 3 项回滚残留失败，修复后目标文件 10 passed。
+- [x] F2 / D4：BookingService 两个迟到出口的阶段证据、日志保底及同事务审计；SQLAlchemyApprovalRepository.record_late_result；全部错误信封使用中性说明。新增目标行为修复前 9 项失败；相关审批回归 54 passed。
+- [x] F3：ApprovalPageService.get_detail 与审批模板展示最近 10 条提醒；管理员权限、各状态与隐私边界。真实门面、临时 SQLite、路由响应经 Chromium 390px 检查；页面相关回归与 F1 合计 38 passed。
+- [x] 自审与最终验证：审批交错、审计失败、临时 PostgreSQL、真实页面浏览器检查；公共引擎配置变更执行一次全量，Ruff、mypy、diff 检查。
+
+最终证据：带临时 PostgreSQL 16 的本地全量 2440 passed、15 skipped（全部真实外部契约）、10 warnings；Ruff 通过，mypy 134 源文件通过，diff --check 通过。临时集群已停止。详细行为、命令、测试工厂覆盖及警告边界见本次 Spec §7。未运行真实模型门禁，最终 diff 未触及 REPLY_PATHS。
+
+实施阶段未提交、推送或部署。2026-10-02 用户确认 Claude 审核通过，并授权「开始发布和部署」；随后明确本次按重要修复与新功能发布为 1.65.0。
+
+- [x] 核对已审核源码、测试与最终验证快照一致，复用有效本地结果。
+- [ ] 同步 1.65.0 版本、CHANGELOG、发布记录，完成最终 diff 的 Ponytail 审查后提交与推送。
+- [ ] 完成可恢复备份并复验，只替换 API，核对数据库迁移与生产运行状态。
+- [ ] 完成登录后只读页面验收，追加发布现场证据；记录真实外部验收缺口。
+
+发布部署不包含真实 DeepSeek、Hostex 或企业微信调用、真实建单或外部消息验收。
+
+---
+
 # 当前任务：前端操作流程补齐（2026-10-01）
 
 依据 `docs/specs/2026-10-01_frontend-improvement-spec.md`，三段确认见 §7.1；用户「开始全部做完」。W5（F09）不做。

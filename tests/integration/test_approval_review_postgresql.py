@@ -49,3 +49,12 @@ test_late_result_of_an_old_round_cannot_overwrite_the_new_round = (
 test_late_result_cannot_overwrite_a_newer_round_that_is_still_creating = (
     review.test_late_result_cannot_overwrite_a_newer_round_that_is_still_creating
 )
+test_discarded_result_keeps_creation_and_verification_stages = (
+    review.test_discarded_result_keeps_creation_and_verification_stages
+)
+test_late_audit_failure_rolls_back_but_preserves_diagnostics = (
+    review.test_late_audit_failure_rolls_back_but_preserves_diagnostics
+)
+test_creation_error_does_not_claim_verified_rejection = (
+    review.test_creation_error_does_not_claim_verified_rejection
+)

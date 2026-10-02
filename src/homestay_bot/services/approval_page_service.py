@@ -176,6 +176,14 @@ class ApprovalPageService:
         approval = await self._session.get(BookingApproval, approval_id)
         if approval is None:
             raise LookupError(f"审批单不存在: {approval_id}")
+        # ponytail: 审计目标暂无索引；当前详情访问量低，实际出现慢查询时再补目标索引。
+        discarded = list(await self._session.scalars(
+            select(AuditLog).where(
+                AuditLog.action == "booking_approval_late_result_discarded",
+                AuditLog.target_type == "booking_approval",
+                AuditLog.target_id == str(approval_id),
+            ).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(10)
+        ))
         unavailable: list[str] = []
         needs_reference = approval.status in self._NEEDS_REFERENCE_DATA
         if needs_reference:
@@ -200,6 +208,13 @@ class ApprovalPageService:
             "can_confirm": needs_reference and not unavailable,
             "reference_unavailable": unavailable,
             "approval": self._to_view(approval),
+            # 模板只接收提醒必需字段，不透传审计 details 中其他可能敏感的内容。
+            "late_results": [{
+                "created_at": row.created_at,
+                "request_id": row.details.get("request_id"),
+                "reservation_codes": row.details.get("reservation_codes", []),
+                "error_code": row.details.get("error_code"),
+            } for row in discarded],
             # 1.41.0 起后台显示完整手机号（用户决定可记录客人信息，只有登录员工可见）；
             # 模板变量沿用原名，已清除的旧记录仍显示「已清理」。
             "masked_mobile": (
@@ -312,8 +327,8 @@ class ApprovalPageService:
             raise self._duplicate_code(approval_id)
         previous = approval.status
         # 状态、订单号与审计在同一次 flush 里写入，一起提交或一起回滚（Spec §6 AR5）。
-        # 不用保存点：SQLite 的驱动不会因普通查询开启物理事务，最外层保存点一释放就
-        # 提交了，之后审计失败也撤不回状态。唯一键冲突时整个会话由调用方回滚。
+        # 单次 flush 更简单，状态、订单号与审计共用外层事务，不依赖保存点语义。
+        # 唯一键冲突时整个会话由当前调用方回滚。
         approval.status = ApprovalStatus.BOOKED
         approval.hostex_reservation_code = code
         self._audit(

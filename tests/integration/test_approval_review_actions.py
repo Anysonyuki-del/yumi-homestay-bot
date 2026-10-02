@@ -620,7 +620,7 @@ async def _age_creating(factory, minutes: int) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("late_outcome", ["success", "rejected"])
+@pytest.mark.parametrize("late_outcome", ["success", "business_error", "server_error"])
 async def test_late_result_of_an_old_round_cannot_overwrite_the_new_round(
     world, late_outcome
 ) -> None:
@@ -641,9 +641,10 @@ async def test_late_result_of_an_old_round_cannot_overwrite_the_new_round(
         assert second.status is ApprovalStatus.BOOKED
 
     hostex = _InterleavingHostex(during_first_create)
-    if late_outcome == "rejected":
+    if late_outcome != "success":
         hostex.fail_first_with = HostexBusinessError(
-            400, "synthetic-req", "synthetic late rejection"
+            503 if late_outcome == "server_error" else 400,
+            "synthetic-req", "synthetic late error",
         )
     facade = _facade(factory, sensitive, hostex)
     await facade.reopen_after_review(1, 1)
@@ -657,6 +658,163 @@ async def test_late_result_of_an_old_round_cannot_overwrite_the_new_round(
             "HX-ROOM-102", "REQ-102",
         )
         assert approval.failure_message is None
+        discarded = list(await session.scalars(select(AuditLog).where(
+            AuditLog.action == "booking_approval_late_result_discarded",
+        )))
+        assert len(discarded) == 1
+        audit = discarded[0]
+        assert (audit.actor_employee_id, audit.target_type, audit.target_id) == (
+            None, "booking_approval", "1",
+        )
+        assert audit.details["create_result"] == (
+            "success" if late_outcome == "success" else "business_error"
+        )
+        assert audit.details["verify_result"] == (
+            "matched" if late_outcome == "success" else "skipped"
+        )
+        assert audit.details["request_id"] == (
+            "REQ-101" if late_outcome == "success" else "synthetic-req"
+        )
+        assert audit.details["reservation_codes"] == (
+            ["HX-ROOM-101"] if late_outcome == "success" else []
+        )
+        if late_outcome != "success":
+            assert audit.details["error_code"] == (503 if late_outcome == "server_error" else 400)
+        assert "张三" not in str(audit.details)
+        assert "13800138000" not in str(audit.details)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["transport_error", "verify_failure", "recovery"])
+async def test_discarded_result_keeps_creation_and_verification_stages(world, phase) -> None:
+    """真实门面保留超时、成功后核验失败和恢复核验的不同阶段，均不覆盖已回退审批。"""
+    factory, sensitive = world
+
+    class LateHostex(BookingHostex):
+        """在核验返回前模拟审批已由另一个请求回退，不执行真实外部请求。"""
+
+        async def create_reservation(self, request):
+            """记录一次建单；恢复分支根本不应调用这里。"""
+            assert phase != "recovery"
+            self.created.append(request)
+            if phase == "transport_error":
+                raise HostexTransportError("synthetic timeout")
+            return CreateReservationResult(request_id="SYNTHETIC-REQ")
+
+        async def list_reservations(self, query):
+            """仅在写后或恢复核验时改变轮次，首次回退前的反查正常返回空结果。"""
+            if not self.created and phase != "recovery":
+                return []
+            async with factory() as other:
+                approval = await other.get(BookingApproval, 1)
+                approval.status = ApprovalStatus.PENDING
+                approval.approved_at = None
+                await other.commit()
+            if phase == "verify_failure":
+                raise HostexTransportError("synthetic lookup failure")
+            return []
+
+    hostex = LateHostex()
+    facade = _facade(factory, sensitive, hostex)
+    if phase == "recovery":
+        await _set_round(factory, approved_at=datetime.now(UTC) - timedelta(minutes=6),
+                         property_id=101, amount=399)
+    else:
+        await facade.reopen_after_review(1, 1)
+    result = await facade.confirm(1, 1, _command(101, 399))
+    assert result.status is ApprovalStatus.PENDING
+    assert len(hostex.created) == (0 if phase == "recovery" else 1)
+    async with factory() as session:
+        audit = (await session.scalars(select(AuditLog).where(
+            AuditLog.action == "booking_approval_late_result_discarded",
+        ))).one()
+        assert audit.details["create_result"] == {
+            "transport_error": "transport_error", "verify_failure": "success",
+            "recovery": "not_attempted",
+        }[phase]
+        assert audit.details["verify_result"] == (
+            "failed" if phase == "verify_failure" else "unmatched"
+        )
+        assert audit.details["request_id"] == (
+            "SYNTHETIC-REQ" if phase == "verify_failure" else None
+        )
+        assert audit.details["reservation_codes"] == []
+        assert audit.details["round_approved_at"] is not None
+        assert audit.details["current_status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_late_audit_failure_rolls_back_but_preserves_diagnostics(world, caplog) -> None:
+    """审计实际 flush 后失败也整体回滚；之前的日志仍保留旧请求和订单线索。"""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    factory, sensitive = world
+
+    class AuditFailureSession(AsyncSession):
+        """在迟到审计写入数据库后注入故障，验证真实事务撤销。"""
+
+        async def flush(self, objects=None):
+            """先落库再抛错，不影响普通回退等其他审计。"""
+            failing = any(isinstance(row, AuditLog) and
+                          row.action == "booking_approval_late_result_discarded"
+                          for row in self.new)
+            await super().flush(objects)
+            if failing:
+                raise RuntimeError("synthetic late audit failure")
+
+    new_at = datetime.now(UTC) + timedelta(seconds=1)
+
+    async def new_round():
+        """另一个会话开始新轮次，旧成功结果不能覆盖它。"""
+        await _set_round(factory, approved_at=new_at, property_id=102, amount=499)
+
+    hostex = _InterleavingHostex(new_round)
+    await _facade(factory, sensitive, hostex).reopen_after_review(1, 1)
+    failing = async_sessionmaker(factory.kw["bind"], class_=AuditFailureSession,
+                                 expire_on_commit=False)
+    with pytest.raises(RuntimeError, match="synthetic late audit failure"):
+        await _facade(failing, sensitive, hostex).confirm(1, 1, _command(101, 399))
+    async with factory() as session:
+        approval = await session.get(BookingApproval, 1)
+        assert approval.status is ApprovalStatus.CREATING
+        assert approval.property_id == 102
+        assert approval.approved_at.replace(tzinfo=UTC) == new_at
+        assert not list(await session.scalars(select(AuditLog).where(
+            AuditLog.action == "booking_approval_late_result_discarded",
+        )))
+    assert "REQ-101" in caplog.text
+    assert "HX-ROOM-101" in caplog.text
+    assert "round_approved_at" in caplog.text
+    assert "approval_id=1" in caplog.text
+    assert "张三" not in caplog.text
+    assert "13800138000" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_code", [400, 503])
+async def test_creation_error_does_not_claim_verified_rejection(world, error_code) -> None:
+    """未经真实契约核实的错误码均提示待核验，保留错误码且不重复建单。"""
+    from homestay_bot.integrations.hostex_client import HostexBusinessError
+
+    factory, sensitive = world
+
+    class ErrorHostex(BookingHostex):
+        """返回合成错误信封，记录是否发生额外建单。"""
+
+        async def create_reservation(self, request):
+            """错误请求编号只用于迟到诊断，不改变本轮既有持久化语义。"""
+            self.created.append(request)
+            raise HostexBusinessError(error_code, "SYNTHETIC-ERROR", "synthetic error")
+
+    hostex = ErrorHostex()
+    facade = _facade(factory, sensitive, hostex)
+    await facade.reopen_after_review(1, 1)
+    result = await facade.confirm(1, 1, _command(101, 399))
+    assert result.status is ApprovalStatus.NEEDS_REVIEW
+    assert result.failure_code == error_code
+    assert result.failure_message == "百居易返回错误，订单是否已创建待核验"
+    assert result.hostex_request_id is None
+    assert len(hostex.created) == 1
 
 
 # ---- Codex 第三轮审查 AR8–AR9：补足判别力 --------------------------------------
@@ -714,11 +872,12 @@ async def test_late_result_cannot_overwrite_a_newer_round_that_is_still_creating
         )
         if old_exit == "reconcile":
             await old._reconcile_or_mark_review(
-                old_approval, attempt=old_at, request_id="REQ-OLD"
+                old_approval, attempt=old_at, create_result="success", request_id="REQ-OLD"
             )
         else:
             await old._mark_needs_review(
-                old_approval, attempt=old_at, failure_message="旧一轮失败", request_id="REQ-OLD"
+                old_approval, attempt=old_at, create_result="business_error",
+                failure_message="旧一轮失败", request_id="REQ-OLD"
             )
 
     async with factory() as session:
@@ -728,6 +887,13 @@ async def test_late_result_cannot_overwrite_a_newer_round_that_is_still_creating
         assert (current.hostex_request_id, current.hostex_reservation_code) == (None, None)
         assert current.failure_message is None
         assert current.approved_at.replace(tzinfo=UTC) == new_at
+        audit = (await session.scalars(select(AuditLog).where(
+            AuditLog.action == "booking_approval_late_result_discarded",
+        ))).one()
+        # 加锁会刷新同一 ORM 对象；旧轮次必须来自请求快照，不能拿新 approved_at 登记。
+        assert audit.details["round_approved_at"] == old_at.isoformat()
+        assert audit.details["current_status"] == "creating"
+        assert audit.details["request_id"] == "REQ-OLD"
 
     async with factory() as new_session:
         new_approval = await new_session.get(BookingApproval, 1)
@@ -735,7 +901,9 @@ async def test_late_result_cannot_overwrite_a_newer_round_that_is_still_creating
         await BookingService(
             SQLAlchemyApprovalRepository(new_session), SQLAlchemyPermissionChecker(new_session),
             _MatchingHostex(property_id=102, created_at=new_at, rate=499), sensitive,
-        )._reconcile_or_mark_review(new_approval, attempt=new_at, request_id="REQ-NEW")
+        )._reconcile_or_mark_review(
+            new_approval, attempt=new_at, create_result="success", request_id="REQ-NEW"
+        )
 
     async with factory() as session:
         booked = await session.get(BookingApproval, 1)
@@ -743,6 +911,9 @@ async def test_late_result_cannot_overwrite_a_newer_round_that_is_still_creating
         assert (booked.hostex_reservation_code, booked.hostex_request_id) == (
             "HX-ROOM-102", "REQ-NEW",
         )
+        assert len(list(await session.scalars(select(AuditLog).where(
+            AuditLog.action == "booking_approval_late_result_discarded",
+        )))) == 1
 
 
 def test_an_eleven_digit_number_starting_with_86_keeps_its_prefix() -> None:

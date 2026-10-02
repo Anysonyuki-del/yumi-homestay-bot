@@ -8,7 +8,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from homestay_bot.domain.enums import ApprovalStatus, EmployeeRole
-from homestay_bot.domain.models import BookingApproval, Employee
+from homestay_bot.domain.models import AuditLog, BookingApproval, Employee
 
 
 class SQLAlchemyApprovalRepository:
@@ -63,6 +63,17 @@ class SQLAlchemyApprovalRepository:
     async def save(self, approval: BookingApproval) -> None:
         """刷新审批单变更，提交由外层事务负责。"""
         self._session.add(approval)
+        await self._session.flush()
+
+    async def record_late_result(self, approval_id: int, details: dict[str, Any]) -> None:
+        """在服务持有的事务里刷新迟到审计；失败交给外层回滚，不单独提交。"""
+        self._session.add(AuditLog(
+            actor_employee_id=None,
+            action="booking_approval_late_result_discarded",
+            target_type="booking_approval",
+            target_id=str(approval_id),
+            details=details,
+        ))
         await self._session.flush()
 
     async def recover_stale_creating(self, *, before: datetime) -> int:

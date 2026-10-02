@@ -10,6 +10,20 @@
    没有解释的灰按钮。已有的本地资料和拒绝入口都不受影响。 #}
 <div class="alert alert--warning" role="status"><div><strong>百居易参考数据暂不可用</strong><p>缺少：{{ reference_unavailable | join("、") }}。本地审批资料照常可看，也可以拒绝；确认下单需要实时房态与金额，暂不开放。</p></div></div>
 {% endif %}
+{% if late_results %}
+{# 提醒放在状态分支之外；审批已回退或结束也可能有旧轮次的上游订单需要核对。 #}
+<section class="alert alert--warning" role="alert" aria-labelledby="late-result-title">
+  <div class="long-text">
+    <h2 id="late-result-title">上一轮建单结果需核对</h2>
+    <p>有一轮建单结果在审批状态改变后才返回，已被丢弃。百居易可能多出一笔订单，请到百居易后台核对，多余的订单需人工取消。</p>
+    <ul>
+      {% for item in late_results %}
+      <li>{{ item.created_at|datetime_zh }}；请求编号：{{ item.request_id or "未取得" }}；匹配订单号：{{ item.reservation_codes|join("、") if item.reservation_codes else "未取得" }}{% if item.error_code is not none %}；错误码：{{ item.error_code }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endif %}
 {% if approval.status.value == "pending" and not can_confirm %}
 <section class="decision-panel panel panel--padded">
   <p class="eyebrow">高风险确认</p>

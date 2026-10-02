@@ -28,7 +28,7 @@ class _Approval:
 
 
 class _Session:
-    """只实现 get 的会话替身。"""
+    """提供审批和空审计查询，专注参考数据失败时的降级行为。"""
 
     def __init__(self, approval: object) -> None:
         """保存要返回的审批单。"""
@@ -37,6 +37,10 @@ class _Session:
     async def get(self, model: object, approval_id: int) -> object:
         """按主键返回预置审批单。"""
         return self._approval
+
+    async def scalars(self, statement: object) -> list[Any]:
+        """这些参考数据降级用例不包含迟到审计；实际查询由浏览器回归覆盖。"""
+        return []
 
 
 class _Hostex:
