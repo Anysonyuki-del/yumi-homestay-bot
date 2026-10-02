@@ -140,10 +140,6 @@ class KnowledgeAdminStub:
         """详情页配图区：存根条目没有配图。"""
         return []
 
-    async def image_counts(self, entry_ids: list[int]) -> dict[int, int]:
-        """存根条目没有配图。"""
-        return {}
-
     async def list_properties(self):
         """提供合成房间选项。"""
         return []

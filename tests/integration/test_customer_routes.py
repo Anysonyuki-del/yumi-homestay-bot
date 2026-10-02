@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.domain.enums import (
+    BusinessTaskStatus,
     CustomerMemoryCategory,
     CustomerMemoryEvidenceType,
     CustomerMemoryStatus,
@@ -145,11 +146,15 @@ class CustomerAdminStub:
                         "id": 11, "type_label": "保洁", "property_title": "东湖小院",
                         "service_date_label": "9月9日", "status_label": "已完成",
                         "can_archive": True, "can_cancel": False,
+                        "status_enum": BusinessTaskStatus.COMPLETED,
+                        "eligible_actions": frozenset({"archive"}),
                     },
                     {
                         "id": 12, "type_label": "维修", "property_title": "江景大床房",
                         "service_date_label": "9月12日", "status_label": "待分派",
                         "can_archive": False, "can_cancel": True,
+                        "status_enum": BusinessTaskStatus.PENDING_ASSIGNMENT,
+                        "eligible_actions": frozenset({"assign", "cancel"}),
                     },
                 ],
                 "complaints": [],

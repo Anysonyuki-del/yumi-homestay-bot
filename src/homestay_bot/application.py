@@ -2731,11 +2731,6 @@ class SessionKnowledgeAdminService:
         async with self._factory() as session:
             return await KnowledgeAdminService(session).list_images(entry_id)
 
-    async def image_counts(self, entry_ids: list[int]) -> dict[int, int]:
-        """在独立只读会话中统计一批条目的配图数量。"""
-        async with self._factory() as session:
-            return await KnowledgeAdminService(session).image_counts(entry_ids)
-
     async def upload_image(
         self,
         entry_id: int,

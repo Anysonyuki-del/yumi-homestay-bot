@@ -431,15 +431,18 @@ def _upload_to(client, entry_id: int, content: bytes):
     )
 
 
-def test_list_delete_confirm_states_how_many_images_go_with_it(tmp_path) -> None:
-    """列表页删除确认框写明会一并删除几张配图，与详情页一致。"""
+def test_detail_delete_confirm_counts_images_and_list_has_no_delete(tmp_path) -> None:
+    """列表只提供启停，详情仍明确提示永久删除会带走的真实配图数量。"""
     engine, factory, storage = _world(tmp_path)
     client, _ = build_client(EmployeeRole.ADMIN)
     client.app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory, storage)
-    for _ in range(2):
-        _upload(client, _token(client), PNG)
-
-    listing = client.get("/employee/knowledge").text
-
-    assert "确定永久删除知识 #1「开车停哪里」及其 2 张配图吗？" in listing
-    asyncio.run(engine.dispose())
+    try:
+        for _ in range(2):
+            assert _upload(client, _token(client), PNG).status_code == 303
+        listing = client.get("/employee/knowledge").text
+        detail = client.get("/employee/knowledge/1").text
+        assert 'action="/employee/knowledge/1/delete"' not in listing
+        assert 'action="/employee/knowledge/1/delete"' in detail
+        assert "确定永久删除知识 #1及其 2 张配图吗？" in detail
+    finally:
+        asyncio.run(engine.dispose())

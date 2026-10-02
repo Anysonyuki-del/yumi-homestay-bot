@@ -2,6 +2,23 @@
 <span class="badge badge--{{ tone }}">{{ text }}</span>
 {%- endmacro %}
 
+{# 任务列表、详情和客户服务记录共用状态语义，未知状态不猜测。 #}
+{% macro task_status_badge(status, label=none) -%}
+{% set key = status.value if status else "" %}
+{% set tone = {"completed": "success", "cancelled": "neutral", "expired": "neutral", "assigned": "info", "in_progress": "info"}.get(key, "warning") %}
+{{ badge(label or (status | status_zh if status else "待核实"), tone) }}
+{%- endmacro %}
+
+{# 资格仍读服务端投影，只提示当前页面和角色提供的动作，避免引导用户寻找不存在的按钮。 #}
+{% macro task_eligibility(actions, offered) -%}
+{% if offered %}<small class="task-eligibility">{% for action, label in [("assign", "可分派"), ("cancel", "可取消"), ("archive", "可归档"), ("purge", "可删除")] if action in actions and action in offered %}{{ label }} {% else %}暂无可执行的批量动作{% endfor %}</small>{% endif %}
+{%- endmacro %}
+
+{# 禁用按钮外仍可读取原因；用户明确选择后才收窄批次。 #}
+{% macro bulk_feedback(action) -%}
+<div class="bulk-feedback" data-selection-enhanced hidden><p id="bulk-hint-{{ action }}" data-bulk-hint="{{ action }}" aria-live="polite" tabindex="-1"></p><button type="button" class="button button--secondary" data-keep-eligible="{{ action }}" hidden></button></div>
+{%- endmacro %}
+
 {% macro empty(title, detail="") -%}
 <div class="empty-state">
   <strong>{{ title }}</strong>
@@ -57,6 +74,11 @@
    直接写成确定的「空闲」。日期分段展示，保留键盘区域入口。 #}
 {# 住宿条时间轴（Spec §7）：日期表头一行，每笔订单一条 bar 独占一轨，按日期列
    定位；姓名只出现一次并链接客户档案；超窗裁切并标前／后延续。空白不表示可售。 #}
+{# 同一住宿状态用于可见文案与链接名称，避免辅助技术只听到日期而漏掉核验状态。 #}
+{% macro stay_status(bar) -%}
+{% if bar.checkout_verified %}已退房{% elif bar.overlaps %}需核对{% elif bar.semantic == "current" %}在住{% elif bar.semantic == "past" %}已过{% else %}未来{% endif %}
+{%- endmacro %}
+
 {% macro stay_guest(guest_name, customer_id) -%}
 {%- if customer_id is not none and guest_name %}<a href="/employee/customers/{{ customer_id }}">{{ guest_name }}</a>
 {%- elif customer_id is not none %}<a href="/employee/customers/{{ customer_id }}">查看客人</a>
@@ -101,10 +123,11 @@
           {% set spans_before = bar.left_pct < begin %}
           {% set spans_after = bar.left_pct + bar.width_pct > end %}
           {% set carry %}{% if spans_before and spans_after %}（同一笔，跨上下段）{% elif spans_before %}（同一笔，接上段）{% elif spans_after %}（同一笔，续下段）{% endif %}{% endset %}
-          {% set summary = _cal_guest(bar.guest_name, bar.customer_id) ~ " · " ~ bar.nights ~ " 晚" ~ (" · 已退房" if bar.checkout_verified else "") ~ carry %}
+          {% set summary = _cal_guest(bar.guest_name, bar.customer_id) ~ " · " ~ bar.nights ~ " 晚 · " ~ stay_status(bar) ~ carry %}
+          {% set dates = (bar.start_date | date_zh if bar.start_date else bar.start_label) ~ "至" ~ (bar.end_date | date_zh if bar.end_date else bar.end_label) %}
           {# 手机跨段条可能很短，姓名独立显示并复用客户链接，不拉长住宿区间。 #}
           <div class="cal__identity{% if loop.index > 3 %} cal__identity--extra{% endif %}" style="top: calc({{ loop.index0 }} * var(--track-height));">{{ stay_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}{% if carry %}<span class="cal__carry">{{ carry }}</span>{% endif %}</div>
-          <{% if bar.customer_id is not none %}a href="/employee/customers/{{ bar.customer_id }}"{% else %}span{% endif %} class="cal__bar cal__bar--{{ bar.semantic }}{% if bar.order_id == featured %} cal__bar--featured{% endif %}{% if loop.index > 3 %} cal__bar--extra{% endif %}{% if bar.overlaps %} cal__bar--overlap{% endif %}{% if bar.checkout_verified %} cal__bar--verified{% endif %}" style="left: {{ (left - begin) / (end - begin) * 100 }}%; width: {{ (right - left) / (end - begin) * 100 }}%; top: calc({{ loop.index0 }} * var(--track-height) + var(--bar-offset));" title="{{ summary }}">{% if bar.left_continues or spans_before %}<span class="cal__cont" aria-label="{% if spans_before %}同一笔，接上段{% else %}更早开始{% endif %}">‹</span>{% endif %}<span class="cal__bar-label">{{ _cal_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</span>{% if bar.right_continues or spans_after %}<span class="cal__cont" aria-label="{% if spans_after %}同一笔，续下段{% else %}延续更晚{% endif %}">›</span>{% endif %}</{% if bar.customer_id is not none %}a{% else %}span{% endif %}>
+          <{% if bar.customer_id is not none %}a href="/employee/customers/{{ bar.customer_id }}"{% else %}span{% endif %} class="cal__bar cal__bar--{{ bar.semantic }}{% if bar.order_id == featured %} cal__bar--featured{% endif %}{% if loop.index > 3 %} cal__bar--extra{% endif %}{% if bar.overlaps %} cal__bar--overlap{% endif %}{% if bar.checkout_verified %} cal__bar--verified{% endif %}" style="left: {{ (left - begin) / (end - begin) * 100 }}%; width: {{ (right - left) / (end - begin) * 100 }}%; top: calc({{ loop.index0 }} * var(--track-height) + var(--bar-offset));" title="{{ summary }} · {{ dates }}" aria-label="{{ summary }} · {{ dates }}">{% if bar.left_continues or spans_before %}<span class="cal__cont" aria-label="{% if spans_before %}同一笔，接上段{% else %}更早开始{% endif %}">‹</span>{% endif %}{% if bar.customer_id is none %}<span class="visually-hidden">{{ dates }} · {{ stay_status(bar) }} · </span>{% endif %}<span class="cal__bar-label">{{ _cal_guest(bar.guest_name, bar.customer_id) }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</span>{% if bar.right_continues or spans_after %}<span class="cal__cont" aria-label="{% if spans_after %}同一笔，续下段{% else %}延续更晚{% endif %}">›</span>{% endif %}</{% if bar.customer_id is not none %}a{% else %}span{% endif %}>
         {% else %}<p class="cal__empty">当前日期范围内暂无订单</p>{% endfor %}
       </div>
     </div>
@@ -143,15 +166,15 @@
   {% if timeline.bars %}
   <ul class="clean-list cal-m__list">
     {% for bar in timeline.bars %}
-    {% set summary = _cal_guest(bar.guest_name, bar.customer_id) ~ " · " ~ bar.start_label ~ " 至 " ~ bar.end_label ~ " · " ~ bar.nights ~ " 晚" %}
+    {% set summary = _cal_guest(bar.guest_name, bar.customer_id) ~ " · " ~ (bar.start_date | date_zh if bar.start_date else bar.start_label) ~ " 至 " ~ (bar.end_date | date_zh if bar.end_date else bar.end_label) ~ " · " ~ bar.nights ~ " 晚" %}
     <li class="cal-m__item cal-m__item--{{ bar.semantic }}{% if bar.overlaps %} cal-m__item--overlap{% endif %}{% if bar.order_id == featured %} cal-m__item--featured{% endif %}">
       <span class="cal-m__edge" aria-hidden="true"></span>
       {# 整张卡是点击区：只让姓名可点会退化到 24px，低于 44px 触控下限。 #}
-      <{% if bar.customer_id is not none %}a class="cal-m__hit" href="/employee/customers/{{ bar.customer_id }}"{% else %}span class="cal-m__hit"{% endif %} title="{{ summary }}">
+      <{% if bar.customer_id is not none %}a class="cal-m__hit" href="/employee/customers/{{ bar.customer_id }}"{% else %}span class="cal-m__hit"{% endif %} title="{{ summary }}"{% if bar.customer_id is not none %} aria-label="{{ summary }} · {{ stay_status(bar) }}"{% endif %}>
         <span class="cal-m__name">{{ _cal_guest(bar.guest_name, bar.customer_id) }}</span>
         <span class="cal-m__meta"><span class="cal-m__when">{{ bar.start_label }} → {{ bar.end_label }}</span> · {{ bar.nights }} 晚{% if bar.overlaps %} · 与其他订单重叠{% endif %}</span>
       </{% if bar.customer_id is not none %}a{% else %}span{% endif %}>
-      <span class="cal-m__state{% if bar.checkout_verified %} cal-m__state--done{% elif bar.overlaps %} cal-m__state--warn{% elif bar.semantic == "current" %} cal-m__state--now{% endif %}">{% if bar.checkout_verified %}已退房{% elif bar.overlaps %}需核对{% elif bar.semantic == "current" %}在住{% elif bar.semantic == "past" %}已过{% else %}未来{% endif %}</span>
+      <span class="cal-m__state{% if bar.checkout_verified %} cal-m__state--done{% elif bar.overlaps %} cal-m__state--warn{% elif bar.semantic == "current" %} cal-m__state--now{% endif %}">{{ stay_status(bar) }}</span>
     </li>
     {% endfor %}
   </ul>
@@ -172,7 +195,7 @@
     <div class="cal__layout--compact">{{ _room_timeline_mobile(timeline, today, featured_order_id) }}</div>
   </div>
   {% if timeline.bars %}<details class="cal__trips"><summary>查看本房间行程列表</summary>
-    <ul class="clean-list cal__trip-list">{% for bar in timeline.bars %}<li>{% if bar.customer_id is not none %}<a href="/employee/customers/{{ bar.customer_id }}">{{ _cal_guest(bar.guest_name, bar.customer_id) }}</a>{% else %}未关联客人{% endif %} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</li>{% endfor %}</ul>
+    <ul class="clean-list cal__trip-list">{% for bar in timeline.bars %}<li>{% if bar.customer_id is not none %}<a href="/employee/customers/{{ bar.customer_id }}">{{ _cal_guest(bar.guest_name, bar.customer_id) }}</a>{% else %}未关联客人{% endif %} · {{ bar.start_date | date_zh if bar.start_date else bar.start_label }}至{{ bar.end_date | date_zh if bar.end_date else bar.end_label }} · {{ bar.nights }} 晚{% if bar.checkout_verified %} · 已退房{% endif %}</li>{% endfor %}</ul>
   </details>{% endif %}
 </div>{% endif %}
 {%- endmacro %}

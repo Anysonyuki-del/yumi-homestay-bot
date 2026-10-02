@@ -210,6 +210,7 @@ button:active:not(:disabled), .button:active { transform: translateY(1px); box-s
 /* 批量选择栏：手机也有全选入口，计数紧跟其后（F12）。触控目标不小于 44px。 */
 .selection-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; width: 100%; }
 .selection-bar__all { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 600; }
+.selection-bar__all input { width: 20px; min-height: 20px; }
 .selection-bar output { font-weight: 600; }
 /* display: flex 会盖过 hidden 属性；脚本未运行时这一栏必须真的隐藏。 */
 .selection-bar[hidden] { display: none; }
@@ -363,7 +364,8 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 /* 入住安排的日历比正文宽：默认 3 天要 6 个日期列（最小 624px），两栏并排需要
    约 1420px 内容宽。只给这一页放宽阅读宽度，其余页面维持全站 1240px。 */
 .page-content--wide { --measure-page: 1560px; }
-.js-enabled .page-content { animation: page-enter var(--motion-panel) var(--ease-out) both; }
+/* 不保留结束帧的 transform，避免为手机 fixed 工具栏建立包含块。 */
+.js-enabled .page-content { animation: page-enter var(--motion-panel) var(--ease-out) backwards; }
 .content-header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 14px; }
 .alert { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px; padding: 11px 13px; border: 1px solid; border-radius: var(--r-sm); }
 .js-enabled .alert { animation: status-enter var(--motion-fast) var(--ease-out) both; }
@@ -440,9 +442,10 @@ h4 { margin: 0 0 6px; color: var(--ink-mid); font-size: var(--t-sm); font-weight
 button.is-submitting { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border: 2px solid currentcolor; border-right-color: transparent; border-radius: 50%; content: ""; opacity: .82; animation: submit-spin 650ms linear infinite; }
 
+/* 动画结束解除包含块，页面内的手机批量栏才能相对视口固定。 */
 @keyframes page-enter {
   from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  to { opacity: 1; transform: none; }
 }
 
 @keyframes status-enter {
@@ -526,12 +529,26 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .room-status-form select { flex: 1 1 8rem; min-width: 0; max-width: 12rem; }
 .stable-room-head .room-status-form { margin: 0 0 0 auto; }
 
-/* 任务勾选：复选框列保持窄，移动端把勾选放在卡片上方。 */
+/* 任务勾选与详情链接并列，触控选择不触发导航。 */
 .select-cell { width: 40px; text-align: center; }
 .data-table .select-cell input { width: 18px; min-height: 18px; margin: 0; }
-.card-select { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: var(--t-xs); font-weight: 600; }
-.card-select input { width: 18px; min-height: 18px; }
+.mobile-card-list > li:has(.card-select) { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: start; gap: 8px; }
+.card-select { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; min-width: 44px; min-height: 44px; margin: 0; color: var(--muted); font-size: var(--t-xs); }
+.card-select input { width: 20px; min-height: 20px; margin: 0; }
+.task-summary, .task-eligibility { display: block; margin-top: 4px; overflow-wrap: anywhere; color: var(--muted); }
 .selection-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.selection-actions > .button--danger { margin-left: 16px; }
+.bulk-feedback { width: 100%; }
+.bulk-feedback p:empty { display: none; }
+.bulk-feedback[hidden], .bulk-feedback button[hidden] { display: none; }
+.room-adjust > summary, .operations-overview > summary { display: flex; align-items: center; min-height: 44px; }
+/* 只在脚本确认有选择时固定；高度按实测预留，短屏允许动作区内部滚动。 */
+@media (max-width: 768px) {
+  .selection-actions[data-fixed-bulk] { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; margin: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--line-strong); max-height: min(50vh, 24rem); overflow-y: auto; justify-content: flex-start; }
+  html:has(.selection-actions[data-fixed-bulk]) { scroll-padding-top: calc(var(--topbar-height) + 24px); scroll-padding-bottom: calc(var(--bulk-toolbar-height, 0px) + 16px); }
+  .admin-body:has(.selection-actions[data-fixed-bulk]) .page-content { padding-bottom: calc(var(--bulk-toolbar-height, 0px) + 24px); }
+  .selection-actions > .button--danger { margin-left: 0; margin-top: 16px; }
+}
 
 /* 批量分派：员工下拉与按钮排在同一行，不撑开操作区。 */
 .assign-inline { margin: 0; color: var(--muted); font-size: var(--t-xs); font-weight: 650; }

@@ -452,7 +452,7 @@ async def test_snapshot_marks_occupancy_unknown_when_hostex_sync_is_stale() -> N
 
     assert snapshot.source_stale is True
     assert snapshot.rooms[0].occupancy_status is RoomOccupancyStatus.UNKNOWN
-    assert snapshot.rooms[0].next_action == "先确认百居易实时房态"
+    assert snapshot.rooms[0].next_action == "同步恢复前不判断入住安排"
     await engine.dispose()  # type: ignore[attr-defined]
 
 
@@ -707,7 +707,30 @@ def test_every_next_action_carries_a_destination_or_none_at_all() -> None:
 
     # 同步不可信：没有能真正解决它的入口，不给按钮。
     reason, url, _ = step(source_stale=True)
-    assert "百居易" in reason and url is None
+    assert "同步恢复前" in reason and url is None
+
+    # 旧订单的到店/离店不参与推断，本地事实仍有可靠去向。
+    for state, counts, expected in (
+        (RoomOperationalStatus.READY,
+         RoomTaskCountRecord(101, 3, 2),
+         "/employee/tasks?property_id=101&overdue=true"),
+        (RoomOperationalStatus.MAINTENANCE,
+         RoomTaskCountRecord(101, 0, 0),
+         "/employee/properties/101"),
+        (RoomOperationalStatus.READY,
+         RoomTaskCountRecord(101, 3, 0),
+         "/employee/tasks?property_id=101"),
+        (RoomOperationalStatus.CLEANING,
+         RoomTaskCountRecord(101, 0, 0),
+         "/employee/properties/101"),
+        (RoomOperationalStatus.PENDING_INSPECTION,
+         RoomTaskCountRecord(101, 0, 0),
+         "/employee/properties/101"),
+    ):
+        reason, url, _ = step(source_stale=True, operational_status=state,
+                              task_count=counts, arrivals=1, departures=1, occupied=True)
+        assert url == expected
+        assert "入住" not in reason and "退房" not in reason
 
     # 逾期是首要原因，去向就带上房间与逾期条件，而不是该房间全部任务。
     reason, url, _ = step(task_count=RoomTaskCountRecord(101, 3, 2))

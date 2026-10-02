@@ -37,6 +37,8 @@ _GATE_INFRASTRUCTURE = {
     "src/homestay_bot/__init__.py",
     "src/homestay_bot/config.py",
     "src/homestay_bot/db.py",
+    # 后台状态/日期与批量拒绝格式仅随 operations 仓储导入，不生成客人回复。
+    "src/homestay_bot/display.py",
     "src/homestay_bot/worker.py",
     "src/homestay_bot/domain/enums.py",
     "src/homestay_bot/domain/errors.py",

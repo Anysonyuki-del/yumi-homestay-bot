@@ -116,9 +116,6 @@ class KnowledgeAdminServicePort(Protocol):
     async def list_images(self, entry_id: int) -> list[Any]:
         """按发送顺序返回条目配图。"""
 
-    async def image_counts(self, entry_ids: list[int]) -> dict[int, int]:
-        """一次查出一批条目各有几张配图，没有配图的条目不在结果里。"""
-
     async def upload_image(
         self,
         entry_id: int,
@@ -415,17 +412,6 @@ class KnowledgeAdminService:
                 )
             ).all()
         )
-
-    async def image_counts(self, entry_ids: list[int]) -> dict[int, int]:
-        """按条目聚合配图数量，供列表页删除确认框写明会一并删除几张图。"""
-        if not entry_ids:
-            return {}
-        rows = await self._session.execute(
-            select(KnowledgeImage.knowledge_entry_id, func.count(KnowledgeImage.id))
-            .where(KnowledgeImage.knowledge_entry_id.in_(entry_ids))
-            .group_by(KnowledgeImage.knowledge_entry_id)
-        )
-        return {int(entry_id): int(count) for entry_id, count in rows}
 
     async def add_image(
         self,
@@ -834,10 +820,6 @@ async def _render_index(
         else []
     )
     csrf_token = await _issue_csrf(request) if is_admin else ""
-    # 删除确认框要写明会一并删除几张配图；只给管理员查，普通员工看不到删除按钮。
-    image_counts = (
-        await service.image_counts([entry.id for entry in entries[:50]]) if is_admin else {}
-    )
     filters = {
         key: value
         for key, value in {
@@ -870,7 +852,6 @@ async def _render_index(
             "candidates_url": list_url(page, candidate_page, "candidates"),
             "properties": await service.list_properties(),
             "entries": entries[:50],
-            "image_counts": image_counts,
             "candidates": candidates[:50],
             "can_edit": is_admin,
             "csrf_token": csrf_token,

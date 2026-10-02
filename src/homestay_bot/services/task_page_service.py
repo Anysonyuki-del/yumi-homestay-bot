@@ -24,6 +24,29 @@ from homestay_bot.services.business_task_service import BusinessTaskService
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
+def task_bulk_eligibility(
+    *,
+    status: BusinessTaskStatus,
+    property_id: int | None,
+    service_date: date | None,
+    archived_at: datetime | None,
+) -> frozenset[str]:
+    """提供页面批量动作资格提示；仓储与状态机仍负责提交时的最终校验。"""
+    actions = {"archive" if status in ARCHIVABLE_TASK_STATUSES else "cancel"}
+    if (
+        status in {
+            BusinessTaskStatus.PENDING_CONFIRMATION,
+            BusinessTaskStatus.PENDING_ASSIGNMENT,
+        }
+        and property_id is not None
+        and service_date is not None
+    ):
+        actions.add("assign")
+    if archived_at is not None:
+        actions.add("purge")
+    return frozenset(actions)
+
+
 class TaskPageRepository(Protocol):
     """定义任务移动页所需的查询和分派操作。"""
 
@@ -70,6 +93,15 @@ class TaskPageRepository(Protocol):
 
     async def require_purgeable(self, task_ids: list[int]) -> list[str]:
         """校验可删除并返回待删除的私有文件编号。"""
+
+    async def describe_refused_tasks(
+        self,
+        tasks: Iterable[BusinessTask],
+        *,
+        reason: str,
+        next_step: str,
+    ) -> str:
+        """用已加载任务的安全定位字段生成有界拒绝提示。"""
 
     async def purge_selected(
         self,
@@ -205,6 +237,8 @@ class TaskListItem:
     assigned_employee_id: int | None
     assigned_employee_name: str
     is_overdue: bool
+    eligible_actions: frozenset[str] = frozenset()
+    safe_summary: str = ""
 
 
 ATTACHMENT_CLEANUP_JOB_TYPE = "task_attachment_cleanup"
@@ -355,6 +389,13 @@ class TaskPageService:
                     and task.service_date
                     and task.service_date < today
                 ),
+                eligible_actions=task_bulk_eligibility(
+                    status=task.status,
+                    property_id=task.property_id,
+                    service_date=task.service_date,
+                    archived_at=task.archived_at,
+                ),
+                safe_summary=self._summary(task.description),
             )
             for task in tasks
         ]
@@ -584,14 +625,18 @@ class TaskPageService:
         # 「可取消」正是「非终态」：状态机里 CANCELLED 从每个开放态都可达，
         # 而终态没有任何出路。因此复用既有的终态定义，不新造第二份状态清单。
         blocked = [
-            str(task.id)
+            task
             for task in tasks
             if task.status in ARCHIVABLE_TASK_STATUSES
         ]
         if blocked:
             # 与批量归档、批量删除一致：混入不合格的条目就整批拒绝，不做一半。
             raise OperationRefused(
-                "以下任务已处于终态，无法取消：" + "、".join(blocked)
+                await self._tasks.describe_refused_tasks(
+                    blocked,
+                    reason="已完成、已取消或已失效的任务无法取消",
+                    next_step="请取消勾选这些任务后重试",
+                )
             )
         for task in tasks:
             await self._task_state.transition(
@@ -740,3 +785,9 @@ class TaskPageService:
         """移除任务页不需要展示的手机号和详细门牌地址。"""
         value = cls._phone_pattern.sub("[手机号已隐藏]", description)
         return cls._address_pattern.sub("[详细地址已隐藏]", value)
+
+    @classmethod
+    def _summary(cls, description: str) -> str:
+        """先对完整说明脱敏，再压成最多八十字的单行摘要，避免截断号码漏出残片。"""
+        value = " ".join(cls._safe_description(description).split())
+        return (value[:79] + "…" if len(value) > 80 else value) or "暂无说明"

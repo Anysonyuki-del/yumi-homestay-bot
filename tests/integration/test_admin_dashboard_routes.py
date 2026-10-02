@@ -139,10 +139,11 @@ class OperationsStub:
                         else RoomOccupancyStatus.ARRIVING_TODAY
                     ),
                     next_action=(
-                        "先确认百居易实时房态"
+                        "推进 1 项开放任务"
                         if source_stale
                         else "核对入住资料并接待"
                     ),
+                    next_action_url="/employee/tasks?property_id=101",
                     source_stale=source_stale,
                 ),
             ),
@@ -266,7 +267,7 @@ def test_attention_and_operations_pages_form_actionable_workflow() -> None:
     assert operations.status_code == 200
     assert "入住信息待核实" in operations.text
     assert "入住安排" in operations.text
-    assert "先确认百居易实时房态" in operations.text
+    assert "推进 1 项开放任务" in operations.text
     assert "未来 3 天" in operations.text
     assert 'href="/employee/properties/101"' in operations.text
 
@@ -329,7 +330,7 @@ def test_dashboard_renders_unified_safe_shell_for_empty_data() -> None:
         for attrs in parser.matching("script")
     )
     assert parser.matching("a", href="/employee/admin", **{"aria-current": "page"})
-    assert "总览" in response.text
+    assert "今天" in response.text
     assert "任务中心" in response.text
     assert "今日暂无入住" in response.text
     assert "系统当前处于降级状态" in response.text
@@ -541,7 +542,7 @@ def test_dashboard_shows_manual_risk_before_daily_turnover() -> None:
     assert 'aria-labelledby="metrics-risk"' in response.text
     assert 'aria-labelledby="metrics-turnover"' in response.text
     assert response.text.index("需要人工处理的风险") < response.text.index("今日周转与工作量")
-    assert response.text.index("需人工关注") < response.text.index("今日入住")
+    assert response.text.index("待我关注") < response.text.index("今日入住")
     assert "逾期任务" in response.text
 
 
@@ -733,13 +734,14 @@ def test_workbench_is_one_entry_with_three_views() -> None:
         )
         assert views is not None
         labels = re.findall(r"<a [^>]*>([^<]+)</a>", views.group(1))
-        assert labels == ["今天", "房间", "全部任务"]
+        assert labels == ["今天", "入住安排", "任务中心"]
 
     assert 'aria-current="page">今天' in today.text
-    assert 'aria-current="page">房间' in rooms.text
+    assert 'aria-current="page">入住安排' in rooms.text
     # 侧边栏只剩一个日常入口，但旧地址仍然 200。
     assert ">工作台</span>" in today.text
-    assert "待我关注</span>" not in today.text
+    sidebar = re.search(r"<aside.*?</aside>", today.text, re.S).group(0)
+    assert "待我关注</span>" not in sidebar
     assert client.get("/employee/admin/attention").status_code == 200
 
 
@@ -769,21 +771,15 @@ def test_workbench_puts_the_next_action_within_reach() -> None:
     assert ">去处理</a>" in first.group(0)
 
 
-def test_no_button_is_rendered_when_there_is_nowhere_reliable_to_go() -> None:
-    """同步不可信时没有能真正解决它的页面入口，不渲染看起来能点的空按钮。"""
+def test_stale_workbench_keeps_local_actions_and_global_warning() -> None:
+    """订单过期时本地任务仍能推进，来源提示只出现一次。"""
     client = build_client()
     login_admin(client, next_path="/employee/admin")
-
     today = client.get("/employee/admin")
-
-    first = re.search(
-        r'<section class="panel panel--padded workbench-first".*?</section>',
-        today.text,
-        re.S,
-    )
-    assert first is not None
-    assert "先确认百居易实时房态" in first.group(0)
-    assert "暂无可直接进入的入口" in first.group(0)
+    assert "推进 1 项开放任务" in today.text
+    assert 'href="/employee/tasks?property_id=101"' in today.text
+    assert today.text.count("入住信息待核实") == 1
+    assert "暂无可直接进入的入口" not in today.text
 
 
 def test_workbench_and_rooms_view_agree_on_how_fresh_the_source_is() -> None:
@@ -1126,3 +1122,38 @@ def test_the_delivery_board_never_renders_message_content() -> None:
         "root_id", "stage", "attempts", "error_codes", "last_failed_at", "customer_id",
     }
     assert "conversation" not in page.text.lower()
+
+
+def test_stale_warning_remains_without_actionable_rooms() -> None:
+    """只过滤无法行动的房间行，全局来源警示仍保持可见。"""
+    client = build_client()
+
+    async def without_action(*args, **kwargs):
+        """保留同一过期快照，只去掉逐房间动作。"""
+        snapshot = await OperationsStub().snapshot()
+        return replace(snapshot, rooms=(replace(snapshot.rooms[0], next_action_url=None),))
+
+    client.app.state.admin_operations_service = SimpleNamespace(snapshot=without_action)
+    login_admin(client, next_path="/employee/admin")
+    page = client.get("/employee/admin")
+    assert page.status_code == 200
+    assert page.text.count("入住信息待核实") == 1
+    assert 'id="workbench-first"' not in page.text
+    assert "查看系统诊断" in page.text and "查看全部房间" in page.text
+
+
+def test_operations_snapshot_failure_is_not_reported_as_empty() -> None:
+    """快照失败保留其余工作台，显式提示且不泄露异常内容。"""
+    client = build_client()
+
+    async def failed(*args, **kwargs):
+        """合成内部错误，页面只允许固定失败文案。"""
+        raise RuntimeError("synthetic-sensitive-error")
+
+    client.app.state.admin_operations_service = SimpleNamespace(snapshot=failed)
+    login_admin(client, next_path="/employee/admin")
+    page = client.get("/employee/admin")
+    assert page.status_code == 200
+    assert "房间待处理信息暂时无法读取" in page.text
+    assert "synthetic-sensitive-error" not in page.text
+    assert "今日周转与工作量" in page.text

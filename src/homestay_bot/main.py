@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from homestay_bot.application import application_lifespan
@@ -21,7 +22,7 @@ from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.routes.health import router as health_router
 from homestay_bot.routes.hostex_webhook import router as hostex_webhook_router
 from homestay_bot.routes.knowledge import router as knowledge_router
-from homestay_bot.routes.page_errors import handle_operation_refused
+from homestay_bot.routes.page_errors import handle_http_exception, handle_operation_refused
 from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.properties import router as properties_router
 from homestay_bot.routes.runtime_config import router as runtime_config_router
@@ -65,6 +66,8 @@ app.add_middleware(
 app.add_middleware(AdminNoStoreMiddleware)
 # 业务拒绝带回原页面并显示原因，而不是把用户丢进一坨 JSON。
 app.add_exception_handler(OperationRefused, handle_operation_refused)
+# 只为后台浏览器 GET 的 503 提供安全页面，其余 HTTP 异常保留原接口契约。
+app.add_exception_handler(StarletteHTTPException, handle_http_exception)
 app.include_router(wecom_callback_router)
 app.include_router(hostex_webhook_router)
 app.include_router(employee_auth_router)

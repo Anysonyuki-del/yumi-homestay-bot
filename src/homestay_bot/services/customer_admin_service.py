@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from homestay_bot.domain.enums import ARCHIVABLE_TASK_STATUSES, EmployeeRole
+from homestay_bot.display import status_zh
+from homestay_bot.domain.enums import BusinessTaskStatus, EmployeeRole
 from homestay_bot.domain.models import Employee
 from homestay_bot.services.customer_errors import (
     CustomerConflictError,
@@ -13,6 +14,7 @@ from homestay_bot.services.customer_errors import (
 )
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
 from homestay_bot.services.task_lifecycle_service import ConversationReleaseRepositoryPort
+from homestay_bot.services.task_page_service import task_bulk_eligibility
 
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
@@ -600,15 +602,6 @@ class CustomerAdminService:
             "booked": "已预订",
             "cancelled": "已取消",
         }
-        task_statuses = {
-            "pending_confirmation": "待确认",
-            "pending_assignment": "待分配",
-            "assigned": "已分配",
-            "in_progress": "进行中",
-            "pending_inspection": "待检查",
-            "completed": "已完成",
-            "cancelled": "已取消",
-        }
         task_types = {
             "cleaning": "保洁",
             "maintenance": "维修",
@@ -655,20 +648,33 @@ class CustomerAdminService:
                 order.get("check_in_date"),
                 order.get("check_out_date"),
             )
-        archivable_values = {state.value for state in ARCHIVABLE_TASK_STATUSES}
         for task in detail.get("tasks", []):
             status = CustomerAdminService._value(task.get("status"))
             task_type = CustomerAdminService._value(task.get("task_type"))
-            task["status_label"] = task_statuses.get(status, "其他状态")
+            # 查询通常返回枚举，兼容字符串投影；未知状态不给操作资格，避免误当开放态。
+            try:
+                status_enum = BusinessTaskStatus(status)
+            except ValueError:
+                status_enum = None
+            task["status_enum"] = status_enum
+            task["status_label"] = status_zh(status_enum) if status_enum else "待核实"
             task["type_label"] = task_types.get(task_type, "其他任务")
             task["service_date_label"] = CustomerAdminService._date_label(
                 task.get("service_date")
             )
-            # 与 routes/tasks 的批量校验共用同一条规则：可归档==终态、可取消==非终态。
-            # 判定放在这里而不是模板，页面显示的可操作性才和服务端的接受条件一致；
-            # 两处各写一份时，界面上会出现「勾得上但提交被拒」的按钮。
-            task["can_archive"] = status in archivable_values
-            task["can_cancel"] = status not in archivable_values
+            actions = (
+                task_bulk_eligibility(
+                    status=status_enum,
+                    property_id=task.get("property_id"),
+                    service_date=task.get("service_date"),
+                    archived_at=task.get("archived_at"),
+                )
+                if status_enum is not None
+                else frozenset()
+            )
+            task["eligible_actions"] = actions
+            task["can_archive"] = "archive" in actions
+            task["can_cancel"] = "cancel" in actions
         for complaint in detail.get("complaints", []):
             status = CustomerAdminService._value(complaint.get("status"))
             complaint["status_label"] = complaint_statuses.get(

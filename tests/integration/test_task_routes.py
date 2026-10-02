@@ -25,6 +25,7 @@ from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.tasks import router as tasks_router
 from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.room_readiness_service import ReadinessRuleError
+from homestay_bot.services.task_page_service import TaskPageService, task_bulk_eligibility
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n"
@@ -82,6 +83,11 @@ class TaskPageStub:
         self.filter_calls.append(filters)
         if self.list_error is not None:
             raise self.list_error
+        self.item.eligible_actions = task_bulk_eligibility(
+            status=self.item.status, property_id=self.item.property_id,
+            service_date=self.item.service_date, archived_at=self.item.archived_at,
+        )
+        self.item.safe_summary = TaskPageService._summary(self.item.description)
         return [self.item] * (limit if offset == 50 else 1)
 
     async def detail_for(self, task_id, employee):
@@ -301,8 +307,8 @@ def test_staff_task_page_only_labels_own_tasks() -> None:
     response = client.get("/employee/tasks")
 
     assert response.status_code == 200
-    assert "自己的任务" in response.text
-    assert "全部待办任务" not in response.text
+    assert "分配给我的任务" in response.text
+    assert "全部待办" not in response.text
 
 
 def test_admin_sees_all_tasks_and_assignment_form() -> None:
@@ -313,7 +319,7 @@ def test_admin_sees_all_tasks_and_assignment_form() -> None:
     index = client.get("/employee/tasks")
     detail = client.get("/employee/tasks/1")
 
-    assert "全部待办任务" in index.text
+    assert "全部待办" in index.text
     assert 'name="assigned_employee_id"' in detail.text
 
 
@@ -327,7 +333,7 @@ def test_task_pages_use_admin_shell_and_protect_risky_forms() -> None:
 
     assert '/static/admin.js' in index.text
     assert 'href="/employee/tasks" aria-current="page"' in index.text
-    assert '<title>全部待办任务 · YuMi 管理后台</title>' in index.text
+    assert '<title>全部待办 · YuMi 管理后台</title>' in index.text
     assert 'data-unsaved-warning' in detail.text
     assert 'action="/employee/tasks/1/transition" data-confirm=' in detail.text
 
@@ -1054,7 +1060,7 @@ def test_staff_cannot_bulk_assign() -> None:
 
 
 def test_staff_list_has_no_selection_controls() -> None:
-    """归档是管理员能力，普通员工列表不出现勾选。"""
+    """批量管理是管理员能力，普通员工列表不出现勾选或可执行管理动作提示。"""
     client, _ = build_client(EmployeeRole.STAFF)
     login(client)
 
@@ -1062,6 +1068,7 @@ def test_staff_list_has_no_selection_controls() -> None:
 
     assert 'name="task_ids"' not in page.text
     assert 'action="/employee/tasks/archive-selected"' not in page.text
+    assert "可取消" not in page.text
 
 
 def test_admin_archives_selected_tasks() -> None:
@@ -1471,8 +1478,8 @@ def test_page_title_and_heading_follow_the_queue_being_viewed() -> None:
     archived = client.get("/employee/tasks?archived=true")
 
     assert _current_queue_links(archived.text) == ["已归档"]
-    assert "<h2>已归档</h2>" in archived.text
-    assert "<title>已归档任务 · YuMi 管理后台</title>" in archived.text
+    assert "<h1>已归档</h1>" in archived.text
+    assert "<title>已归档 · YuMi 管理后台</title>" in archived.text
     assert "全部待办" not in archived.text
 
 
@@ -1575,7 +1582,7 @@ def test_typed_confirm_wording_belongs_to_the_button_not_the_script() -> None:
     cancel_button = cancel_button.split(">")[0]
 
     assert "data-typed-confirm-detail=" in cancel_button
-    assert "状态机没有回头路" in cancel_button
+    assert "取消后不可撤回" in cancel_button
     assert "现场照片" not in cancel_button
 
 
@@ -1886,3 +1893,77 @@ def test_task_detail_status_tone_follows_the_status() -> None:
         text = client.get("/employee/tasks/1").text
         heading = text[text.index('<div class="section-heading"><h2>'):][:400]
         assert tone in heading, status
+
+
+def test_bulk_success_notices_keep_safe_origin_and_use_actual_counts() -> None:
+    """三动作保留筛选与锚点，实际数量只提示一次；外站地址统一落回任务中心。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    origin = "/employee/tasks?property_id=101&page=1#task-1"
+    for action, notice in (("assign", "已分派 1 条"), ("cancel", "已取消 1 条"),
+                           ("archive", "已归档 1 条")):
+        page = client.get(origin)
+        token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+        response = client.post(f"/employee/tasks/{action}-selected", data={
+            "csrf_token": token, "return_to": origin, "task_ids": [1],
+            "confirm_count": 1, "assigned_employee_id": 2,
+        }, follow_redirects=False)
+        assert response.headers["location"] == origin
+        assert notice in client.get(origin).text
+        assert notice not in client.get(origin).text
+
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    response = client.post("/employee/tasks/cancel-selected", data={
+        "csrf_token": token, "return_to": "https://example.invalid/employee/tasks",
+        "task_ids": [1], "confirm_count": 1,
+    }, follow_redirects=False)
+    assert response.headers["location"] == "/employee/tasks"
+
+
+def test_zero_archive_and_missing_employee_refusal_do_not_claim_changes() -> None:
+    """零归档如实提示；缺员工早期拒绝保留来源且没有成功反馈。"""
+    client, tasks = build_client(EmployeeRole.ADMIN)
+    login(client)
+    origin = "/employee/tasks?property_id=101"
+
+    async def unchanged(*args):
+        """模拟已归档无新增的实际返回值。"""
+        return 0
+
+    tasks.archive_many = unchanged
+    tasks.archive_filtered = unchanged
+    for endpoint, expected in (
+        ("archive-selected", "所选任务已归档，本次没有新增归档"),
+        ("archive-filtered", "当前筛选没有新增可归档任务"),
+    ):
+        page = client.get(origin)
+        token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+        response = client.post(f"/employee/tasks/{endpoint}", data={
+            "csrf_token": token, "return_to": origin, "task_ids": [1],
+        }, follow_redirects=False)
+        assert expected in client.get(response.headers["location"]).text
+    page = client.get(origin)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    refusal = client.post("/employee/tasks/assign-selected", data={
+        "csrf_token": token, "return_to": origin, "task_ids": [1],
+        "assigned_employee_id": "",
+    }, headers={"Accept": "text/html"}, follow_redirects=False)
+    assert refusal.status_code == 303
+    assert refusal.headers["location"] == origin
+    landed = client.get(origin).text
+    assert "请先选择要分派给哪位员工" in landed
+    assert 'class="alert alert--success"' not in landed
+
+
+def test_refusal_with_html_quality_zero_keeps_json_contract() -> None:
+    """共享 HTML 判断改变后，业务拒绝仍尊重 q=0 的接口偏好。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+    page = client.get("/employee/tasks")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    response = client.post("/employee/tasks/assign-selected", data={
+        "csrf_token": token, "task_ids": [1],
+    }, headers={"Accept": "text/html;q=0,application/json"}, follow_redirects=False)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "请先选择要分派给哪位员工"}

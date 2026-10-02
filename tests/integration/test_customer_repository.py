@@ -2009,3 +2009,60 @@ async def test_clear_test_customer_data_removes_chat_and_orders_only_for_test_ac
         )
         assert audit.target_id == "1" and audit.details["messages"] == 1
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_customer_service_tasks_keep_eligibility_fields_owner_and_latest_fifty() -> None:
+    """真实服务页投影应补资格字段，同时保持客户归属、五十条上限和日期编号倒序。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        customer = Customer(display_name="本客户")
+        other = Customer(display_name="其他客户")
+        room = PropertyProfile(id=101, title="测试房间")
+        session.add_all([customer, other, room])
+        await session.flush()
+        tasks = [
+            BusinessTask(
+                customer_id=customer.id,
+                task_type=BusinessTaskType.CLEANING,
+                status=BusinessTaskStatus.COMPLETED,
+                property_id=room.id,
+                service_date=date(2026, 10, 2),
+                archived_at=datetime(2026, 10, 1, tzinfo=UTC),
+                description="原始说明不应进入客户服务投影",
+            )
+            for _ in range(51)
+        ]
+        foreign = BusinessTask(
+            customer_id=other.id,
+            task_type=BusinessTaskType.CLEANING,
+            status=BusinessTaskStatus.COMPLETED,
+            property_id=room.id,
+            service_date=date(2026, 10, 3),
+            description="其他客户任务",
+        )
+        session.add_all([*tasks, foreign])
+        await session.flush()
+        # 更晚日期即使编号更小也应排在最前，随后以编号倒序排列。
+        tasks[0].service_date = date(2026, 10, 4)
+        await session.flush()
+
+        detail = await SQLAlchemyCustomerRepository(session).customer_detail(
+            customer.id, tab="service"
+        )
+        rows = detail["tasks"]
+        assert len(rows) == 50
+        assert [row["id"] for row in rows] == [tasks[0].id, *[item.id for item in tasks[2:][::-1]]]
+        assert foreign.id not in [row["id"] for row in rows]
+        assert all(row["property_id"] == 101 and row["archived_at"] is not None for row in rows)
+        assert all("description" not in row for row in rows)
+
+        from homestay_bot.services.customer_admin_service import CustomerAdminService
+
+        CustomerAdminService._localize_detail(detail)
+        assert all(row["status_enum"] is BusinessTaskStatus.COMPLETED for row in rows)
+        assert all(row["eligible_actions"] == frozenset({"archive", "purge"}) for row in rows)
+    await engine.dispose()

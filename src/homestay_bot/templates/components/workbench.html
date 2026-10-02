@@ -7,7 +7,7 @@
 {% macro views(current) -%}
 <nav class="tab-nav workbench-views" aria-label="工作台视图">
   <a href="/employee/admin" {% if current == "today" %}aria-current="page"{% endif %}>今天</a>
-  <a href="/employee/admin/operations" {% if current == "rooms" %}aria-current="page"{% endif %}>房间</a>
-  <a href="/employee/tasks" {% if current == "tasks" %}aria-current="page"{% endif %}>全部任务</a>
+  <a href="/employee/admin/operations" {% if current == "rooms" %}aria-current="page"{% endif %}>入住安排</a>
+  <a href="/employee/tasks" {% if current == "tasks" %}aria-current="page"{% endif %}>任务中心</a>
 </nav>
 {%- endmacro %}

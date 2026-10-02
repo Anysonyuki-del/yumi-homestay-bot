@@ -1,12 +1,14 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
 {% import "components/workbench.html" as workbench %}
-{% block title %}运营总览 · {{ app_name }}{% endblock %}
+{% block title %}今天 · {{ app_name }}{% endblock %}
 {% block content %}
 {{ workbench.views("today") }}
 {# 先处理：把「现在该做什么」放在指标之前。指标回答有多少，这里回答先动哪一件。
    数据来自运营快照里已经排好风险序的房间，不另建第四套待办投影；每行的原因与
    去向出自服务里同一组分支，没有可靠入口时不渲染空按钮。 #}
+{% if operations_error %}<div class="alert alert--warning" role="status">{{ operations_error }}。<a href="/employee/admin/diagnostics">查看系统诊断</a></div>{% endif %}
+{% if source_stale %}<div class="alert alert--warning" role="status"><div><strong>入住信息待核实</strong><p>百居易同步暂不在可信窗口内；先处理本地任务和准备记录，入住安排待核实。{% if source_synced_at %}最近同步：{{ source_synced_at | datetime_zh }}。{% endif %}</p><a href="/employee/admin/diagnostics">查看系统诊断</a> · <a href="/employee/admin/operations">查看全部房间</a></div></div>{% endif %}
 {% if attention_rooms %}
 <section class="panel panel--padded workbench-first" aria-labelledby="workbench-first">
   <div class="section-heading"><div><p class="eyebrow">{{ snapshot.local_date | date_zh }}</p><h2 id="workbench-first">先处理 · {{ attention_rooms | length }} 间</h2></div><a class="button button--secondary" href="/employee/admin/operations">查看全部房间</a></div>
@@ -23,7 +25,7 @@
 <section class="metric-group" aria-labelledby="metrics-risk">
   <h2 class="metric-group__label" id="metrics-risk">需要人工处理的风险</h2>
   <div class="metric-grid">
-    <article class="metric-item{% if snapshot.manual_attention_count %} metric-item--risk{% endif %}"><span>需人工关注</span><strong>{{ snapshot.manual_attention_count }}</strong><a href="/employee/admin/attention">进入待我关注</a></article>
+    <article class="metric-item{% if snapshot.manual_attention_count %} metric-item--risk{% endif %}"><span>待我关注</span><strong>{{ snapshot.manual_attention_count }}</strong><small>客人、客诉和待确认事项</small><a href="/employee/admin/attention">进入待我关注</a></article>
     <article class="metric-item{% if snapshot.overdue_task_count %} metric-item--risk{% endif %}"><span>逾期任务</span><strong>{{ snapshot.overdue_task_count }}</strong><a href="/employee/tasks?overdue=true">查看逾期任务</a></article>
     <article class="metric-item{% if snapshot.pending_approval_count %} metric-item--risk{% endif %}"><span>待审批</span><strong>{{ snapshot.pending_approval_count }}</strong><a href="/employee/approvals">查看审批</a></article>
   </div>

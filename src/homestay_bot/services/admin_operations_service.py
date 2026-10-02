@@ -281,6 +281,9 @@ class TimelineBar:
     # 不把裁切后的窗口边界当成真实时刻——那会显示一个从未发生的时间。
     start_label: str = ""
     end_label: str = ""
+    # 原始日期独立于窗口延续文案，用于桌面可访问名称和完整行程列表。
+    start_date: date | None = None
+    end_date: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -804,6 +807,8 @@ class AdminOperationsService:
                     checkout_verified=interval.checkout_verified,
                     semantic=semantic,
                     overlaps=overlaps,
+                    start_date=start.date(),
+                    end_date=end.date(),
                     start_label=(
                         "更早" if left_cont else _stay_clock_label(start, today)
                     ),
@@ -1120,16 +1125,13 @@ class AdminOperationsService:
         # 今日有到店或离店，却没有任何开放任务：进任务列表只会看到空结果。
         # 改去房间详情并说明任务尚未生成——不在这里替业务补造任务。
         no_open_tasks = task_count.count == 0
-        if source_stale:
-            # 同步不可信时没有能真正解决它的页面入口，不给按钮。
-            return "先确认百居易实时房态", None, handle
         if task_count.overdue_count:
             return (
                 f"优先处理 {task_count.overdue_count} 项逾期任务",
                 f"{tasks_url}&overdue=true",
                 handle,
             )
-        if arrivals or departures:
+        if not source_stale and (arrivals or departures):
             if arrivals and departures:
                 reason = "安排退房周转并核对今日入住"
             elif departures:
@@ -1145,6 +1147,14 @@ class AdminOperationsService:
             return "跟进维修并确认房间可用性", room_url, inspect
         if task_count.count:
             return f"推进 {task_count.count} 项开放任务", tasks_url, handle
+        if source_stale:
+            # 订单过期只限制入住推断；本地任务、维修与准备记录仍可继续处理。
+            if operational_status in (
+                RoomOperationalStatus.CLEANING,
+                RoomOperationalStatus.PENDING_INSPECTION,
+            ):
+                return "核对本系统准备记录", room_url, inspect
+            return "同步恢复前不判断入住安排", None, handle
         if occupied:
             return "关注在住服务", room_url, inspect
         if next_arrival is not None:

@@ -6,9 +6,7 @@
 {% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">{{ "返回客户档案" if return_to.startswith("/employee/customers/") else "返回任务列表" }}</a>{% endblock %}
 {% block content %}
 <section class="detail-section panel panel--padded">
-  {# 状态颜色随状态变化（F15）：终态不再一律警告色，待办类才用警告色。 #}
-  {% set task_tone = {"completed": "success", "cancelled": "neutral", "expired": "neutral", "assigned": "info", "in_progress": "info"}.get(task.status.value, "warning") %}
-  <div class="section-heading"><h2>{{ task.task_type | status_zh }}</h2>{{ ui.badge(task.status | status_zh, task_tone) }}</div>
+  <div class="section-heading"><h2>{{ task.task_type | status_zh }}</h2>{{ ui.task_status_badge(task.status) }}</div>
   <dl class="detail-grid">
     <dt>房间</dt><dd>{{ property_title }}</dd>
     <dt>执行员工</dt><dd>{{ assigned_employee_name }}</dd>
@@ -84,6 +82,6 @@
     <form method="post" action="/employee/tasks/{{ task.id }}/purge" data-danger-confirm="确定永久删除这项任务吗？任务记录与现场照片将一并删除，此操作不可恢复。审计记录会保留。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">永久删除</button></form>
     {% else %}<form method="post" action="/employee/tasks/{{ task.id }}/archive" data-confirm="确定把这项任务移入归档吗？归档后不再出现在默认列表，可随时恢复。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">移入归档</button></form>{% endif %}
   {% endif %}
-  {% if is_admin and task.status not in archivable_statuses %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？此操作会中止当前处理流程。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
+  {% if is_admin and task.status not in archivable_statuses %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？取消后不可撤回，任务会停止处理。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
 </div></section>
 {% endblock %}

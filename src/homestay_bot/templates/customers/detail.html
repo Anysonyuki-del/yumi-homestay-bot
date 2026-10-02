@@ -46,7 +46,7 @@
 {% if tasks %}
 {% set archivable = tasks | selectattr("can_archive") | list | length %}
 {% set cancellable = tasks | selectattr("can_cancel") | list | length %}
-<form method="post" action="/employee/tasks/archive-selected" data-confirm="确定把勾选的任务移入归档吗？归档后不再出现在默认列表，可在「已归档」中恢复。">
+<form method="post" action="/employee/tasks/archive-selected" data-default-action="archive" data-confirm="确定把勾选的任务移入归档吗？归档后不再出现在默认列表，可在「已归档」中恢复。">
   <input type="hidden" name="csrf_token" value="{{ bulk_task_csrf_token }}">
   <input type="hidden" name="return_to" value="/employee/customers/{{ customer.id }}?tab=service&return_to={{ return_to | urlencode }}">
   <div class="responsive-table"><table class="data-table">
@@ -57,23 +57,24 @@
       <th scope="col">状态</th><th scope="col"><span class="visually-hidden">操作</span></th>
     </tr></thead>
     <tbody>{% for task in tasks %}<tr>
-      <td class="select-cell"><input type="checkbox" name="task_ids" value="{{ task.id }}" aria-label="选择任务 {{ task.id }}"></td>
-      <td><strong>{{ task.type_label }}</strong></td>
+      <td class="select-cell"><input type="checkbox" name="task_ids" value="{{ task.id }}" data-eligible="{{ task.eligible_actions | sort | join(' ') }}" aria-label="选择任务 #{{ task.id }}，{{ task.type_label }}，{{ task.property_title or '房间待确认' }}，{{ task.service_date_label }}"></td>
+      <td><strong>{{ task.type_label }}</strong> <small class="muted">#{{ task.id }}</small>{{ ui.task_eligibility(task.eligible_actions, ["archive", "cancel"]) }}</td>
       <td>{{ task.service_date_label }}</td>
       <td>{{ task.property_title or "待确认房源" }}</td>
-      <td>{{ ui.badge(task.status_label, "warning" if task.can_cancel else "neutral") }}</td>
+      <td>{{ ui.task_status_badge(task.status_enum, task.status_label) }}</td>
       <td><a class="table-action" href="/employee/tasks/{{ task.id }}?return_to={{ ('/employee/customers/' ~ customer.id ~ '?tab=service&return_to=' ~ (return_to | urlencode)) | urlencode }}">处理任务</a></td>
     </tr>{% endfor %}</tbody>
   </table></div>
   <ul class="mobile-card-list clean-list">{% for task in tasks %}<li>
-    <label class="card-select"><input type="checkbox" name="task_ids" value="{{ task.id }}"><span>选择</span></label>
-    <a class="mobile-record-card" href="/employee/tasks/{{ task.id }}?return_to={{ ('/employee/customers/' ~ customer.id ~ '?tab=service&return_to=' ~ (return_to | urlencode)) | urlencode }}"><span><strong>{{ task.type_label }}</strong> {{ ui.badge(task.status_label, "warning" if task.can_cancel else "neutral") }}</span><small>{{ task.service_date_label }} · {{ task.property_title or "待确认房源" }}</small></a>
+    <label class="card-select"><input type="checkbox" name="task_ids" value="{{ task.id }}" data-eligible="{{ task.eligible_actions | sort | join(' ') }}" aria-label="选择任务 #{{ task.id }}，{{ task.type_label }}，{{ task.property_title or '房间待确认' }}，{{ task.service_date_label }}"><span>选择</span></label>
+    <a class="mobile-record-card" href="/employee/tasks/{{ task.id }}?return_to={{ ('/employee/customers/' ~ customer.id ~ '?tab=service&return_to=' ~ (return_to | urlencode)) | urlencode }}"><span><strong>{{ task.type_label }}</strong> <small class="muted">#{{ task.id }}</small> {{ ui.task_status_badge(task.status_enum, task.status_label) }}</span><small>{{ task.service_date_label }} · {{ task.property_title or "待确认房源" }}</small>{{ ui.task_eligibility(task.eligible_actions, ["archive", "cancel"]) }}</a>
   </li>{% endfor %}</ul>
+  <p class="field-help">永久删除请到任务中心操作。</p>
   <div class="selection-actions">
-    {% if archivable %}<button class="button--secondary" type="submit">归档勾选的任务</button>{% endif %}
-    {# 取消与任务列表页同样要求手输条数：它对每个开放态都走得通，且状态机没有回头路。 #}
-    {% if cancellable %}<button class="button button--danger" type="submit" formaction="/employee/tasks/cancel-selected" data-typed-confirm="取消任务" data-typed-confirm-detail="即将取消 {n} 条任务。取消后任务进入终态，状态机没有回头路。">取消勾选的任务</button>{% endif %}
-    <span class="field-help">永久删除请到任务列表页操作。</span>
+    <div class="selection-bar" data-selection-enhanced hidden><label class="selection-bar__all"><input type="checkbox" data-select-all aria-label="全选本页">全选本页</label><button class="button button--secondary" type="button" data-select-clear>清空选择</button><output data-selection-count aria-live="polite" tabindex="-1">已选 0 项</output></div>
+    {% if archivable %}<button class="button--secondary" type="submit" data-requires="archive" aria-describedby="bulk-hint-archive">归档勾选的任务</button>{{ ui.bulk_feedback("archive") }}{% endif %}
+    {# 取消与任务列表页同样要求手输条数：它对每个开放态都走得通，且取消后不可撤回。 #}
+    {% if cancellable %}<button class="button button--danger" type="submit" formaction="/employee/tasks/cancel-selected" data-requires="cancel" aria-describedby="bulk-hint-cancel" data-typed-confirm="取消任务" data-typed-confirm-detail="即将取消 {n} 条任务。取消后不可撤回，任务会停止处理。">取消勾选的任务</button>{{ ui.bulk_feedback("cancel") }}{% endif %}
   </div>
   <input type="hidden" name="confirm_count" value="0" data-confirm-count>
 </form>

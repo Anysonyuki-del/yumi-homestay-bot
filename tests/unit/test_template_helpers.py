@@ -1,12 +1,16 @@
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
+from homestay_bot.display import PAGE_MESSAGE_MAX_LENGTH, refusal_message, task_refusal_label
 from homestay_bot.domain.enums import (
     ApprovalStatus,
+    BusinessTaskStatus,
+    BusinessTaskType,
     RoomOccupancyStatus,
     RoomOperationalStatus,
     TaskClosureReason,
 )
-from homestay_bot.web import templates
+from homestay_bot.web import set_page_error, set_page_notice, templates
 
 
 def test_templates_register_safe_chinese_helpers() -> None:
@@ -35,6 +39,59 @@ def test_all_templates_compile_with_unified_environment() -> None:
     """统一环境应能编译现有与新增模板，避免迁移前破坏旧页面。"""
     for template_name in templates.env.list_templates():
         templates.env.get_template(template_name)
+
+
+def test_refusal_message_preserves_reason_count_and_next_step_within_cookie_budget() -> None:
+    """长标题和多任务不能让原因与下一步被 Cookie 限长截断，定位保留完整日期。"""
+    reason = "只有已完成、已取消或已失效的任务可以归档"
+    next_step = "请取消勾选仍在处理中的任务后重试"
+
+    def labels(room_limit):
+        """提供超长房间名，触发房名与点名条数预算。"""
+        return [
+            task_refusal_label(
+                number,
+                BusinessTaskType.MAINTENANCE,
+                "很长的停用房源标题" * 20,
+                date(2026, 10, 2),
+                BusinessTaskStatus.PENDING_INSPECTION,
+                room_limit,
+            )
+            for number in range(10000, 10010)
+        ]
+
+    message = refusal_message(reason, labels, 10, next_step)
+    assert len(message) <= PAGE_MESSAGE_MAX_LENGTH
+    assert reason in message and "以下 10 条不符合" in message and message.endswith(next_step)
+    assert "任务 #10000·维修·" in message
+    assert "2026年10月2日（待检查）" in message
+    assert "另 7 条" in message
+    assert "…" in message
+
+    # 编号极长时放不下任何定位标签，保留原因、总数和下一步，不截断原句。
+    fallback = refusal_message(reason, lambda limit: ["任务 #" + "9" * 300], 1, next_step)
+    assert fallback == f"{reason}。共 1 条不符合。{next_step}"
+    assert len(fallback) <= PAGE_MESSAGE_MAX_LENGTH
+    compact = refusal_message(
+        reason, lambda limit: ["很" * 300] if limit == 12 else ["短房间标签"], 1, next_step
+    )
+    assert "短房间标签" in compact and compact.endswith(next_step)
+    request = SimpleNamespace(session={})
+    set_page_error(request, message)
+    set_page_notice(request, "好" * (PAGE_MESSAGE_MAX_LENGTH + 1))
+    assert request.session["page_error"] == message
+    assert len(request.session["page_notice"]) == PAGE_MESSAGE_MAX_LENGTH
+
+
+def test_task_refusal_label_shows_missing_fields_without_internal_values() -> None:
+    """缺房间和日期时明确说明待补齐，避免把空值或内部枚举直接交给管理员。"""
+    assert task_refusal_label(
+        12,
+        BusinessTaskType.SUPPLIES,
+        None,
+        None,
+        BusinessTaskStatus.PENDING_CONFIRMATION,
+    ) == "任务 #12·补给·房间待确认·日期待补齐（待确认）"
 
 
 def test_complaint_message_origin_and_risk_read_as_chinese() -> None:

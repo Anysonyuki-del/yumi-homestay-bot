@@ -43,6 +43,7 @@ def task(
         service_date=date(2026, 8, 2),
         assigned_employee_id=assigned_employee_id,
         description="完成房间保洁",
+        archived_at=None,
     )
 
 
@@ -162,6 +163,52 @@ async def test_admin_sees_all_open_tasks() -> None:
     )
 
     assert [item.id for item in items] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_task_list_summary_redacts_before_truncation_and_normalizes_whitespace() -> None:
+    """说明中的号码横跨截断位置时也不能留下号码残片，摘要只展示一行。"""
+    repository = TaskRepositoryStub()
+    repository.items[1].status = BusinessTaskStatus.PENDING_ASSIGNMENT
+    repository.items[1].description = "甲" * 76 + "13800138000\n珞喻路123号 " + "乙" * 90
+    repository.items[2].description = " \n\t "
+    items = await TaskPageService(repository, TaskStateStub()).list_for(
+        employee(1, EmployeeRole.ADMIN), offset=0, limit=51
+    )
+
+    assert len(items[0].safe_summary) == 80
+    assert items[0].safe_summary.endswith("…")
+    assert not any(character.isdigit() for character in items[0].safe_summary)
+    assert "\n" not in items[0].safe_summary
+    assert items[0].eligible_actions == frozenset({"assign", "cancel"})
+    assert items[1].safe_summary == "暂无说明"
+
+
+@pytest.mark.asyncio
+async def test_cancel_many_passes_loaded_blocked_tasks_and_refuses_whole_batch() -> None:
+    """整批取消遇到终态时保留对象供安全点名，不能先取消前面的开放任务。"""
+    repository = TaskRepositoryStub()
+    repository.items[2].status = BusinessTaskStatus.COMPLETED
+    states = TaskStateStub()
+    received = []
+
+    async def describe_refused_tasks(tasks, *, reason, next_step):
+        """记录服务交给拒绝描述助手的对象与指引。"""
+        received.append((list(tasks), reason, next_step))
+        return "已完成任务不能取消，请取消勾选后重试"
+
+    repository.describe_refused_tasks = describe_refused_tasks
+    from homestay_bot.domain.errors import OperationRefused
+
+    with pytest.raises(OperationRefused, match="请取消勾选后重试"):
+        await TaskPageService(repository, states).cancel_many(
+            [1, 2], employee(1, EmployeeRole.ADMIN)
+        )
+
+    assert received == [
+        ([repository.items[2]], "已完成、已取消或已失效的任务无法取消", "请取消勾选这些任务后重试")
+    ]
+    assert states.calls == []
 
 
 @pytest.mark.asyncio

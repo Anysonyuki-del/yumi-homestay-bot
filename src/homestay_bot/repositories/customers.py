@@ -730,7 +730,9 @@ class SQLAlchemyCustomerRepository:
                         BusinessTask.id,
                         BusinessTask.task_type,
                         BusinessTask.status,
+                        BusinessTask.property_id,
                         BusinessTask.service_date,
+                        BusinessTask.archived_at,
                         BusinessTask.assigned_employee_id,
                         PropertyProfile.title.label("property_title"),
                     )

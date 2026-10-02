@@ -125,8 +125,11 @@ def test_stay_labels_mark_continuation_instead_of_clipped_time() -> None:
     裁切只是画图需要；把 w0 当作入住时刻会显示一个从未发生的时间。
     """
     # 窗口 9/07–9/13；这笔 9/05 入住、9/20 退房，两端都超出。
-    bars, *_ = _bars([_iv(1, "2026-09-05", "2026-09-20")])
+    interval = _iv(1, "2026-09-05", "2026-09-20")
+    bars, *_ = _bars([interval])
     assert bars[0].left_continues is True
     assert bars[0].right_continues is True
     assert bars[0].start_label == "更早"
     assert bars[0].end_label == "延续更晚"
+    assert bars[0].start_date == interval.check_in
+    assert bars[0].end_date == interval.check_out

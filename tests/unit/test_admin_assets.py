@@ -33,7 +33,7 @@ def test_no_javascript_navigation_reaches_every_core_admin_page() -> None:
     fallback = layout.split('<details class="no-script-nav">', 1)[1].split("</details>", 1)[0]
 
     expected_links = {
-        "/employee/admin": "总览",
+        "/employee/admin": "工作台",
         "/employee/properties": "房源管理",
         "/employee/knowledge": "知识库",
         "/employee/customers": "客户管理",
@@ -196,8 +196,8 @@ def test_business_templates_extend_one_admin_shell() -> None:
 def test_archivable_statuses_have_one_definition_only() -> None:
     """可归档状态只能有一份定义，模板不得再硬编码副本。
 
-    仓储用它做强制校验、页面用它决定是否给出勾选；两份副本一旦漂移，
-    页面就会给出注定被服务端拒绝的操作入口。
+    仓储和列表资格使用同一状态集合；真实执行一致性由仓储资格矩阵验证，
+    这里只检查模板没有再定义状态副本，不绑定具体上下文变量名。
     """
     from homestay_bot.domain.enums import (
         ARCHIVABLE_TASK_STATUSES,
@@ -216,7 +216,6 @@ def test_archivable_statuses_have_one_definition_only() -> None:
         assert '"completed", "cancelled", "expired"' not in source, (
             f"{relative_path} 又硬编码了可归档状态副本"
         )
-        assert "archivable_statuses" in source
 
 
 def test_room_card_column_threshold_can_hold_the_default_calendar() -> None:

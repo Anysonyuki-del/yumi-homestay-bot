@@ -328,6 +328,9 @@ document.querySelectorAll('input[name="task_ids"]').forEach((box) => {
   if (box.form) selectionForms.add(box.form);
 });
 
+// 空队列也必须拦住程序化提交，不能等有任务复选框才注册保护。
+document.querySelectorAll("form[data-default-action]").forEach((form) => selectionForms.add(form));
+
 /** 本次会真正提交的任务编号：只算启用的勾选框，并按编号去重。 */
 function selectedTaskIds(form) {
   return new Set(
@@ -336,67 +339,114 @@ function selectedTaskIds(form) {
 }
 
 selectionForms.forEach((form) => {
-  // 表头一个、批量操作栏一个（手机布局没有表头，F12）：两个入口共用同一份选择，
-  // 都按当前可提交的勾选框刷新勾选与不确定态，不各自维护状态。
-  const toggles = Array.from(form.querySelectorAll("[data-select-all]"))
-    .filter((toggle) => toggle instanceof HTMLInputElement);
+  const toggles = Array.from(form.querySelectorAll("[data-select-all]"));
   const counter = form.querySelector("[data-selection-count]");
-  const clear = form.querySelector("[data-select-clear]");
-  // 这些控件只在脚本可用时有意义，模板里默认隐藏，避免无脚本时显示一个不会变的「已选 0 项」。
+  const toolbar = form.querySelector(".selection-actions");
+  const enhanced = form.hasAttribute("data-default-action");
+  const actions = Array.from(form.querySelectorAll("button[data-requires]"));
+  const labels = new Map(actions.map((button) => [button, button.textContent.trim()]));
+  const verbs = { assign: "分派", cancel: "取消", archive: "归档", purge: "永久删除" };
   form.querySelectorAll("[data-selection-enhanced]").forEach((element) => {
     element.hidden = false;
   });
+  /** 按实际提交副本与编号计数，资格完全来自服务端，不在脚本复制状态规则。 */
+  const eligibleIds = (action) => new Set(selectableBoxes(form)
+    .filter((box) => box.checked && (box.dataset.eligible || "").split(" ").includes(action))
+    .map((box) => box.value));
+  /** 手机操作区高度由原生观察器测量，给整个页面留空间，保护分页与新建表单。 */
+  const measureToolbar = () => {
+    const height = toolbar && toolbar.hasAttribute("data-fixed-bulk")
+      ? toolbar.getBoundingClientRect().height : 0;
+    document.documentElement.style.setProperty("--bulk-toolbar-height", `${height}px`);
+    // 操作区出现或增高后，原生滚动避开顶栏和底栏，不遮住当前勾选焦点。
+    const focused = document.activeElement;
+    if (height && focused instanceof HTMLElement && form.contains(focused) && !toolbar.contains(focused)) {
+      focused.scrollIntoView({ block: "nearest" });
+    }
+  };
   const refresh = () => {
     const all = selectableBoxes(form);
     const count = selectedTaskIds(form).size;
     const checked = all.filter((box) => box.checked).length;
     toggles.forEach((toggle) => {
       toggle.checked = checked === all.length && all.length > 0;
-      // 部分选中时显示不确定态，避免全选框看起来是「已全选」。
       toggle.indeterminate = checked > 0 && checked < all.length;
     });
     if (counter) counter.textContent = `已选 ${count} 项`;
+    // 选择或布局发生变化后，旧手输确认作废；提交时必须重新确认当前数量。
+    const field = form.querySelector("[data-confirm-count]");
+    if (field) field.value = "0";
+    actions.forEach((button) => {
+      // 提交后的按钮必须保持忙态；镜像和操作栏尺寸仍在下方继续同步。
+      if (form.dataset.submitting === "true") return;
+      const action = button.dataset.requires;
+      const eligible = eligibleIds(action).size;
+      button.disabled = count > 0 && eligible !== count;
+      button.textContent = labels.get(button) + (count ? `（${eligible === count ? count : `${eligible}/${count}`}）` : "");
+      const hint = form.querySelector(`[data-bulk-hint="${action}"]`);
+      const keep = form.querySelector(`[data-keep-eligible="${action}"]`);
+      if (hint) hint.textContent = !button.disabled ? "" : eligible
+        ? `已选 ${count} 条，其中 ${count - eligible} 条不能${verbs[action]}`
+        : `已选的任务都不能${verbs[action]}`;
+      if (keep) {
+        keep.hidden = !button.disabled || eligible === 0;
+        keep.textContent = `只保留可${verbs[action]}的 ${eligible} 条`;
+      }
+    });
+    if (toolbar && enhanced) toolbar.toggleAttribute("data-fixed-bulk", count > 0 && window.innerWidth <= 768);
+    measureToolbar();
   };
   syncMirroredSelection(form);
   refresh();
-  toggles.forEach((toggle) => {
-    toggle.addEventListener("change", () => {
-      selectableBoxes(form).forEach((box) => {
-        box.checked = toggle.checked;
-      });
-      refresh();
-    });
-  });
-  if (clear instanceof HTMLButtonElement) {
-    clear.addEventListener("click", () => {
-      selectableBoxes(form).forEach((box) => {
-        box.checked = false;
-      });
-      refresh();
-    });
-  }
-  form.addEventListener("change", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    if (target.name !== "task_ids") return;
+  if (toolbar && enhanced) new ResizeObserver(measureToolbar).observe(toolbar);
+  toggles.forEach((toggle) => toggle.addEventListener("change", () => {
+    selectableBoxes(form).forEach((box) => { box.checked = toggle.checked; });
+    refresh();
+  }));
+  const clear = form.querySelector("[data-select-clear]");
+  if (clear) clear.addEventListener("click", () => {
+    selectableBoxes(form).forEach((box) => { box.checked = false; });
     refresh();
   });
-  // 一条都没选就点批量动作：在确认框弹出之前拦下并说清楚，而不是让人确认一个空操作
-  // 再收到服务端拒绝。捕获阶段注册，先于表单上的确认处理执行。
-  form.addEventListener("submit", (event) => {
-    if (selectedTaskIds(form).size > 0) return;
-    const submitter = event.submitter;
-    if (submitter instanceof HTMLElement && submitter.hasAttribute("data-typed-confirm")) return;
+  form.querySelectorAll("[data-keep-eligible]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const allowed = eligibleIds(button.dataset.keepEligible);
+      selectableBoxes(form).forEach((box) => { box.checked = allowed.has(box.value); });
+      syncMirroredSelection(form);
+      refresh();
+    });
+  });
+  form.addEventListener("change", (event) => {
+    if (event.target instanceof HTMLInputElement && event.target.name === "task_ids") refresh();
+  });
+  /** 捕获点击和提交两条入口，先挡住无效批次，再进入确认、手输与忙态。 */
+  const guard = (event, submitter) => {
+    // 重复入口在捕获阶段结束，避免到冒泡忙态锁之前再次弹出确认框。
+    if (form.dataset.submitting === "true") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    const count = selectedTaskIds(form).size;
+    const action = submitter?.dataset.requires || form.dataset.defaultAction;
+    if (count > 0 && (!enhanced || eligibleIds(action).size === count)) return;
+    // 未标记的旧表单保留原手输空选择提示。
+    if (!enhanced && submitter?.hasAttribute("data-typed-confirm")) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (counter) {
-      counter.textContent = "请先勾选任务";
-      counter.focus();
-    } else {
-      window.alert("请先勾选任务。");
-    }
+    const actionHint = count ? form.querySelector(`[data-bulk-hint="${action}"]`) : null;
+    const hint = actionHint || counter;
+    if (hint) {
+      if (!count) hint.textContent = "请先勾选任务";
+      else if (!actionHint) hint.textContent = `已选 ${count} 项，已选的任务都不能${verbs[action]}`;
+      hint.focus();
+    } else window.alert("请先勾选任务。");
+  };
+  form.addEventListener("click", (event) => {
+    const button = event.target.closest("button[type=submit]");
+    if (button && enhanced) guard(event, button);
   }, true);
-  // 换断点会互换可见副本，重新对齐后全选框与计数也要跟着回到正确状态。
+  form.addEventListener("submit", (event) => guard(event, event.submitter), true);
   window.addEventListener("resize", () => {
     syncMirroredSelection(form);
     refresh();
@@ -428,37 +478,29 @@ document.querySelectorAll("[data-select-all-reminders]").forEach((toggle) => {
 
 // 不可逆的批量操作要求手输条数：挡住「习惯性点确定」这一整类事故，
 // 提交者必须真的看过数量。脚本缺失时该按钮提交的确认数为 0，服务端会拒绝。
-document.querySelectorAll("button[data-typed-confirm]").forEach((button) => {
-  button.addEventListener("click", (event) => {
-    const form = button.form;
-    if (!form) return;
-    // 按任务编号去重：镜像副本理应已被禁用，这里再兜一次，确保用户看到的
-    // 数字、输入的数字和服务端收到的编号数三者一致。
-    const selected = new Set(
-      Array.from(
-        form.querySelectorAll('input[name="task_ids"]:checked:not(:disabled)'),
-      ).map((box) => box.value),
-    );
+const typedForms = new Set(Array.from(document.querySelectorAll("button[data-typed-confirm]"))
+  .map((button) => button.form).filter(Boolean));
+typedForms.forEach((form) => {
+  // 放在 submit 捕获阶段，键盘和 requestSubmit 同样必须确认；不能复用上次数字。
+  form.addEventListener("submit", (event) => {
+    const button = event.submitter;
+    if (!(button instanceof HTMLElement) || !button.hasAttribute("data-typed-confirm")) return;
+    const selected = selectedTaskIds(form);
     const field = form.querySelector("[data-confirm-count]");
-    if (selected.size === 0) {
-      window.alert("请先勾选要删除的任务。");
-      event.preventDefault();
-      return;
-    }
-    const label = button.getAttribute("data-typed-confirm") || "删除";
-    // 后果由按钮自己说明：同一套手输确认现在服务于删除和取消两种不可逆动作，
-    // 把措辞写死在脚本里，另一种动作就会读到一句与它无关的警告。
+    if (field) field.value = "0";
     const detail = (button.getAttribute("data-typed-confirm-detail")
       || "即将处理 {n} 条任务，此操作不可恢复。").replace("{n}", String(selected.size));
-    const answer = window.prompt(
-      `${label}：${detail}\n确认请输入数字 ${selected.size}。`,
-    );
+    const answer = selected.size ? window.prompt(
+      `${button.getAttribute("data-typed-confirm")}：${detail}\n确认请输入数字 ${selected.size}。`,
+    ) : null;
+    if (!selected.size) window.alert("请先勾选要处理的任务。");
     if (answer === null || answer.trim() !== String(selected.size)) {
       event.preventDefault();
+      event.stopImmediatePropagation();
       return;
     }
     if (field) field.value = String(selected.size);
-  });
+  }, true);
 });
 
 // 入住安排倒计时与跨节点刷新（Spec §6/§9）。

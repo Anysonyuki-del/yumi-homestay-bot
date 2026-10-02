@@ -610,6 +610,42 @@ async def test_task_actionability_follows_the_same_rule_as_task_routes() -> None
         assert task["can_cancel"] is not expected_archive
 
 
+def test_customer_task_projection_handles_raw_status_and_unknown_safely() -> None:
+    """客户任务的字符串状态应有统一标签和资格，未知值不能误开放批量操作。"""
+    detail = {
+        "tasks": [
+            {
+                "status": "pending_assignment",
+                "task_type": "cleaning",
+                "property_id": 101,
+                "service_date": date(2026, 10, 2),
+                "archived_at": None,
+            },
+            {
+                "status": "expired",
+                "archived_at": datetime(2026, 10, 2, tzinfo=UTC),
+            },
+            {"status": "unrecognized", "archived_at": datetime(2026, 10, 2, tzinfo=UTC)},
+        ]
+    }
+
+    CustomerAdminService._localize_detail(detail)
+
+    pending, expired, unknown = detail["tasks"]
+    assert pending["status"] == "pending_assignment"
+    assert pending["status_enum"] is BusinessTaskStatus.PENDING_ASSIGNMENT
+    assert pending["status_label"] == "待分派"
+    assert pending["eligible_actions"] == frozenset({"assign", "cancel"})
+    assert pending["can_cancel"] is True
+    assert pending["can_archive"] is False
+    assert expired["status_label"] == "已失效"
+    assert expired["eligible_actions"] == frozenset({"archive", "purge"})
+    assert unknown["status_enum"] is None
+    assert unknown["status_label"] == "待核实"
+    assert unknown["eligible_actions"] == frozenset()
+    assert unknown["can_archive"] is unknown["can_cancel"] is False
+
+
 @pytest.mark.asyncio
 async def test_refreshing_context_enqueues_a_job_instead_of_calling_the_model() -> None:
     """手动重算摘要与记忆走入队，不在请求里同步调模型。

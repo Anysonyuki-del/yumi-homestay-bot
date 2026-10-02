@@ -255,8 +255,11 @@ async def admin_dashboard(request: Request) -> Response:
         snapshot = Snapshot.empty(aware_time.astimezone(WUHAN_TIMEZONE).date())
         snapshot_error = "运营数据暂时不可用，当前显示安全空态。"
     # 「先处理」直接用运营快照里已经排好风险序的房间，不另建第四套待办投影。
-    # 读失败时安静降级为空列表：工作台的其余部分仍然可用。
+    # 读取失败必须提示，不能用空列表声称没有待处理房间。
     attention_rooms: tuple[RoomOperationItem, ...] = ()
+    operations_error: str | None = None
+    source_stale = False
+    source_synced_at = None
     try:
         operations = await _operations_service(request).snapshot(
             observed_at,
@@ -269,18 +272,27 @@ async def admin_dashboard(request: Request) -> Response:
                 None,
             ),
         )
-        attention_rooms = operations.attention_rooms
+        source_stale = operations.source_stale
+        source_synced_at = operations.source_synced_at
+        attention_rooms = tuple(
+            room for room in operations.attention_rooms
+            if not source_stale or room.next_action_url
+        )
     except Exception as error:
         logger.warning("工作台先处理读取失败：error_type=%s", type(error).__name__)
+        operations_error = "房间待处理信息暂时无法读取"
     health = await _safe_health(request)
     return templates.TemplateResponse(
         request=request,
         name="admin/dashboard.html",
         context={
-            "page_title": "运营总览",
+            "page_title": "今天",
             "active_nav": "dashboard",
             "snapshot": snapshot,
             "attention_rooms": attention_rooms,
+            "operations_error": operations_error,
+            "source_stale": source_stale,
+            "source_synced_at": source_synced_at,
             "health_degraded": snapshot_error is not None or health.get("status") != "ok",
             "error": snapshot_error,
         },

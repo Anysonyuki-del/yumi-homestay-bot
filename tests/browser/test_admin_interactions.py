@@ -559,7 +559,10 @@ def _timeline_fixture(
         return bar
 
     env = Environment(loader=FileSystemLoader(PROJECT_ROOT / "src/homestay_bot/templates"))
+    from homestay_bot.display import date_zh
+
     env.filters["status_zh"] = str
+    env.filters["date_zh"] = date_zh
     start = date(2026, 9, 8)
     days = [SimpleNamespace(local_date=start + timedelta(days=i)) for i in range(day_count)]
     bars = [SimpleNamespace(
@@ -871,6 +874,7 @@ def _render_room_timeline(bar_count: int, *, days: int = 6) -> str:
 
     from jinja2 import Environment, FileSystemLoader
 
+    from homestay_bot.display import date_zh
     from homestay_bot.services.admin_operations_service import TimelineBar
 
     start = date(2026, 9, 14)
@@ -894,6 +898,8 @@ def _render_room_timeline(bar_count: int, *, days: int = 6) -> str:
             left_continues=False,
             right_continues=False,
             checkout_verified=False,
+            start_date=start,
+            end_date=start + timedelta(days=2),
             start_label="今天 15:00",
             end_label="明天 12:00",
         )
@@ -910,6 +916,7 @@ def _render_room_timeline(bar_count: int, *, days: int = 6) -> str:
         loader=FileSystemLoader(PROJECT_ROOT / "src/homestay_bot/templates"),
         autoescape=True,
     )
+    env.filters["date_zh"] = date_zh
     template = env.from_string(
         "{% import 'components/ui.html' as ui %}"
         "{{ ui.room_timeline(timeline, today, false, '测试房间') }}"

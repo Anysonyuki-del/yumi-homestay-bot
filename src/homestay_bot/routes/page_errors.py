@@ -5,10 +5,12 @@ import secrets
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from homestay_bot.domain.errors import OperationRefused
-from homestay_bot.web import set_page_error
+from homestay_bot.web import set_page_error, templates
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +58,42 @@ def raise_page_error(
 
 
 def _wants_html(request: Request) -> bool:
-    """判断请求期望页面而不是接口响应。"""
-    accept = request.headers.get("accept", "")
-    return "text/html" in accept
+    """只接受明确且权重非零的 HTML 类型，通配符仍沿用接口响应。"""
+    for entry in request.headers.get("accept", "").split(","):
+        media_type, *parameters = entry.strip().lower().split(";")
+        if media_type.strip() != "text/html":
+            continue
+        quality = 1.0
+        for parameter in parameters:
+            key, separator, value = parameter.strip().partition("=")
+            if key == "q" and separator:
+                try:
+                    quality = float(value)
+                except ValueError:
+                    quality = 0
+        if 0 < quality <= 1:
+            return True
+    return False
+
+
+async def handle_http_exception(request: Request, exc: Exception) -> Response:
+    """后台 GET 页面暂不可用时给安全 HTML，保留接口契约和重试响应头。"""
+    assert isinstance(exc, StarletteHTTPException)
+    if (
+        exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        and request.method == "GET"
+        and request.url.path.startswith("/employee/")
+        and request.url.path != "/employee/health"
+        and _wants_html(request)
+    ):
+        return templates.TemplateResponse(
+            request=request,
+            name="errors/unavailable.html",
+            context={"page_title": "页面暂时不可用", "active_nav": ""},
+            status_code=exc.status_code,
+            headers=exc.headers,
+        )
+    return await http_exception_handler(request, exc)
 
 
 _FALLBACK_RETURN_PATH = "/employee/tasks"

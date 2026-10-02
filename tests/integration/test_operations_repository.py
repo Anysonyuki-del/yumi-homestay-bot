@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -37,7 +37,7 @@ from homestay_bot.repositories.operations import (
 from homestay_bot.repositories.retention import SQLAlchemyRetentionRepository
 from homestay_bot.services.business_task_service import BusinessTaskService
 from homestay_bot.services.task_lifecycle_service import TaskLifecycleService
-from homestay_bot.services.task_page_service import TaskPageService
+from homestay_bot.services.task_page_service import TaskPageService, task_bulk_eligibility
 
 
 @pytest.mark.asyncio
@@ -1040,10 +1040,26 @@ async def test_archive_selected_rejects_whole_batch_when_open_task_included() ->
             await repository.archive_selected([expired.id, assigned.id], 1)
         # 消息必须点名受阻的任务编号，否则用户不知道该取消勾选哪几条
         assert str(assigned.id) in str(refused.value)
+        assert "保洁·测试房间·2026年8月2日（已分派）" in str(refused.value)
+        assert str(refused.value).endswith("请取消勾选仍在处理中的任务后重试")
 
         # 整批拒绝：终态那条也不能被归档
         await session.refresh(expired)
         assert expired.archived_at is None
+        assert assigned.archived_at is None
+        assert assigned.status is BusinessTaskStatus.ASSIGNED
+
+        actor = Employee(wecom_userid="cancel-admin", name="管理员", role=EmployeeRole.ADMIN)
+        session.add(actor)
+        await session.flush()
+        service = TaskPageService(repository, BusinessTaskService(repository))
+        with pytest.raises(OperationRefused) as cancelled:
+            await service.cancel_many([assigned.id, expired.id], actor)
+        assert "保洁·测试房间·2026年8月1日（已失效）" in str(cancelled.value)
+        assert str(cancelled.value).endswith("请取消勾选这些任务后重试")
+        assert expired.status is BusinessTaskStatus.EXPIRED
+        assert assigned.status is BusinessTaskStatus.ASSIGNED
+        assert expired.archived_at is assigned.archived_at is None
 
         assert await repository.archive_selected([expired.id], 1) == 1
 
@@ -1167,6 +1183,10 @@ async def test_bulk_purge_validates_before_touching_any_file() -> None:
         with pytest.raises(OperationRefused) as refused:
             await repository.require_purgeable([archived.id, open_task.id])
         assert str(open_task.id) in str(refused.value)
+        assert "保洁·测试房间·2026年8月1日（已失效）" in str(refused.value)
+        assert str(refused.value).endswith("请先完成或取消这些任务后归档，再永久删除")
+        assert archived.archived_at is not None
+        assert open_task.archived_at is None
 
         # 空选择同样拒绝
         with pytest.raises(OperationRefused):
@@ -1238,10 +1258,20 @@ async def test_bulk_assign_validation_rejects_incomplete_or_wrong_status() -> No
         with pytest.raises(OperationRefused) as missing_fields:
             await repository.require_assignable([ready_a.id, no_property.id])
         assert str(no_property.id) in str(missing_fields.value)
+        assert "维修·房间待确认·日期待补齐（待确认）" in str(missing_fields.value)
+        assert str(missing_fields.value).endswith("请先在任务详情补齐后再分派")
 
         with pytest.raises(OperationRefused) as wrong_status:
             await repository.require_assignable([ready_a.id, already_done.id])
         assert str(already_done.id) in str(wrong_status.value)
+        assert "保洁·房间甲·2026年8月1日（已失效）" in str(wrong_status.value)
+        assert str(wrong_status.value).endswith("请取消勾选这些任务后重试")
+        assert ready_a.status is ready_b.status is BusinessTaskStatus.PENDING_ASSIGNMENT
+        assert no_property.status is BusinessTaskStatus.PENDING_CONFIRMATION
+        assert already_done.status is BusinessTaskStatus.EXPIRED
+        assert all(
+            item.archived_at is None for item in (ready_a, ready_b, no_property, already_done)
+        )
 
         with pytest.raises(OperationRefused):
             await repository.require_assignable([])
@@ -1655,4 +1685,133 @@ async def test_tombstones_do_not_suppress_credential_review_tasks() -> None:
     assert failure.dedupe_key == "credential-failure:7"
     assert review.dedupe_key == "credential-review:101:2026-08-01"
 
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refused_task_description_queries_rooms_once_and_uses_inactive_room_number() -> None:
+    """拒绝提示只补一次房间投影，停用房间可定位且不泄露说明或其他私密字段。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        session.add(
+            PropertyProfile(
+                id=101,
+                room_number="C502",
+                title="不应替代房号的标题",
+                address_hint="不应展示的完整地址",
+                is_active=False,
+            )
+        )
+        tasks = [
+            BusinessTask(
+                task_type=BusinessTaskType.MAINTENANCE,
+                status=BusinessTaskStatus.IN_PROGRESS,
+                property_id=101,
+                service_date=date(2026, 10, 2),
+                description="客人手机号13800138000，不应读取的说明",
+            )
+            for _ in range(10)
+        ]
+        session.add_all(tasks)
+        await session.flush()
+        queries = []
+
+        def record_query(connection, cursor, statement, parameters, context, executemany):
+            """记录失败路径的实际 SQL，确认没有逐任务查询。"""
+            queries.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_query)
+        message = await SQLAlchemyOperationsRepository(session).describe_refused_tasks(
+            tasks,
+            reason="只有已完成、已取消或已失效的任务可以归档",
+            next_step="请取消勾选仍在处理中的任务后重试",
+        )
+        event.remove(engine.sync_engine, "before_cursor_execute", record_query)
+
+        assert len(queries) == 1
+        assert "property_profiles" in queries[0]
+        assert "business_tasks" not in queries[0]
+        assert len(message) <= 200
+        assert "C502·2026年10月2日（进行中）" in message
+        assert "以下 10 条不符合" in message
+        assert "另 7 条" in message
+        assert "13800138000" not in message
+        assert "不应" not in message
+    await engine.dispose()
+
+
+# 预期动作来自业务状态含义；每个动作使用独立 ORM 行，执行不会改变下一动作的前提。
+_ELIGIBILITY_CASES = [
+    (BusinessTaskStatus.PENDING_CONFIRMATION, 101, date(2026, 10, 2), {"assign", "cancel"}),
+    (BusinessTaskStatus.PENDING_ASSIGNMENT, 101, date(2026, 10, 2), {"assign", "cancel"}),
+    (BusinessTaskStatus.ASSIGNED, 101, date(2026, 10, 2), {"cancel"}),
+    (BusinessTaskStatus.IN_PROGRESS, 101, date(2026, 10, 2), {"cancel"}),
+    (BusinessTaskStatus.PENDING_INSPECTION, 101, date(2026, 10, 2), {"cancel"}),
+    (BusinessTaskStatus.COMPLETED, 101, date(2026, 10, 2), {"archive"}),
+    (BusinessTaskStatus.CANCELLED, 101, date(2026, 10, 2), {"archive"}),
+    (BusinessTaskStatus.EXPIRED, 101, date(2026, 10, 2), {"archive"}),
+    (BusinessTaskStatus.PENDING_CONFIRMATION, None, date(2026, 10, 2), {"cancel"}),
+    (BusinessTaskStatus.PENDING_CONFIRMATION, 101, None, {"cancel"}),
+    (BusinessTaskStatus.PENDING_CONFIRMATION, None, None, {"cancel"}),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,property_id,service_date,expected", _ELIGIBILITY_CASES)
+@pytest.mark.parametrize("archived", [False, True])
+async def test_bulk_eligibility_matches_real_execution(
+    status, property_id, service_date, expected, archived
+) -> None:
+    """提示资格须与真实分派、取消、归档、删除门禁一致，包括再次归档零改动。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        admin = Employee(wecom_userid="admin", name="管理员", role=EmployeeRole.ADMIN)
+        staff = Employee(wecom_userid="staff", name="员工", role=EmployeeRole.STAFF)
+        session.add_all([admin, staff, PropertyProfile(id=101, title="测试房间")])
+        archived_at = datetime(2026, 10, 1, tzinfo=UTC) if archived else None
+        expected_actions = frozenset(expected | ({"purge"} if archived else set()))
+        tasks = {
+            action: BusinessTask(
+                task_type=BusinessTaskType.SUPPLIES,
+                status=status,
+                property_id=property_id,
+                service_date=service_date,
+                description="资格验证",
+                archived_at=archived_at,
+            )
+            for action in ("assign", "cancel", "archive", "purge")
+        }
+        session.add_all(tasks.values())
+        await session.flush()
+        repository = SQLAlchemyOperationsRepository(session)
+        service = TaskPageService(repository, BusinessTaskService(repository))
+        for action, task in tasks.items():
+            assert task_bulk_eligibility(
+                status=task.status,
+                property_id=task.property_id,
+                service_date=task.service_date,
+                archived_at=task.archived_at,
+            ) == expected_actions
+            if action == "assign":
+                operation = service.assign_many([task.id], admin, staff.id)
+            elif action == "cancel":
+                operation = service.cancel_many([task.id], admin)
+            elif action == "archive":
+                operation = service.archive_many(admin, [task.id])
+            else:
+                operation = service.purge_many([task.id], admin)
+            if action in expected_actions:
+                count = await operation
+                assert count == (0 if action == "archive" and archived else 1)
+            else:
+                with pytest.raises(OperationRefused):
+                    await operation
+                assert task.status is status
+                assert (task.archived_at is not None) is archived
     await engine.dispose()

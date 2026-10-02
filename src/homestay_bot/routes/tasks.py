@@ -38,7 +38,7 @@ from homestay_bot.services.room_readiness_service import (
     REQUIRED_READINESS_CHECKS,
 )
 from homestay_bot.services.task_page_service import TaskFilters
-from homestay_bot.web import templates
+from homestay_bot.web import pop_page_notice, set_page_notice, templates
 
 router = APIRouter(prefix="/employee/tasks")
 logger = logging.getLogger(__name__)
@@ -64,14 +64,8 @@ class _TaskQueue:
     """
 
     url: str
-    admin_title: str
     admin_heading: str
-    staff_title: str
     staff_heading: str
-
-    def title(self, *, is_admin: bool) -> str:
-        """返回浏览器标签页使用的完整称呼。"""
-        return self.admin_title if is_admin else self.staff_title
 
     def heading(self, *, is_admin: bool) -> str:
         """返回页面主标题使用的简短称呼。"""
@@ -79,41 +73,15 @@ class _TaskQueue:
 
 
 _QUEUES = {
-    "archived": _TaskQueue(
-        "/employee/tasks?archived=true",
-        "已归档任务",
-        "已归档",
-        "已归档任务",
-        "已归档",
-    ),
-    "overdue": _TaskQueue(
-        "/employee/tasks?overdue=true",
-        "逾期任务",
-        "逾期",
-        "我的逾期任务",
-        "我的逾期任务",
-    ),
+    "archived": _TaskQueue("/employee/tasks?archived=true", "已归档", "已归档"),
+    "overdue": _TaskQueue("/employee/tasks?overdue=true", "逾期", "我的逾期任务"),
     "pending_confirmation": _TaskQueue(
-        "/employee/tasks?status_filter=pending_confirmation",
-        "待确认任务",
-        "待确认",
-        "我的待确认任务",
-        "我的待确认任务",
+        "/employee/tasks?status_filter=pending_confirmation", "待确认", "我的待确认任务",
     ),
     "pending_assignment": _TaskQueue(
-        "/employee/tasks?status_filter=pending_assignment",
-        "待分派任务",
-        "待分派",
-        "我的待分派任务",
-        "我的待分派任务",
+        "/employee/tasks?status_filter=pending_assignment", "待分派", "我的待分派任务",
     ),
-    "open": _TaskQueue(
-        "/employee/tasks",
-        "全部待办任务",
-        "全部待办",
-        "自己的任务",
-        "分配给我的任务",
-    ),
+    "open": _TaskQueue("/employee/tasks", "全部待办", "分配给我的任务"),
 }
 
 
@@ -466,35 +434,19 @@ async def task_index(
                 if employee.role is EmployeeRole.ADMIN
                 else ""
             ),
-            "archivable_statuses": ARCHIVABLE_TASK_STATUSES,
-            # 可取消 == 非终态。判定放在这里而不是模板：它与 cancel_many 的
-            # 校验必须是同一条规则，写进模板就没法和服务端一起被测试锁住。
-            "cancellable_count": sum(
-                1
-                for item in items[:50]
-                if item.status not in ARCHIVABLE_TASK_STATUSES
-            ),
-            # 可批量分派的条件放在这里判定而不是模板里：规则含状态与两个字段，
-            # 写进模板既难读也无法单独测试。
-            "assignable_ids": {
-                item.id
-                for item in items[:50]
-                if item.status
-                in (
-                    BusinessTaskStatus.PENDING_CONFIRMATION,
-                    BusinessTaskStatus.PENDING_ASSIGNMENT,
-                )
-                and item.property_id is not None
-                and item.service_date is not None
+            # 页面资格与执行服务共享投影，只统计当前页，排除分页哨兵。
+            "bulk_counts": {
+                action: sum(action in item.eligible_actions for item in items[:50])
+                for action in ("assign", "cancel", "archive", "purge")
             },
+            "notice": pop_page_notice(request) or None,
             "task_types": list(BusinessTaskType),
             "properties": options.get("properties", []),
             "employees": options.get("employees", []),
             "queue": queue,
-            "queue_heading": _QUEUES[queue].heading(is_admin=is_admin),
             "queue_url": _QUEUES[queue].url,
             "extra_filters": _extra_filters(selected_filters, queue),
-            "page_title": _QUEUES[queue].title(is_admin=is_admin),
+            "page_title": _QUEUES[queue].heading(is_admin=is_admin),
             "active_nav": "tasks",
         },
     )
@@ -573,9 +525,10 @@ async def purge_selected_tasks(
             f"确认输入 {confirm_count}。请重新确认后再删除。"
         )
     try:
-        await _get_service(request).purge_many(selected, employee)
+        changed = await _get_service(request).purge_many(selected, employee)
     except Exception as error:
         _raise_page_error(error)
+    set_page_notice(request, f"已永久删除 {changed} 条任务")
     return RedirectResponse(
         "/employee/tasks?archived=true",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -586,6 +539,7 @@ async def purge_selected_tasks(
 async def assign_selected_tasks(
     request: Request,
     csrf_token: str = Form(min_length=1, max_length=128),
+    return_to: Annotated[str, Form(max_length=200)] = "",
     assigned_employee_id: Annotated[int, Form()] = 0,
     task_ids: Annotated[list[int] | None, Form()] = None,
 ) -> RedirectResponse:
@@ -593,17 +547,21 @@ async def assign_selected_tasks(
     employee = await _current_employee(request)
     await _consume_csrf(request, BULK_TASK_CSRF_ENTITY, csrf_token)
     if assigned_employee_id <= 0:
-        raise OperationRefused("请先选择要分派给哪位员工")
+        raise OperationRefused("请先选择要分派给哪位员工", return_to=return_to)
     try:
-        await _get_service(request).assign_many(
+        changed = await _get_service(request).assign_many(
             task_ids or [],
             employee,
             assigned_employee_id,
         )
+    except OperationRefused as refused:
+        refused.return_to = return_to
+        raise
     except Exception as error:
         _raise_page_error(error)
+    set_page_notice(request, f"已分派 {changed} 条给所选员工")
     return RedirectResponse(
-        "/employee/tasks",
+        safe_return_path(return_to),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -630,14 +588,15 @@ async def cancel_selected_tasks(
             return_to=return_to,
         )
     try:
-        await _get_service(request).cancel_many(selected, employee)
+        changed = await _get_service(request).cancel_many(selected, employee)
     except OperationRefused as refused:
         refused.return_to = return_to
         raise
     except Exception as error:
         _raise_page_error(error)
+    set_page_notice(request, f"已取消 {changed} 条")
     return RedirectResponse(
-        return_to or "/employee/tasks",
+        safe_return_path(return_to),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -653,14 +612,19 @@ async def archive_selected_tasks(
     employee = await _current_employee(request)
     await _consume_csrf(request, BULK_TASK_CSRF_ENTITY, csrf_token)
     try:
-        await _get_service(request).archive_many(employee, task_ids or [])
+        changed = await _get_service(request).archive_many(employee, task_ids or [])
     except OperationRefused as refused:
         refused.return_to = return_to
         raise
     except Exception as error:
         _raise_page_error(error)
+    set_page_notice(
+        request,
+        f"已归档 {changed} 条，可在『已归档』中恢复"
+        if changed else "所选任务已归档，本次没有新增归档",
+    )
     return RedirectResponse(
-        "/employee/tasks?archived=true",
+        safe_return_path(return_to),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -719,12 +683,17 @@ async def archive_filtered_tasks(
         assigned_employee_id=assigned_employee_id,
     )
     try:
-        await _get_service(request).archive_filtered(employee, filters)
+        changed = await _get_service(request).archive_filtered(employee, filters)
     except OperationRefused as refused:
         refused.return_to = return_to
         raise
     except Exception as error:
         _raise_page_error(error)
+    set_page_notice(
+        request,
+        f"已归档 {changed} 条，可在『已归档』中恢复"
+        if changed else "当前筛选没有新增可归档任务",
+    )
     return RedirectResponse(
         "/employee/tasks?archived=true",
         status_code=status.HTTP_303_SEE_OTHER,

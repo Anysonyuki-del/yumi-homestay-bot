@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
+from homestay_bot.display import refusal_message, task_refusal_label
 from homestay_bot.domain.enums import (
     ARCHIVABLE_TASK_STATUSES,
     BusinessTaskOrigin,
@@ -647,6 +648,43 @@ class SQLAlchemyOperationsRepository:
             )
         )
 
+    async def describe_refused_tasks(
+        self,
+        tasks: Iterable[BusinessTask],
+        *,
+        reason: str,
+        next_step: str,
+    ) -> str:
+        """使用已加载的拒绝任务，一次读取房间安全名称并生成有界提示。"""
+        items = sorted(tasks, key=lambda task: task.id)
+        property_ids = {task.property_id for task in items if task.property_id is not None}
+        # 停用房源也参与定位；失败路径仅查询这三个字段，不带说明、地址或客户资料。
+        room_names: dict[int, str] = {}
+        if property_ids:
+            rooms = (
+                await self._session.execute(
+                    select(PropertyProfile.id, PropertyProfile.room_number, PropertyProfile.title)
+                    .where(PropertyProfile.id.in_(property_ids))
+                )
+            ).all()
+            room_names = {room.id: room.room_number or room.title for room in rooms}
+
+        def labels(room_limit: int) -> list[str]:
+            """按当前房间名预算生成标签，给纯格式助手选择可放下的条数。"""
+            return [
+                task_refusal_label(
+                    task.id,
+                    task.task_type,
+                    room_names.get(task.property_id) if task.property_id is not None else None,
+                    task.service_date,
+                    task.status,
+                    room_limit,
+                )
+                for task in items
+            ]
+
+        return refusal_message(reason, labels, len(items), next_step)
+
     async def require_assignable(
         self,
         task_ids: list[int],
@@ -671,19 +709,25 @@ class SQLAlchemyOperationsRepository:
             BusinessTaskStatus.PENDING_CONFIRMATION,
             BusinessTaskStatus.PENDING_ASSIGNMENT,
         )
-        if blocked := sorted(
-            task.id for task in tasks if task.status not in assignable_statuses
-        ):
+        if blocked := [task for task in tasks if task.status not in assignable_statuses]:
             raise OperationRefused(
-                f"只有待确认或待分派的任务可以分派，以下状态不符：{blocked}"
+                await self.describe_refused_tasks(
+                    blocked,
+                    reason="只有待确认或待分派的任务可以分派",
+                    next_step="请取消勾选这些任务后重试",
+                )
             )
-        if incomplete := sorted(
-            task.id
+        if incomplete := [
+            task
             for task in tasks
             if task.property_id is None or task.service_date is None
-        ):
+        ]:
             raise OperationRefused(
-                f"以下任务缺少房间或服务日期，请先逐条补齐：{incomplete}"
+                await self.describe_refused_tasks(
+                    incomplete,
+                    reason="这些任务缺少房间或服务日期",
+                    next_step="请先在任务详情补齐后再分派",
+                )
             )
         return [
             (task.id, cast(int, task.property_id), cast(date, task.service_date))
@@ -716,11 +760,13 @@ class SQLAlchemyOperationsRepository:
         )
         if missing := sorted(set(unique_ids) - {task.id for task in tasks}):
             raise LookupError(f"任务不存在：{missing}")
-        if blocked := sorted(
-            task.id for task in tasks if task.archived_at is None
-        ):
+        if blocked := [task for task in tasks if task.archived_at is None]:
             raise OperationRefused(
-                f"只有已归档的任务可以永久删除，以下尚未归档：{blocked}"
+                await self.describe_refused_tasks(
+                    blocked,
+                    reason="只有已归档的任务可以永久删除",
+                    next_step="请先完成或取消这些任务后归档，再永久删除",
+                )
             )
         return list(
             await self._session.scalars(
@@ -982,13 +1028,17 @@ class SQLAlchemyOperationsRepository:
         found = {task.id for task in tasks}
         if missing := sorted(set(unique_ids) - found):
             raise LookupError(f"任务不存在：{missing}")
-        if blocked := sorted(
-            task.id
+        if blocked := [
+            task
             for task in tasks
             if task.status not in ARCHIVABLE_TASK_STATUSES
-        ):
+        ]:
             raise OperationRefused(
-                f"只有已完成、已取消或已失效的任务可以归档，以下仍在处理中：{blocked}"
+                await self.describe_refused_tasks(
+                    blocked,
+                    reason="只有已完成、已取消或已失效的任务可以归档",
+                    next_step="请取消勾选仍在处理中的任务后重试",
+                )
             )
         now = datetime.now(UTC)
         archived = 0
