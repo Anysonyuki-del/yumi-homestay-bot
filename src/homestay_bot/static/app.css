@@ -26,7 +26,6 @@
   --warning-soft: #fffbeb;
   --danger: #b42318;
   --danger-soft: #fef2f2;
-  --brand-warm: #a16207;
   --t-2xs: .6875rem;
   --t-xs: .75rem;
   --t-sm: .8125rem;
@@ -57,7 +56,8 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-html { min-width: 320px; scroll-behavior: smooth; }
+/* 根元素按扣除滚动条后的可用宽度布局，避免 320px 视口被最小宽度撑出横向滚动。 */
+html { scroll-behavior: smooth; }
 body { min-height: 100vh; margin: 0; background: var(--page); font-size: 14px; line-height: 1.55; }
 a { color: var(--primary); text-underline-offset: 3px; }
 button, input, select, textarea { max-width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); color: var(--text); background: var(--surface); font: inherit; font-size: 16px; }
@@ -234,7 +234,6 @@ tbody tr:hover { background: var(--surface-sunk); }
 .mobile-card-list { display: grid; }
 .mobile-record-card { display: grid; gap: 5px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); color: inherit; background: var(--surface); text-decoration: none; }
 .mobile-record-card span, .mobile-record-card small { color: var(--muted); }
-.decision-panel { border-top: 3px solid var(--brand-warm); }
 .price-list { display: grid; gap: 8px; padding: 0; list-style: none; }
 .price-list li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .confirmation-check { grid-template-columns: auto 1fr; align-items: center; padding: 14px; border: 1px solid #f59e0b; border-radius: var(--r-sm); background: var(--warning-soft); }

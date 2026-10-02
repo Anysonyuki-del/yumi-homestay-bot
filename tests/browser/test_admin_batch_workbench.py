@@ -210,6 +210,35 @@ def test_mixed_selection_blocks_before_dialog_or_request(admin_client, browser, 
         page.close()
 
 
+@pytest.mark.parametrize("path", [
+    "/employee/login", "/employee/tasks", "/employee/customers/1?tab=service",
+    "/employee/admin/operations",
+])
+def test_pages_fit_available_width_with_vertical_scrollbar(admin_client, playwright_runtime, path):  # noqa: F811
+    """预留真实滚动条宽度，防止 320px 视口被根元素最小宽度撑出横向滚动。"""
+    # Playwright 默认 --hide-scrollbars 会抹掉现场槽位，只为此回归取消这一参数。
+    instance = playwright_runtime.chromium.launch(
+        headless=True, ignore_default_args=["--hide-scrollbars"],
+    )
+    page = instance.new_page(viewport={"width": 320, "height": 740})
+    try:
+        load_page(page, admin_client, path)
+        # 即使认证页内容不够长，也预留槽位，统一复现现场 15px 的宽度损失。
+        page.add_style_tag(content="html { scrollbar-gutter: stable; overflow-y: scroll; }")
+        for width in (320, 360, 390, 1280):
+            page.set_viewport_size({"width": width, "height": 740})
+            dimensions = page.evaluate("""() => ({
+              client: document.documentElement.clientWidth,
+              scroll: document.documentElement.scrollWidth,
+              content: document.body.getBoundingClientRect().width,
+            })""")
+            assert dimensions["client"] < width, "回归环境必须保留垂直滚动条槽位"
+            assert dimensions["scroll"] <= dimensions["client"], dimensions
+            assert dimensions["content"] <= dimensions["client"], dimensions
+    finally:
+        instance.close()
+
+
 @pytest.mark.parametrize("path", ["/employee/tasks", "/employee/customers/1?tab=service"])
 def test_mobile_toolbar_stays_in_view_without_covering_content(admin_client, browser, path):  # noqa: F811
     """首条选择立即出现操作栏；底部内容、触控区、选择和焦点均可达。"""
