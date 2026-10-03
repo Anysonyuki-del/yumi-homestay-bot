@@ -357,22 +357,21 @@ def test_calendar_bar_palette_stays_derived_from_the_primary_token() -> None:
     其中一行，两类浏览器就会看到两套配色，而且没有任何地方会报错。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
-    root = _root_tokens(css)
-
-    pairs = re.findall(
-        r"(--cal-[\w-]+):\s*(#[0-9A-Fa-f]{6});\s*\1:\s*"
-        r"color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\);",
-        css,
-    )
-    assert len(pairs) >= 4, f"color-mix 与回退值没有成对声明：{pairs}"
-    # 住宿条配色挂 --primary；2026-09-16 手机版式新增的重叠告警色挂 --warning，
-    # 二者都是语义令牌。真正要守的是下面那条：回退值与 color-mix 不得脱钩。
-    allowed_bases = {"--primary", "--warning"}
-    for name, fallback, top, percent, bottom in pairs:
-        assert top in allowed_bases, (
-            f"{name} 挂在 {top} 上，既不是主色也不是告警色，换令牌时不会跟着走"
+    classic, warm = css.split(':root[data-theme="warm"]', 1)
+    # 两套主题必须按各自根令牌计算；还用经典主色验算暖色会报错或漏掉真实回退偏差。
+    for theme_css in (classic, ":root" + warm):
+        root = _root_tokens(theme_css)
+        pairs = re.findall(
+            r"(--cal-[\w-]+):\s*(#[0-9A-Fa-f]{6});\s*\1:\s*"
+            r"color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\);",
+            theme_css,
         )
-        expected = _srgb_mix(root[top], root[bottom], float(percent))
-        assert fallback.lower() == expected, (
-            f"{name} 回退值 {fallback} 与 color-mix 结果 {expected} 不一致"
-        )
+        assert len(pairs) >= 4, f"color-mix 与回退值没有成对声明：{pairs}"
+        for name, fallback, top, percent, bottom in pairs:
+            assert top in {"--primary", "--warning"}, (
+                f"{name} 挂在 {top} 上，既不是主色也不是告警色，换令牌时不会跟着走"
+            )
+            expected = _srgb_mix(root[top], root[bottom], float(percent))
+            assert fallback.lower() == expected, (
+                f"{name} 回退值 {fallback} 与 color-mix 结果 {expected} 不一致"
+            )

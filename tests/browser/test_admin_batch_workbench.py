@@ -18,6 +18,7 @@ from test_admin_interactions import (
 )
 
 from homestay_bot.application import (
+    SessionAdminDashboardService,
     SessionAdminOperationsService,
     SessionCustomerAdminService,
     SessionTaskPageService,
@@ -103,6 +104,8 @@ def admin_client(tmp_path):
                 factory, SensitiveDataCipher(Fernet.generate_key().decode()),
             )
             app.state.admin_operations_service = SessionAdminOperationsService(factory)
+            # 总览也使用真实只读聚合，主题同源验收不能总落到缺服务的安全空态。
+            app.state.admin_dashboard_service = SessionAdminDashboardService(factory)
             app.state.admin_dashboard_clock = lambda: observed
             app.state.hostex_data_last_success = observed
             with TestClient(app) as client:

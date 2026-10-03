@@ -5,5 +5,27 @@
       "maxFindings": 5,
       "maxChars": 8000
     }
+  },
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "pingfang sc",
+        "createdAt": "2026-10-02T22:11:35.741Z",
+        "reason": "Codex: app.css:53 使用既有中文系统字体，本轮 CSS 无 diff；原木主题 Spec 第 1.1 节明确沿用中文系统字体，Claude 官网参考的授权字体不适合作为中文后台的强制字体。"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/homestay_bot/templates/layouts/admin.html",
+          "src/homestay_bot/templates/layouts/auth.html"
+        ],
+        "createdAt": "2026-10-03T00:24:57.484Z",
+        "reason": "Codex 核实：检测只命中共享 app.css 中经典及暖色 .cal__date--today 的 3px 底部当天定位线；components/ui.html 的日期宏同时标记今天 aria-label。这是日期语义提示，不是卡片侧边装饰。两个布局被关联样式扫描重复归因，auth 页面没有日历结构，保留定位线。"
+      }
+    ]
   }
 }

@@ -1,3 +1,14 @@
+{# 主题选择只管理本机外观；调用方传唯一 id，控件在业务表单外且脚本失败时隐藏。 #}
+{% macro theme_selector(control_id) -%}
+<div class="theme-selector" data-theme-selector hidden>
+  <label for="{{ control_id }}">主题</label>
+  <select id="{{ control_id }}" data-theme-control aria-describedby="{{ control_id }}-feedback">
+    <option value="classic">经典</option><option value="warm">暖色</option>
+  </select>
+  <p class="theme-feedback" id="{{ control_id }}-feedback" data-theme-feedback aria-live="polite"></p>
+</div>
+{%- endmacro %}
+
 {% macro badge(text, tone="neutral") -%}
 <span class="badge badge--{{ tone }}">{{ text }}</span>
 {%- endmacro %}
