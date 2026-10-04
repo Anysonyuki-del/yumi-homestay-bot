@@ -1,9 +1,12 @@
-"""发布脚本的静态守护：真实模型回归门禁不写死地址与密钥，失败必清理，改动范围判定不漏项。"""
+"""发布脚本守护：地址密钥不写死，失败必清理，范围不漏项，UTF-8 启动不阻断。"""
 
 import ast
+import os
 import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 GATE = Path(__file__).resolve().parents[2] / "scripts" / "release" / "reply_gate.sh"
 
@@ -112,3 +115,62 @@ def test_gate_tests_the_tagged_code_not_the_working_tree() -> None:
     assert 'git archive "$TAG" src/homestay_bot' in text
     assert 'git show "$TAG:tests/fixtures/guest_reply_scenarios.json"' in text
     assert 'git show "$TAG:tests/fixtures/guest_reply_regression_baseline.json"' in text
+
+
+@pytest.mark.parametrize("scope,expected_returncode", [("skip", 0), ("all", 2)])
+def test_gate_handles_utf8_startup_and_missing_result(
+    tmp_path: Path, scope: str, expected_returncode: int,
+) -> None:
+    """用独立 Git 和命令替身验证 UTF-8 启动，缺结果仍拒绝发布。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    # 替身不执行远端命令；cat 结果必失败，使 all 走正式的失败出口。
+    (fake_bin / "ssh").write_text(
+        '#!/bin/sh\ncase "$*" in *"cat"*"result.json"*) exit 17;; *) exit 0;; esac\n',
+    )
+    (fake_bin / "scp").write_text("#!/bin/sh\nexit 0\n")
+    for command in ("ssh", "scp"):
+        (fake_bin / command).chmod(0o755)
+    env = dict(
+        os.environ,
+        PATH=f'{fake_bin}:{os.environ["PATH"]}', LC_ALL="en_US.UTF-8",
+        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+        GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
+        GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid",
+        DEPLOY_HOST="fixture.invalid", DEPLOY_KEY=str(tmp_path / "fixture-key"),
+        REPLY_GATE_SCOPE=scope, REPLY_GATE_SCOPE_REASON="本地隔离验证",
+    )
+
+    def git(*args: str) -> None:
+        """仅操作临时仓库，不读取用户配置或运行钩子。"""
+        subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
+
+    git("init", "-q")
+    source = repo / "src/homestay_bot/tools/reply_regression.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("candidate = 1\n")
+    (repo / "pyproject.toml").write_text('[project]\nversion = "0.1.0"\n')
+    fixtures = repo / "tests/fixtures"
+    fixtures.mkdir(parents=True)
+    for name in ("guest_reply_scenarios.json", "guest_reply_regression_baseline.json"):
+        (fixtures / name).write_text("{}\n")
+    git("add", ".")
+    git("commit", "-qm", "baseline")
+    git("tag", "v0.1.0")
+    source.write_text("candidate = 2\n")
+    (repo / "pyproject.toml").write_text('[project]\nversion = "0.1.1"\n')
+    git("add", ".")
+    git("commit", "-qm", "candidate")
+    git("tag", "v0.1.1")
+    result = subprocess.run(
+        ["/bin/bash", str(GATE), "v0.1.1"], cwd=repo, env=env,
+        capture_output=True, text=True, errors="replace", timeout=30,
+    )
+    assert result.returncode == expected_returncode, result.stdout + result.stderr
+    if scope == "skip":
+        assert "REPLY_GATE_SKIPPED_BY_JUDGMENT：本地隔离验证" in result.stdout
+    else:
+        assert "取不到回归结果" in result.stdout
+        assert "REPLY_GATE_PASSED" not in result.stdout

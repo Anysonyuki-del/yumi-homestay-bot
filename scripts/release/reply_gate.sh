@@ -75,7 +75,8 @@ if [ -n "$PREV" ]; then
     echo "REPLY_GATE_SKIPPED：$PREV..$TAG 未改回复链路"
     exit 0
   fi
-  echo "回复链路有改动（$PREV..$TAG）："
+  # macOS Bash 3.2 会把相邻中文标点误识别成变量名，输出统一显式限定变量边界。
+  echo "回复链路有改动（${PREV}..${TAG}）："
   printf '%s\n' "$changed" | sed '/^$/d; s/^/  /'
 else
   echo "找不到上一个版本标签，按改了回复链路处理"
@@ -85,7 +86,7 @@ SCOPE="${REPLY_GATE_SCOPE:-all}"
 ONLY=""
 if [ "$SCOPE" != "all" ]; then
   : "${REPLY_GATE_SCOPE_REASON:?按范围运行门禁必须写明 REPLY_GATE_SCOPE_REASON}"
-  echo "门禁范围：$SCOPE（理由：$REPLY_GATE_SCOPE_REASON）"
+  echo "门禁范围：${SCOPE}（理由：${REPLY_GATE_SCOPE_REASON}）"
 fi
 case "$SCOPE" in
   all) ;;
@@ -160,7 +161,7 @@ set -e
 RESULT="$STAGE/reply-gate-$TAG.json"
 if ! ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" "docker exec '$CONTAINER' cat '$REMOTE_DIR/result.json'" \
     > "$RESULT" 2>/dev/null; then
-  echo "✗ 取不到回归结果（运行退出码 $status），按不通过处理"
+  echo "✗ 取不到回归结果（运行退出码 ${status}），按不通过处理"
   exit 2
 fi
 
