@@ -46,6 +46,11 @@ class ApprovalPageStub:
             "masked_mobile": "138****8000",
             "properties": [{"id": 101, "title": "江景大床房 101"}],
             "reference_prices": [{"date": "2026-08-01", "price": 399}],
+            "reference_price_groups": [{"id": 101, "title": "江景大床房 101", "prices": [
+                {"date": "2026-08-01", "price": 399, "channel_type": "booking_site",
+                 "currency_label": "CNY"}
+            ]}],
+            "unmatched_reference_prices": [],
             "income_methods": [{"id": 1, "name": "微信支付"}],
             "reference_unavailable": self.reference_unavailable,
             "can_confirm": not self.reference_unavailable,

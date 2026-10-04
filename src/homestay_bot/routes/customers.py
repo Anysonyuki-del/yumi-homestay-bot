@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BeforeValidator
 
 from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import Employee
 from homestay_bot.routes.admin_form_csrf import (
     CUSTOMER_CSRF_FAMILY,
@@ -17,7 +18,7 @@ from homestay_bot.routes.admin_form_csrf import (
     issue_form_csrf,
 )
 from homestay_bot.routes.employee_auth import require_employee_session
-from homestay_bot.routes.page_errors import safe_return_path
+from homestay_bot.routes.page_errors import safe_return_path, wants_html
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.routes.tasks import BULK_TASK_CSRF_ENTITY
 from homestay_bot.services.customer_admin_service import (
@@ -197,8 +198,13 @@ async def _consume_csrf(
     )
 
 
-def _raise_page_error(error: Exception) -> None:
-    """把客户服务领域异常转换为稳定 HTTP 状态。"""
+def _raise_page_error(error: Exception, *, return_to: str | None = None) -> None:
+    """POST 业务拒绝交给页面处理器；GET 保留 HTTP 状态避免缺失档案回跳循环。"""
+    if return_to is not None and isinstance(error, OperationRefused):
+        error.return_to = (
+            "/employee/customers" if isinstance(error, CustomerNotFoundError) else return_to
+        )
+        raise error
     if isinstance(error, CustomerPermissionError):
         raise HTTPException(status_code=403, detail=str(error)) from error
     if isinstance(error, CustomerNotFoundError):
@@ -344,7 +350,7 @@ async def review_customer_merge(
             accepted=decision == "confirm",
         )
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(error, return_to=f"/employee/customers/merge/{suggestion_id}")
     return RedirectResponse(
         "/employee/customers",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -361,6 +367,19 @@ async def customer_detail(
     return_to: Annotated[str, Query(max_length=200)] = "",
 ) -> Response:
     """展示客户档案各页签；对话记录页签按 before_message_id 向前翻页。"""
+    return await _render_customer_detail(
+        request, customer_id, merge_query=merge_query, tab=tab or "overview",
+        before_message_id=before_message_id, return_to=return_to,
+    )
+
+
+async def _render_customer_detail(
+    request: Request, customer_id: int, *, merge_query: str | None = None,
+    tab: str = "overview", before_message_id: int | None = None, return_to: str = "",
+    summary_draft: dict[str, str] | None = None, error_message: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    """正常详情与摘要冲突共用最新数据、权限复核和新令牌，草稿只留在本次响应。"""
     administrator = await _current_admin(request)
     service = _get_service(request)
     try:
@@ -368,7 +387,7 @@ async def customer_detail(
         # 资料、标签、备注、AI 摘要、结构化记忆和合并区一次铺开，而日常入口和
         # 所有写操作都落在这个 URL 上，五个标签页形同虚设。旧 URL 仍可访问。
         detail = await service.get_detail(
-            CustomerDetailRequest(customer_id, tab or "overview", before_message_id),
+            CustomerDetailRequest(customer_id, tab, before_message_id),
             administrator,
         )
         merge_targets = (
@@ -386,10 +405,14 @@ async def customer_detail(
             else []
         )
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(error, return_to=(
+            await _customer_return_path(request, customer_id, tab)
+            if request.method == "POST" else None
+        ))
     return templates.TemplateResponse(
         request=request,
         name="customers/detail.html",
+        status_code=status_code,
         context={
             **detail,
             "merge_query": merge_query or "",
@@ -412,6 +435,8 @@ async def customer_detail(
             "notice": pop_page_notice(request) or None,
             "page_title": detail["customer"].display_name,
             "active_nav": "customers",
+            "summary_draft": summary_draft,
+            "error": error_message,
         },
     )
 
@@ -432,12 +457,12 @@ async def _customer_form_context(
     return administrator, _get_service(request)
 
 
-async def _customer_redirect(
+async def _customer_return_path(
     request: Request,
     customer_id: int,
     tab: str = "overview",
-) -> RedirectResponse:
-    """返回客户详情页对应标签页的统一 303 跳转。
+) -> str:
+    """成功与业务拒绝复用站内客户页签及来源，避免错误落到任务中心。
 
     写操作原先一律回到无 tab 的详情，保存完又是一整页长内容；连续审几条记忆
     时每次都要重新滚到记忆区。回跳带上标签页，人就留在刚才做事的地方。
@@ -452,7 +477,15 @@ async def _customer_redirect(
         target += "&" + urlencode(
             {"return_to": safe_return_path(source, fallback="/employee/customers")}
         )
-    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+    return target
+
+
+async def _customer_redirect(
+    request: Request, customer_id: int, tab: str = "overview",
+) -> RedirectResponse:
+    """完成操作后用统一地址返回原客户工作页。"""
+    return RedirectResponse(await _customer_return_path(request, customer_id, tab),
+                            status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/{customer_id}/merge/manual")
@@ -475,7 +508,9 @@ async def create_manual_customer_merge(
             administrator,
         )
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(
+            error, return_to=await _customer_return_path(request, customer_id, "governance")
+        )
     return RedirectResponse(
         f"/employee/customers/merge/{suggestion_id}",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -502,7 +537,7 @@ async def update_customer_tags(
             administrator,
         )
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(error, return_to=await _customer_return_path(request, customer_id))
     return await _customer_redirect(request, customer_id, "overview")
 
 
@@ -522,7 +557,7 @@ async def update_customer_note(
     try:
         await service.update_note(customer_id, note, administrator)
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(error, return_to=await _customer_return_path(request, customer_id))
     return await _customer_redirect(request, customer_id, "overview")
 
 
@@ -534,8 +569,8 @@ async def update_customer_summary(
     long_summary: str = Form("", max_length=4000),
     expected_version: int = Form(ge=0),
     csrf_token: str = Form(min_length=1, max_length=128),
-) -> RedirectResponse:
-    """按页面版本更正客户短期和长期摘要。"""
+) -> Response:
+    """按页面版本保存摘要；HTML 冲突保留原稿并展示最新版本供人工核对。"""
     administrator, service = await _customer_form_context(
         request,
         customer_id,
@@ -550,7 +585,18 @@ async def update_customer_summary(
             expected_version=expected_version,
         )
     except Exception as error:
-        _raise_page_error(error)
+        if isinstance(error, CustomerConflictError) and wants_html(request):
+            source = (await request.form()).get("return_to")
+            return await _render_customer_detail(
+                request, customer_id, tab="memory",
+                return_to=source if isinstance(source, str) else "",
+                summary_draft={"short_summary": short_summary, "long_summary": long_summary},
+                error_message=f"{error}。草稿尚未保存，请核对最新要点后再次保存。",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+        _raise_page_error(
+            error, return_to=await _customer_return_path(request, customer_id, "memory")
+        )
     return await _customer_redirect(request, customer_id, "memory")
 
 
@@ -581,7 +627,9 @@ async def refresh_customer_context(
         set_page_error(request, str(error))
         return await _customer_redirect(request, customer_id, "memory")
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(
+            error, return_to=await _customer_return_path(request, customer_id, "memory")
+        )
     # 入队已提交才提示；完成与否看下方「最近一次整理」的任务状态，不在这里冒充完成。
     set_page_notice(request, "已排队，完成后会更新接手要点；可稍后刷新查看任务状态。")
     return await _customer_redirect(request, customer_id, "memory")
@@ -602,7 +650,9 @@ async def delete_customer_summary(
     try:
         await service.delete_summary(customer_id, administrator)
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(
+            error, return_to=await _customer_return_path(request, customer_id, "memory")
+        )
     return await _customer_redirect(request, customer_id, "memory")
 
 
@@ -630,7 +680,9 @@ async def review_customer_memory(
             expected_version=expected_version,
         )
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(
+            error, return_to=await _customer_return_path(request, customer_id, "memory")
+        )
     return await _customer_redirect(request, customer_id, "memory")
 
 
@@ -644,7 +696,9 @@ async def clear_customer_test_data(
     try:
         await service.clear_test_data(customer_id, administrator)
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(
+            error, return_to=await _customer_return_path(request, customer_id, "service")
+        )
     return await _customer_redirect(request, customer_id, "service")
 
 
@@ -658,5 +712,7 @@ async def release_customer_conversation(
     try:
         await service.release_conversation(customer_id, conversation_id, administrator)
     except Exception as error:
-        _raise_page_error(error)
+        _raise_page_error(
+            error, return_to=await _customer_return_path(request, customer_id, "service")
+        )
     return await _customer_redirect(request, customer_id, "service")

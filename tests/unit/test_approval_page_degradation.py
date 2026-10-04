@@ -128,6 +128,93 @@ async def test_detail_allows_confirmation_when_all_reference_data_is_present() -
 
 
 @pytest.mark.asyncio
+async def test_reference_groups_keep_room_identity_and_unmatched_prices() -> None:
+    """同渠道撞号不猜房间，跨渠道同编号仍可区分，空房和未知币种明确展示。"""
+    from homestay_bot.integrations.hostex_client import ListingCalendarDay, Property
+
+    class Catalog(_Hostex):
+        async def list_properties(self):
+            """合成跨渠道同号、重复归属及无渠道房间。"""
+            return [Property(id=1, title="庭院", channels=[
+                {"channel_type": "booking_site", "listing_id": "same", "currency": "CNY"},
+                {"channel_type": "airbnb", "listing_id": "ambiguous"},
+            ]), Property(id=2, title="江景", channels=[
+                {"channel_type": "airbnb", "listing_id": "same", "currency": "USD"},
+                {"channel_type": "airbnb", "listing_id": "ambiguous"},
+            ]), Property(id=3, title="空房")]
+
+        async def list_reference_prices(self, start_date, end_date):
+            """每种身份各一行，包含不能归属的价格。"""
+            return [ListingCalendarDay(channel_type=channel, listing_id=listing,
+                date=start_date, price=price, inventory=1) for channel, listing, price in [
+                    ("booking_site", "same", 300), ("airbnb", "same", 100),
+                    ("airbnb", "ambiguous", 90), ("other", "missing", 80)]]
+
+    detail = await _service(Catalog(), _Approval(ApprovalStatus.PENDING)).get_detail(1)
+    groups = detail["reference_price_groups"]
+    assert [(g["title"], [r["price"] for r in g["prices"]]) for g in groups] == [
+        ("庭院", [300]), ("江景", [100]), ("空房", [])]
+    assert groups[1]["prices"][0]["currency_label"] == "USD"
+    assert [r["price"] for r in detail["unmatched_reference_prices"]] == [90, 80]
+    assert detail["can_confirm"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel,currency_label,currency_note,quote_allowed", [
+    ({"channel_type": "booking_site"}, "¥", "直订默认人民币", True),
+    ({"channel_type": "booking_site", "currency": None}, "¥", "直订默认人民币", True),
+    ({"channel_type": "booking_site", "currency": "CNY"}, "¥", None, True),
+    ({"channel_type": "booking_site", "currency": "USD"}, "USD", None, False),
+    ({"channel_type": "booking_site", "currency": ""}, "币种未确认", None, False),
+    ({"channel_type": "airbnb"}, "币种未确认", None, False),
+    ({"channel_type": "airbnb", "currency": None}, "币种未确认", None, False),
+    ({"channel_type": "airbnb", "currency": "CNY"}, "¥", None, True),
+    ({"channel_type": "airbnb", "currency": "USD"}, "USD", None, False),
+    ({"channel_type": "airbnb", "currency": ""}, "币种未确认", None, False),
+])
+async def test_reference_currency_policy_matches_guest_quote_and_approval_display(
+    channel, currency_label, currency_note, quote_allowed,
+) -> None:
+    """同一渠道资料经两个正式调用方，缺币种直订可报价且标注，未知 OTA 不冒充人民币。"""
+    from homestay_bot.integrations.deepseek_client import HostexReadOnlyToolExecutor
+    from homestay_bot.integrations.hostex_client import (
+        ListingCalendarDay,
+        Property,
+        PropertyAvailability,
+    )
+
+    class Catalog(_Hostex):
+        async def list_properties(self):
+            """保留字段缺失、null 与空字符串，走实际模型解析和页面投影。"""
+            return [Property(id=101, title="合成房间", channels=[
+                {"listing_id": "price", **channel},
+            ])]
+
+        async def list_reference_prices(self, start_date, end_date):
+            """只返回合成渠道夜价，不涉及真实上游。"""
+            return [ListingCalendarDay(channel_type=channel["channel_type"], listing_id="price",
+                date=start_date, price=399, inventory=1)]
+
+        async def list_availabilities(self, property_ids, start_date, end_date):
+            """完整一晚合成库存使报价能经过正式工具入口。"""
+            return [PropertyAvailability(property_id=101,
+                days=[{"date": start_date, "available": True}])]
+
+    hostex = Catalog()
+    detail = await _service(hostex, _Approval(ApprovalStatus.PENDING)).get_detail(1)
+    price = detail["reference_price_groups"][0]["prices"][0]
+    assert price["currency_label"] == currency_label
+    assert price.get("currency_note") == currency_note
+    executor = HostexReadOnlyToolExecutor(hostex, local_date_provider=lambda: date(2026, 9, 9))
+    rows = await executor.execute("search_reference_price", {
+        "check_in_date": "2026-09-10", "check_out_date": "2026-09-11",
+    })
+    assert [(row["property_id"], row["nightly_reference_prices"]) for row in rows] == (
+        [(101, [{"date": "2026-09-10", "price": 399.0}])] if quote_allowed else []
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [ApprovalStatus.BOOKED, ApprovalStatus.REJECTED])
 async def test_finished_approvals_do_not_touch_hostex_at_all(
     status: ApprovalStatus,

@@ -387,3 +387,54 @@ def test_warm_text_and_action_contrast_uses_actual_computed_surfaces(theme_site,
         assert writes == []
     finally:
         context.close()
+
+
+@pytest.mark.parametrize("theme", ["classic", "warm"])
+def test_visible_control_boundaries_and_focus_have_sufficient_contrast(theme_site, browser, theme):  # noqa: F811
+    """真实页面的空控件在普通、焦点和无效状态均能辨认，禁用状态保持不可操作。"""
+    context, page, writes = _context(browser, theme_site,
+        script=f"localStorage.setItem('yumi.admin.theme', '{theme}');")
+    try:
+        for path, selector in [
+            ("/employee/tasks", '.create-task input[type=date]'),
+            ("/employee/tasks", '#bulk-assign-employee'),
+            ("/employee/customers/1?tab=memory", '.memory-edit textarea[name=short_summary]'),
+        ]:
+            page.goto(theme_site[0] + path)
+            if "memory" in path:
+                page.locator('.memory-edit > summary').click()
+            elif "input" in selector:
+                page.locator('.create-task > summary').click()
+            control = page.locator(selector).first
+            assert control.is_visible()
+            for state in ("ordinary", "focus", "invalid"):
+                if state == "focus":
+                    control.focus()
+                elif state == "invalid":
+                    control.evaluate("node => node.setAttribute('aria-invalid', 'true')")
+                ratios = control.evaluate("""node => {
+                  const lum = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number)
+                    .map(x => x / 255).map(x => x <= .04045 ? x / 12.92 : ((x + .055)/1.055)**2.4)
+                    .reduce((sum, x, i) => sum + x * [.2126, .7152, .0722][i], 0);
+                  const contrast = (a, b) =>
+                    (Math.max(lum(a),lum(b))+.05)/(Math.min(lum(a),lum(b))+.05);
+                  let parent = node.parentElement;
+                  while (getComputedStyle(parent).backgroundColor === 'rgba(0, 0, 0, 0)')
+                    parent = parent.parentElement;
+                  const style = getComputedStyle(node);
+                  const outside = getComputedStyle(parent).backgroundColor;
+                  return { inside: contrast(style.borderTopColor, style.backgroundColor),
+                    outside: contrast(style.borderTopColor, outside),
+                    focus: node.matches(':focus-visible')
+                      ? contrast(style.outlineColor, outside) : null };
+                }""")
+                assert ratios["inside"] >= 3 and ratios["outside"] >= 3, (
+                    theme, selector, state, ratios
+                )
+                if state == "focus":
+                    assert ratios["focus"] is not None and ratios["focus"] >= 3
+            control.evaluate("node => { node.disabled = true; }")
+            assert control.is_disabled()
+        assert writes == []
+    finally:
+        context.close()

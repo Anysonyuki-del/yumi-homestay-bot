@@ -14,8 +14,10 @@ from homestay_bot.domain.enums import (
     CustomerMemoryStatus,
     EmployeeRole,
 )
+from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.routes.customers import router as customers_router
 from homestay_bot.routes.employee_auth import router as employee_auth_router
+from homestay_bot.routes.page_errors import handle_operation_refused
 from homestay_bot.services.customer_admin_service import (
     CustomerCard,
     CustomerDetailRequest,
@@ -306,6 +308,7 @@ def build_client(
     app.add_middleware(SessionMiddleware, secret_key="customer-test-secret")
     app.include_router(employee_auth_router)
     app.include_router(customers_router)
+    app.add_exception_handler(OperationRefused, handle_operation_refused)
     configure_admin_auth(app, role)
     customers = CustomerAdminStub()
     app.state.customer_admin_service = customers
@@ -335,6 +338,107 @@ def merge_csrf(client: TestClient, suggestion_id: int = 9) -> str:
         r'name="csrf_token" value="([^"]+)"',
         response.text,
     ).group(1)
+
+
+@pytest.mark.parametrize("endpoint,method,fields,tab", [
+    ("/7/merge/manual", "create_manual_merge", {"target_customer_id": 8}, "governance"),
+    ("/7/tags", "set_tags", {}, "overview"),
+    ("/7/note", "update_note", {}, "overview"),
+    ("/7/summary", "update_summary", {"expected_version": 4}, "memory"),
+    ("/7/context-refresh", "refresh_context", {}, "memory"),
+    ("/7/summary/delete", "delete_summary", {}, "memory"),
+    ("/7/memories/12/confirm", "review_memory", {"expected_version": 2}, "memory"),
+    ("/7/test-data/clear", "clear_test_data", {}, "service"),
+    ("/7/conversations/4/release", "release_conversation", {}, "service"),
+    ("/merge/9/confirm", "review_merge", {}, None),
+])
+def test_all_customer_posts_restore_html_refusals(endpoint, method,
+                                                 fields, tab, monkeypatch):
+    """所有写入口均交给正式处理器，回到当前工作页且提示只出现一次。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    login(client)
+    token = merge_csrf(client) if tab is None else detail_csrf(client)
+
+    async def refuse(*args, **kwargs):
+        """只注入领域拒绝，不替换路由、认证、令牌或生产处理器。"""
+        raise CustomerPermissionError("操作权限已变更，请联系管理员")
+
+    monkeypatch.setattr(service, method, refuse, raising=False)
+    source = "/employee/customers?query=test&page=2"
+    response = client.post("/employee/customers" + endpoint,
+        data={**fields, "csrf_token": token, "return_to": source},
+        headers={"Accept": "text/html"}, follow_redirects=False)
+    assert response.status_code == 303
+    target = response.headers["location"]
+    if tab is None:
+        assert target == "/employee/customers/merge/9"
+    else:
+        assert target.startswith(f"/employee/customers/7?tab={tab}&return_to=")
+    assert "操作权限已变更" in client.get(target).text
+    assert "操作权限已变更" not in client.get(target).text
+
+
+@pytest.mark.parametrize("error,status_code", [
+    (CustomerPermissionError, 403), (CustomerNotFoundError, 404), (CustomerConflictError, 409),
+])
+def test_customer_refusals_keep_json_and_safe_deleted_target(error, status_code, monkeypatch):
+    """JSON 状态不变；HTML 删除后不回到不存在档案，外部来源也不能跳出站点。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    login(client)
+
+    async def refuse(*args, **kwargs):
+        """模拟安全业务拒绝。"""
+        raise error("操作已被拒绝")
+
+    monkeypatch.setattr(service, "update_note", refuse)
+    for accept in ("application/json", "text/html"):
+        response = client.post("/employee/customers/7/note",
+            data={"csrf_token": detail_csrf(client), "return_to": "https://evil.example"},
+            headers={"Accept": accept}, follow_redirects=False)
+        if accept == "application/json":
+            assert response.status_code == status_code
+            assert response.json() == {"detail": "操作已被拒绝"}
+        else:
+            assert response.status_code == 303
+            assert "evil.example" not in response.headers["location"]
+            if status_code == 404:
+                assert response.headers["location"] == "/employee/customers"
+
+
+@pytest.mark.parametrize("error", [CustomerPermissionError, CustomerNotFoundError])
+def test_summary_recovery_does_not_render_draft_if_latest_read_is_refused(error, monkeypatch):
+    """冲突后若档案已删除或权限变更，只安全回跳，不把草稿或客户资料交给无权限主体。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    login(client)
+    token = detail_csrf(client)
+
+    async def conflict(*args, **kwargs):
+        """保存遇到版本冲突。"""
+        raise CustomerConflictError("要点已更新")
+
+    async def refuse(*args, **kwargs):
+        """模拟核对最新档案时再次拒绝。"""
+        raise error("无法读取档案")
+
+    monkeypatch.setattr(service, "update_summary", conflict)
+    monkeypatch.setattr(service, "get_detail", refuse)
+    response = client.post("/employee/customers/7/summary",
+        data={"csrf_token": token, "expected_version": 4, "short_summary": "SENSITIVE_DRAFT"},
+        headers={"Accept": "text/html"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert "SENSITIVE_DRAFT" not in response.text
+    assert "SENSITIVE_DRAFT" not in str(response.headers)
+    if error is CustomerNotFoundError:
+        assert response.headers["location"] == "/employee/customers"
+
+
+def test_customer_missing_get_keeps_404_without_a_redirect_loop():
+    """三个 GET 的不存在状态直接返回 HTTP 错误，避免重定向回同一缺失资源。"""
+    client, _ = build_client(EmployeeRole.ADMIN)
+    login(client)
+    for path in ("/employee/customers/999", "/employee/customers/merge/999"):
+        response = client.get(path, headers={"Accept": "text/html"}, follow_redirects=False)
+        assert response.status_code == 404 and "location" not in response.headers
 
 
 def test_staff_cannot_open_customer_crm() -> None:

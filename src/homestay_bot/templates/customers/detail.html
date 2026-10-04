@@ -97,8 +97,12 @@
   {% if long_text not in placeholder_summaries %}<h3>更早的历史</h3><p class="long-text">{{ long_text }}</p>{% endif %}
   {% if summary and summary.unresolved_items %}<p class="field-help">历史待确认项：{{ summary.unresolved_items|join("；") }}</p>{% endif %}
   <p class="field-help">由 AI 根据最近七天的对话整理，只写客人的诉求、没解决的事和需要注意的情况；完整对话见「对话记录」。</p>
-  <details class="memory-edit"><summary>修改要点</summary>
-    <form method="post" action="/employee/customers/{{ customer.id }}/summary" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="expected_version" value="{{ summary.version if summary else 0 }}"><label>接手要点（最近七天）<textarea name="short_summary" maxlength="4000">{{ summary.short_summary if summary else "" }}</textarea></label><label>更早的历史<textarea name="long_summary" maxlength="4000">{{ summary.long_summary if summary else "" }}</textarea></label><button type="submit">保存要点</button></form>
+  {# 冲突时正文保持数据库最新内容，编辑区只回填本次草稿；核对后才允许再次保存。
+     textarea 前置一个换行供 HTML 解析器丢弃，保护草稿自身的首个换行。 #}
+  <details class="memory-edit"{% if summary_draft %} open{% endif %}><summary>修改要点</summary>
+    <form method="post" action="/employee/customers/{{ customer.id }}/summary" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="expected_version" value="{{ summary.version if summary else 0 }}"><label>接手要点（最近七天）<textarea name="short_summary" maxlength="4000">
+{{ summary_draft.short_summary if summary_draft else (summary.short_summary if summary else "") }}</textarea></label><label>更早的历史<textarea name="long_summary" maxlength="4000">
+{{ summary_draft.long_summary if summary_draft else (summary.long_summary if summary else "") }}</textarea></label><button type="submit">保存要点</button></form>
   </details>
   <div class="button-row">
     {# 手动重算走后台队列，因此文案只能说「已排队」，不能说成已完成：模型调用要几十秒。 #}

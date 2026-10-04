@@ -224,7 +224,7 @@ async def test_list_room_types_parses_linked_properties() -> None:
 
 @pytest.mark.asyncio
 async def test_reference_prices_prefer_booking_site_channel() -> None:
-    """存在直订网站渠道时，参考价不应混入 OTA 渠道价。"""
+    """逐房优先直订；另一房无直订时仍请求它的回退渠道。"""
     requests: list[httpx.Request] = []
 
     def responder(request: httpx.Request) -> httpx.Response:
@@ -237,7 +237,7 @@ async def test_reference_prices_prefer_booking_site_channel() -> None:
                     "error_code": 0,
                     "error_msg": "",
                     "data": {
-                        "total": 1,
+                        "total": 2,
                         "properties": [
                             {
                                 "id": 101,
@@ -252,7 +252,11 @@ async def test_reference_prices_prefer_booking_site_channel() -> None:
                                         "listing_id": "direct-101",
                                     },
                                 ],
-                            }
+                            },
+                            {"id": 201, "title": "201", "channels": [
+                                {"channel_type": "airbnb", "listing_id": "airbnb-201",
+                                 "currency": "CNY"}
+                            ]},
                         ],
                     },
                 },
@@ -288,7 +292,8 @@ async def test_reference_prices_prefer_booking_site_channel() -> None:
     assert prices[0].price == 399
     assert prices[0].restrictions == {}
     assert requests[1].content.count(b"booking_site") == 1
-    assert b"airbnb" not in requests[1].content
+    assert b"airbnb-101" not in requests[1].content
+    assert b"airbnb-201" in requests[1].content
 
 
 @pytest.mark.asyncio

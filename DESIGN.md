@@ -7,6 +7,7 @@ colors:
   classic-primary-hover: "#1d4ed8"
   classic-canvas: "#f4f6fa"
   classic-surface: "#ffffff"
+  classic-control-line: "#64748b"
   classic-ink: "#1e293b"
   warm-primary: "#cc785c"
   warm-primary-hover: "#a9583e"
@@ -86,6 +87,8 @@ components:
 珊瑚配深墨按钮字；深陶土悬停配奶油字。小字链接用正文色，保留清楚的链接提示；焦点用深陶土。危险动作保留红色描边和明确文案，信息徽标采用独立灰蓝，不和珊瑚动作混用。
 
 warning/success 使用加深的文字色，soft 底保留暖浅黄/暖浅绿；状态映射来自真实组件。普通正文至少 4.5:1，大字和必要边界/焦点至少 3:1。装饰 hairline 不承担必要控件边界。
+
+可见 input（原生 checkbox/radio 除外）、select 与 textarea 使用专用 `--control-border`：经典 `classic-control-line`，暖色 `warm-control-line`。卡片、表格、日历和按钮保留各自边界角色；不通过加深全局装饰线改善控件识别。
 
 ## Typography
 

@@ -13,7 +13,7 @@ from homestay_bot.domain.enums import ApprovalStatus
 from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import AuditLog, BookingApproval
 from homestay_bot.domain.schemas import ConfirmBookingCommand
-from homestay_bot.integrations.hostex_client import ReservationQuery
+from homestay_bot.integrations.hostex_client import ReservationQuery, reference_price_currency
 from homestay_bot.services.approval_sensitive_data import ApprovalSensitiveData
 from homestay_bot.services.booking_service import BookingService
 
@@ -171,6 +171,37 @@ class ApprovalPageService:
             unavailable.append(label)
             return []
 
+    @staticmethod
+    def _price_groups(
+        properties: list[Any], prices: list[Any],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """按完整渠道身份归属并统一币种；直订默认来源明确标注，未知房间单列核对。"""
+        groups = {item["id"]: {"id": item["id"], "title": item["title"], "prices": []}
+                  for item in properties}
+        owners: dict[tuple[str, str], set[int]] = {}
+        currencies: dict[tuple[str, str], tuple[str, str | None]] = {}
+        for item in properties:
+            for channel in item.get("channels", []):
+                key = (channel["channel_type"], channel["listing_id"])
+                owners.setdefault(key, set()).add(item["id"])
+                raw_currency = channel.get("currency")
+                currency = reference_price_currency(channel["channel_type"], raw_currency)
+                currencies[key] = (
+                    "¥" if currency == "CNY" else currency or "币种未确认",
+                    "直订默认人民币" if currency == "CNY" and raw_currency is None else None,
+                )
+        unmatched = []
+        for row in prices:
+            key = (row["channel_type"], row["listing_id"])
+            room_ids = owners.get(key, set())
+            currency_label, currency_note = currencies.get(key, ("币种未确认", None))
+            display_row = {**row, "currency_label": currency_label, "currency_note": currency_note}
+            if len(room_ids) == 1:
+                groups[next(iter(room_ids))]["prices"].append(display_row)
+            else:
+                unmatched.append(display_row)
+        return list(groups.values()), unmatched
+
     async def get_detail(self, approval_id: int) -> dict[str, Any]:
         """读取审批单，并按需取小规模参考数据；上游失败时逐项降级。"""
         approval = await self._session.get(BookingApproval, approval_id)
@@ -203,6 +234,7 @@ class ApprovalPageService:
         else:
             properties, prices, income_methods = [], [], []
         sensitive = self._sensitive_data.read(approval)
+        groups, unmatched = self._price_groups(properties, prices)
         return {
             # 下单依赖实时房态与价格：缺任何一项都不许确认，绝不拿旧数据兜底。
             "can_confirm": needs_reference and not unavailable,
@@ -222,6 +254,8 @@ class ApprovalPageService:
             ),
             "properties": properties,
             "reference_prices": prices,
+            "reference_price_groups": groups,
+            "unmatched_reference_prices": unmatched,
             "income_methods": income_methods,
         }
 

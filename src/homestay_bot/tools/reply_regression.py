@@ -331,7 +331,7 @@ class FakeHostexClient:
         return [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
 
     async def list_properties(self) -> list[Any]:
-        """房源及其直订渠道。"""
+        """房源及合成渠道；场景中的参考价均为人民币，显式声明以走正式币种校验。"""
         from homestay_bot.integrations.hostex_client import Channel, Property
 
         listing_ids = self._data.get("listing_ids") or {}
@@ -342,7 +342,8 @@ class FakeHostexClient:
                 title=item["title"],
                 address=item.get("address"),
                 channels=[
-                    Channel(channel_type=channel_type, listing_id=listing_ids[str(item["id"])])
+                    Channel(channel_type=channel_type, listing_id=listing_ids[str(item["id"])],
+                            currency="CNY")
                 ]
                 if str(item["id"]) in listing_ids
                 else [],

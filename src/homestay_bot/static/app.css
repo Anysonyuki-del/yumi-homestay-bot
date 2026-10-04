@@ -19,6 +19,8 @@
      强线+22 逐级递进，顺带消掉徽标里重复写死的同值。 */
   --line: #e2e8f0;
   --line-strong: #cbd5e1;
+  /* 控件识别边界单独达到 3:1，不加深卡片和日历的装饰分隔线。 */
+  --control-border: #64748b;
   --line-soft: #94a3b8;
   --success: #15803d;
   --success-soft: #f0fdf4;
@@ -66,6 +68,7 @@ html { scroll-behavior: smooth; }
 body { min-height: 100vh; margin: 0; background: var(--page); font-size: 14px; line-height: 1.55; }
 a { color: var(--link); text-underline-offset: 3px; }
 button, input, select, textarea { max-width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); color: var(--text); background: var(--surface); font: inherit; font-size: 16px; }
+input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, textarea { border-color: var(--control-border); }
 button, .button { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: rgb(37 99 235 / 16%); }
 button:disabled, input:disabled { cursor: not-allowed; opacity: .68; }
 button.is-submitting { cursor: wait; }
@@ -237,10 +240,15 @@ tbody tr:hover { background: var(--surface-sunk); }
 .data-table td:last-child, .data-table th:last-child { text-align: right; white-space: nowrap; }
 .table-action { font-weight: 600; text-decoration: none; }
 .mobile-card-list { display: grid; }
-.mobile-record-card { display: grid; gap: 5px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); color: inherit; background: var(--surface); text-decoration: none; }
+.mobile-record-card { display: grid; gap: 5px; min-width: 0; overflow-wrap: anywhere; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); color: inherit; background: var(--surface); text-decoration: none; }
 .mobile-record-card span, .mobile-record-card small { color: var(--muted); }
 .price-list { display: grid; gap: 8px; padding: 0; list-style: none; }
 .price-list li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+/* 手机将渠道资料与金额分行，长编号不能把币种和数字挤成竖排。 */
+@media (max-width: 520px) {
+  .price-list li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .price-list li strong { justify-self: start; }
+}
 .confirmation-check { grid-template-columns: auto 1fr; align-items: center; padding: 14px; border: 1px solid #f59e0b; border-radius: var(--r-sm); background: var(--warning-soft); }
 .confirmation-check small { display: block; color: var(--muted); }
 .message-item p { margin-bottom: 0; white-space: pre-wrap; }
@@ -783,6 +791,7 @@ span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
   --muted: #3d3d3a;
   --line: #e6dfd8;
   --line-strong: #8d8172;
+  --control-border: #8d8172;
   --line-soft: #766959;
   --success: #166534;
   --success-soft: #edf3e8;

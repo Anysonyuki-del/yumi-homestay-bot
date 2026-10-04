@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from homestay_bot.domain.enums import BusinessTaskType, Language
 from homestay_bot.integrations.deepseek_delivery_rewriter import DeepSeekDeliveryRewriter
+from homestay_bot.integrations.hostex_client import reference_price_currency
 from homestay_bot.integrations.tourism import (
     TourismSearchError,
     classify_tourism_query,
@@ -565,24 +566,38 @@ class HostexReadOnlyToolExecutor:
 
         百居易参考价只按渠道房源编号返回（ListingCalendarDay 没有房间），以前原样交给
         模型，模型对不上是哪间房。这里用房源资料里的渠道对照表换算；对应不上房间的
-        价格行丢弃。同一间房有多个渠道时取第一个渠道的价格（客户端已优先直订渠道）。
+        价格行丢弃。同一间房固定一个完整渠道身份，不拼接多个渠道的夜价。
+        与审批页共用币种规则；新增回退渠道必须明确为 CNY，直订缺币种沿用历史约定。
         """
-        owners = {
-            channel.listing_id: item
-            for item in properties
-            for channel in getattr(item, "channels", []) or []
-        }
+        owners: dict[tuple[str, str], Any] = {}
+        ambiguous: set[tuple[str, str]] = set()
+        yuan_channels: set[tuple[str, str]] = set()
+        for item in properties:
+            for channel in getattr(item, "channels", []) or []:
+                key = (channel.channel_type, channel.listing_id)
+                if key in owners and owners[key].id != item.id:
+                    ambiguous.add(key)
+                owners[key] = item
+                currency = reference_price_currency(
+                    channel.channel_type, getattr(channel, "currency", None)
+                )
+                if currency == "CNY":
+                    yuan_channels.add(key)
         stay_dates = set(_stay_nights(check_in_date, check_out_date))
         nightly: dict[int, dict[date, float]] = {}
-        channel_of: dict[int, str] = {}
+        channel_of: dict[int, tuple[str, str]] = {}
         for row in await self._hostex.list_reference_prices(
             check_in_date.isoformat(),
             check_out_date.isoformat(),
         ):
-            owner = owners.get(row.listing_id)
-            if owner is None or row.date not in stay_dates:
+            key = (row.channel_type, row.listing_id)
+            owner = owners.get(key)
+            if (
+                owner is None or key in ambiguous or key not in yuan_channels
+                or row.date not in stay_dates
+            ):
                 continue
-            if channel_of.setdefault(owner.id, row.listing_id) != row.listing_id:
+            if channel_of.setdefault(owner.id, key) != key:
                 continue
             nightly.setdefault(owner.id, {})[row.date] = float(row.price)
         available = {item["property_id"]: item["stay_available"] for item in availability}

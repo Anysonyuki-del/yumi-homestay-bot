@@ -57,8 +57,8 @@ def raise_page_error(
     ) from error
 
 
-def _wants_html(request: Request) -> bool:
-    """只接受明确且权重非零的 HTML 类型，通配符仍沿用接口响应。"""
+def wants_html(request: Request) -> bool:
+    """供路由与异常处理器共享 HTML 判断；仅接受明确且权重非零的类型。"""
     for entry in request.headers.get("accept", "").split(","):
         media_type, *parameters = entry.strip().lower().split(";")
         if media_type.strip() != "text/html":
@@ -84,7 +84,7 @@ async def handle_http_exception(request: Request, exc: Exception) -> Response:
         and request.method == "GET"
         and request.url.path.startswith("/employee/")
         and request.url.path != "/employee/health"
-        and _wants_html(request)
+        and wants_html(request)
     ):
         return templates.TemplateResponse(
             request=request,
@@ -135,7 +135,7 @@ async def handle_operation_refused(
     """
     message = str(exc)
     status_code = getattr(exc, "status_code", status.HTTP_409_CONFLICT)
-    if not _wants_html(request):
+    if not wants_html(request):
         return JSONResponse({"detail": message}, status_code=status_code)
     set_page_error(request, message)
     return RedirectResponse(

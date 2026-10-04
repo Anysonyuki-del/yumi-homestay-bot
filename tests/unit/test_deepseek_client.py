@@ -3111,6 +3111,45 @@ def test_price_questions_open_the_price_tool_in_chinese_and_english() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reference_prices_use_channel_identity_without_mixing_or_foreign_currency():
+    """回退渠道不撞房、不拼接另一渠道的夜价，未知币种和外币不能冒充人民币。"""
+    from homestay_bot.integrations.hostex_client import ListingCalendarDay, Property
+
+    class Catalog(_PricedHostexStub):
+        async def list_properties(self):
+            """同编号分属不同渠道，另含无法确定归属的记录。"""
+            return [Property(id=101, title="庭院", channels=[
+                {"channel_type": "booking_site", "listing_id": "same"},
+                {"channel_type": "airbnb", "listing_id": "second", "currency": "CNY"},
+                {"channel_type": "airbnb", "listing_id": "ambiguous", "currency": "CNY"},
+            ]), Property(id=201, title="江景", channels=[
+                {"channel_type": "airbnb", "listing_id": "same", "currency": "CNY"},
+                {"channel_type": "airbnb", "listing_id": "ambiguous", "currency": "CNY"},
+            ]), Property(id=301, title="外币", channels=[
+                {"channel_type": "airbnb", "listing_id": "usd", "currency": "USD"}]),
+                Property(id=401, title="未知", channels=[
+                {"channel_type": "airbnb", "listing_id": "unknown"}])]
+
+        async def list_reference_prices(self, start_date, end_date):
+            """刻意让回退渠道先返回；同房第二渠道不能补入另一晚。"""
+            return [ListingCalendarDay(channel_type=c, listing_id=i, date=d, price=p,
+                inventory=1) for c, i, d, p in [
+                ("airbnb", "same", start_date, 500),
+                ("booking_site", "same", start_date, 300),
+                ("airbnb", "second", "2026-09-27", 999),
+                ("airbnb", "ambiguous", start_date, 99),
+                ("airbnb", "usd", start_date, 80),
+                ("airbnb", "unknown", start_date, 70)]]
+
+    executor = HostexReadOnlyToolExecutor(Catalog(), local_date_provider=lambda: date(2026, 9, 25))
+    rows = await executor.execute("search_reference_price", {
+        "check_in_date": "2026-09-26", "check_out_date": "2026-09-28"})
+    assert [(r["property_id"], r["nightly_reference_prices"]) for r in rows] == [
+        (101, [{"date": "2026-09-26", "price": 300.0}]),
+        (201, [{"date": "2026-09-26", "price": 500.0}])]
+
+
+@pytest.mark.asyncio
 async def test_a_dated_price_question_forces_the_price_tool() -> None:
     """带日期问价必须先查参考价，不能让模型跳过工具。"""
     client = ChatClientStub([json.dumps(decision_payload(), ensure_ascii=False)])

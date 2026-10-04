@@ -51,6 +51,17 @@ class Channel(HostexModel):
     currency: str | None = None
 
 
+def reference_price_currency(channel_type: str, currency: str | None) -> str | None:
+    """统一参考价币种：仅缺币种的直订沿用人民币兼容约定，显式币种优先。
+
+    默认人民币是历史报价政策，不是上游币种证据；空字符串或未知 OTA 不适用。
+    审批页和客人侧共用此规则，避免一处报人民币、另一处显示币种未确认。
+    """
+    if currency is None:
+        return "CNY" if channel_type == "booking_site" else None
+    return currency or None
+
+
 class Property(HostexModel):
     """表示百居易中的一间物理房间。"""
 
@@ -359,13 +370,15 @@ class HostexClient:
         start_date: date | str,
         end_date: date | str,
     ) -> list[ListingCalendarDay]:
-        """优先读取直订网站渠道价格，并明确仅作为参考价。"""
+        """每间房优先读取直订渠道；该房没有直订时保留其它渠道的参考价。"""
         properties = await self.list_properties()
-        channels = [channel for item in properties for channel in item.channels]
-        booking_site_channels = [
-            channel for channel in channels if channel.channel_type == "booking_site"
-        ]
-        selected_channels = booking_site_channels or channels
+        # 优先级属于单间房：其它房间有直订渠道不能让本房静默漏价。
+        selected_channels = []
+        for item in properties:
+            direct = [
+                channel for channel in item.channels if channel.channel_type == "booking_site"
+            ]
+            selected_channels.extend(direct or item.channels)
         if not selected_channels:
             return []
 

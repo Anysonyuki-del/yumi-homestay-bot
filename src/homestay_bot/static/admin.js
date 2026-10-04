@@ -346,6 +346,10 @@ selectionForms.forEach((form) => {
   const actions = Array.from(form.querySelectorAll("button[data-requires]"));
   const labels = new Map(actions.map((button) => [button, button.textContent.trim()]));
   const verbs = { assign: "分派", cancel: "取消", archive: "归档", purge: "永久删除" };
+  const employee = form.querySelector('select[name="assigned_employee_id"]');
+  const employeePrompt = "请先选择要分派给哪位员工";
+  // 只在分派被拒后提示缺员工；资格错误优先，补选员工或清空任务后移除旧提示。
+  let missingEmployee = false;
   form.querySelectorAll("[data-selection-enhanced]").forEach((element) => {
     element.hidden = false;
   });
@@ -385,7 +389,8 @@ selectionForms.forEach((form) => {
       button.textContent = labels.get(button) + (count ? `（${eligible === count ? count : `${eligible}/${count}`}）` : "");
       const hint = form.querySelector(`[data-bulk-hint="${action}"]`);
       const keep = form.querySelector(`[data-keep-eligible="${action}"]`);
-      if (hint) hint.textContent = !button.disabled ? "" : eligible
+      if (hint) hint.textContent = !button.disabled
+        ? (action === "assign" && missingEmployee && count && !employee?.value ? employeePrompt : "") : eligible
         ? `已选 ${count} 条，其中 ${count - eligible} 条不能${verbs[action]}`
         : `已选的任务都不能${verbs[action]}`;
       if (keep) {
@@ -418,6 +423,10 @@ selectionForms.forEach((form) => {
   });
   form.addEventListener("change", (event) => {
     if (event.target instanceof HTMLInputElement && event.target.name === "task_ids") refresh();
+    if (event.target === employee) {
+      if (employee.value) missingEmployee = false;
+      refresh();
+    }
   });
   /** 捕获点击和提交两条入口，先挡住无效批次，再进入确认、手输与忙态。 */
   const guard = (event, submitter) => {
@@ -429,7 +438,17 @@ selectionForms.forEach((form) => {
     }
     const count = selectedTaskIds(form).size;
     const action = submitter?.dataset.requires || form.dataset.defaultAction;
-    if (count > 0 && (!enhanced || eligibleIds(action).size === count)) return;
+    if (count > 0 && (!enhanced || eligibleIds(action).size === count)) {
+      // 捕获阶段先检查目标，避免以「选择员工…」弹出确认并在回跳时丢掉勾选。
+      if (enhanced && action === "assign" && employee && !employee.value) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        missingEmployee = true;
+        refresh();
+        employee.focus();
+      }
+      return;
+    }
     // 未标记的旧表单保留原手输空选择提示。
     if (!enhanced && submitter?.hasAttribute("data-typed-confirm")) return;
     event.preventDefault();
