@@ -14,7 +14,10 @@
   <div class="section-heading"><div><p class="eyebrow">{{ snapshot.local_date | date_zh }}</p><h2 id="workbench-first">先处理 · {{ attention_rooms | length }} 间</h2></div><a class="button button--secondary" href="/employee/admin/operations">查看全部房间</a></div>
   <ul class="clean-list first-list">
     {% for room in attention_rooms %}<li>
-      <a class="first-list__room" href="/employee/properties/{{ room.property_id }}"><strong>{{ room.room_number or room.room_title }}</strong><span>{{ room.room_title }}</span></a>
+      {# 房间身份只显示一次（Hallmark H04）：房号缺失（空、仅空白）或与房名相同时只显示房名；
+         不在这里提示「房号待补充」，这个数据质量提示由入住安排页和房源页负责，避免重点区每行都多一句。 #}
+      {% set room_no = (room.room_number or "") | trim %}
+      <a class="first-list__room" href="/employee/properties/{{ room.property_id }}">{% if room_no and room_no != room.room_title | trim %}<strong>{{ room_no }}</strong><span>{{ room.room_title }}</span>{% else %}<strong>{{ room.room_title }}</strong>{% endif %}</a>
       <span class="first-list__why{% if room.overdue_task_count %} first-list__why--urgent{% endif %}">{{ room.next_action }}</span>
       {% if room.next_action_url %}<a class="button button--secondary" href="{{ room.next_action_url }}">{{ room.next_action_label }}</a>{% else %}<span class="muted">暂无可直接进入的入口</span>{% endif %}
     </li>{% endfor %}

@@ -4,14 +4,18 @@ import json
 import socket
 import threading
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 import uvicorn
+from sqlalchemy import create_engine as create_sync_engine
+from sqlalchemy.orm import Session
 from starlette.staticfiles import StaticFiles
 from test_admin_batch_workbench import admin_client  # noqa: F401
 from test_admin_interactions import browser, playwright_runtime  # noqa: F401
 
+from homestay_bot.domain.models import PropertyProfile, StayOrder
 from homestay_bot.web import templates
 
 STATIC_ROOT = Path(__file__).resolve().parents[2] / "src/homestay_bot/static"
@@ -47,11 +51,16 @@ def theme_site(admin_client):  # noqa: F811
             assert not worker.is_alive(), "临时服务必须释放线程和监听端口"
 
 
-def _context(instance, site, *, width=1280, script="", java_script_enabled=True):
-    """隔离浏览器偏好，只允许本地读请求，记录并阻断任何写请求。"""
+def _context(instance, site, *, width=1280, script="", java_script_enabled=True,
+             has_touch=False):
+    """隔离浏览器偏好，只允许本地读请求，记录并阻断任何写请求。
+
+    has_touch 让 Chromium 报告 any-pointer: coarse，用于区分触屏与纯鼠标环境。
+    """
     origin, cookies = site
     context = instance.new_context(
         viewport={"width": width, "height": 840}, java_script_enabled=java_script_enabled,
+        has_touch=has_touch,
     )
     context.add_cookies(cookies)
     if script:
@@ -435,6 +444,247 @@ def test_visible_control_boundaries_and_focus_have_sufficient_contrast(theme_sit
                     assert ratios["focus"] is not None and ratios["focus"] >= 3
             control.evaluate("node => { node.disabled = true; }")
             assert control.is_disabled()
+        assert writes == []
+    finally:
+        context.close()
+
+
+# —— Hallmark 审查回归（docs/specs/2026-10-04_hallmark-frontend-polish-spec.md R2）——
+
+# 统计元素文本实际占用的行数：按文本 Range 的行片段顶边去重，不依赖样式源码。
+_LINE_COUNT = """node => {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const tops = [...range.getClientRects()].filter(rect => rect.width > 0)
+    .map(rect => Math.round(rect.top));
+  return new Set(tops).size;
+}"""
+
+# 触控目标下限 44px；布局取整会出现 43.99998 这类亚像素值，留 0.5px 浮点容差。
+_MIN_TARGET = 44 - 0.5
+
+# 冻结页面内经过时间：倒计时停在服务器观察时刻，避免测量期间越过退房节点触发自动刷新。
+_FREEZE_ELAPSED = "Object.defineProperty(performance, 'now', { value: () => 0 });"
+
+
+def _seed_rooms(tmp_path, rooms):
+    """向本测试独立的 SQLite 追加合成房间；今日退房让房间进入工作台「先处理」。"""
+    engine = create_sync_engine(f"sqlite:///{tmp_path / 'admin.db'}")
+    today = date(2026, 10, 2)
+    try:
+        with Session(engine) as session:
+            for property_id, title, room_number in rooms:
+                session.add(PropertyProfile(
+                    id=property_id, title=title, room_number=room_number, is_active=True,
+                ))
+                session.add(StayOrder(
+                    hostex_reservation_code=f"synthetic-{property_id}",
+                    stay_code=f"synthetic-{property_id}", property_id=property_id,
+                    customer_id=1, status="confirmed",
+                    check_in_date=today - timedelta(days=1), check_out_date=today,
+                ))
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("theme", ["classic", "warm"])
+def test_hallmark_heading_actions_keep_full_labels(theme_site, browser, theme):  # noqa: F811
+    """H01：窄屏入口位于标题下方并左对齐，标签始终单行且不覆盖文字。"""
+    context, page, writes = _context(
+        browser, theme_site, script=f"localStorage.setItem('yumi.admin.theme', '{theme}');",
+    )
+    try:
+        cases = [
+            ("/employee/admin", ".workbench-first > .section-heading",
+             "/employee/admin/operations"),
+            ("/employee/admin/operations", ".operations-heading > .section-heading",
+             "/employee/admin/attention"),
+        ]
+        for path, heading, href in cases:
+            page.goto(theme_site[0] + path)
+            for width in (320, 375, 414, 480, 520, 521, 768, 1280):
+                page.set_viewport_size({"width": width, "height": 840})
+                button = page.locator(f"{heading} > .button")
+                assert button.get_attribute("href") == href
+                assert button.evaluate(_LINE_COUNT) == 1, (theme, path, width)
+                box = button.bounding_box()
+                text = page.locator(f"{heading} > :first-child").bounding_box()
+                overlaps = (
+                    box["x"] < text["x"] + text["width"] and text["x"] < box["x"] + box["width"]
+                    and box["y"] < text["y"] + text["height"]
+                    and text["y"] < box["y"] + box["height"]
+                )
+                assert not overlaps, (theme, path, width, box, text)
+                if width <= 520:
+                    assert box["y"] >= text["y"] + text["height"] - .5, (
+                        theme, path, width, box, text,
+                    )
+                    assert abs(box["x"] - text["x"]) <= .5, (theme, path, width)
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+                ), (theme, path, width)
+        assert writes == []
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("theme", ["classic", "warm"])
+def test_dashboard_metric_content_does_not_overlap(theme_site, browser, theme):  # noqa: F811
+    """真实指标的标签、数值、说明和入口不重叠，双主题及分栏边界都可完整阅读。"""
+    context, page, writes = _context(
+        browser, theme_site, script=f"localStorage.setItem('yumi.admin.theme', '{theme}');",
+    )
+    try:
+        page.goto(theme_site[0] + "/employee/admin")
+        metric = page.locator(".metric-item").first
+        assert metric.locator("small").inner_text() == "客人、客诉和待确认事项"
+        assert metric.locator("a").get_attribute("href") == "/employee/admin/attention"
+        for width in (320, 375, 414, 480, 520, 521, 768, 1280):
+            page.set_viewport_size({"width": width, "height": 840})
+            results = page.locator(".metric-item").evaluate_all("""nodes => nodes.map(node => {
+              const outer = node.getBoundingClientRect();
+              const boxes = [...node.children].map(child => child.getBoundingClientRect());
+              const inside = boxes.every(r => r.left >= outer.left - .5
+                && r.right <= outer.right + .5 && r.top >= outer.top - .5
+                && r.bottom <= outer.bottom + .5);
+              const overlaps = boxes.some((a, i) => boxes.slice(i + 1).some(b =>
+                Math.min(a.right, b.right) - Math.max(a.left, b.left) > .5
+                && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > .5));
+              return {inside, overlaps};
+            })""")
+            assert results and all(
+                result == {"inside": True, "overlaps": False} for result in results
+            ), (theme, width, results)
+            assert page.evaluate(
+                "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+            ), (theme, width)
+        assert writes == []
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("theme", ["classic", "warm"])
+def test_hallmark_event_duration_fits_available_width(theme_site, browser, tmp_path, theme):  # noqa: F811
+    """H02：最长时长在真实事件块内保持单行，不留孤字，也不压住姓名和计划时间。"""
+    _seed_rooms(tmp_path, [(301, "合成长名房间", "301")])
+    context, page, writes = _context(
+        browser, theme_site,
+        script=f"localStorage.setItem('yumi.admin.theme', '{theme}');" + _FREEZE_ELAPSED,
+    )
+    try:
+        page.goto(theme_site[0] + "/employee/admin/operations")
+        assert page.locator(".room-event .countdown strong").count() >= 2
+        samples = ("不足 1 分钟", "59 分钟", "1 小时 27 分钟", "23 小时 59 分钟", "2 天 23 小时")
+        for width in (320, 375, 414, 768, 1280):
+            page.set_viewport_size({"width": width, "height": 840})
+            for sample in samples:
+                results = page.locator(".room-event").evaluate_all("""(events, sample) =>
+                  events.filter(event => event.querySelector('.countdown strong')).map(event => {
+                    const strong = event.querySelector('.countdown strong');
+                    strong.textContent = sample;
+                    const range = document.createRange();
+                    range.selectNodeContents(strong);
+                    const lines = new Set([...range.getClientRects()]
+                      .filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size;
+                    const box = rect => rect.getBoundingClientRect();
+                    const own = box(strong), area = box(event);
+                    const hit = other => {
+                      const r = box(other);
+                      return own.left < r.right && r.left < own.right
+                        && own.top < r.bottom && r.top < own.bottom;
+                    };
+                    return {
+                      lines,
+                      inside: own.left >= area.left - .5 && own.right <= area.right + .5,
+                      overlap: [...event.querySelectorAll('.room-event__guest, .room-event__abs')]
+                        .some(hit),
+                    };
+                  })""", sample)
+                assert results, (theme, width)
+                for result in results:
+                    assert result == {"lines": 1, "inside": True, "overlap": False}, (
+                        theme, width, sample, result,
+                    )
+            assert page.evaluate(
+                "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+            ), (theme, width)
+        assert writes == []
+    finally:
+        context.close()
+
+
+def test_hallmark_touch_navigation_targets_remain_reachable(theme_site, browser):  # noqa: F811
+    """H03：触屏下导航、页签与账号入口至少 44×44；纯鼠标桌面保持原有紧凑密度。"""
+    for width in (390, 768):
+        context, page, writes = _context(browser, theme_site, width=width, has_touch=True)
+        try:
+            page.goto(theme_site[0] + "/employee/admin")
+            assert page.evaluate("matchMedia('(any-pointer: coarse)').matches")
+            account = page.locator(".topbar__account").bounding_box()
+            assert account["height"] >= _MIN_TARGET and account["width"] >= _MIN_TARGET, (
+                width, account)
+            tabs = page.locator(".tab-nav a:visible").evaluate_all(
+                "nodes => nodes.map(node => node.getBoundingClientRect().height)")
+            assert tabs and min(tabs) >= _MIN_TARGET, (width, tabs)
+            opener = page.locator("[data-drawer-open]")
+            opener.click()
+            # 抽屉有滑入过渡；等它完全进入视口再测量，否则会量到动画中途的位置。
+            page.wait_for_function(
+                "document.querySelector('[data-drawer]').getBoundingClientRect().left >= 0")
+            heights = page.locator(".side-nav a, .sidebar-footer .account-link").evaluate_all(
+                "nodes => nodes.map(node => node.getBoundingClientRect().height)")
+            assert heights and min(heights) >= _MIN_TARGET, (width, heights)
+            # 抽屉变长后底部账号入口仍能滚动到可点位置，且没有被其它层盖住。
+            footer = page.locator(".sidebar-footer .account-link")
+            footer.scroll_into_view_if_needed()
+            assert footer.evaluate("""node => {
+              const r = node.getBoundingClientRect();
+              const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+              return r.bottom <= innerHeight && node.contains(hit);
+            }""")
+            page.keyboard.press("Escape")
+            # 焦点在关闭过渡结束后才归还给菜单按钮，按状态等待而不是固定延时。
+            page.wait_for_function(
+                "document.activeElement === document.querySelector('[data-drawer-open]')")
+            assert writes == []
+        finally:
+            context.close()
+    context, page, writes = _context(browser, theme_site, width=1280)
+    try:
+        page.goto(theme_site[0] + "/employee/admin")
+        assert not page.evaluate("matchMedia('(any-pointer: coarse)').matches")
+        tab = page.locator(".tab-nav a").first.bounding_box()
+        assert tab["height"] < 44, tab
+        assert writes == []
+    finally:
+        context.close()
+
+
+def test_hallmark_first_room_identity_is_not_duplicated(theme_site, browser, tmp_path):  # noqa: F811
+    """H04：缺房号或房号与房名相同只显示房名一次；有不同房号时保持房号加房名。"""
+    _seed_rooms(tmp_path, [
+        (401, "无房号房", None), (402, "空房号房", ""), (403, "空白房号房", "   "),
+        (404, "同名房", "同名房"), (405, "带房号房", "A12"),
+    ])
+    context, page, writes = _context(browser, theme_site)
+    try:
+        page.goto(theme_site[0] + "/employee/admin")
+        rows = page.locator(".first-list__room").evaluate_all("""nodes => nodes.map(node => ({
+          href: node.getAttribute('href'),
+          parts: [...node.children].map(child => child.textContent.trim()),
+          text: node.textContent,
+        }))""")
+        by_href = {row["href"]: row for row in rows}
+        for property_id, title in [(401, "无房号房"), (402, "空房号房"),
+                                   (403, "空白房号房"), (404, "同名房")]:
+            row = by_href[f"/employee/properties/{property_id}"]
+            assert row["parts"] == [title], row
+            assert row["text"].count(title) == 1 and "房号待补充" not in row["text"], row
+        assert by_href["/employee/properties/405"]["parts"] == ["A12", "带房号房"]
+        assert by_href["/employee/properties/101"]["parts"] == ["101", "合成房间"]
+        # 每行保留原有行动原因，去重不影响「先处理」的内容。
+        assert page.locator(".first-list li .first-list__why").count() == len(rows)
         assert writes == []
     finally:
         context.close()

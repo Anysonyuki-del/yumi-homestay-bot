@@ -172,6 +172,11 @@ button:active:not(:disabled), .button:active { transform: translateY(1px); box-s
 .image-list img { display: block; width: 200px; max-width: 100%; height: 200px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-sunk); object-fit: contain; }
 .detail-sections, .detail-section + .detail-section, .page-content > .panel + .panel { margin-top: 16px; }
 .section-heading { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+/* 工作台重点区与入住安排头部（Hallmark H01）：入口按钮不收缩、不折行；文字组至少保留
+   16rem，放不下时整个按钮换到下一行，而不是把标签挤成两行。其它 .section-heading 不受影响。 */
+.workbench-first > .section-heading, .operations-heading > .section-heading { flex-wrap: wrap; }
+.workbench-first > .section-heading > :first-child, .operations-heading > .section-heading > :first-child { flex: 1 1 16rem; min-width: 0; }
+.workbench-first > .section-heading > .button, .operations-heading > .section-heading > .button { flex: none; white-space: nowrap; }
 .section-heading h2, .section-heading h3 { min-width: 0; margin-bottom: 0; overflow-wrap: anywhere; }
 .long-text, .safe-pre, td, .message-item { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .detail-grid dd.long-text, .panel > p, fieldset > p, .empty-state p, .help-text { max-width: var(--measure-prose); }
@@ -369,6 +374,13 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .topbar__account { display: inline-flex; min-height: 40px; align-items: center; gap: 7px; padding: 7px 9px; border-radius: var(--r-sm); color: var(--ink-soft); font-weight: 600; text-decoration: none; }
 .topbar__account:hover { color: var(--ink-strong); background: var(--surface-sunk); }
 .topbar__account span { display: none; }
+/* 触屏设备上导航、页签与账号入口至少 44×44（Hallmark H03）；any-pointer 判断的是设备能力，
+   不是窗口宽度，纯鼠标桌面保持原有紧凑密度。用元素本身的尺寸，不用透明伪元素扩大点击区。 */
+@media (any-pointer: coarse) {
+  .side-nav a, .sidebar-footer .account-link { min-height: 44px; }
+  .tab-nav a { display: inline-flex; align-items: center; min-height: 44px; }
+  .topbar__account { min-width: 44px; min-height: 44px; justify-content: center; }
+}
 .no-script-nav { margin: 12px 14px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
 .no-script-nav a { display: block; min-height: 44px; padding: 10px 4px; }
 .js-enabled .no-script-nav { display: none; }
@@ -396,11 +408,13 @@ h4 { margin: 0 0 6px; color: var(--ink-mid); font-size: var(--t-sm); font-weight
 .metric-group + .metric-group { margin-top: 22px; }
 .metric-group__label { margin: 0 0 8px; color: var(--muted); font-size: var(--t-sm); font-weight: 650; letter-spacing: .02em; }
 .metric-grid { display: grid; grid-template-columns: minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
-.metric-item { display: grid; min-height: 58px; align-content: center; grid-template-areas: "label value" "meta value"; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+/* 指标可能同时有说明和入口，两主题共用独立格位，避免同占 meta 后覆盖真实内容。 */
+.metric-item { display: grid; min-height: 58px; align-content: center; grid-template-areas: "label value" "meta value" "action value"; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .metric-item:last-child { border-bottom: 0; }
 .metric-item > span { grid-area: label; }
 .metric-item > strong { grid-area: value; align-self: center; }
-.metric-item > small, .metric-item > a { grid-area: meta; }
+.metric-item > small { grid-area: meta; }
+.metric-item > a { grid-area: action; }
 .metric-item span, .metric-item small { color: var(--muted); }
 .metric-item strong { color: var(--ink-strong); font-size: var(--t-2xl); font-weight: 700; line-height: 1.05; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .metric-item a { font-size: var(--t-sm); font-weight: 600; text-decoration: none; }
@@ -485,7 +499,7 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   .topbar { padding-inline: 20px; }
   .topbar__account span { display: inline; }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .metric-item { min-height: 86px; grid-template-areas: "label" "value" "meta"; grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 12px; border-right: 1px solid var(--line); border-bottom: 0; }
+  .metric-item { min-height: 86px; grid-template-areas: "label" "value" "meta" "action"; grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 12px; border-right: 1px solid var(--line); border-bottom: 0; }
   .metric-item > strong { align-self: start; font-size: var(--t-2xl); }
   .metric-item:last-child { border-right: 0; }
   .property-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -520,7 +534,9 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 
 @media (max-width: 520px) {
   .detail-grid, .search-form, .tag-grid, .compare-grid, .decision-grid, .compact-detail { grid-template-columns: 1fr; }
-  .operations-heading .button { white-space: nowrap; }
+  /* H01 窄屏明确上下排列；重置文字组的 flex，避免 16rem 横向基准变成固定纵向高度。 */
+  .workbench-first > .section-heading, .operations-heading > .section-heading { flex-direction: column; }
+  .workbench-first > .section-heading > :first-child, .operations-heading > .section-heading > :first-child { flex: initial; width: 100%; }
   .stable-room-list .muted { width: 100%; margin-left: 0; }
   .content-header { align-items: flex-start; flex-direction: column; }
   .content-header .button { width: 100%; }
@@ -596,14 +612,20 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 .room-events { margin: 20px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
 .room-event { min-width: 0; margin: 0; padding: 14px 16px; background: var(--surface-sunk); border-radius: 10px; }
 .room-event > dt { color: var(--muted); font-size: 12px; }
-.room-event > dd { margin: 2px 0 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px 16px; align-items: center; }
-.room-event__guest { font-weight: 700; font-size: 18px; overflow-wrap: anywhere; }
-.room-event__guest a { display: inline-flex; align-items: center; min-height: 44px; color: var(--link); text-decoration: none; }
-.room-event__guest a:hover { text-decoration: underline; }
+/* 事件内容按事件块自身宽度排布（Hallmark H02）：放得下时客人与倒计时同排，放不下时倒计时
+   整块换到下一行，计划时间独占一行。不按卡片或窗口宽度设门槛：事件块是 .room-events
+   自动分栏的一格，宽度只有卡片的一半左右，按卡片判断会在中等宽度把时长挤断。 */
+.room-event > dd { margin: 2px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; }
+.room-event__guest { flex: 1 1 auto; min-width: 0; font-weight: 700; font-size: 18px; overflow-wrap: anywhere; }
+/* 客人档案入口默认带细下划线（Hallmark H05）：暖色主题下链接与正文同色，触屏没有悬停，
+   只靠悬停出现的下划线等于没有提示。悬停时加粗下划线作为反馈。 */
+.room-event__guest a { display: inline-flex; align-items: center; min-height: 44px; color: var(--link); text-decoration: underline; text-decoration-thickness: 1px; }
+.room-event__guest a:hover { text-decoration-thickness: 2px; }
 .countdown { font-variant-numeric: tabular-nums; color: var(--ink-mid); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.room-event .countdown { grid-column: 2; grid-row: 1 / 3; text-align: right; }
-.countdown strong { display: block; font-size: 22px; font-weight: 600; color: var(--ink-strong); }
-.room-event__abs { grid-row: 2; grid-column: 1; color: var(--muted); font-size: 12px; }
+.room-event .countdown { margin-left: auto; text-align: right; }
+/* keep-all 只允许在空格处断行，「小时」「分钟」不会被拆成孤字；覆盖 .countdown 的 anywhere。 */
+.countdown strong { display: block; font-size: 22px; font-weight: 600; color: var(--ink-strong); word-break: keep-all; overflow-wrap: normal; }
+.room-event__abs { flex-basis: 100%; color: var(--muted); font-size: 12px; }
 .room-turnover-gap { margin: 8px 0 0; color: var(--ink-soft); font-size: var(--t-sm); }
 .room-timeline-block { margin: 10px 0 0; }
 /* 日历四档条色整体挂在 --primary 上：换主色时四档一起跟着走，不用逐条改字面值。
@@ -852,9 +874,6 @@ html[data-theme="warm"] .first-list__why--urgent { color: var(--danger); }
 html[data-theme="warm"] .first-list .button { min-height: 44px; background: var(--primary); border-color: var(--primary); color: var(--on-primary); box-shadow: none; }
 html[data-theme="warm"] .first-list .button:hover, html[data-theme="warm"] .room-operation-card .room-next-action .button:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: var(--on-primary-hover); }
 html[data-theme="warm"] .metric-group + .metric-group, html[data-theme="warm"] .dashboard-grid { margin-top: 24px; }
-/* 真实指标可能同时有说明和入口，不能让两者共享 meta 网格格位而互相覆盖。 */
-html[data-theme="warm"] .metric-item { grid-template-areas: "label value" "meta value" "action value"; }
-html[data-theme="warm"] .metric-item > a { grid-area: action; }
 html[data-theme="warm"] .metric-item strong { font-size: 32px; }
 html[data-theme="warm"] .panel > .panel__header { margin: -16px -16px 16px; padding: 14px 16px; border-radius: var(--radius) var(--radius) 0 0; background: var(--surface-sunk); }
 html[data-theme="warm"] .panel > .panel__header h2 { margin: 0; }
@@ -885,7 +904,6 @@ html[data-theme="warm"] .cal__date--today { box-shadow: inset 0 -3px var(--focus
 html[data-theme="warm"] .cal-m__day--today, html[data-theme="warm"] .cal-m__item--featured { box-shadow: inset 0 0 0 1px var(--focus); }
 html[data-theme="warm"] .cal-m__item--featured { border-color: var(--focus); }
 @media (min-width: 768px) {
-  html[data-theme="warm"] .metric-item { grid-template-areas: "label" "value" "meta" "action"; }
   html[data-theme="warm"] .content-header h1, html[data-theme="warm"] .page-header h1 { font-size: 32px; }
   html[data-theme="warm"] .panel > .panel__header { margin-inline: -20px; margin-top: -20px; padding-inline: 20px; }
   html[data-theme="warm"] .workbench-first > .section-heading { padding-inline: 20px; }
