@@ -208,7 +208,7 @@ claude-design-analysis.md[SU4L]: F:保存Claude营销网站暖奶油、珊瑚与
 1.67.0.md[SV4T]: F:记录经典与暖色主题的偏好恢复、可访问性规范和上线后只读审查入口 | R:code:src/homestay_bot/static/theme.js,code:DESIGN.md | A:改动及依据,本地验证与发布门禁,风险与回滚,发布现场补录,登录页面与用户审查入口 | S:生产只验工作台、认证与诊断；其他页交互仅有本地回归。
 1.68.0.md[SV5T]: F:记录参考价币种与房间分组、摘要冲突草稿恢复及手机交互修复的发布和独立验收 | R:code:src/homestay_bot/integrations/hostex_client.py,code:src/homestay_bot/routes/customers.py,code:scripts/release/reply_gate.sh | A:改动及依据,本地验证与发布门禁,风险与回滚,候选提交与授权补录,部署与独立验收补录 | S:末节确认上线，开头准备态为历史；all门禁仅证明不退步，47个已知失败未修复，未验真实建单或收件。
 README.md[SV5T]: F:规定逐版本发布记录的审计内容、更正与敏感信息边界，并汇总至1.65.0的历史部署状态 | R:code:CHANGELOG.md | A:发布记录内容要求,补写说明,版本部署汇总 | S:事实更正按日期追加不改原结论；补写未重测，来源缺数字不推断，不记录私密原文。
-1.68.1.md[SV4T]: F:记录Hallmark局部布局与经典指标格位修复随AOCI认知资产发布的依据、相关回归、CI、备份、仅API部署及独立核对。 | R:code:docs/specs/2026-10-04_hallmark-frontend-polish-spec.md,code:src/homestay_bot/static/app.css,code:tests/browser/test_admin_theme.py | A:改动及依据;本地验证与发布门禁;风险、未覆盖与回滚;发布现场与独立验收补录 | S:末节确认上线；登录后页面未验收，红绿为实施时证据。
+1.68.1.md[SV4T]: F:记录Hallmark局部布局与经典指标格位修复随AOCI认知资产发布的依据、相关回归、CI、备份、仅API部署、独立核对及登录后页面验收。 | R:code:docs/specs/2026-10-04_hallmark-frontend-polish-spec.md,code:src/homestay_bot/static/app.css,code:tests/browser/test_admin_theme.py | A:改动及依据;本地验证与发布门禁;风险、未覆盖与回滚;发布现场与独立验收;登录后页面验收 | S:末节更正前文未验状态；仅模拟视口及经典主题，红绿为实施时证据。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-09-08-evidence/===
 pytest-output.txt[TQ3S]: F:保存离线回归原始输出、真实外部契约跳过原因与依赖及SQLite清理警告 | R:- | A:1406passed,15skipped,6warnings | S:历史结果含真实外部契约跳过，不能充当当前验收。
@@ -573,4 +573,4 @@ reply_regression.py[TQ8L]: F:提供部署前真实模型回复回归CLI，用虚
 
 ===/Volumes/02/obsidian/tasks/===
 lessons.md[SQ6T]: F:收集尚未归并的发布验收、证据边界与客服泛化防回归教训，供后续确认并归入开发手册 | R:code:YuMi民宿AI开发经验与防回归手册.md | A:- | S:只收已有代码或测试依据的新教训；长期有效后归并唯一对应章节并删除本处正文，历史由Git保留
-todo.md[SW5L]: F:按任务累积Spec依据、实施进度、验证证据和未完成边界，以最新1.68.1发版进度供续接定位。 | R:code:docs/releases/1.68.1.md,code:docs/specs/2026-10-04_hallmark-frontend-polish-spec.md | A:当前发版进度；历史任务与发布记录；挂起验收 | S:1.68.1已上线但登录后页面验收仍未勾选；部署结果以发布记录为准；勾选和数量仅证明各自阶段，历史授权不能用于本轮外联或发布。
+todo.md[SW5L]: F:按任务累积Spec依据、实施进度、验证证据和未完成边界，以最新1.68.1发版记录供续接定位。 | R:code:docs/releases/1.68.1.md,code:docs/specs/2026-10-04_hallmark-frontend-polish-spec.md | A:最新发版进度；历史任务与发布记录；挂起验收 | S:部署与页面验收结果以发布记录为准；勾选和数量仅证明各自阶段，历史授权不能用于本轮外联或发布。
