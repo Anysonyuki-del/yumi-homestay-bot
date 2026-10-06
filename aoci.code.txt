@@ -6,7 +6,7 @@
 .gitattributes[FW6T]: F:统一文本检出的LF换行，保证跨平台源码原始字节与AOCI摘要基线一致。 | R:code:AGENTS.md | A:* text=auto eol=lf | S:覆盖平台autocrlf默认，避免检出改写使全树认知基线漂移；二进制自动识别并保留原字节。
 .gitignore[FS8T]: F:阻止真实配置、客户数据、备份、生产部署资产、本机技能、客户端签名和平台构建产物进入公开版本库。 | R:code:.dockerignore,code:.env.example,code:AGENTS.md | A:Git未跟踪文件忽略规则；客户端本机签名与生成文件排除；机器绑定Codex配置排除 | S:忽略规则不移除已跟踪内容或历史泄漏；本机测试签名保留同一身份以便升级，但不能进入仓库或安装包；新增敏感产物还须独立核对构建上下文。
 AGENTS.md[SW9S]: F:规定仓库开发的保护边界、渐进Spec、外部授权、风险验证、发布证据和AOCI认知建立与维护流程。 | R:code:YuMi民宿AI开发经验与防回归手册.md,code:scripts/release/reply_gate.sh,code:tests/unit/test_release_scripts.py | A:目录树开发规则；Spec确认后明确开始；真实外部操作当前授权；按影响验证；AOCI会话及收尾合同 | S:受保护总结禁止读取或提交；历史记录不能证明当前生产或授权。AOCI语义由模型依据绑定证据独立创作，实时合同和Guide优先于静态说明；完整Overview须续传并一次回绑Attestation，压缩后强制新完整重载；受管理对象最终稳定后维护完整机器批次，冲突与Recovery不得绕过。
-CHANGELOG.md[SW5L]: F:按正式版本与日期记录功能、修复及迁移、依赖和回复门禁变化，作为发布说明的维护来源。 | R:code:pyproject.toml,code:AGENTS.md,code:docs/releases/1.68.0.md | A:语义化版本发布条目 | S:发布或版本升级同步维护；已记录版本可能尚未部署，日志不证明线上状态；应用版本、迁移号和运行配置revision须分别核验。
+CHANGELOG.md[SW5L]: F:按正式版本与日期记录功能、修复及迁移、依赖和回复门禁变化，作为发布说明的维护来源。 | R:code:pyproject.toml,code:AGENTS.md,code:docs/releases/1.68.1.md | A:语义化版本发布条目 | S:发布或版本升级同步维护；已记录版本可能尚未部署，日志不证明线上状态；应用版本、迁移号和运行配置revision须分别核验。
 DESIGN.md[SU6S]: F:定义运营后台与认证页经典/暖色双主题的颜色、字体、控件、布局和可访问性规范，约束外观变更。 | R:code:src/homestay_bot/static/app.css,code:src/homestay_bot/static/theme.js,code:src/homestay_bot/templates/layouts/admin.html,code:src/homestay_bot/templates/layouts/auth.html | A:classic/warm；系统字体；业务状态色语义；对比度；44px触控 | S:暖色参考不覆盖经典，原生外壳不在范围；禁止黑色重点块、木纹及外部字体；切换只改外观，保留草稿和业务状态，CSS前恢复偏好并对存储失败反馈。
 Dockerfile[FV8T]: F:构建固定Python基础镜像、哈希锁依赖和应用包，以固定非root身份迁移数据库后启动API。 | R:code:requirements.lock,code:pyproject.toml,code:alembic.ini,code:migrations/env.py,code:compose.yaml,code:src/homestay_bot/main.py | A:固定基础镜像digest；UID/GID10001；私有上传目录；迁移成功后启动8000端口 | S:锁文件依赖层先于版本及源码复制，保留缓存边界；项目安装禁止重新解析依赖和隔离构建，不能削弱哈希或TLS验证。上传宿主挂载权限须匹配固定身份；CMD只迁移启动，不执行可恢复备份。
 LICENSE[SS8T]: F:声明YuMi专有软件的内部使用与维护授权、衍生修改限制、保密边界、免责声明和违约终止条件。 | R:code:README.md | A:内部及书面许可人员使用；对外复制或分发需许可；衍生修改沿用授权 | S:源代码可被看到不授予对外分发权；客户数据、凭据与私有文件不在公开使用授权内；经营信息由使用者核验，AI不得替代员工判断。
@@ -208,6 +208,7 @@ claude-design-analysis.md[SU4L]: F:保存Claude营销网站暖奶油、珊瑚与
 1.67.0.md[SV4T]: F:记录经典与暖色主题的偏好恢复、可访问性规范和上线后只读审查入口 | R:code:src/homestay_bot/static/theme.js,code:DESIGN.md | A:改动及依据,本地验证与发布门禁,风险与回滚,发布现场补录,登录页面与用户审查入口 | S:生产只验工作台、认证与诊断；其他页交互仅有本地回归。
 1.68.0.md[SV5T]: F:记录参考价币种与房间分组、摘要冲突草稿恢复及手机交互修复的发布和独立验收 | R:code:src/homestay_bot/integrations/hostex_client.py,code:src/homestay_bot/routes/customers.py,code:scripts/release/reply_gate.sh | A:改动及依据,本地验证与发布门禁,风险与回滚,候选提交与授权补录,部署与独立验收补录 | S:末节确认上线，开头准备态为历史；all门禁仅证明不退步，47个已知失败未修复，未验真实建单或收件。
 README.md[SV5T]: F:规定逐版本发布记录的审计内容、更正与敏感信息边界，并汇总至1.65.0的历史部署状态 | R:code:CHANGELOG.md | A:发布记录内容要求,补写说明,版本部署汇总 | S:事实更正按日期追加不改原结论；补写未重测，来源缺数字不推断，不记录私密原文。
+1.68.1.md[SV4T]: F:记录Hallmark局部布局与经典指标格位修复随AOCI认知资产发布的依据、相关回归、门禁适用性及回滚边界。 | R:code:docs/specs/2026-10-04_hallmark-frontend-polish-spec.md,code:src/homestay_bot/static/app.css,code:tests/browser/test_admin_theme.py | A:改动及依据;本地验证与发布门禁;风险、未覆盖与回滚;部署补录 | S:红绿为实施时证据，发版仅重跑相关回归；部署以文末补录为准。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-09-08-evidence/===
 pytest-output.txt[TQ3S]: F:保存离线回归原始输出、真实外部契约跳过原因与依赖及SQLite清理警告 | R:- | A:1406passed,15skipped,6warnings | S:历史结果含真实外部契约跳过，不能充当当前验收。
@@ -572,4 +573,4 @@ reply_regression.py[TQ8L]: F:提供部署前真实模型回复回归CLI，用虚
 
 ===/Volumes/02/obsidian/tasks/===
 lessons.md[SQ6T]: F:收集尚未归并的发布验收、证据边界与客服泛化防回归教训，供后续确认并归入开发手册 | R:code:YuMi民宿AI开发经验与防回归手册.md | A:- | S:只收已有代码或测试依据的新教训；长期有效后归并唯一对应章节并删除本处正文，历史由Git保留
-todo.md[SW5L]: F:按任务累积Spec依据、实施进度、验证证据和未完成边界，以最新Hallmark补修记录供续接定位。 | R:code:docs/specs/2026-10-04_hallmark-frontend-polish-spec.md,code:docs/reviews/2026-10-05_claude-to-codex-hallmark-polish-implementation-handoff.md | A:当前补修进度；历史任务与发布记录；挂起验收 | S:最新完成只指本地两项补修，历史当前任务仍保留；勾选和数量仅证明各自阶段，历史授权不能用于本轮外联或发布。
+todo.md[SW5L]: F:按任务累积Spec依据、实施进度、验证证据和未完成边界，以最新1.68.1发版进度供续接定位。 | R:code:docs/releases/1.68.1.md,code:docs/specs/2026-10-04_hallmark-frontend-polish-spec.md | A:当前发版进度；历史任务与发布记录；挂起验收 | S:未勾选步骤表示尚未执行，部署结果以发布记录为准；勾选和数量仅证明各自阶段，历史授权不能用于本轮外联或发布。
