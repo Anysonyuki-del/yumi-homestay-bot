@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "aoci": {
+      "type": "stdio",
+      "command": "/Users/rin/.local/bin/aoci",
+      "args": [
+        "--repo",
+        "/Volumes/02/obsidian codex/homestay-bot",
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}

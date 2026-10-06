@@ -1,0 +1,4016 @@
+{
+  "version": 1,
+  "created_at": "2026-10-05T09:00:05Z",
+  "updated_at": "2026-10-06T02:15:30Z",
+  "files": {
+    ".codex/hooks.json": {
+      "role": "index",
+      "sha256": "b7a28b6ef3f4f6284c9c40d49fa72107c6b6dd3a9f8ebce1e70473cab7f5ff6f",
+      "size": 1078,
+      "normalized_sha256": "b7a28b6ef3f4f6284c9c40d49fa72107c6b6dd3a9f8ebce1e70473cab7f5ff6f"
+    },
+    ".dockerignore": {
+      "role": "index",
+      "sha256": "c789e8e777764a3cfbe1b9e948c7a79a0498b7fc505999d4dea7fb2eaf81b8ab",
+      "size": 488,
+      "normalized_sha256": "c789e8e777764a3cfbe1b9e948c7a79a0498b7fc505999d4dea7fb2eaf81b8ab"
+    },
+    ".env.example": {
+      "role": "index",
+      "sha256": "2f86465c1fa65eeee1495813c9995570634ea00aa762d9cd7986cbdff2755463",
+      "size": 2186,
+      "normalized_sha256": "2f86465c1fa65eeee1495813c9995570634ea00aa762d9cd7986cbdff2755463"
+    },
+    ".gitattributes": {
+      "role": "index",
+      "sha256": "21fa16a2122e2b0360b47502c577428b645437e08e9e87ffba661f84853cb476",
+      "size": 291,
+      "normalized_sha256": "21fa16a2122e2b0360b47502c577428b645437e08e9e87ffba661f84853cb476"
+    },
+    ".github/workflows/ci.yml": {
+      "role": "index",
+      "sha256": "1eb99b9ca41c8b24cced3db1adc696ac7c146aeb80885cfb9b878624cca15fce",
+      "size": 2459,
+      "normalized_sha256": "1eb99b9ca41c8b24cced3db1adc696ac7c146aeb80885cfb9b878624cca15fce"
+    },
+    ".gitignore": {
+      "role": "index",
+      "sha256": "293049d62bef98b514b6b3dfd7589ec4676a72a05534f4bd858c05bd886f411f",
+      "size": 2094,
+      "normalized_sha256": "293049d62bef98b514b6b3dfd7589ec4676a72a05534f4bd858c05bd886f411f"
+    },
+    ".impeccable/config.json": {
+      "role": "index",
+      "sha256": "cf15351696e63f26c59f544df160b48908453f8eaaca3c7228cf679df2c8bac3",
+      "size": 1187,
+      "normalized_sha256": "cf15351696e63f26c59f544df160b48908453f8eaaca3c7228cf679df2c8bac3"
+    },
+    ".impeccable/critique/2026-10-02T02-08-13Z__src-homestay-bot-templates.md": {
+      "role": "index",
+      "sha256": "f248c7a1e90b38edb29b96a16ecf7f73dee5a79da44c285c6ee74ecc1f24d112",
+      "size": 4364,
+      "normalized_sha256": "f248c7a1e90b38edb29b96a16ecf7f73dee5a79da44c285c6ee74ecc1f24d112"
+    },
+    ".mcp.json": {
+      "role": "index",
+      "sha256": "58d5f4cc89eae41c35498d14af851d293cefb35f4a199f9ffd2479a90400d491",
+      "size": 239,
+      "normalized_sha256": "58d5f4cc89eae41c35498d14af851d293cefb35f4a199f9ffd2479a90400d491"
+    },
+    ".stage/test_release_gate_bash_regression.py": {
+      "role": "observe",
+      "sha256": "e2282a9e7a20d4768ff1db87b0cf591a50e97743aef436bdd61a72824245f999",
+      "size": 2936,
+      "normalized_sha256": "e2282a9e7a20d4768ff1db87b0cf591a50e97743aef436bdd61a72824245f999"
+    },
+    "AGENTS.md": {
+      "role": "index",
+      "sha256": "a3437faa37522f87fc955beb69c251bc2e358939b65c2fe5fadb793b8c6c5eab",
+      "size": 18832,
+      "normalized_sha256": "a3437faa37522f87fc955beb69c251bc2e358939b65c2fe5fadb793b8c6c5eab"
+    },
+    "CHANGELOG.md": {
+      "role": "index",
+      "sha256": "30e4898e8b0b8a6c871a2e2d8e107d353e09ab1e74417899c44ba8f6dc75c855",
+      "size": 169715,
+      "normalized_sha256": "30e4898e8b0b8a6c871a2e2d8e107d353e09ab1e74417899c44ba8f6dc75c855"
+    },
+    "DESIGN.md": {
+      "role": "index",
+      "sha256": "6bded5ab5e4194a3467975e03a9fddce1ee844561ebad4435eb493ec3623c817",
+      "size": 6241,
+      "normalized_sha256": "6bded5ab5e4194a3467975e03a9fddce1ee844561ebad4435eb493ec3623c817"
+    },
+    "Dockerfile": {
+      "role": "index",
+      "sha256": "f68aef27855a5a16279f361f4b54d7aad2f3292e04fb0a96b016f8976b8f4078",
+      "size": 1171,
+      "normalized_sha256": "f68aef27855a5a16279f361f4b54d7aad2f3292e04fb0a96b016f8976b8f4078"
+    },
+    "LICENSE": {
+      "role": "index",
+      "sha256": "7139a861ae1e29149d143f1876e9c1cb55fe9c6a6f8bf4fcc1d35e029f7e038a",
+      "size": 1379,
+      "normalized_sha256": "7139a861ae1e29149d143f1876e9c1cb55fe9c6a6f8bf4fcc1d35e029f7e038a"
+    },
+    "README.md": {
+      "role": "index",
+      "sha256": "34bba19d5efbca053dec22d58e5b1a51b041fc9a6e5caa612d106abc491abe31",
+      "size": 5117,
+      "normalized_sha256": "34bba19d5efbca053dec22d58e5b1a51b041fc9a6e5caa612d106abc491abe31"
+    },
+    "YuMi民宿AI开发经验与防回归手册.md": {
+      "role": "index",
+      "sha256": "263c16c3042bb8dfd0b53b0039366fa640acafb9c2fa421051cd23c8bc6142a8",
+      "size": 37767,
+      "normalized_sha256": "263c16c3042bb8dfd0b53b0039366fa640acafb9c2fa421051cd23c8bc6142a8"
+    },
+    "alembic.ini": {
+      "role": "index",
+      "sha256": "002c636f40ae5726961d906081126ceb22baa0496195c875f20bdc697cf8abf4",
+      "size": 630,
+      "normalized_sha256": "002c636f40ae5726961d906081126ceb22baa0496195c875f20bdc697cf8abf4"
+    },
+    "aoci.code.txt": {
+      "role": "index",
+      "sha256": "6b6e4bad46b56162d4b82e1d7312008095bb8613c8461356dc8d99eb997ec0b0",
+      "size": 235719,
+      "normalized_sha256": "6b6e4bad46b56162d4b82e1d7312008095bb8613c8461356dc8d99eb997ec0b0"
+    },
+    "aoci.meta.txt": {
+      "role": "index",
+      "sha256": "fbc304fa05182547e96f1f8404c7c30ad6c366bba9589523f1019c2c1da0427c",
+      "size": 1989,
+      "normalized_sha256": "fbc304fa05182547e96f1f8404c7c30ad6c366bba9589523f1019c2c1da0427c"
+    },
+    "aoci.txt": {
+      "role": "index",
+      "sha256": "11480b594152b260db5255d53231a87f6df903788f5514a7d08b625d84e3dd7c",
+      "size": 301,
+      "normalized_sha256": "11480b594152b260db5255d53231a87f6df903788f5514a7d08b625d84e3dd7c"
+    },
+    "clients/yumi/rust-toolchain.toml": {
+      "role": "index",
+      "sha256": "34582c9e2e84fafb155999d34c25bd17ea37fe24796eac0e65d5bd7eb0154890",
+      "size": 364,
+      "normalized_sha256": "34582c9e2e84fafb155999d34c25bd17ea37fe24796eac0e65d5bd7eb0154890"
+    },
+    "clients/yumi/src-tauri/Cargo.lock": {
+      "role": "index",
+      "sha256": "167d779a0377b7fad701c0cc8357fae29dbe702ab093d91ddd1606ebaadafc12",
+      "size": 125861,
+      "normalized_sha256": "167d779a0377b7fad701c0cc8357fae29dbe702ab093d91ddd1606ebaadafc12"
+    },
+    "clients/yumi/src-tauri/Cargo.toml": {
+      "role": "index",
+      "sha256": "042a486fa1fa19b5dac64fa547b5ad4b64cefd9f59629058ac39c980f5bdbe82",
+      "size": 1724,
+      "normalized_sha256": "042a486fa1fa19b5dac64fa547b5ad4b64cefd9f59629058ac39c980f5bdbe82"
+    },
+    "clients/yumi/src-tauri/build.rs": {
+      "role": "index",
+      "sha256": "e99813003de23d4ef25d6a29d9d2a86db5b025f5bcd3f44c3c02965d76cb4f9d",
+      "size": 7164,
+      "normalized_sha256": "e99813003de23d4ef25d6a29d9d2a86db5b025f5bcd3f44c3c02965d76cb4f9d"
+    },
+    "clients/yumi/src-tauri/gen/android/.editorconfig": {
+      "role": "index",
+      "sha256": "d22b394a5a140050065207d160273570edb04200480160e0951df3291dd7848f",
+      "size": 230,
+      "normalized_sha256": "d22b394a5a140050065207d160273570edb04200480160e0951df3291dd7848f"
+    },
+    "clients/yumi/src-tauri/gen/android/.gitignore": {
+      "role": "index",
+      "sha256": "2d8a4dfb08ea1403e6eab97bc216158328c01ace4027f0dd3b65b2a088994270",
+      "size": 290,
+      "normalized_sha256": "2d8a4dfb08ea1403e6eab97bc216158328c01ace4027f0dd3b65b2a088994270"
+    },
+    "clients/yumi/src-tauri/gen/android/app/.gitignore": {
+      "role": "index",
+      "sha256": "174bfc72691cfd2146e10c4dc930940ae29af4f9c79b7f3f7d1fe87b32689491",
+      "size": 143,
+      "normalized_sha256": "174bfc72691cfd2146e10c4dc930940ae29af4f9c79b7f3f7d1fe87b32689491"
+    },
+    "clients/yumi/src-tauri/gen/android/app/build.gradle.kts": {
+      "role": "index",
+      "sha256": "f2cb83c043bb8a029320d35f542364f5f2acdc3c9d8f187861e1d7edaa4f72a4",
+      "size": 2901,
+      "normalized_sha256": "f2cb83c043bb8a029320d35f542364f5f2acdc3c9d8f187861e1d7edaa4f72a4"
+    },
+    "clients/yumi/src-tauri/gen/android/app/identity.gradle": {
+      "role": "index",
+      "sha256": "3707d0eb261de9b28dd7fe82aeeee4b541478bca27a6df2ed85b4fd533d7ee47",
+      "size": 2821,
+      "normalized_sha256": "3707d0eb261de9b28dd7fe82aeeee4b541478bca27a6df2ed85b4fd533d7ee47"
+    },
+    "clients/yumi/src-tauri/gen/android/app/proguard-rules.pro": {
+      "role": "index",
+      "sha256": "56fd960cf225f6ca40f982b13a5dbb0d8bc3dfde13ff76422825c6070d0a1890",
+      "size": 750,
+      "normalized_sha256": "56fd960cf225f6ca40f982b13a5dbb0d8bc3dfde13ff76422825c6070d0a1890"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/diagnostics/java/icu/akros/yumi/DiagnosticsGate.kt": {
+      "role": "index",
+      "sha256": "f8710ffe3bd61a0f915707036c25b822b86486391d3f988c9995ec68f8ce8fad",
+      "size": 950,
+      "normalized_sha256": "f8710ffe3bd61a0f915707036c25b822b86486391d3f988c9995ec68f8ce8fad"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/diagnostics/java/icu/akros/yumi/DiagnosticsReporter.kt": {
+      "role": "index",
+      "sha256": "36a700fc1ea074086a661bac45e11b1b64a602f6dcd7fd4b31627e97ef8f0698",
+      "size": 4377,
+      "normalized_sha256": "36a700fc1ea074086a661bac45e11b1b64a602f6dcd7fd4b31627e97ef8f0698"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/AndroidManifest.xml": {
+      "role": "index",
+      "sha256": "513ad410ca59bdd6fa73cf56498d3b1659f0fc9564982d03f7bd53d06d969bc2",
+      "size": 1742,
+      "normalized_sha256": "513ad410ca59bdd6fa73cf56498d3b1659f0fc9564982d03f7bd53d06d969bc2"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/java/icu/akros/yumi/ImageSaver.kt": {
+      "role": "index",
+      "sha256": "938ca2e30602fefc8e327ba7fccb7703c436264834d99de22695b78854df8e43",
+      "size": 11945,
+      "normalized_sha256": "938ca2e30602fefc8e327ba7fccb7703c436264834d99de22695b78854df8e43"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/java/icu/akros/yumi/MainActivity.kt": {
+      "role": "index",
+      "sha256": "c92a8dbaf4261368e456c993f2e88ab118be68449d5ed830fd833eed155fe746",
+      "size": 15172,
+      "normalized_sha256": "c92a8dbaf4261368e456c993f2e88ab118be68449d5ed830fd833eed155fe746"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/java/icu/akros/yumi/SafeAreaMetrics.kt": {
+      "role": "index",
+      "sha256": "f5be8d9256f77be3d5901ead8cdea746118a30d90e2a1f0063ce2800089877c4",
+      "size": 439,
+      "normalized_sha256": "f5be8d9256f77be3d5901ead8cdea746118a30d90e2a1f0063ce2800089877c4"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/java/icu/akros/yumi/SafeWebViewClient.kt": {
+      "role": "index",
+      "sha256": "ca9dd27165bf83458621dec55b7c1fef2f7e35b5db42010289d2ecb94a3f1287",
+      "size": 3047,
+      "normalized_sha256": "ca9dd27165bf83458621dec55b7c1fef2f7e35b5db42010289d2ecb94a3f1287"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/java/icu/akros/yumi/SaveSession.kt": {
+      "role": "index",
+      "sha256": "691b68c566fd217dd09d965094e248a4a4ad2ceca9ee8e6ec8fc6bb0e860bb2a",
+      "size": 2926,
+      "normalized_sha256": "691b68c566fd217dd09d965094e248a4a4ad2ceca9ee8e6ec8fc6bb0e860bb2a"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml": {
+      "role": "index",
+      "sha256": "01d1a6a6c1234eb7fe270d097eb283d72b9c95ae5118886f1b6573aad280f1f7",
+      "size": 1702,
+      "normalized_sha256": "01d1a6a6c1234eb7fe270d097eb283d72b9c95ae5118886f1b6573aad280f1f7"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/drawable/ic_launcher_background.xml": {
+      "role": "index",
+      "sha256": "ed423c73a6f40a4d2909f0901e60527b3a807cd59e1b5593bcaae1808b1c6321",
+      "size": 5606,
+      "normalized_sha256": "ed423c73a6f40a4d2909f0901e60527b3a807cd59e1b5593bcaae1808b1c6321"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/layout/activity_main.xml": {
+      "role": "index",
+      "sha256": "68466a0a3006f183eb3af4e978d52f50a68087a1aac0880bd16eef3760153bcb",
+      "size": 780,
+      "normalized_sha256": "68466a0a3006f183eb3af4e978d52f50a68087a1aac0880bd16eef3760153bcb"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml": {
+      "role": "index",
+      "sha256": "760d4b8a06bf7163dd010c33ad2cac9e4a75fa0177afaba042f83e311eef0c3e",
+      "size": 261,
+      "normalized_sha256": "760d4b8a06bf7163dd010c33ad2cac9e4a75fa0177afaba042f83e311eef0c3e"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-hdpi/ic_launcher.png": {
+      "role": "index",
+      "sha256": "a6c60b034ffde872ea2d3fee1d2e6f4621bebde19cca55c5f2806742fc9d7e85",
+      "size": 1637
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png": {
+      "role": "index",
+      "sha256": "67b89479c8324bfe22c87037286dd50120b8964f29fed2cc1ff989d38f05a49c",
+      "size": 4309
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png": {
+      "role": "index",
+      "sha256": "301b0390853f944d52da3a6ea6750b08eb5e707e806e7db918b9bdf595c0f828",
+      "size": 1361
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-mdpi/ic_launcher.png": {
+      "role": "index",
+      "sha256": "fe3c93e588b09970ff4e84213cbd8bfd117c0aef1587a6f39cc64053ca043a7e",
+      "size": 1630
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png": {
+      "role": "index",
+      "sha256": "1e28195359f919e4ecaefaa5f148b32e533a802902f8713b23b910dda915c7fa",
+      "size": 3045
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png": {
+      "role": "index",
+      "sha256": "adcd2571383f114f1a47bf18fc1b6b278bcf01fbd958c3aab3eb1157b976068d",
+      "size": 1381
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png": {
+      "role": "index",
+      "sha256": "37cf134686d691cf9f1c9ff68f6c6ff0bdcef89d1a1f27bbd6b4d0c3d48dcd82",
+      "size": 3135
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png": {
+      "role": "index",
+      "sha256": "1039bdbb1c1fc804081487a55f26240d8c7a4dbc4a9e8a97f2f00722411de268",
+      "size": 5778
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png": {
+      "role": "index",
+      "sha256": "38c80307bf82c9e34f3d9750df2c3590a0a690e1a77b545d36fbf5559f10b0c3",
+      "size": 2492
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png": {
+      "role": "index",
+      "sha256": "f179b06625f6e06c030b30e8e9663356bd241173f2d3ba94a2b5ab72533ed9c9",
+      "size": 4809
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png": {
+      "role": "index",
+      "sha256": "362a619f0dd15d2dc1b676d9c791f90791fc5c6ec5e04788e91cd471495a2c98",
+      "size": 10304
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png": {
+      "role": "index",
+      "sha256": "50e4cfdf9b5580b33230bfe2ea623a4e03d40d68df01bbf70aeb604e496d23f3",
+      "size": 3571
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png": {
+      "role": "index",
+      "sha256": "9fc5096ec67dcdc7bf8b46dcc54835ccda3bf3e08ec13cc5a35e3a34044e7c11",
+      "size": 6221
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png": {
+      "role": "index",
+      "sha256": "a9eb7b572ccec20865bfc07e0f557f38839f8feca1c99de6989aa38804d818d6",
+      "size": 15241
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png": {
+      "role": "index",
+      "sha256": "a20b6cddcbf7887a53b9f9ade10b00f347d9a11315717830863163a0e75ac389",
+      "size": 4675
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/values-night/themes.xml": {
+      "role": "index",
+      "sha256": "e4537f6735c1c0b09e7e0253602abc6a3958d483a5b92a1a928d89afb264d064",
+      "size": 251,
+      "normalized_sha256": "e4537f6735c1c0b09e7e0253602abc6a3958d483a5b92a1a928d89afb264d064"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/values/colors.xml": {
+      "role": "index",
+      "sha256": "b5626527d503417f0d8e5b1e08f338de7b31173bf0e122815f03e64932adbd88",
+      "size": 378,
+      "normalized_sha256": "b5626527d503417f0d8e5b1e08f338de7b31173bf0e122815f03e64932adbd88"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/values/ic_launcher_background.xml": {
+      "role": "index",
+      "sha256": "0687336f0ccc6f7ee09c7c95110667c63b75931238df779a21af401fb864cd34",
+      "size": 115,
+      "normalized_sha256": "0687336f0ccc6f7ee09c7c95110667c63b75931238df779a21af401fb864cd34"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/values/strings.xml": {
+      "role": "index",
+      "sha256": "320f2cbec37d57388d8e571cb3e9a628a9a1cefac58a36d6f7b58476ab5e5972",
+      "size": 2536,
+      "normalized_sha256": "320f2cbec37d57388d8e571cb3e9a628a9a1cefac58a36d6f7b58476ab5e5972"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/values/themes.xml": {
+      "role": "index",
+      "sha256": "e4537f6735c1c0b09e7e0253602abc6a3958d483a5b92a1a928d89afb264d064",
+      "size": 251,
+      "normalized_sha256": "e4537f6735c1c0b09e7e0253602abc6a3958d483a5b92a1a928d89afb264d064"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/xml/backup_rules.xml": {
+      "role": "index",
+      "sha256": "7b49543556bbb66c73a02b01d806f019d451703e04c0fce24a5f25f5f2d8bc80",
+      "size": 430,
+      "normalized_sha256": "7b49543556bbb66c73a02b01d806f019d451703e04c0fce24a5f25f5f2d8bc80"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/xml/data_extraction_rules.xml": {
+      "role": "index",
+      "sha256": "df6f723572df6576ff3eef6338afe68067416074a079fda9ba3432ec9d180d6a",
+      "size": 881,
+      "normalized_sha256": "df6f723572df6576ff3eef6338afe68067416074a079fda9ba3432ec9d180d6a"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/main/res/xml/file_paths.xml": {
+      "role": "index",
+      "sha256": "cdb4effab9f579e06f0f49d5fde4b3909fc5f03e978c9ba9ce34cf5b9f4b6902",
+      "size": 210,
+      "normalized_sha256": "cdb4effab9f579e06f0f49d5fde4b3909fc5f03e978c9ba9ce34cf5b9f4b6902"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/nodiagnostics/java/icu/akros/yumi/DiagnosticsReporter.kt": {
+      "role": "index",
+      "sha256": "db26fc2f3df95c5c288069ffab3b77d384a4d97ef537bf2d1235fd7032cd5941",
+      "size": 544,
+      "normalized_sha256": "db26fc2f3df95c5c288069ffab3b77d384a4d97ef537bf2d1235fd7032cd5941"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/test/java/icu/akros/yumi/SecurityBoundaryTest.kt": {
+      "role": "index",
+      "sha256": "4756a266bc25a500724052b3e920244b27aa8f9ee8f7568dd551d2d19ed8bc7e",
+      "size": 1559,
+      "normalized_sha256": "4756a266bc25a500724052b3e920244b27aa8f9ee8f7568dd551d2d19ed8bc7e"
+    },
+    "clients/yumi/src-tauri/gen/android/app/src/testDiagnostics/java/icu/akros/yumi/DiagnosticsGateTest.kt": {
+      "role": "index",
+      "sha256": "109fcabbec3d2f4d12b6d0e6c546d9f96fbf96d0a26d9ed0473b9f77ea6db59d",
+      "size": 1553,
+      "normalized_sha256": "109fcabbec3d2f4d12b6d0e6c546d9f96fbf96d0a26d9ed0473b9f77ea6db59d"
+    },
+    "clients/yumi/src-tauri/gen/android/build.gradle.kts": {
+      "role": "index",
+      "sha256": "f8d6b8ac33de9acbe318595de7be4500fec1009f8ea0edc508fd998cc15294c5",
+      "size": 377,
+      "normalized_sha256": "f8d6b8ac33de9acbe318595de7be4500fec1009f8ea0edc508fd998cc15294c5"
+    },
+    "clients/yumi/src-tauri/gen/android/buildSrc/build.gradle.kts": {
+      "role": "index",
+      "sha256": "11818be939b3aa44d691228f8666fba5efc796cdc1b4fb8072ab7c91bc056eb0",
+      "size": 345,
+      "normalized_sha256": "11818be939b3aa44d691228f8666fba5efc796cdc1b4fb8072ab7c91bc056eb0"
+    },
+    "clients/yumi/src-tauri/gen/android/buildSrc/src/main/java/icu/akros/yumi/kotlin/BuildTask.kt": {
+      "role": "index",
+      "sha256": "066da06829f36a38888284646f1c3e347a820eadfb38aaf2f288ed41297e27c0",
+      "size": 2220,
+      "normalized_sha256": "066da06829f36a38888284646f1c3e347a820eadfb38aaf2f288ed41297e27c0"
+    },
+    "clients/yumi/src-tauri/gen/android/buildSrc/src/main/java/icu/akros/yumi/kotlin/RustPlugin.kt": {
+      "role": "index",
+      "sha256": "3488450f755ee6ed9eeaaad99e7adcc27de827f98f4657d9a4fb4af47c2f8663",
+      "size": 3336,
+      "normalized_sha256": "3488450f755ee6ed9eeaaad99e7adcc27de827f98f4657d9a4fb4af47c2f8663"
+    },
+    "clients/yumi/src-tauri/gen/android/gradle.properties": {
+      "role": "index",
+      "sha256": "580de86208e48edae2206e167da024f17794269d296ad46a94d001c6809ba2cb",
+      "size": 1387,
+      "normalized_sha256": "580de86208e48edae2206e167da024f17794269d296ad46a94d001c6809ba2cb"
+    },
+    "clients/yumi/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar": {
+      "role": "index",
+      "sha256": "e996d452d2645e70c01c11143ca2d3742734a28da2bf61f25c82bdc288c9e637",
+      "size": 59203
+    },
+    "clients/yumi/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties": {
+      "role": "index",
+      "sha256": "5f8448f8760a88f7dfa64fad849012828706c6ce8e11041bb0640faa1e230f0e",
+      "size": 233,
+      "normalized_sha256": "5f8448f8760a88f7dfa64fad849012828706c6ce8e11041bb0640faa1e230f0e"
+    },
+    "clients/yumi/src-tauri/gen/android/gradlew": {
+      "role": "index",
+      "sha256": "63135287117a1e6d12c84580f1f49c61d1ba02218ecd28660605e97f976e7d65",
+      "size": 5766,
+      "normalized_sha256": "63135287117a1e6d12c84580f1f49c61d1ba02218ecd28660605e97f976e7d65"
+    },
+    "clients/yumi/src-tauri/gen/android/gradlew.bat": {
+      "role": "index",
+      "sha256": "c46a27c79007746de5922b17abb6230d64ad8b1ba3ad1585ee5c6543c2a9b129",
+      "size": 2674,
+      "normalized_sha256": "c46a27c79007746de5922b17abb6230d64ad8b1ba3ad1585ee5c6543c2a9b129"
+    },
+    "clients/yumi/src-tauri/gen/android/settings.gradle": {
+      "role": "index",
+      "sha256": "99856053f245337d20d308dbeaf9cd7250ad0c186ebbb6866ab46a6e7005ee19",
+      "size": 52,
+      "normalized_sha256": "99856053f245337d20d308dbeaf9cd7250ad0c186ebbb6866ab46a6e7005ee19"
+    },
+    "clients/yumi/src-tauri/gen/schemas/acl-manifests.json": {
+      "role": "index",
+      "sha256": "851c5e7fb6c14ad9082cdbe0d112c46b37af6af9678034d380ce625e66c2da64",
+      "size": 71775,
+      "normalized_sha256": "851c5e7fb6c14ad9082cdbe0d112c46b37af6af9678034d380ce625e66c2da64"
+    },
+    "clients/yumi/src-tauri/gen/schemas/android-schema.json": {
+      "role": "index",
+      "sha256": "195d64ce17879d51ed8093e967216b4009013e73380951276eedeb372dde7ec7",
+      "size": 133163,
+      "normalized_sha256": "195d64ce17879d51ed8093e967216b4009013e73380951276eedeb372dde7ec7"
+    },
+    "clients/yumi/src-tauri/gen/schemas/capabilities.json": {
+      "role": "index",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "size": 2,
+      "normalized_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "clients/yumi/src-tauri/gen/schemas/desktop-schema.json": {
+      "role": "index",
+      "sha256": "195d64ce17879d51ed8093e967216b4009013e73380951276eedeb372dde7ec7",
+      "size": 133163,
+      "normalized_sha256": "195d64ce17879d51ed8093e967216b4009013e73380951276eedeb372dde7ec7"
+    },
+    "clients/yumi/src-tauri/gen/schemas/macOS-schema.json": {
+      "role": "index",
+      "sha256": "195d64ce17879d51ed8093e967216b4009013e73380951276eedeb372dde7ec7",
+      "size": 133163,
+      "normalized_sha256": "195d64ce17879d51ed8093e967216b4009013e73380951276eedeb372dde7ec7"
+    },
+    "clients/yumi/src-tauri/gen/schemas/mobile-schema.json": {
+      "role": "index",
+      "sha256": "195d64ce17879d51ed8093e967216b4009013e73380951276eedeb372dde7ec7",
+      "size": 133163,
+      "normalized_sha256": "195d64ce17879d51ed8093e967216b4009013e73380951276eedeb372dde7ec7"
+    },
+    "clients/yumi/src-tauri/icons/128x128.png": {
+      "role": "index",
+      "sha256": "ab40f654d1a1b1b41985f1aa28f97fc5fcee1cbbc964231ac225fb855f36ef3c",
+      "size": 3420
+    },
+    "clients/yumi/src-tauri/icons/128x128@2x.png": {
+      "role": "index",
+      "sha256": "d88f40d9358ade65d52b4f80a7b8876a970324204137d1c6474371e24e4119ce",
+      "size": 7016
+    },
+    "clients/yumi/src-tauri/icons/32x32.png": {
+      "role": "index",
+      "sha256": "487633d46e3bec211d7a615ffb95b048d06f7cce5c64b822450713417b3d57a3",
+      "size": 1073
+    },
+    "clients/yumi/src-tauri/icons/64x64.png": {
+      "role": "index",
+      "sha256": "7917b59c3a0ca81ef0d6ebc8879dcda110820438b083cd35b1972ab2d7fb5d8d",
+      "size": 1831
+    },
+    "clients/yumi/src-tauri/icons/Square107x107Logo.png": {
+      "role": "index",
+      "sha256": "50a425cea03ad3f92b6cacb2acfdf664a38376219941a8d90f9bb3b7474808f7",
+      "size": 2985
+    },
+    "clients/yumi/src-tauri/icons/Square142x142Logo.png": {
+      "role": "index",
+      "sha256": "dcf2f8169a4e56771b96bf95454c63ba98515f35c7907229bbff75f83ac1260b",
+      "size": 3869
+    },
+    "clients/yumi/src-tauri/icons/Square150x150Logo.png": {
+      "role": "index",
+      "sha256": "6fc42b00d98941125a722b536f26de95438bab1dca17e09351004948ff3296d2",
+      "size": 4147
+    },
+    "clients/yumi/src-tauri/icons/Square284x284Logo.png": {
+      "role": "index",
+      "sha256": "0ec17b65c5033b59b017cb5b3f56711238f25ccc0e0666d721d9e5aa32777764",
+      "size": 8465
+    },
+    "clients/yumi/src-tauri/icons/Square30x30Logo.png": {
+      "role": "index",
+      "sha256": "97732366aceed4988f3b9fdb8f6eefeb085d5020abfb6b286078ed782ba2fd1e",
+      "size": 1019
+    },
+    "clients/yumi/src-tauri/icons/Square310x310Logo.png": {
+      "role": "index",
+      "sha256": "838dc2d628c6264711ecd36ef3ee3ec7862bd0327e98c509f7291a719c2bb69a",
+      "size": 9688
+    },
+    "clients/yumi/src-tauri/icons/Square44x44Logo.png": {
+      "role": "index",
+      "sha256": "8e98413605462c54f4213505694d67ea9b2286b65e44716d84498711ead2312c",
+      "size": 1405
+    },
+    "clients/yumi/src-tauri/icons/Square71x71Logo.png": {
+      "role": "index",
+      "sha256": "76af49d7dc2de076a91eed5adcec238e20dbdcfdaf321b652f64b16d845cb4aa",
+      "size": 2009
+    },
+    "clients/yumi/src-tauri/icons/Square89x89Logo.png": {
+      "role": "index",
+      "sha256": "3facc4208f5d7f4bd9e900d2e390b980f25805eaf2fae4726b4b1713f1e6352e",
+      "size": 2384
+    },
+    "clients/yumi/src-tauri/icons/StoreLogo.png": {
+      "role": "index",
+      "sha256": "38dc1af2faeedbb6478e6726f44de44a0d0ff627a14eea43066134e962dcb89e",
+      "size": 1482
+    },
+    "clients/yumi/src-tauri/icons/icon.icns": {
+      "role": "index",
+      "sha256": "455cbef97a36a72e09fab3a3e35593ff8341b28612333622816ac65bc87a1dbb",
+      "size": 62805
+    },
+    "clients/yumi/src-tauri/icons/icon.ico": {
+      "role": "index",
+      "sha256": "1a9cad00fa51ef16fa6a2dc83d9b16f58b407daa79b450c77d4f8cff0c7ece70",
+      "size": 14237
+    },
+    "clients/yumi/src-tauri/icons/icon.png": {
+      "role": "index",
+      "sha256": "0a06358c011fae5cc50bae75859daee4826b5a6eadfa9c337ae15c10fd3d1a3f",
+      "size": 14235
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-20x20@1x.png": {
+      "role": "index",
+      "sha256": "656ef2f911b63a4296b2736030c7a6bc638223844080ba7439891fe203eada9b",
+      "size": 660
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-20x20@2x-1.png": {
+      "role": "index",
+      "sha256": "acc5e26b4562e28707889afb16adc0c979320222f30ec3e19ee8419e448e93f2",
+      "size": 1275
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-20x20@2x.png": {
+      "role": "index",
+      "sha256": "acc5e26b4562e28707889afb16adc0c979320222f30ec3e19ee8419e448e93f2",
+      "size": 1275
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-20x20@3x.png": {
+      "role": "index",
+      "sha256": "2207584b11e209dd810f6cbffc4d5af04a59a1d0e087da49c448de3fb7cde439",
+      "size": 1651
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-29x29@1x.png": {
+      "role": "index",
+      "sha256": "ec6625e2e5412496b06efefbac67a64c8c40adbea6d688f16a5f370152c6d113",
+      "size": 953
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-29x29@2x-1.png": {
+      "role": "index",
+      "sha256": "25d91bfe9d22524618ebd9e96f6abe0922bcfeba780e87ebb83b37e034ead69d",
+      "size": 1633
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-29x29@2x.png": {
+      "role": "index",
+      "sha256": "25d91bfe9d22524618ebd9e96f6abe0922bcfeba780e87ebb83b37e034ead69d",
+      "size": 1633
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-29x29@3x.png": {
+      "role": "index",
+      "sha256": "0dc365e072bbb58e1105ffb0b0b167349d46e51fc60e0fabc34fb845c858f61e",
+      "size": 2247
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-40x40@1x.png": {
+      "role": "index",
+      "sha256": "acc5e26b4562e28707889afb16adc0c979320222f30ec3e19ee8419e448e93f2",
+      "size": 1275
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-40x40@2x-1.png": {
+      "role": "index",
+      "sha256": "825a2730fa0dc2a6831e0e749636ca4cb688673fcc25bdb1ac7acaf40af19026",
+      "size": 2044
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-40x40@2x.png": {
+      "role": "index",
+      "sha256": "825a2730fa0dc2a6831e0e749636ca4cb688673fcc25bdb1ac7acaf40af19026",
+      "size": 2044
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-40x40@3x.png": {
+      "role": "index",
+      "sha256": "465f2c04357ace173f49896f2f4501a417f853f7477cdc5bfb65aa653bdfbf5a",
+      "size": 3160
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-512@2x.png": {
+      "role": "index",
+      "sha256": "1daf88ba966c6012731b050eabd1cdb160bb44831789ea89b8bc78330867386a",
+      "size": 10613
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-60x60@2x.png": {
+      "role": "index",
+      "sha256": "465f2c04357ace173f49896f2f4501a417f853f7477cdc5bfb65aa653bdfbf5a",
+      "size": 3160
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-60x60@3x.png": {
+      "role": "index",
+      "sha256": "474853f5ae094a1fc7928737317c70d0bba375efbfda10a63bce6e15672287f4",
+      "size": 4768
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-76x76@1x.png": {
+      "role": "index",
+      "sha256": "58f19df6bd924cc19fccd75a6135adc1faf799b284ef85fca7fd77c5939f255a",
+      "size": 2064
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-76x76@2x.png": {
+      "role": "index",
+      "sha256": "2e04a482e8873cbd70c546ea93ee41c9b5166b6ef82e9aa180409ed7be6897f8",
+      "size": 4040
+    },
+    "clients/yumi/src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png": {
+      "role": "index",
+      "sha256": "764703f6488bd7555ea6a67b5e042edd44cc382e42041209891fa39c8480062b",
+      "size": 4389
+    },
+    "clients/yumi/src-tauri/src/lib.rs": {
+      "role": "index",
+      "sha256": "6822f261ba115eb78be6d843768e68090c9600e5dcb968031f5dec6164de2899",
+      "size": 32717,
+      "normalized_sha256": "6822f261ba115eb78be6d843768e68090c9600e5dcb968031f5dec6164de2899"
+    },
+    "clients/yumi/src-tauri/src/main.rs": {
+      "role": "index",
+      "sha256": "ec438608b6ddb0ffa51aca4f25c294df3e169661405e7220957701cbb905c685",
+      "size": 238,
+      "normalized_sha256": "ec438608b6ddb0ffa51aca4f25c294df3e169661405e7220957701cbb905c685"
+    },
+    "clients/yumi/src-tauri/tauri.conf.json": {
+      "role": "index",
+      "sha256": "f8fb6dcfb85a22cf33bed8f5f09206af131284a22467529bfd9d8638544cccb6",
+      "size": 537,
+      "normalized_sha256": "f8fb6dcfb85a22cf33bed8f5f09206af131284a22467529bfd9d8638544cccb6"
+    },
+    "clients/yumi/src-tauri/tauri.diagnostics.conf.json": {
+      "role": "index",
+      "sha256": "5d54d54be714619e1ddb048bc79a873e59135a9b9b80bdeeecb524783c2b680d",
+      "size": 111,
+      "normalized_sha256": "5d54d54be714619e1ddb048bc79a873e59135a9b9b80bdeeecb524783c2b680d"
+    },
+    "clients/yumi/tests/webview_fixture.py": {
+      "role": "observe",
+      "sha256": "3d30ee2004875d088d3a47f99e0cf347654d041e3ea060a56dc2097db15e66a7",
+      "size": 20699,
+      "normalized_sha256": "3d30ee2004875d088d3a47f99e0cf347654d041e3ea060a56dc2097db15e66a7"
+    },
+    "clients/yumi/ui-diagnostics/diagnostics.html": {
+      "role": "index",
+      "sha256": "b82824e21c81827d455d0058b896639ac0c3495d589aab6a1990a4cabe7714fa",
+      "size": 12394,
+      "normalized_sha256": "b82824e21c81827d455d0058b896639ac0c3495d589aab6a1990a4cabe7714fa"
+    },
+    "clients/yumi/ui/index.html": {
+      "role": "index",
+      "sha256": "c04dfb5c609ab14cd33bbc7a9bd73bbfd31ef6289d7c657d2a9d8fc255f377e4",
+      "size": 2927,
+      "normalized_sha256": "c04dfb5c609ab14cd33bbc7a9bd73bbfd31ef6289d7c657d2a9d8fc255f377e4"
+    },
+    "compose.yaml": {
+      "role": "index",
+      "sha256": "c943dcf175d731f3b927b7c7e25897c6af6ccdd24ec014d583a2e07022add23c",
+      "size": 1063,
+      "normalized_sha256": "c943dcf175d731f3b927b7c7e25897c6af6ccdd24ec014d583a2e07022add23c"
+    },
+    "deploy/com.rin.homestay-bot.plist": {
+      "role": "index",
+      "sha256": "7d72df5503a31e51cb64e0fde106bad8b4648f922099ddbebe5978ce676c6d20",
+      "size": 872,
+      "normalized_sha256": "7d72df5503a31e51cb64e0fde106bad8b4648f922099ddbebe5978ce676c6d20"
+    },
+    "deploy/start.sh": {
+      "role": "index",
+      "sha256": "bac9ca2a592923d9a8d3914fd3a26f60d1062c5bf5540636737b4723be432d4e",
+      "size": 1890,
+      "normalized_sha256": "bac9ca2a592923d9a8d3914fd3a26f60d1062c5bf5540636737b4723be432d4e"
+    },
+    "docs/design/references/claude-design-analysis.md": {
+      "role": "index",
+      "sha256": "3d972f34f8d4f33b442fa28220cf3b7ca2f13c0a97c468e3988148f82521f9df",
+      "size": 33586,
+      "normalized_sha256": "3d972f34f8d4f33b442fa28220cf3b7ca2f13c0a97c468e3988148f82521f9df"
+    },
+    "docs/knowledge/2026-09-22_claude-knowledge-import-handoff.md": {
+      "role": "index",
+      "sha256": "b1fb13cde140c5462f8f1b1dd406598bc657525815aed267ca27b7eed6bb6789",
+      "size": 7737,
+      "normalized_sha256": "b1fb13cde140c5462f8f1b1dd406598bc657525815aed267ca27b7eed6bb6789"
+    },
+    "docs/knowledge/2026-09-22_yumi-knowledge-draft.json": {
+      "role": "index",
+      "sha256": "ed6c8d2df2ca3068131f793f5667d4334ad1b0bcc2082d08c25e14a843798409",
+      "size": 26279,
+      "normalized_sha256": "ed6c8d2df2ca3068131f793f5667d4334ad1b0bcc2082d08c25e14a843798409"
+    },
+    "docs/knowledge/2026-09-22_yumi-knowledge-review.md": {
+      "role": "index",
+      "sha256": "65bca8234ebef4e6677778c1a87faee963142e3b9af7eb62947a9d7394ff1c9f",
+      "size": 23306,
+      "normalized_sha256": "65bca8234ebef4e6677778c1a87faee963142e3b9af7eb62947a9d7394ff1c9f"
+    },
+    "docs/releases/1.39.0.md": {
+      "role": "index",
+      "sha256": "aa616b69a4a50a30dc055e14c0c8a9a4e4764c8712eb5918771c7e1f448fe4f6",
+      "size": 4531,
+      "normalized_sha256": "aa616b69a4a50a30dc055e14c0c8a9a4e4764c8712eb5918771c7e1f448fe4f6"
+    },
+    "docs/releases/1.39.1.md": {
+      "role": "index",
+      "sha256": "1d90dd3620b19b4d4c51339f6fb5b1bdcd84a2e466c9163060e1e1582a79f86a",
+      "size": 1932,
+      "normalized_sha256": "1d90dd3620b19b4d4c51339f6fb5b1bdcd84a2e466c9163060e1e1582a79f86a"
+    },
+    "docs/releases/1.39.10.md": {
+      "role": "index",
+      "sha256": "7828cf8162bf22d2d09828e836e3715480a16d9945ae45507685f4ed81854b29",
+      "size": 2134,
+      "normalized_sha256": "7828cf8162bf22d2d09828e836e3715480a16d9945ae45507685f4ed81854b29"
+    },
+    "docs/releases/1.39.11.md": {
+      "role": "index",
+      "sha256": "95e302df365872b52588fb3bcd3e4ee26b781f7bafd5ead124ba8a60f5a1b0b2",
+      "size": 5326,
+      "normalized_sha256": "95e302df365872b52588fb3bcd3e4ee26b781f7bafd5ead124ba8a60f5a1b0b2"
+    },
+    "docs/releases/1.39.12.md": {
+      "role": "index",
+      "sha256": "c20a76c3eb755aa424dc6f09c8812ef674e439dc1b9fc1f14b8f463f4ee5b283",
+      "size": 7036,
+      "normalized_sha256": "c20a76c3eb755aa424dc6f09c8812ef674e439dc1b9fc1f14b8f463f4ee5b283"
+    },
+    "docs/releases/1.39.13.md": {
+      "role": "index",
+      "sha256": "7c9871b126e86a5e6dca7a8895cd11313a5ae9085806bd4a1e9ff37baaeab581",
+      "size": 6197,
+      "normalized_sha256": "7c9871b126e86a5e6dca7a8895cd11313a5ae9085806bd4a1e9ff37baaeab581"
+    },
+    "docs/releases/1.39.14.md": {
+      "role": "index",
+      "sha256": "7314480c38b68cd77f15c1312e797b4840139ab33ba5510af3ad5ae41848eb25",
+      "size": 4437,
+      "normalized_sha256": "7314480c38b68cd77f15c1312e797b4840139ab33ba5510af3ad5ae41848eb25"
+    },
+    "docs/releases/1.39.15.md": {
+      "role": "index",
+      "sha256": "a93eedab9e38db3691f1e96121a66123383813e84be8ca743407a65f040bdc93",
+      "size": 6334,
+      "normalized_sha256": "a93eedab9e38db3691f1e96121a66123383813e84be8ca743407a65f040bdc93"
+    },
+    "docs/releases/1.39.16.md": {
+      "role": "index",
+      "sha256": "09ba557a6ac619f80e5d4ea260ac6e12624bc20f8edeab9a325efa6c3f99429e",
+      "size": 12472,
+      "normalized_sha256": "09ba557a6ac619f80e5d4ea260ac6e12624bc20f8edeab9a325efa6c3f99429e"
+    },
+    "docs/releases/1.39.17.md": {
+      "role": "index",
+      "sha256": "a6b41191db2485ead5b29b129612d4e57f66a8e1c9de611b71fee59678c0834b",
+      "size": 9879,
+      "normalized_sha256": "a6b41191db2485ead5b29b129612d4e57f66a8e1c9de611b71fee59678c0834b"
+    },
+    "docs/releases/1.39.2.md": {
+      "role": "index",
+      "sha256": "282c38f34bf587cc31b68b2e1b1aebae4881758bfdf3e501fdb498fe044e194e",
+      "size": 3221,
+      "normalized_sha256": "282c38f34bf587cc31b68b2e1b1aebae4881758bfdf3e501fdb498fe044e194e"
+    },
+    "docs/releases/1.39.3.md": {
+      "role": "index",
+      "sha256": "df75cedd2c1b85c3ba85ce7658530bf9ba3f54b89315a91f24a2f5c5561f62f1",
+      "size": 1142,
+      "normalized_sha256": "df75cedd2c1b85c3ba85ce7658530bf9ba3f54b89315a91f24a2f5c5561f62f1"
+    },
+    "docs/releases/1.39.4.md": {
+      "role": "index",
+      "sha256": "09fa9d8b75be14d721a1ff9ee1c77a4bca1b0b585473df74e8225c0ece753b0b",
+      "size": 1406,
+      "normalized_sha256": "09fa9d8b75be14d721a1ff9ee1c77a4bca1b0b585473df74e8225c0ece753b0b"
+    },
+    "docs/releases/1.39.5.md": {
+      "role": "index",
+      "sha256": "3d46f747953d247ffd55257b7e218c960eead9d8f6449b6889d16da55702d65d",
+      "size": 2298,
+      "normalized_sha256": "3d46f747953d247ffd55257b7e218c960eead9d8f6449b6889d16da55702d65d"
+    },
+    "docs/releases/1.39.6.md": {
+      "role": "index",
+      "sha256": "08d86c9e6869fa7a32674bf710981ae7b95c793adcfec853179c73a490fee066",
+      "size": 3526,
+      "normalized_sha256": "08d86c9e6869fa7a32674bf710981ae7b95c793adcfec853179c73a490fee066"
+    },
+    "docs/releases/1.39.7.md": {
+      "role": "index",
+      "sha256": "ca6552e55d4cbda10d323ad26f80708e9364bc4a1516fd9113e9e03206a15a70",
+      "size": 2643,
+      "normalized_sha256": "ca6552e55d4cbda10d323ad26f80708e9364bc4a1516fd9113e9e03206a15a70"
+    },
+    "docs/releases/1.39.8.md": {
+      "role": "index",
+      "sha256": "f29cc0d38b2a6e3ae65d217d578a96c6c21f3d533d80fdd26e35970d6279d2d3",
+      "size": 4146,
+      "normalized_sha256": "f29cc0d38b2a6e3ae65d217d578a96c6c21f3d533d80fdd26e35970d6279d2d3"
+    },
+    "docs/releases/1.39.9.md": {
+      "role": "index",
+      "sha256": "1625c3dd88c464faa862ee1cbeb50f80d6e994211178467be00ea98f43731419",
+      "size": 4716,
+      "normalized_sha256": "1625c3dd88c464faa862ee1cbeb50f80d6e994211178467be00ea98f43731419"
+    },
+    "docs/releases/1.40.0.md": {
+      "role": "index",
+      "sha256": "02958760b3c2909dcf5ccfb410f226f5bfb03900c9e9afd570513c7f4a823266",
+      "size": 8126,
+      "normalized_sha256": "02958760b3c2909dcf5ccfb410f226f5bfb03900c9e9afd570513c7f4a823266"
+    },
+    "docs/releases/1.40.1.md": {
+      "role": "index",
+      "sha256": "1fa275be2619c62f7589bc3d08796618e6275fab172465d59b77d5943ebf283f",
+      "size": 5098,
+      "normalized_sha256": "1fa275be2619c62f7589bc3d08796618e6275fab172465d59b77d5943ebf283f"
+    },
+    "docs/releases/1.40.2.md": {
+      "role": "index",
+      "sha256": "392691e86326ec25f93104920d1eb85ab6437d10b32e7c8f78d9bc3ab8b69c00",
+      "size": 4208,
+      "normalized_sha256": "392691e86326ec25f93104920d1eb85ab6437d10b32e7c8f78d9bc3ab8b69c00"
+    },
+    "docs/releases/1.41.0.md": {
+      "role": "index",
+      "sha256": "7661ec58fd5746758a8deb26db33d30f696abab461e4da992ad1f05d3f4dcb6b",
+      "size": 8222,
+      "normalized_sha256": "7661ec58fd5746758a8deb26db33d30f696abab461e4da992ad1f05d3f4dcb6b"
+    },
+    "docs/releases/1.42.0.md": {
+      "role": "index",
+      "sha256": "e5444f152611cbe6fa12a24b4882464440de5c75de8d8f9ac4bec3a7874ad59b",
+      "size": 13067,
+      "normalized_sha256": "e5444f152611cbe6fa12a24b4882464440de5c75de8d8f9ac4bec3a7874ad59b"
+    },
+    "docs/releases/1.43.0.md": {
+      "role": "index",
+      "sha256": "360f5c3dd580e98c8a4a190cd487070d31bfd2ac41ec8a9983981a3701023e28",
+      "size": 6765,
+      "normalized_sha256": "360f5c3dd580e98c8a4a190cd487070d31bfd2ac41ec8a9983981a3701023e28"
+    },
+    "docs/releases/1.44.0.md": {
+      "role": "index",
+      "sha256": "8d38e883c28d065408a88b453fca9a923fd078658ae19de52fe94a72984f51d1",
+      "size": 6207,
+      "normalized_sha256": "8d38e883c28d065408a88b453fca9a923fd078658ae19de52fe94a72984f51d1"
+    },
+    "docs/releases/1.45.0.md": {
+      "role": "index",
+      "sha256": "653889692a27db1514fa7465aa0eb378a0a2bdc8a4b65cfe3259629c079c296b",
+      "size": 4536,
+      "normalized_sha256": "653889692a27db1514fa7465aa0eb378a0a2bdc8a4b65cfe3259629c079c296b"
+    },
+    "docs/releases/1.46.0.md": {
+      "role": "index",
+      "sha256": "9bd7bb9dc42523dc46f539de94ffb56323bdede3b8ff624a89ed5619dbe590d8",
+      "size": 5370,
+      "normalized_sha256": "9bd7bb9dc42523dc46f539de94ffb56323bdede3b8ff624a89ed5619dbe590d8"
+    },
+    "docs/releases/1.47.0.md": {
+      "role": "index",
+      "sha256": "ae23670a82ba572cf74cc5ddf4a8d93cd7c09d0dc2c4b2bb0d55b55ec83839e9",
+      "size": 4812,
+      "normalized_sha256": "ae23670a82ba572cf74cc5ddf4a8d93cd7c09d0dc2c4b2bb0d55b55ec83839e9"
+    },
+    "docs/releases/1.48.0.md": {
+      "role": "index",
+      "sha256": "aedef453f37c2d75c0921230ed92f8a4c4e4052128b99f6d0e406f7c9de97647",
+      "size": 11436,
+      "normalized_sha256": "aedef453f37c2d75c0921230ed92f8a4c4e4052128b99f6d0e406f7c9de97647"
+    },
+    "docs/releases/1.48.1.md": {
+      "role": "index",
+      "sha256": "e6feb75a015b9c477759ae232587ea068208d354a0dc5dadb65629f81ece2dde",
+      "size": 3080,
+      "normalized_sha256": "e6feb75a015b9c477759ae232587ea068208d354a0dc5dadb65629f81ece2dde"
+    },
+    "docs/releases/1.49.0.md": {
+      "role": "index",
+      "sha256": "2744ea3ea76dd75c9e246d6a60c120bdf6843dfd7b17aa1ac3330f4603101ff4",
+      "size": 5617,
+      "normalized_sha256": "2744ea3ea76dd75c9e246d6a60c120bdf6843dfd7b17aa1ac3330f4603101ff4"
+    },
+    "docs/releases/1.49.1.md": {
+      "role": "index",
+      "sha256": "64084beab57144dc043933b78dfc6995f8a791352b37741605d6aa805fe426d8",
+      "size": 3180,
+      "normalized_sha256": "64084beab57144dc043933b78dfc6995f8a791352b37741605d6aa805fe426d8"
+    },
+    "docs/releases/1.50.0.md": {
+      "role": "index",
+      "sha256": "de092c2c7f38b268585dd03123ea0fc9247c9ef955b7efcbfd282722bf5cc748",
+      "size": 4341,
+      "normalized_sha256": "de092c2c7f38b268585dd03123ea0fc9247c9ef955b7efcbfd282722bf5cc748"
+    },
+    "docs/releases/1.51.0.md": {
+      "role": "index",
+      "sha256": "a943a7cbebcde56aefb0e13bbfd35ee631ee194f9c87ad14640e8d5a33ce426c",
+      "size": 9579,
+      "normalized_sha256": "a943a7cbebcde56aefb0e13bbfd35ee631ee194f9c87ad14640e8d5a33ce426c"
+    },
+    "docs/releases/1.52.0.md": {
+      "role": "index",
+      "sha256": "716587c6fc39afe856d0e2e0f96d09fbb7886b9605f8e330edc2ef8d90a702c7",
+      "size": 5938,
+      "normalized_sha256": "716587c6fc39afe856d0e2e0f96d09fbb7886b9605f8e330edc2ef8d90a702c7"
+    },
+    "docs/releases/1.53.0.md": {
+      "role": "index",
+      "sha256": "fe77773bf88661ae56988cee4ff358b2d03d20ac6423135d24c155a0f1a83339",
+      "size": 9524,
+      "normalized_sha256": "fe77773bf88661ae56988cee4ff358b2d03d20ac6423135d24c155a0f1a83339"
+    },
+    "docs/releases/1.54.0.md": {
+      "role": "index",
+      "sha256": "40c07b57cb1c80ba1bf35eae91a95d6c3e6f74a8fd4a8a31b57c4ed20e1a5f9f",
+      "size": 6582,
+      "normalized_sha256": "40c07b57cb1c80ba1bf35eae91a95d6c3e6f74a8fd4a8a31b57c4ed20e1a5f9f"
+    },
+    "docs/releases/1.54.1.md": {
+      "role": "index",
+      "sha256": "296a64a4f2656edd21d233ca333ec3fbfc38fcc14febad827ac156a1ca432e0d",
+      "size": 3736,
+      "normalized_sha256": "296a64a4f2656edd21d233ca333ec3fbfc38fcc14febad827ac156a1ca432e0d"
+    },
+    "docs/releases/1.55.0.md": {
+      "role": "index",
+      "sha256": "d3c9a209f8407e4ec96a100e3c685557a79d54f195b75f03c40ae4180f4215e1",
+      "size": 5360,
+      "normalized_sha256": "d3c9a209f8407e4ec96a100e3c685557a79d54f195b75f03c40ae4180f4215e1"
+    },
+    "docs/releases/1.56.0.md": {
+      "role": "index",
+      "sha256": "26f11b7fbb559761e7b45c7938b9bda7e54e105f1534c7851c18f4a9b8703e83",
+      "size": 8331,
+      "normalized_sha256": "26f11b7fbb559761e7b45c7938b9bda7e54e105f1534c7851c18f4a9b8703e83"
+    },
+    "docs/releases/1.56.1.md": {
+      "role": "index",
+      "sha256": "cfca30185246721dd29fa39bbf4c21608ed40be63e1abbd573bdec695f14bd88",
+      "size": 3285,
+      "normalized_sha256": "cfca30185246721dd29fa39bbf4c21608ed40be63e1abbd573bdec695f14bd88"
+    },
+    "docs/releases/1.57.0.md": {
+      "role": "index",
+      "sha256": "5fd031b188e6e20dc701fdd67ad4946a1ded4e930109b41474135a9e7fd17884",
+      "size": 5830,
+      "normalized_sha256": "5fd031b188e6e20dc701fdd67ad4946a1ded4e930109b41474135a9e7fd17884"
+    },
+    "docs/releases/1.58.0.md": {
+      "role": "index",
+      "sha256": "8e06302fe180bf3330d5ba871c5b430bb413d06a1bc6c220207b147f076bb6e3",
+      "size": 8649,
+      "normalized_sha256": "8e06302fe180bf3330d5ba871c5b430bb413d06a1bc6c220207b147f076bb6e3"
+    },
+    "docs/releases/1.58.1.md": {
+      "role": "index",
+      "sha256": "02915b2522d2ae7bf91eaf57e1e50d47a193ac904be87b29d45381e4f4430f6f",
+      "size": 3041,
+      "normalized_sha256": "02915b2522d2ae7bf91eaf57e1e50d47a193ac904be87b29d45381e4f4430f6f"
+    },
+    "docs/releases/1.58.2.md": {
+      "role": "index",
+      "sha256": "87ac4ca2a50a2b3d4ab1621a51c2d9455906eb5e995ffd2a76572ef67110885c",
+      "size": 4490,
+      "normalized_sha256": "87ac4ca2a50a2b3d4ab1621a51c2d9455906eb5e995ffd2a76572ef67110885c"
+    },
+    "docs/releases/1.58.3.md": {
+      "role": "index",
+      "sha256": "ce88c3e6b974137231002b141e7dede4c441def5a3b7fd1c31f711baaff33c4a",
+      "size": 5103,
+      "normalized_sha256": "ce88c3e6b974137231002b141e7dede4c441def5a3b7fd1c31f711baaff33c4a"
+    },
+    "docs/releases/1.58.4.md": {
+      "role": "index",
+      "sha256": "aa7d33e7a3d5bea208383671a35691082d6c5203e746c41276d8db6262347a0f",
+      "size": 2271,
+      "normalized_sha256": "aa7d33e7a3d5bea208383671a35691082d6c5203e746c41276d8db6262347a0f"
+    },
+    "docs/releases/1.59.0.md": {
+      "role": "index",
+      "sha256": "e8c602f9fa8cca6d92610e4a3ffa2d62d1876757b59c6b769f0e4843a86d43f1",
+      "size": 5099,
+      "normalized_sha256": "e8c602f9fa8cca6d92610e4a3ffa2d62d1876757b59c6b769f0e4843a86d43f1"
+    },
+    "docs/releases/1.59.1.md": {
+      "role": "index",
+      "sha256": "0b429dc1138ff47aed221adf55bd555465305342cd8a81d1fe064d9357131f12",
+      "size": 3609,
+      "normalized_sha256": "0b429dc1138ff47aed221adf55bd555465305342cd8a81d1fe064d9357131f12"
+    },
+    "docs/releases/1.59.2.md": {
+      "role": "index",
+      "sha256": "8ad5714c96979d9f24e03a4d4bf7261f952c049cc7044ab932e3aff81793bc9b",
+      "size": 4727,
+      "normalized_sha256": "8ad5714c96979d9f24e03a4d4bf7261f952c049cc7044ab932e3aff81793bc9b"
+    },
+    "docs/releases/1.60.0.md": {
+      "role": "index",
+      "sha256": "10bfa82c0a4bfe7a56776a9c0d3a16494e8bbb9b2a9cf9754d4d8b4e3c7cdc51",
+      "size": 4403,
+      "normalized_sha256": "10bfa82c0a4bfe7a56776a9c0d3a16494e8bbb9b2a9cf9754d4d8b4e3c7cdc51"
+    },
+    "docs/releases/1.60.1.md": {
+      "role": "index",
+      "sha256": "8c2e482826b6bf623a32203712fbeebcdd3f40ec3a6b715717859f6bbc24244d",
+      "size": 3013,
+      "normalized_sha256": "8c2e482826b6bf623a32203712fbeebcdd3f40ec3a6b715717859f6bbc24244d"
+    },
+    "docs/releases/1.61.0.md": {
+      "role": "index",
+      "sha256": "bed0333155a3449cd7bb3cb61b05cfd1d076f90dae894d6850aefdc1e20a2fd2",
+      "size": 4694,
+      "normalized_sha256": "bed0333155a3449cd7bb3cb61b05cfd1d076f90dae894d6850aefdc1e20a2fd2"
+    },
+    "docs/releases/1.62.0.md": {
+      "role": "index",
+      "sha256": "744dbbecdb764ddcef72f7cb33f02458644137b4eeec8eb7fbf608ebabc932a0",
+      "size": 4522,
+      "normalized_sha256": "744dbbecdb764ddcef72f7cb33f02458644137b4eeec8eb7fbf608ebabc932a0"
+    },
+    "docs/releases/1.63.0.md": {
+      "role": "index",
+      "sha256": "afa0bd9743ea8eea81838cd113ff6d0f93fea2c580a54b5e2c0117c081348b85",
+      "size": 8626,
+      "normalized_sha256": "afa0bd9743ea8eea81838cd113ff6d0f93fea2c580a54b5e2c0117c081348b85"
+    },
+    "docs/releases/1.63.1.md": {
+      "role": "index",
+      "sha256": "e8b9f8c60f7861a20bc773b309eddeda4326fab5b7a99975b5508901fba79c4d",
+      "size": 4739,
+      "normalized_sha256": "e8b9f8c60f7861a20bc773b309eddeda4326fab5b7a99975b5508901fba79c4d"
+    },
+    "docs/releases/1.64.0.md": {
+      "role": "index",
+      "sha256": "cbc686e98acc3dafa28cbe97b8a3f50fa9d8abab16d3fe65cb1a4e70b88ec273",
+      "size": 7376,
+      "normalized_sha256": "cbc686e98acc3dafa28cbe97b8a3f50fa9d8abab16d3fe65cb1a4e70b88ec273"
+    },
+    "docs/releases/1.65.0.md": {
+      "role": "index",
+      "sha256": "2e8def0acde6c61e6d0b0d732dd0b5baf6df0fad2e05a5c51e9de487c692790e",
+      "size": 13181,
+      "normalized_sha256": "2e8def0acde6c61e6d0b0d732dd0b5baf6df0fad2e05a5c51e9de487c692790e"
+    },
+    "docs/releases/1.66.0.md": {
+      "role": "index",
+      "sha256": "f68afca0565b9010af8cfd7c1a312ac64a83f2b9676820b0339cba79827f7b5c",
+      "size": 18608,
+      "normalized_sha256": "f68afca0565b9010af8cfd7c1a312ac64a83f2b9676820b0339cba79827f7b5c"
+    },
+    "docs/releases/1.66.1.md": {
+      "role": "index",
+      "sha256": "8b068582a75ff8d05316d1f59b1320200bf00684ccad5d40fff84b24e13aafb5",
+      "size": 7666,
+      "normalized_sha256": "8b068582a75ff8d05316d1f59b1320200bf00684ccad5d40fff84b24e13aafb5"
+    },
+    "docs/releases/1.67.0.md": {
+      "role": "index",
+      "sha256": "a016242d17976964e2c5433d812057038c3e0cb6e5e6f2cf041c4217331ba25f",
+      "size": 9495,
+      "normalized_sha256": "a016242d17976964e2c5433d812057038c3e0cb6e5e6f2cf041c4217331ba25f"
+    },
+    "docs/releases/1.68.0.md": {
+      "role": "index",
+      "sha256": "5ea104fcc69be41b9949e4bea017e90c6cf4d5e5a0992b44050ff30041cab141",
+      "size": 16557,
+      "normalized_sha256": "5ea104fcc69be41b9949e4bea017e90c6cf4d5e5a0992b44050ff30041cab141"
+    },
+    "docs/releases/README.md": {
+      "role": "index",
+      "sha256": "9ef6fc75da08b16a08d6b5da21b4e55bc035de31d54c1280d3f4e418acd9e7a9",
+      "size": 10949,
+      "normalized_sha256": "9ef6fc75da08b16a08d6b5da21b4e55bc035de31d54c1280d3f4e418acd9e7a9"
+    },
+    "docs/reviews/2026-09-08-evidence/pytest-output.txt": {
+      "role": "index",
+      "sha256": "96937f5c83485834f675d49b0782d5213f5f97005b214446312f4d85a9b8b231",
+      "size": 13498,
+      "normalized_sha256": "96937f5c83485834f675d49b0782d5213f5f97005b214446312f4d85a9b8b231"
+    },
+    "docs/reviews/2026-09-08-evidence/reproduce_findings.py": {
+      "role": "index",
+      "sha256": "e63656808ce264aedb81c66bc3fd16f98424f0b0f15ddcfa6819cd9087eb86a0",
+      "size": 18653,
+      "normalized_sha256": "e63656808ce264aedb81c66bc3fd16f98424f0b0f15ddcfa6819cd9087eb86a0"
+    },
+    "docs/reviews/2026-09-08-evidence/reproduce_usability.py": {
+      "role": "index",
+      "sha256": "84240ab4d8ea1914e39a6f7bef5e89afb48e8d4125e9c5345d532726e059df7c",
+      "size": 3145,
+      "normalized_sha256": "84240ab4d8ea1914e39a6f7bef5e89afb48e8d4125e9c5345d532726e059df7c"
+    },
+    "docs/reviews/2026-09-08-evidence/reproduction-output.txt": {
+      "role": "index",
+      "sha256": "70d10c81da122cdf9ea2320e41228b21b9b70899505cc5d91af0f03f271dc1de",
+      "size": 709,
+      "normalized_sha256": "70d10c81da122cdf9ea2320e41228b21b9b70899505cc5d91af0f03f271dc1de"
+    },
+    "docs/reviews/2026-09-08-evidence/usability-pytest-v1.15.1.txt": {
+      "role": "index",
+      "sha256": "4d02b621a8581ace652bd3e73df2d68d7c931ed8e3b69648c253a684ee3e9005",
+      "size": 688,
+      "normalized_sha256": "4d02b621a8581ace652bd3e73df2d68d7c931ed8e3b69648c253a684ee3e9005"
+    },
+    "docs/reviews/2026-09-08-evidence/usability-reproduction-output.txt": {
+      "role": "index",
+      "sha256": "7667e1f83db78926df99b542620cd778f1cad4c69ce866b52b4ce2454af68822",
+      "size": 683,
+      "normalized_sha256": "7667e1f83db78926df99b542620cd778f1cad4c69ce866b52b4ce2454af68822"
+    },
+    "docs/reviews/2026-09-08_code-review-handoff-report.md": {
+      "role": "index",
+      "sha256": "c92f50c13e8ac20bb57bb28edd4c6064eb8da89d21127c364777256d735ff936",
+      "size": 30994,
+      "normalized_sha256": "c92f50c13e8ac20bb57bb28edd4c6064eb8da89d21127c364777256d735ff936"
+    },
+    "docs/reviews/2026-09-08_deployed-usability-audit-report.md": {
+      "role": "index",
+      "sha256": "cf81fc23047d79c5932b10ffa3f9368fbdf57adb86665fa2ee6ab7bebf943a58",
+      "size": 24343,
+      "normalized_sha256": "cf81fc23047d79c5932b10ffa3f9368fbdf57adb86665fa2ee6ab7bebf943a58"
+    },
+    "docs/reviews/2026-09-08_frontend-operations-optimization-report.md": {
+      "role": "index",
+      "sha256": "106d81e9e6c9a69caaadc166d72d05fce2d3d12db7754997fd08563818b34ca4",
+      "size": 24302,
+      "normalized_sha256": "106d81e9e6c9a69caaadc166d72d05fce2d3d12db7754997fd08563818b34ca4"
+    },
+    "docs/reviews/2026-09-09_historical-data-audit.md": {
+      "role": "index",
+      "sha256": "4d31bea7cabd3945c44281203abe1e2be1314d54f84f3fc50be547e9a306c267",
+      "size": 3241,
+      "normalized_sha256": "4d31bea7cabd3945c44281203abe1e2be1314d54f84f3fc50be547e9a306c267"
+    },
+    "docs/reviews/2026-09-09_room-status-clarity-review.md": {
+      "role": "index",
+      "sha256": "99c7dcdbf425231a24744ebb0208623d598ddfbe45f45b613421bcb48b13d907",
+      "size": 27713,
+      "normalized_sha256": "99c7dcdbf425231a24744ebb0208623d598ddfbe45f45b613421bcb48b13d907"
+    },
+    "docs/reviews/2026-09-11_handoff-to-codex.md": {
+      "role": "index",
+      "sha256": "1b03fff1fbfae8dc83bd066aa951adcc5736103e8c82800272efc9f4783aed84",
+      "size": 15757,
+      "normalized_sha256": "1b03fff1fbfae8dc83bd066aa951adcc5736103e8c82800272efc9f4783aed84"
+    },
+    "docs/reviews/2026-09-25_reply-rules-cross-review.md": {
+      "role": "index",
+      "sha256": "b00f29898e307958dd369d7fc14fdb9b87f3fe649c6c5ffb52cf4c61670ccee6",
+      "size": 16226,
+      "normalized_sha256": "b00f29898e307958dd369d7fc14fdb9b87f3fe649c6c5ffb52cf4c61670ccee6"
+    },
+    "docs/reviews/2026-09-26_codex-boundaries-rebase-handoff.md": {
+      "role": "index",
+      "sha256": "930e4f2cf5509145f99dca58e208c17b72542c021422f8897c37aff9462204fd",
+      "size": 14789,
+      "normalized_sha256": "930e4f2cf5509145f99dca58e208c17b72542c021422f8897c37aff9462204fd"
+    },
+    "docs/reviews/2026-09-28_codex-to-claude-guest-assistant-handoff.md": {
+      "role": "index",
+      "sha256": "9013e79ed2e30ffdc286d3031b79e178b5fc6ebe007b3d04651e083aaa9c05a7",
+      "size": 12967,
+      "normalized_sha256": "9013e79ed2e30ffdc286d3031b79e178b5fc6ebe007b3d04651e083aaa9c05a7"
+    },
+    "docs/reviews/2026-09-30_test-validation-rules-analysis-handoff.md": {
+      "role": "index",
+      "sha256": "2e5f397ecf49feab0d477d22aa33ad69128dfc18d8acfbb489f7d970bfb24d21",
+      "size": 16015,
+      "normalized_sha256": "2e5f397ecf49feab0d477d22aa33ad69128dfc18d8acfbb489f7d970bfb24d21"
+    },
+    "docs/reviews/2026-10-01_claude-to-codex-approval-review-handoff.md": {
+      "role": "index",
+      "sha256": "e77c2f2ae8bf191d11521cff2ea83be381ea6e9e3af31da6a5719f28d7000dea",
+      "size": 11740,
+      "normalized_sha256": "e77c2f2ae8bf191d11521cff2ea83be381ea6e9e3af31da6a5719f28d7000dea"
+    },
+    "docs/reviews/2026-10-01_claude-to-codex-approval-review-round2-handoff.md": {
+      "role": "index",
+      "sha256": "9503a5763de42de6b5f27d643130083139a40ee979ec8d82b6b94fe05e3fbc01",
+      "size": 9342,
+      "normalized_sha256": "9503a5763de42de6b5f27d643130083139a40ee979ec8d82b6b94fe05e3fbc01"
+    },
+    "docs/reviews/2026-10-01_claude-to-codex-frontend-implementation-handoff.md": {
+      "role": "index",
+      "sha256": "d5f29d8b4c32466eec9a1c8e325870fbf9a584e2c12022101c36386215533e62",
+      "size": 21660,
+      "normalized_sha256": "d5f29d8b4c32466eec9a1c8e325870fbf9a584e2c12022101c36386215533e62"
+    },
+    "docs/reviews/2026-10-01_codex-to-claude-approval-review-handoff.md": {
+      "role": "index",
+      "sha256": "f53cd1c82b27c53485e02d78e367f4d456e108a3d7dfd43d7bb2a15a85f18903",
+      "size": 30200,
+      "normalized_sha256": "f53cd1c82b27c53485e02d78e367f4d456e108a3d7dfd43d7bb2a15a85f18903"
+    },
+    "docs/reviews/2026-10-01_codex-to-claude-frontend-implementation-review-handoff.md": {
+      "role": "index",
+      "sha256": "4e630cd519c67530a7b0847e1388832ca5be16696237892f3a936654477b0f9a",
+      "size": 16574,
+      "normalized_sha256": "4e630cd519c67530a7b0847e1388832ca5be16696237892f3a936654477b0f9a"
+    },
+    "docs/reviews/2026-10-01_codex-to-claude-frontend-review-handoff.md": {
+      "role": "index",
+      "sha256": "1826e969b5c255a644c7962e0526589a96266db747af5a4ce138d90993f62394",
+      "size": 18705,
+      "normalized_sha256": "1826e969b5c255a644c7962e0526589a96266db747af5a4ce138d90993f62394"
+    },
+    "docs/reviews/2026-10-01_codex-to-claude-frontend-review-round2-handoff.md": {
+      "role": "index",
+      "sha256": "30ac1a3b23cda23d477f48349fe42afc596a579a7077a8bfdb71cce1c3558e95",
+      "size": 12590,
+      "normalized_sha256": "30ac1a3b23cda23d477f48349fe42afc596a579a7077a8bfdb71cce1c3558e95"
+    },
+    "docs/reviews/2026-10-01_frontend-spec-review-claude.md": {
+      "role": "index",
+      "sha256": "f6a59143ab50349c42d00ed171e48c381619c83d467f7d894a2f677ef0e9de27",
+      "size": 19649,
+      "normalized_sha256": "f6a59143ab50349c42d00ed171e48c381619c83d467f7d894a2f677ef0e9de27"
+    },
+    "docs/reviews/2026-10-02_claude-to-codex-admin-batch-and-workbench-implementation-review-handoff.md": {
+      "role": "index",
+      "sha256": "7ac2ad15698fcbbc5cd12cfce2d2acc16cd8d698fe422fcdbbef1c260a58f7d1",
+      "size": 10254,
+      "normalized_sha256": "7ac2ad15698fcbbc5cd12cfce2d2acc16cd8d698fe422fcdbbef1c260a58f7d1"
+    },
+    "docs/reviews/2026-10-02_claude-to-codex-approval-review-round3-handoff.md": {
+      "role": "index",
+      "sha256": "9b4aa3e9e494610e4c06a5dc9fb0b93563220f0dd1e9681857759d8ebb58165d",
+      "size": 10336,
+      "normalized_sha256": "9b4aa3e9e494610e4c06a5dc9fb0b93563220f0dd1e9681857759d8ebb58165d"
+    },
+    "docs/reviews/2026-10-02_codex-to-claude-admin-batch-and-workbench-implementation-handoff.md": {
+      "role": "index",
+      "sha256": "e92af2f005a0ea65490c20b9cf9ae9d2877fb678ddf53b41e4bcd66aef8ac9d0",
+      "size": 22427,
+      "normalized_sha256": "e92af2f005a0ea65490c20b9cf9ae9d2877fb678ddf53b41e4bcd66aef8ac9d0"
+    },
+    "docs/reviews/2026-10-02_codex-to-claude-approval-review-round2-handoff.md": {
+      "role": "index",
+      "sha256": "4fe8534af544d68babe91eeaad5454ea9e63b9f379a8196531de0b3cb79cac94",
+      "size": 23762,
+      "normalized_sha256": "4fe8534af544d68babe91eeaad5454ea9e63b9f379a8196531de0b3cb79cac94"
+    },
+    "docs/reviews/2026-10-02_codex-to-claude-approval-review-round3-handoff.md": {
+      "role": "index",
+      "sha256": "9330cfac42c546f42cf01f6f9c079881aa97c3f3037222c3dab939be91b6aa98",
+      "size": 16957,
+      "normalized_sha256": "9330cfac42c546f42cf01f6f9c079881aa97c3f3037222c3dab939be91b6aa98"
+    },
+    "docs/reviews/2026-10-02_codex-to-claude-sqlite-savepoint-and-late-result-implementation-handoff.md": {
+      "role": "index",
+      "sha256": "a07ba986dd148d0fb1502a80ad561f0da9a1ef80eb11429590fea38482398c27",
+      "size": 22956,
+      "normalized_sha256": "a07ba986dd148d0fb1502a80ad561f0da9a1ef80eb11429590fea38482398c27"
+    },
+    "docs/reviews/2026-10-02_codex-to-claude-sqlite-savepoint-and-late-result-spec-review-handoff.md": {
+      "role": "index",
+      "sha256": "bd59dc11cd1de015032a2d34379ea7b927b37e3f752a15060eb334a8b9ff122f",
+      "size": 19554,
+      "normalized_sha256": "bd59dc11cd1de015032a2d34379ea7b927b37e3f752a15060eb334a8b9ff122f"
+    },
+    "docs/reviews/2026-10-03_claude-to-codex-warm-theme-spec-review-handoff.md": {
+      "role": "index",
+      "sha256": "11e30188abcc1884b297a656b06de6b650db2ff99c813d33e1b0ae857f226e91",
+      "size": 7797,
+      "normalized_sha256": "11e30188abcc1884b297a656b06de6b650db2ff99c813d33e1b0ae857f226e91"
+    },
+    "docs/reviews/2026-10-04_claude-to-codex-frontend-audit-fixes-review-handoff.md": {
+      "role": "index",
+      "sha256": "fa508af531d85d5438812a95855a8639a61657c0947a69ba2131d6fd4ed810f4",
+      "size": 8058,
+      "normalized_sha256": "fa508af531d85d5438812a95855a8639a61657c0947a69ba2131d6fd4ed810f4"
+    },
+    "docs/reviews/2026-10-04_claude-to-codex-frontend-audit-review-handoff.md": {
+      "role": "index",
+      "sha256": "38950569e67101a86804e75a4d237e944b24a3e0c3641344532a9f03174f19af",
+      "size": 11432,
+      "normalized_sha256": "38950569e67101a86804e75a4d237e944b24a3e0c3641344532a9f03174f19af"
+    },
+    "docs/reviews/2026-10-04_codex-to-claude-frontend-audit-fixes-implementation-handoff.md": {
+      "role": "index",
+      "sha256": "fe55fe282f925ee22fcbbae73da342645b598dc591ffd33c71a277c53a26d20e",
+      "size": 16209,
+      "normalized_sha256": "fe55fe282f925ee22fcbbae73da342645b598dc591ffd33c71a277c53a26d20e"
+    },
+    "docs/reviews/2026-10-04_codex-to-claude-frontend-audit-handoff.md": {
+      "role": "index",
+      "sha256": "eea18340daf3043b1c435fc6b4c8b7ca7d543561be0e45e8d68749f44314d3ae",
+      "size": 16192,
+      "normalized_sha256": "eea18340daf3043b1c435fc6b4c8b7ca7d543561be0e45e8d68749f44314d3ae"
+    },
+    "docs/reviews/2026-10-05_claude-to-codex-hallmark-polish-implementation-handoff.md": {
+      "role": "index",
+      "sha256": "7dadf372c041418d331123901a72e588ee1e25384ed99b1bc1460cae3857ea9b",
+      "size": 10574,
+      "normalized_sha256": "7dadf372c041418d331123901a72e588ee1e25384ed99b1bc1460cae3857ea9b"
+    },
+    "docs/reviews/2026-10-06_aoci-index-claude-sqlite-handoff.md": {
+      "role": "index",
+      "sha256": "96892f43130f55da3f605a1532a7cbba325d99e528aa3ec6734143f8127f58a2",
+      "size": 13545,
+      "normalized_sha256": "96892f43130f55da3f605a1532a7cbba325d99e528aa3ec6734143f8127f58a2"
+    },
+    "docs/reviews/2026-10-06_codex-to-claude-hallmark-r3-fixes-handoff.md": {
+      "role": "index",
+      "sha256": "22d0769d62acf38219a7c5547eca35f83f47c3815f0ddc2fe02f6ee9f969ffcf",
+      "size": 9742,
+      "normalized_sha256": "22d0769d62acf38219a7c5547eca35f83f47c3815f0ddc2fe02f6ee9f969ffcf"
+    },
+    "docs/reviews/README.md": {
+      "role": "index",
+      "sha256": "686dc7f61e2742f50f8b4434cb467a16fb320bce20b27aea210f0897702548f5",
+      "size": 3679,
+      "normalized_sha256": "686dc7f61e2742f50f8b4434cb467a16fb320bce20b27aea210f0897702548f5"
+    },
+    "docs/specs/2026-09-09_room-calendar-visual-optimization-spec.md": {
+      "role": "index",
+      "sha256": "bc33c1827d552a3218adb5ec9a2545d1ab2c8822c066a374a0bbe027ddcf0263",
+      "size": 18477,
+      "normalized_sha256": "bc33c1827d552a3218adb5ec9a2545d1ab2c8822c066a374a0bbe027ddcf0263"
+    },
+    "docs/specs/2026-09-09_room-stay-timeline-countdown-spec.md": {
+      "role": "index",
+      "sha256": "b909a0d2c778254e1c6a22b8579c2a9f961d493eebf8abbf107767fde6c6aef8",
+      "size": 22059,
+      "normalized_sha256": "b909a0d2c778254e1c6a22b8579c2a9f961d493eebf8abbf107767fde6c6aef8"
+    },
+    "docs/specs/2026-09-10_room-card-redesign.md": {
+      "role": "index",
+      "sha256": "8842a1225dc2c8e57e699bfb1e9b787888259d7a2bde8234c88c69a4a7c1cd73",
+      "size": 5290,
+      "normalized_sha256": "8842a1225dc2c8e57e699bfb1e9b787888259d7a2bde8234c88c69a4a7c1cd73"
+    },
+    "docs/specs/2026-09-10_wecom-test-account-plan.md": {
+      "role": "index",
+      "sha256": "e3274dbe02d958859e54707d279665025dbc9a9bf2cab9388cac236dfa6cc80c",
+      "size": 9491,
+      "normalized_sha256": "e3274dbe02d958859e54707d279665025dbc9a9bf2cab9388cac236dfa6cc80c"
+    },
+    "docs/specs/2026-09-11_customer-manual-maintenance-spec.md": {
+      "role": "index",
+      "sha256": "8f8907b9bcbfc7c08ebe164a5133dee51dd3d885f380815e19492aab22822d16",
+      "size": 4061,
+      "normalized_sha256": "8f8907b9bcbfc7c08ebe164a5133dee51dd3d885f380815e19492aab22822d16"
+    },
+    "docs/specs/2026-09-11_memory-auto-promotion-spec.md": {
+      "role": "index",
+      "sha256": "b61bd919c6419f7bb8b07a8892ea7df58f84cb5a8fa9db31e416e53ffe12bad2",
+      "size": 5545,
+      "normalized_sha256": "b61bd919c6419f7bb8b07a8892ea7df58f84cb5a8fa9db31e416e53ffe12bad2"
+    },
+    "docs/specs/2026-09-12_windows-android-client-spec.md": {
+      "role": "index",
+      "sha256": "6a6d7860ef16178f67dffa53dd67bad0742a519738b696699633a6bd75dbff31",
+      "size": 36486,
+      "normalized_sha256": "6a6d7860ef16178f67dffa53dd67bad0742a519738b696699633a6bd75dbff31"
+    },
+    "docs/specs/2026-09-13_android-field-test-fixes-spec.md": {
+      "role": "index",
+      "sha256": "7fc1c9db75f8dd85e34c6053dd1febf73f691b2e291f5d1e6fefe2d39206f203",
+      "size": 14697,
+      "normalized_sha256": "7fc1c9db75f8dd85e34c6053dd1febf73f691b2e291f5d1e6fefe2d39206f203"
+    },
+    "docs/specs/2026-09-13_yumi-client-phase-a-handoff.md": {
+      "role": "index",
+      "sha256": "aceb67fab742ecc0c42524a0fa6659be6cf1721850b179be01a646b2497ed933",
+      "size": 19094,
+      "normalized_sha256": "aceb67fab742ecc0c42524a0fa6659be6cf1721850b179be01a646b2497ed933"
+    },
+    "docs/specs/2026-09-14_yumi-client-phase-a-final-handoff.md": {
+      "role": "index",
+      "sha256": "cb517ff2d6120adac85ed10d84b9b2f8c7fa9ee224f61958b6dd997289f8cf75",
+      "size": 14709,
+      "normalized_sha256": "cb517ff2d6120adac85ed10d84b9b2f8c7fa9ee224f61958b6dd997289f8cf75"
+    },
+    "docs/specs/2026-09-15_android-phase-a-closure-spec.md": {
+      "role": "index",
+      "sha256": "01d408b0f6a0d93ddebe0097a813d8aabaca906f85898756c857a5c723e86694",
+      "size": 16039,
+      "normalized_sha256": "01d408b0f6a0d93ddebe0097a813d8aabaca906f85898756c857a5c723e86694"
+    },
+    "docs/specs/2026-09-16_room-timeline-mobile-redesign-spec.md": {
+      "role": "index",
+      "sha256": "73b73b91954a339f8f6669ab9d1709a39004e0d873dae893f51f4d5a47d03573",
+      "size": 15270,
+      "normalized_sha256": "73b73b91954a339f8f6669ab9d1709a39004e0d873dae893f51f4d5a47d03573"
+    },
+    "docs/specs/2026-09-21_codex-to-claude-rag-fix-handoff.md": {
+      "role": "index",
+      "sha256": "c63a106454b4685f2e07167b471ad243372830c67de85e388cedcc34d6dda1f9",
+      "size": 8671,
+      "normalized_sha256": "c63a106454b4685f2e07167b471ad243372830c67de85e388cedcc34d6dda1f9"
+    },
+    "docs/specs/2026-09-21_database-optimization-handoff.md": {
+      "role": "index",
+      "sha256": "4fb2fc515ef1dd8fc73ebc48c6d5aa978213bc13fd979debae3c0585c79199af",
+      "size": 30539,
+      "normalized_sha256": "4fb2fc515ef1dd8fc73ebc48c6d5aa978213bc13fd979debae3c0585c79199af"
+    },
+    "docs/specs/2026-09-21_database-optimization-spec.md": {
+      "role": "index",
+      "sha256": "ab1e5788ca55ee3673271174fad4dd774b83fe634817e563c5afd001889c281a",
+      "size": 68716,
+      "normalized_sha256": "ab1e5788ca55ee3673271174fad4dd774b83fe634817e563c5afd001889c281a"
+    },
+    "docs/specs/2026-09-22_c2-tuning-handoff.md": {
+      "role": "index",
+      "sha256": "58ed4a1d2be73539e3ad185fd3a20fea97c9338a6dc490b76ae82b7274d7a7cc",
+      "size": 14989,
+      "normalized_sha256": "58ed4a1d2be73539e3ad185fd3a20fea97c9338a6dc490b76ae82b7274d7a7cc"
+    },
+    "docs/specs/2026-09-22_claude-to-codex-evidence-gate-handoff.md": {
+      "role": "index",
+      "sha256": "b94d3eae61cff85b315b4df6ed66632d1f7b0aaa99b9484127c32ad92bf9b4a8",
+      "size": 10073,
+      "normalized_sha256": "b94d3eae61cff85b315b4df6ed66632d1f7b0aaa99b9484127c32ad92bf9b4a8"
+    },
+    "docs/specs/2026-09-22_codex-to-claude-c2-acceptance-handoff.md": {
+      "role": "index",
+      "sha256": "4e45d9ebb7e0c352b3c62f0f16f4e6ca91118c8a5537068ddd52cadf2aee62ac",
+      "size": 14121,
+      "normalized_sha256": "4e45d9ebb7e0c352b3c62f0f16f4e6ca91118c8a5537068ddd52cadf2aee62ac"
+    },
+    "docs/specs/2026-09-22_knowledge-evidence-gate-spec.md": {
+      "role": "index",
+      "sha256": "e65ab9b31499fc7cd8a09f3708a515046affa37c5f882dca017375eb00191218",
+      "size": 31943,
+      "normalized_sha256": "e65ab9b31499fc7cd8a09f3708a515046affa37c5f882dca017375eb00191218"
+    },
+    "docs/specs/2026-09-23_evidence-gate-release-handoff.md": {
+      "role": "index",
+      "sha256": "8dcf424fb781e5107582821514a342d8c5a4c729d2b88c6a8c7549d816172e9a",
+      "size": 12968,
+      "normalized_sha256": "8dcf424fb781e5107582821514a342d8c5a4c729d2b88c6a8c7549d816172e9a"
+    },
+    "docs/specs/2026-09-23_facility-reply-wording-spec.md": {
+      "role": "index",
+      "sha256": "991bb2e39f66ca92f7784b287bbc4e33f061ddc444097c30c744241c638327c9",
+      "size": 9141,
+      "normalized_sha256": "991bb2e39f66ca92f7784b287bbc4e33f061ddc444097c30c744241c638327c9"
+    },
+    "docs/specs/2026-09-23_holdout-v4-brief.md": {
+      "role": "index",
+      "sha256": "b240fb22b6af1ce0e4307b23dc20e30d336ea54cba3e06ccfc95942acadfdbee",
+      "size": 4082,
+      "normalized_sha256": "b240fb22b6af1ce0e4307b23dc20e30d336ea54cba3e06ccfc95942acadfdbee"
+    },
+    "docs/specs/2026-09-23_knowledge-draft-import-spec.md": {
+      "role": "index",
+      "sha256": "e449cea1838de6e3aa4907d38005016972b436b3a86e312d256bda284e4abd5e",
+      "size": 7558,
+      "normalized_sha256": "e449cea1838de6e3aa4907d38005016972b436b3a86e312d256bda284e4abd5e"
+    },
+    "docs/specs/2026-09-23_v1.39.5-release-handoff.md": {
+      "role": "index",
+      "sha256": "85a799379db770f95c46262af1c06ec839e745f22e6f1d98f21a39a47c9b6e6f",
+      "size": 6607,
+      "normalized_sha256": "85a799379db770f95c46262af1c06ec839e745f22e6f1d98f21a39a47c9b6e6f"
+    },
+    "docs/specs/2026-09-24_amenity-claims-and-room-catalog-spec.md": {
+      "role": "index",
+      "sha256": "18418abc8910a47d620b8e790391f3a3a49dff5da25173bc14d3447a4ba29b85",
+      "size": 9265,
+      "normalized_sha256": "18418abc8910a47d620b8e790391f3a3a49dff5da25173bc14d3447a4ba29b85"
+    },
+    "docs/specs/2026-09-24_fact-source-rule-spec.md": {
+      "role": "index",
+      "sha256": "3f9adf4da1292e5f094be50cd18b626cfae3bf890b5fc9e9fe8e1aef75091b94",
+      "size": 13551,
+      "normalized_sha256": "3f9adf4da1292e5f094be50cd18b626cfae3bf890b5fc9e9fe8e1aef75091b94"
+    },
+    "docs/specs/2026-09-24_live-reply-latency-spec.md": {
+      "role": "index",
+      "sha256": "bdbabd48be5213d100ac542a37b2a4edcbca876276837b7ff4c131b4073b62bf",
+      "size": 7521,
+      "normalized_sha256": "bdbabd48be5213d100ac542a37b2a4edcbca876276837b7ff4c131b4073b62bf"
+    },
+    "docs/specs/2026-09-24_service-claims-and-live-routing-spec.md": {
+      "role": "index",
+      "sha256": "4f3666ab9d20643650c07906e9c0eb2439af1fd8b6affb2b82b181a0278f3bd2",
+      "size": 10298,
+      "normalized_sha256": "4f3666ab9d20643650c07906e9c0eb2439af1fd8b6affb2b82b181a0278f3bd2"
+    },
+    "docs/specs/2026-09-24_split-long-replies-spec.md": {
+      "role": "index",
+      "sha256": "e1a5b395cfcdd4308105525b08e18f55c1e11a058e1184a897575e02dfbeee72",
+      "size": 12600,
+      "normalized_sha256": "e1a5b395cfcdd4308105525b08e18f55c1e11a058e1184a897575e02dfbeee72"
+    },
+    "docs/specs/2026-09-25_guest-assistant-boundaries-p9-p14.md": {
+      "role": "index",
+      "sha256": "1a409edb0bdbc2cc46c5860b3c04fd7ea502de1292781d5d0500e723d2476129",
+      "size": 26827,
+      "normalized_sha256": "1a409edb0bdbc2cc46c5860b3c04fd7ea502de1292781d5d0500e723d2476129"
+    },
+    "docs/specs/2026-09-25_guest-assistant-boundaries-spec.md": {
+      "role": "index",
+      "sha256": "1ab894c9e6bbf9fa44920d6f2fd01bfb9ce411e5d5957e900ad553eb4526bd4d",
+      "size": 37912,
+      "normalized_sha256": "1ab894c9e6bbf9fa44920d6f2fd01bfb9ce411e5d5957e900ad553eb4526bd4d"
+    },
+    "docs/specs/2026-09-25_main-chain-stage-timing-spec.md": {
+      "role": "index",
+      "sha256": "9a0e3db2742b5b1bcfe07402aac39e24565746aabf2553a046c17cdd6fc44283",
+      "size": 8567,
+      "normalized_sha256": "9a0e3db2742b5b1bcfe07402aac39e24565746aabf2553a046c17cdd6fc44283"
+    },
+    "docs/specs/2026-09-25_reply-regression-gate-spec.md": {
+      "role": "index",
+      "sha256": "08b482f8a4d7bfeaaa99fc8405f72ed1a83f4ee2463997692d499f175fa84d7b",
+      "size": 15257,
+      "normalized_sha256": "08b482f8a4d7bfeaaa99fc8405f72ed1a83f4ee2463997692d499f175fa84d7b"
+    },
+    "docs/specs/2026-09-25_safety-delivery-and-regressions-spec.md": {
+      "role": "index",
+      "sha256": "01a100f1fcf374af00dcb69db54b909b6cf34007faa3a5bfb588fb46d68f0ca9",
+      "size": 12777,
+      "normalized_sha256": "01a100f1fcf374af00dcb69db54b909b6cf34007faa3a5bfb588fb46d68f0ca9"
+    },
+    "docs/specs/2026-09-26_emergency-follow-up-and-price-spec.md": {
+      "role": "index",
+      "sha256": "636586223d1738032d228175a7f6d2517a7aaa1fbe9d2e1eda6904467d84930c",
+      "size": 13413,
+      "normalized_sha256": "636586223d1738032d228175a7f6d2517a7aaa1fbe9d2e1eda6904467d84930c"
+    },
+    "docs/specs/2026-09-26_guest-data-retention-spec.md": {
+      "role": "index",
+      "sha256": "4592bec872f2cea95ada06ef65048aec42fcb4707f4a9b97e848fb8d95855eeb",
+      "size": 8296,
+      "normalized_sha256": "4592bec872f2cea95ada06ef65048aec42fcb4707f4a9b97e848fb8d95855eeb"
+    },
+    "docs/specs/2026-09-28_property-lorebook-spec.md": {
+      "role": "index",
+      "sha256": "770a3d57f4ad8e70ef8b2f5fb6623c46e1616e8e1c413d54c37c7481d31d46ba",
+      "size": 11728,
+      "normalized_sha256": "770a3d57f4ad8e70ef8b2f5fb6623c46e1616e8e1c413d54c37c7481d31d46ba"
+    },
+    "docs/specs/2026-09-29_knowledge-images-spec.md": {
+      "role": "index",
+      "sha256": "2a7c0c56216ea5fd9789f6c277665b4dcf047e32b05cb6e820282f5241e61222",
+      "size": 7943,
+      "normalized_sha256": "2a7c0c56216ea5fd9789f6c277665b4dcf047e32b05cb6e820282f5241e61222"
+    },
+    "docs/specs/2026-09-30_claude-review-fixes-spec.md": {
+      "role": "index",
+      "sha256": "cba847902ba9fcdc131fca4069c41393c3ff52bce11f849579c8a7d765ca3a91",
+      "size": 29204,
+      "normalized_sha256": "cba847902ba9fcdc131fca4069c41393c3ff52bce11f849579c8a7d765ca3a91"
+    },
+    "docs/specs/2026-10-01_approval-review-backfill-spec.md": {
+      "role": "index",
+      "sha256": "a7e22d26c0a0250ce99ae70a514a68ffce35876f0db97b5df47931c70acacae8",
+      "size": 14317,
+      "normalized_sha256": "a7e22d26c0a0250ce99ae70a514a68ffce35876f0db97b5df47931c70acacae8"
+    },
+    "docs/specs/2026-10-01_frontend-audit-handoff.md": {
+      "role": "index",
+      "sha256": "579e7214bdc45c985f82dc8f2740e324247587def805fe37a7eb3524071e2790",
+      "size": 29754,
+      "normalized_sha256": "579e7214bdc45c985f82dc8f2740e324247587def805fe37a7eb3524071e2790"
+    },
+    "docs/specs/2026-10-01_frontend-improvement-spec.md": {
+      "role": "index",
+      "sha256": "f74c7ff89f80d6b5cb2bf0c51e21add2ad1e807dfc94d092d8ba22049f205077",
+      "size": 53981,
+      "normalized_sha256": "f74c7ff89f80d6b5cb2bf0c51e21add2ad1e807dfc94d092d8ba22049f205077"
+    },
+    "docs/specs/2026-10-02_admin-batch-and-workbench-spec.md": {
+      "role": "index",
+      "sha256": "5d9dfdba96c58b3183358118c3d77407d2a3a660ea32d3d52909e9472f6dd16d",
+      "size": 51391,
+      "normalized_sha256": "5d9dfdba96c58b3183358118c3d77407d2a3a660ea32d3d52909e9472f6dd16d"
+    },
+    "docs/specs/2026-10-02_sqlite-savepoint-and-late-result-spec.md": {
+      "role": "index",
+      "sha256": "8b0f2723f39cd688ea658eff0972d68e59fbbcf31a1c76277aca203c62146052",
+      "size": 21269,
+      "normalized_sha256": "8b0f2723f39cd688ea658eff0972d68e59fbbcf31a1c76277aca203c62146052"
+    },
+    "docs/specs/2026-10-03_admin-warm-wood-theme-spec.md": {
+      "role": "index",
+      "sha256": "03582e251897dc2a35e9fcf4ab7bba256df966fa3088df524c5631ee1abc3b86",
+      "size": 23543,
+      "normalized_sha256": "03582e251897dc2a35e9fcf4ab7bba256df966fa3088df524c5631ee1abc3b86"
+    },
+    "docs/specs/2026-10-04_frontend-audit-fixes-spec.md": {
+      "role": "index",
+      "sha256": "f3e53d0cac3931aa9a34ed6115ae141977174a36ae1ea8637a7892e3e9e44229",
+      "size": 33174,
+      "normalized_sha256": "f3e53d0cac3931aa9a34ed6115ae141977174a36ae1ea8637a7892e3e9e44229"
+    },
+    "docs/specs/2026-10-04_hallmark-frontend-polish-spec.md": {
+      "role": "index",
+      "sha256": "73012fb7d92e13ee0aadeb150550be6a4e9b5d3f49c81daef6827578ecc1a8a0",
+      "size": 24760,
+      "normalized_sha256": "73012fb7d92e13ee0aadeb150550be6a4e9b5d3f49c81daef6827578ecc1a8a0"
+    },
+    "docs/specs/assets/2026-09-16_room-timeline-mobile-proto.html": {
+      "role": "index",
+      "sha256": "b0b7f45a74ec72d11bb12fe57c2cdca37215df4aa1c5e68862f3ca50008ff5bd",
+      "size": 13334,
+      "normalized_sha256": "b0b7f45a74ec72d11bb12fe57c2cdca37215df4aa1c5e68862f3ca50008ff5bd"
+    },
+    "docs/specs/assets/2026-10-03_admin-warm-wood-theme/reference-v3.png": {
+      "role": "index",
+      "sha256": "ee19bd7a681aae1cad16a792e41d6c76e81ba9e44cf782ed83a8ab007248ff10",
+      "size": 1751290
+    },
+    "docs/specs/assets/2026-10-03_admin-warm-wood-theme/reference-v4.png": {
+      "role": "index",
+      "sha256": "189e2e6b9413d07e7c11dc43c717c2e15498bddf8c2103f3122d017ce2b33708",
+      "size": 1741210
+    },
+    "docs/specs/assets/2026-10-03_admin-warm-wood-theme/reference-v5.png": {
+      "role": "index",
+      "sha256": "a3854dbdba9f14b2a115675925173b29c4ca8bc1f16bd769220a4bb979917727",
+      "size": 1494618
+    },
+    "docs/specs/assets/2026-10-03_admin-warm-wood-theme/reference-v6.png": {
+      "role": "index",
+      "sha256": "09bad0bcf54bd59fc2463db2add6cc9c694b2d23f2e24028b9f62b118581802d",
+      "size": 1509058
+    },
+    "docs/superpowers/plans/2026-07-29-ai-fallback-knowledge-gap.md": {
+      "role": "index",
+      "sha256": "f4e844cdbef073d12fc123567ece2e99d07b42f7eddad62789dff9559043fb6b",
+      "size": 27576,
+      "normalized_sha256": "f4e844cdbef073d12fc123567ece2e99d07b42f7eddad62789dff9559043fb6b"
+    },
+    "docs/superpowers/plans/2026-07-29-wuhan-tourism-web-search.md": {
+      "role": "index",
+      "sha256": "7cbe721f7350d7121bd8b213320162ce8586748f76ff8c22d883bd96d8129737",
+      "size": 38774,
+      "normalized_sha256": "7cbe721f7350d7121bd8b213320162ce8586748f76ff8c22d883bd96d8129737"
+    },
+    "docs/superpowers/plans/2026-07-30-deepseek-migration.md": {
+      "role": "index",
+      "sha256": "99f9a6994893511b406f1be07886f1966455436053e1c57688279a81a4c6afe8",
+      "size": 34896,
+      "normalized_sha256": "99f9a6994893511b406f1be07886f1966455436053e1c57688279a81a4c6afe8"
+    },
+    "docs/superpowers/specs/2026-07-29-ai-fallback-knowledge-gap-design.md": {
+      "role": "index",
+      "sha256": "9356626d29143b4000f47a607219ac2fb0e2ac2eb41bd0807cfb0df35c80f7a3",
+      "size": 7860,
+      "normalized_sha256": "9356626d29143b4000f47a607219ac2fb0e2ac2eb41bd0807cfb0df35c80f7a3"
+    },
+    "docs/superpowers/specs/2026-07-29-wuhan-tourism-web-search-design.md": {
+      "role": "index",
+      "sha256": "0d7058a0bcb8543287809868b9bb494854cb76f1cb34f148281465b44a6e7a87",
+      "size": 5281,
+      "normalized_sha256": "0d7058a0bcb8543287809868b9bb494854cb76f1cb34f148281465b44a6e7a87"
+    },
+    "docs/superpowers/specs/2026-07-30-deepseek-migration-design.md": {
+      "role": "index",
+      "sha256": "326e3ac9160310517ce62ea7994c7d880a8129fab7705908de722b0e0c7debab",
+      "size": 8907,
+      "normalized_sha256": "326e3ac9160310517ce62ea7994c7d880a8129fab7705908de722b0e0c7debab"
+    },
+    "migrations/env.py": {
+      "role": "index",
+      "sha256": "fa241a4926488076557a5622583218bdc95504ba44fa6d498e02033094faabd0",
+      "size": 1821,
+      "normalized_sha256": "fa241a4926488076557a5622583218bdc95504ba44fa6d498e02033094faabd0"
+    },
+    "migrations/script.py.mako": {
+      "role": "index",
+      "sha256": "891ae6b14b04f2af5a6b83af979ce20d3a9bd4d3aff36f17ad663ac0ef3d1dd2",
+      "size": 674,
+      "normalized_sha256": "891ae6b14b04f2af5a6b83af979ce20d3a9bd4d3aff36f17ad663ac0ef3d1dd2"
+    },
+    "migrations/versions/0001_initial.py": {
+      "role": "index",
+      "sha256": "9b4846397e3366947913d04cbe4ce135a2ba8c850158147e5a8c15d8fc0d4bfb",
+      "size": 9259,
+      "normalized_sha256": "9b4846397e3366947913d04cbe4ce135a2ba8c850158147e5a8c15d8fc0d4bfb"
+    },
+    "migrations/versions/0002_frequent_faq_candidates.py": {
+      "role": "index",
+      "sha256": "0ba2884c5028179f988aaa913878cc381eccc4fcfae7ceac09c6081c61e473eb",
+      "size": 4241,
+      "normalized_sha256": "0ba2884c5028179f988aaa913878cc381eccc4fcfae7ceac09c6081c61e473eb"
+    },
+    "migrations/versions/0003_customer_crm.py": {
+      "role": "index",
+      "sha256": "2bab9ebe0d9237f21179cd3639973ce688cebe7d2a462fddb0e53bbb95e1288b",
+      "size": 8928,
+      "normalized_sha256": "2bab9ebe0d9237f21179cd3639973ce688cebe7d2a462fddb0e53bbb95e1288b"
+    },
+    "migrations/versions/0004_customer_context.py": {
+      "role": "index",
+      "sha256": "1f9513990347acba8cecc78cb9f5d1140a8129fbf65e9809e8d0fd6adbae953f",
+      "size": 2232,
+      "normalized_sha256": "1f9513990347acba8cecc78cb9f5d1140a8129fbf65e9809e8d0fd6adbae953f"
+    },
+    "migrations/versions/0005_operations.py": {
+      "role": "index",
+      "sha256": "b04ce47841cb0aa5c14ddca18aeea1fd1b4e6157043877c57fd33ff07a32cddf",
+      "size": 8910,
+      "normalized_sha256": "b04ce47841cb0aa5c14ddca18aeea1fd1b4e6157043877c57fd33ff07a32cddf"
+    },
+    "migrations/versions/0006_employee_roles.py": {
+      "role": "index",
+      "sha256": "600e136786f4adf36807ffc5b84801befae668d7ca3fa14ae11fe4c668a4e9e7",
+      "size": 822,
+      "normalized_sha256": "600e136786f4adf36807ffc5b84801befae668d7ca3fa14ae11fe4c668a4e9e7"
+    },
+    "migrations/versions/0007_lifecycle_reminders.py": {
+      "role": "index",
+      "sha256": "d5fff6d9725b9db2284bf677fc27e4c2da8f3e6724f8a03193ee5ae5f1946b64",
+      "size": 3344,
+      "normalized_sha256": "d5fff6d9725b9db2284bf677fc27e4c2da8f3e6724f8a03193ee5ae5f1946b64"
+    },
+    "migrations/versions/0008_complaint_reviews.py": {
+      "role": "index",
+      "sha256": "e5527eb213e5bdc72d83a1104e9cd10c1828cfac5611e6d2276d205683b3155a",
+      "size": 2228,
+      "normalized_sha256": "e5527eb213e5bdc72d83a1104e9cd10c1828cfac5611e6d2276d205683b3155a"
+    },
+    "migrations/versions/0009_approval_source_message.py": {
+      "role": "index",
+      "sha256": "78864d45a6cc3e5689aca39b0bc502d230cfc448db41523a4ddf7ecdc3ae151a",
+      "size": 1026,
+      "normalized_sha256": "78864d45a6cc3e5689aca39b0bc502d230cfc448db41523a4ddf7ecdc3ae151a"
+    },
+    "migrations/versions/0010_property_room_number.py": {
+      "role": "index",
+      "sha256": "a46a8880ad9033b85283720e6f102841c49c2903de2753753a8f9a1e7a0dba1c",
+      "size": 886,
+      "normalized_sha256": "a46a8880ad9033b85283720e6f102841c49c2903de2753753a8f9a1e7a0dba1c"
+    },
+    "migrations/versions/0011_complaint_delivery_status.py": {
+      "role": "index",
+      "sha256": "91e494b0248d195c56e2baf2c5c51a8257ca295471f9c0e4441038b993ea23fa",
+      "size": 702,
+      "normalized_sha256": "91e494b0248d195c56e2baf2c5c51a8257ca295471f9c0e4441038b993ea23fa"
+    },
+    "migrations/versions/0012_message_metadata.py": {
+      "role": "index",
+      "sha256": "1ea26d42cfbdc2bfff13e51d78bc9270da7d60922b0b516e1e115af05f77f2c5",
+      "size": 748,
+      "normalized_sha256": "1ea26d42cfbdc2bfff13e51d78bc9270da7d60922b0b516e1e115af05f77f2c5"
+    },
+    "migrations/versions/0013_complaint_delivery_links.py": {
+      "role": "index",
+      "sha256": "a5338bb99242d7e23bd1d64591b2e20c78896de2287143d450096029eead52d0",
+      "size": 1906,
+      "normalized_sha256": "a5338bb99242d7e23bd1d64591b2e20c78896de2287143d450096029eead52d0"
+    },
+    "migrations/versions/0014_query_indexes.py": {
+      "role": "index",
+      "sha256": "d2830c243d20df648bee6a7d5706f35f5e021cf2d204cef37c821226633ed624",
+      "size": 1740,
+      "normalized_sha256": "d2830c243d20df648bee6a7d5706f35f5e021cf2d204cef37c821226633ed624"
+    },
+    "migrations/versions/0015_admin_runtime_config.py": {
+      "role": "index",
+      "sha256": "0ff26e370813dcf1cfe779735994478b68001e54bb96233e1740025dc1b1f131",
+      "size": 5182,
+      "normalized_sha256": "0ff26e370813dcf1cfe779735994478b68001e54bb96233e1740025dc1b1f131"
+    },
+    "migrations/versions/0016_admin_dashboard_indexes.py": {
+      "role": "index",
+      "sha256": "cab5317ac1e163a132fcf778f1730ce779c58e6b52154858108a0d6b587a7eea",
+      "size": 965,
+      "normalized_sha256": "cab5317ac1e163a132fcf778f1730ce779c58e6b52154858108a0d6b587a7eea"
+    },
+    "migrations/versions/0017_runtime_config_lifecycle.py": {
+      "role": "index",
+      "sha256": "92006b65f7ccdc1575c20af9b60cad376ad5280790b1ad8c3504d82be61b7d17",
+      "size": 3141,
+      "normalized_sha256": "92006b65f7ccdc1575c20af9b60cad376ad5280790b1ad8c3504d82be61b7d17"
+    },
+    "migrations/versions/0018_stay_checkout_observation.py": {
+      "role": "index",
+      "sha256": "80152dc461844b8a357002ce7ac0e669094ccbd5b52deb23c1e7294e0427cb09",
+      "size": 1147,
+      "normalized_sha256": "80152dc461844b8a357002ce7ac0e669094ccbd5b52deb23c1e7294e0427cb09"
+    },
+    "migrations/versions/0019_customer_memory_items.py": {
+      "role": "index",
+      "sha256": "211435249dd2e17a9c95beead2516f04a1389203d59dd1a24df45291a7e703da",
+      "size": 3369,
+      "normalized_sha256": "211435249dd2e17a9c95beead2516f04a1389203d59dd1a24df45291a7e703da"
+    },
+    "migrations/versions/0020_customer_memory_trust_timeline.py": {
+      "role": "index",
+      "sha256": "cbdac7cd28cc58f0db9118a33e1b54577382e2cd739d6aac375197d991f68f5e",
+      "size": 9025,
+      "normalized_sha256": "cbdac7cd28cc58f0db9118a33e1b54577382e2cd739d6aac375197d991f68f5e"
+    },
+    "migrations/versions/0021_task_lifecycle_room_operations.py": {
+      "role": "index",
+      "sha256": "ac3c35fac0d7403e880c862f5d37edbecc2befe24eae13c5f05ed124e8d259f2",
+      "size": 3661,
+      "normalized_sha256": "ac3c35fac0d7403e880c862f5d37edbecc2befe24eae13c5f05ed124e8d259f2"
+    },
+    "migrations/versions/0022_approval_pii.py": {
+      "role": "index",
+      "sha256": "aa9b2ca9e4024ca5da94399190150ab5ef5f6565d90157a406fc47ba5947f56b",
+      "size": 1399,
+      "normalized_sha256": "aa9b2ca9e4024ca5da94399190150ab5ef5f6565d90157a406fc47ba5947f56b"
+    },
+    "migrations/versions/0023_approval_pii_final.py": {
+      "role": "index",
+      "sha256": "ad977e522430dcb787f245368fbcaedf49347cd8ccf3db700b1fda39da59dd85",
+      "size": 1980,
+      "normalized_sha256": "ad977e522430dcb787f245368fbcaedf49347cd8ccf3db700b1fda39da59dd85"
+    },
+    "migrations/versions/0024_business_task_archive.py": {
+      "role": "index",
+      "sha256": "540a8b5e74790d5bcd41a5cb8d4a5af17341bc5da1eec483f18df8d863266d1a",
+      "size": 1804,
+      "normalized_sha256": "540a8b5e74790d5bcd41a5cb8d4a5af17341bc5da1eec483f18df8d863266d1a"
+    },
+    "migrations/versions/0025_purged_task_marks.py": {
+      "role": "index",
+      "sha256": "0ed00c37119f4f9f157b48c3717f6953eda7ebdf8293a21a25eb2fd1d9e48fe9",
+      "size": 1694,
+      "normalized_sha256": "0ed00c37119f4f9f157b48c3717f6953eda7ebdf8293a21a25eb2fd1d9e48fe9"
+    },
+    "migrations/versions/0026_settle_retry_latch.py": {
+      "role": "index",
+      "sha256": "ab41c6b255e17b25435e8c6a8a2e85bc4e6451154463641dc46afdac6ee55501",
+      "size": 3801,
+      "normalized_sha256": "ab41c6b255e17b25435e8c6a8a2e85bc4e6451154463641dc46afdac6ee55501"
+    },
+    "migrations/versions/0027_knowledge_embeddings.py": {
+      "role": "index",
+      "sha256": "d278ee2416ad793d465c09da8dd79393b02111bd973b26e3e51017b2a721e751",
+      "size": 2400,
+      "normalized_sha256": "d278ee2416ad793d465c09da8dd79393b02111bd973b26e3e51017b2a721e751"
+    },
+    "migrations/versions/0028_guest_plaintext.py": {
+      "role": "index",
+      "sha256": "593eede7cc5bd07881506e904d59479c18ff89a1d671ac17dfe4d83b03d3ac9c",
+      "size": 1543,
+      "normalized_sha256": "593eede7cc5bd07881506e904d59479c18ff89a1d671ac17dfe4d83b03d3ac9c"
+    },
+    "migrations/versions/0029_knowledge_scope.py": {
+      "role": "index",
+      "sha256": "5ae3e34fc569a48d8e3971ad830ad42d5a41e543870f84e03882f5157cd4c397",
+      "size": 3756,
+      "normalized_sha256": "5ae3e34fc569a48d8e3971ad830ad42d5a41e543870f84e03882f5157cd4c397"
+    },
+    "migrations/versions/0030_stay_confirmation.py": {
+      "role": "index",
+      "sha256": "a3e092602c6f71476b74d70747c2defc46e3ac92622ef6679423dab48f11fd33",
+      "size": 706,
+      "normalized_sha256": "a3e092602c6f71476b74d70747c2defc46e3ac92622ef6679423dab48f11fd33"
+    },
+    "migrations/versions/0031_guest_verification.py": {
+      "role": "index",
+      "sha256": "41b9517a971623b4a2c8f5194fdb2882238902131a3a3e2348f08af8764b94bb",
+      "size": 581,
+      "normalized_sha256": "41b9517a971623b4a2c8f5194fdb2882238902131a3a3e2348f08af8764b94bb"
+    },
+    "migrations/versions/0032_knowledge_triggers.py": {
+      "role": "index",
+      "sha256": "66bfb5f8d80ffdde3b0159a8432a8c34ebeee956f278f7f7a41fea412db05674",
+      "size": 785,
+      "normalized_sha256": "66bfb5f8d80ffdde3b0159a8432a8c34ebeee956f278f7f7a41fea412db05674"
+    },
+    "migrations/versions/0033_knowledge_images.py": {
+      "role": "index",
+      "sha256": "27f2e194224b63d07890c56b86b2594a4a05128f4f6cf0e828763ca1c02e6db3",
+      "size": 1868,
+      "normalized_sha256": "27f2e194224b63d07890c56b86b2594a4a05128f4f6cf0e828763ca1c02e6db3"
+    },
+    "migrations/versions/0034_wecom_sync_cursors.py": {
+      "role": "index",
+      "sha256": "91b3712b7b08bdc0fd092968b57ee22f5de51b829e39014da019c0be884b7285",
+      "size": 913,
+      "normalized_sha256": "91b3712b7b08bdc0fd092968b57ee22f5de51b829e39014da019c0be884b7285"
+    },
+    "pyproject.toml": {
+      "role": "index",
+      "sha256": "a1e96f21febe3a1749405c29616b94a1e002f821b708cc4626e18cfc39bb3157",
+      "size": 1284,
+      "normalized_sha256": "a1e96f21febe3a1749405c29616b94a1e002f821b708cc4626e18cfc39bb3157"
+    },
+    "requirements.lock": {
+      "role": "index",
+      "sha256": "9abddc58bb9c9f1e7209aaa7c3d369649faee26f07f2f75aed259a60396e3ede",
+      "size": 104762,
+      "normalized_sha256": "9abddc58bb9c9f1e7209aaa7c3d369649faee26f07f2f75aed259a60396e3ede"
+    },
+    "scripts/release/reply_gate.sh": {
+      "role": "index",
+      "sha256": "bc93b9feca105f3cd2c49b709335edac2a83c83e7a0ea104acee01474ac077b3",
+      "size": 9730,
+      "normalized_sha256": "bc93b9feca105f3cd2c49b709335edac2a83c83e7a0ea104acee01474ac077b3"
+    },
+    "src/homestay_bot/__init__.py": {
+      "role": "index",
+      "sha256": "90c8c95d8ef36afb726ec738246ea35ea815ce792ad1b7a246f8fb864f73a954",
+      "size": 43,
+      "normalized_sha256": "90c8c95d8ef36afb726ec738246ea35ea815ce792ad1b7a246f8fb864f73a954"
+    },
+    "src/homestay_bot/application.py": {
+      "role": "index",
+      "sha256": "270ab4a44183febde5616965677cfad0abb23b7db4ec3da3c52ef8632585abde",
+      "size": 210561,
+      "normalized_sha256": "270ab4a44183febde5616965677cfad0abb23b7db4ec3da3c52ef8632585abde"
+    },
+    "src/homestay_bot/config.py": {
+      "role": "index",
+      "sha256": "3382d287bbc1a8ad783f71fce68dc5a421c4dd381a798d65dd81b1df3e26dc21",
+      "size": 2811,
+      "normalized_sha256": "3382d287bbc1a8ad783f71fce68dc5a421c4dd381a798d65dd81b1df3e26dc21"
+    },
+    "src/homestay_bot/db.py": {
+      "role": "index",
+      "sha256": "4b1af8100173fac02d841dbb5fb0f669688344ddeb60d9b80aa057b2e2da9909",
+      "size": 2502,
+      "normalized_sha256": "4b1af8100173fac02d841dbb5fb0f669688344ddeb60d9b80aa057b2e2da9909"
+    },
+    "src/homestay_bot/display.py": {
+      "role": "index",
+      "sha256": "d2d2014542d7ef2d806e3bd41c4764a32d282f881f46023e0ac255c9030edbe9",
+      "size": 7310,
+      "normalized_sha256": "d2d2014542d7ef2d806e3bd41c4764a32d282f881f46023e0ac255c9030edbe9"
+    },
+    "src/homestay_bot/domain/__init__.py": {
+      "role": "index",
+      "sha256": "a4137daafaabae0aa1a6a323e6d55aa1c5ef349645a2926ec9550cd16357707f",
+      "size": 46,
+      "normalized_sha256": "a4137daafaabae0aa1a6a323e6d55aa1c5ef349645a2926ec9550cd16357707f"
+    },
+    "src/homestay_bot/domain/enums.py": {
+      "role": "index",
+      "sha256": "929c2ccd2b086c5ab84d8dbd5f1031467da42cfc4b93e2cfae18c8f76419e9d1",
+      "size": 6912,
+      "normalized_sha256": "929c2ccd2b086c5ab84d8dbd5f1031467da42cfc4b93e2cfae18c8f76419e9d1"
+    },
+    "src/homestay_bot/domain/errors.py": {
+      "role": "index",
+      "sha256": "391fecb6726ea4bd4a5202c399bd70f6856b24a7d0c46c13a7bcca35153257a1",
+      "size": 1213,
+      "normalized_sha256": "391fecb6726ea4bd4a5202c399bd70f6856b24a7d0c46c13a7bcca35153257a1"
+    },
+    "src/homestay_bot/domain/models.py": {
+      "role": "index",
+      "sha256": "f906c9297f9fa71ff2c25dfdd1afad2ba32b08eaa8f5e3198894595322f1e27b",
+      "size": 49296,
+      "normalized_sha256": "f906c9297f9fa71ff2c25dfdd1afad2ba32b08eaa8f5e3198894595322f1e27b"
+    },
+    "src/homestay_bot/domain/runtime_config.py": {
+      "role": "index",
+      "sha256": "868f82e0d380c491c8df345290a7570e61e5177448ed08534c2fed5bb0f01b5b",
+      "size": 12525,
+      "normalized_sha256": "868f82e0d380c491c8df345290a7570e61e5177448ed08534c2fed5bb0f01b5b"
+    },
+    "src/homestay_bot/domain/schemas.py": {
+      "role": "index",
+      "sha256": "f62db6307de082997120ef143ca8adfb9b912bb166bc6f7b5f9fdba5e2cd1f73",
+      "size": 784,
+      "normalized_sha256": "f62db6307de082997120ef143ca8adfb9b912bb166bc6f7b5f9fdba5e2cd1f73"
+    },
+    "src/homestay_bot/domain/stay_status.py": {
+      "role": "index",
+      "sha256": "3dfc88527c5ae74661c53d48bb038caeb8fabca37e54bd98805680fec158d9d3",
+      "size": 1849,
+      "normalized_sha256": "3dfc88527c5ae74661c53d48bb038caeb8fabca37e54bd98805680fec158d9d3"
+    },
+    "src/homestay_bot/domain/task_lifecycle.py": {
+      "role": "index",
+      "sha256": "8f093d2e4ee539b7ad6d1f96a2a3bddb5e627d0b5f92c2c7e384345b02a7740a",
+      "size": 2812,
+      "normalized_sha256": "8f093d2e4ee539b7ad6d1f96a2a3bddb5e627d0b5f92c2c7e384345b02a7740a"
+    },
+    "src/homestay_bot/integrations/__init__.py": {
+      "role": "index",
+      "sha256": "b1e0fabf04078f15b185c0eb61afc80fed10b274b5ee053b09601c525e5b4092",
+      "size": 31,
+      "normalized_sha256": "b1e0fabf04078f15b185c0eb61afc80fed10b274b5ee053b09601c525e5b4092"
+    },
+    "src/homestay_bot/integrations/deepseek_client.py": {
+      "role": "index",
+      "sha256": "b185617cc0830befab18cbfba2d2ef04a54482fb83e13f72cba6ce51e27badda",
+      "size": 140472,
+      "normalized_sha256": "b185617cc0830befab18cbfba2d2ef04a54482fb83e13f72cba6ce51e27badda"
+    },
+    "src/homestay_bot/integrations/deepseek_complaint.py": {
+      "role": "index",
+      "sha256": "da507c95ecbc92669afa23b9aca050161b5f01061241764487db52b5a5d5e8e1",
+      "size": 7511,
+      "normalized_sha256": "da507c95ecbc92669afa23b9aca050161b5f01061241764487db52b5a5d5e8e1"
+    },
+    "src/homestay_bot/integrations/deepseek_context_summarizer.py": {
+      "role": "index",
+      "sha256": "4e5a012fe0103e45ccc33da6c3c6ceee28c563fe24b586998269fe03f04c45dd",
+      "size": 12342,
+      "normalized_sha256": "4e5a012fe0103e45ccc33da6c3c6ceee28c563fe24b586998269fe03f04c45dd"
+    },
+    "src/homestay_bot/integrations/deepseek_delivery_rewriter.py": {
+      "role": "index",
+      "sha256": "b026e9eefb8365c2ae299ae83cc5544ebc0fc8930d1be82501a29d415be1dede",
+      "size": 25231,
+      "normalized_sha256": "b026e9eefb8365c2ae299ae83cc5544ebc0fc8930d1be82501a29d415be1dede"
+    },
+    "src/homestay_bot/integrations/deepseek_faq_drafter.py": {
+      "role": "index",
+      "sha256": "db3cf06d7f448829ae5285607a87255fc5b42dc4e0ebced8ecdeab05fb193526",
+      "size": 5801,
+      "normalized_sha256": "db3cf06d7f448829ae5285607a87255fc5b42dc4e0ebced8ecdeab05fb193526"
+    },
+    "src/homestay_bot/integrations/deepseek_tourism.py": {
+      "role": "index",
+      "sha256": "89c7b8ec8373a24486b1de109895568f70dbb99e98ae683ccbf45d64e4827299",
+      "size": 26812,
+      "normalized_sha256": "89c7b8ec8373a24486b1de109895568f70dbb99e98ae683ccbf45d64e4827299"
+    },
+    "src/homestay_bot/integrations/hostex_client.py": {
+      "role": "index",
+      "sha256": "11d6aa5494fd1ce35d849520a2a3a84bcafb6628c8a6e9a9cac3ad5f31874c6e",
+      "size": 16140,
+      "normalized_sha256": "11d6aa5494fd1ce35d849520a2a3a84bcafb6628c8a6e9a9cac3ad5f31874c6e"
+    },
+    "src/homestay_bot/integrations/tourism.py": {
+      "role": "index",
+      "sha256": "50e9dc9e0838065c3135f66c38526716c61e2e31846c325de4680c04f8e4da46",
+      "size": 19102,
+      "normalized_sha256": "50e9dc9e0838065c3135f66c38526716c61e2e31846c325de4680c04f8e4da46"
+    },
+    "src/homestay_bot/integrations/wecom/__init__.py": {
+      "role": "index",
+      "sha256": "c21a0551d95332a2caa97887ed985d4026a17429f71fec5d4b50af6e405c5da1",
+      "size": 59,
+      "normalized_sha256": "c21a0551d95332a2caa97887ed985d4026a17429f71fec5d4b50af6e405c5da1"
+    },
+    "src/homestay_bot/integrations/wecom/api_client.py": {
+      "role": "index",
+      "sha256": "5c9e3c14eba0f498d9465202017a6f1e873c1f35ffca7c6e31872c089eae3641",
+      "size": 19348,
+      "normalized_sha256": "5c9e3c14eba0f498d9465202017a6f1e873c1f35ffca7c6e31872c089eae3641"
+    },
+    "src/homestay_bot/integrations/wecom/callback_crypto.py": {
+      "role": "index",
+      "sha256": "372a75b98cfcb7175bfbe293a9b85bd0a10d80d14ca033ff1664b6f23e879e6b",
+      "size": 2565,
+      "normalized_sha256": "372a75b98cfcb7175bfbe293a9b85bd0a10d80d14ca033ff1664b6f23e879e6b"
+    },
+    "src/homestay_bot/integrations/wecom/contact_client.py": {
+      "role": "index",
+      "sha256": "2a377e2ff6683971d7a96aae8eae4fe31823f394ad27680b7601f2ed1135fcc4",
+      "size": 4456,
+      "normalized_sha256": "2a377e2ff6683971d7a96aae8eae4fe31823f394ad27680b7601f2ed1135fcc4"
+    },
+    "src/homestay_bot/integrations/wecom/schemas.py": {
+      "role": "index",
+      "sha256": "7f23c83b5ecabe58b8087e1da348ed676c5e93fd3a8c13398cdedb4c9d93ea98",
+      "size": 1108,
+      "normalized_sha256": "7f23c83b5ecabe58b8087e1da348ed676c5e93fd3a8c13398cdedb4c9d93ea98"
+    },
+    "src/homestay_bot/logging.py": {
+      "role": "index",
+      "sha256": "e3f807f12bd86fae681d66ba761431e34c2d29fa12222618cc5f37cfc5163a00",
+      "size": 8109,
+      "normalized_sha256": "e3f807f12bd86fae681d66ba761431e34c2d29fa12222618cc5f37cfc5163a00"
+    },
+    "src/homestay_bot/main.py": {
+      "role": "index",
+      "sha256": "0a2349cbfbb2935336c481357a7b89fbf2466119404c2313334a0d2728b0ba61",
+      "size": 3887,
+      "normalized_sha256": "0a2349cbfbb2935336c481357a7b89fbf2466119404c2313334a0d2728b0ba61"
+    },
+    "src/homestay_bot/middleware.py": {
+      "role": "index",
+      "sha256": "fe9eea04719c72f74b1ff4680d826576f2a1b7305004d233001adf966b4791fa",
+      "size": 1877,
+      "normalized_sha256": "fe9eea04719c72f74b1ff4680d826576f2a1b7305004d233001adf966b4791fa"
+    },
+    "src/homestay_bot/repositories/__init__.py": {
+      "role": "index",
+      "sha256": "94c6e4a4593355ae2b3044353777da0530819c526f73ed261a4f00665d008530",
+      "size": 31,
+      "normalized_sha256": "94c6e4a4593355ae2b3044353777da0530819c526f73ed261a4f00665d008530"
+    },
+    "src/homestay_bot/repositories/admin_credentials.py": {
+      "role": "index",
+      "sha256": "b25430d015c6adf2d6840237e7a404b8d76b4ded5f2d8b06df68b9f2e9cb7e0e",
+      "size": 9260,
+      "normalized_sha256": "b25430d015c6adf2d6840237e7a404b8d76b4ded5f2d8b06df68b9f2e9cb7e0e"
+    },
+    "src/homestay_bot/repositories/admin_csrf.py": {
+      "role": "index",
+      "sha256": "1f3245dedaca14189f33929c68c771fce50ac8f57ba7601989b92becac8f9ddc",
+      "size": 9662,
+      "normalized_sha256": "1f3245dedaca14189f33929c68c771fce50ac8f57ba7601989b92becac8f9ddc"
+    },
+    "src/homestay_bot/repositories/admin_dashboard.py": {
+      "role": "index",
+      "sha256": "a6d7952b6499629027d05b024278a407a95f7925938cc558a400c4e8c429a590",
+      "size": 1318,
+      "normalized_sha256": "a6d7952b6499629027d05b024278a407a95f7925938cc558a400c4e8c429a590"
+    },
+    "src/homestay_bot/repositories/admin_diagnostics.py": {
+      "role": "index",
+      "sha256": "aec2933b665a710f83658e2e6dc2be9920843fa2e62f1aba8ba33c291ee09609",
+      "size": 18420,
+      "normalized_sha256": "aec2933b665a710f83658e2e6dc2be9920843fa2e62f1aba8ba33c291ee09609"
+    },
+    "src/homestay_bot/repositories/admin_operations.py": {
+      "role": "index",
+      "sha256": "b7cebe0595a84a905e7fe872454aff8ef2aac729c77b8dde1d1b3b43866cea70",
+      "size": 13436,
+      "normalized_sha256": "b7cebe0595a84a905e7fe872454aff8ef2aac729c77b8dde1d1b3b43866cea70"
+    },
+    "src/homestay_bot/repositories/approvals.py": {
+      "role": "index",
+      "sha256": "539bd87e3d873091d01af97c3d1e8dc3edaa9575ea7057109b9f7bd2d3f7b898",
+      "size": 4403,
+      "normalized_sha256": "539bd87e3d873091d01af97c3d1e8dc3edaa9575ea7057109b9f7bd2d3f7b898"
+    },
+    "src/homestay_bot/repositories/complaints.py": {
+      "role": "index",
+      "sha256": "b50c634c21248e83f1c40dc591cfad214c9f247dd9ace4ee8f7cbe4cbae7987e",
+      "size": 16336,
+      "normalized_sha256": "b50c634c21248e83f1c40dc591cfad214c9f247dd9ace4ee8f7cbe4cbae7987e"
+    },
+    "src/homestay_bot/repositories/context.py": {
+      "role": "index",
+      "sha256": "5ba94fa85733f2f1d0161fcfa18b0d2631499050e5404f59639868a22e8069ac",
+      "size": 42957,
+      "normalized_sha256": "5ba94fa85733f2f1d0161fcfa18b0d2631499050e5404f59639868a22e8069ac"
+    },
+    "src/homestay_bot/repositories/conversations.py": {
+      "role": "index",
+      "sha256": "e5c6dee2b19df73b561a539506e5c3c58583f1df01c46793a46467c8a0cbfef4",
+      "size": 23540,
+      "normalized_sha256": "e5c6dee2b19df73b561a539506e5c3c58583f1df01c46793a46467c8a0cbfef4"
+    },
+    "src/homestay_bot/repositories/credentials.py": {
+      "role": "index",
+      "sha256": "9ab30795bb33adb286ff99129c03dd943b7159e1ca3a71fdb8407da02cff7f5b",
+      "size": 16692,
+      "normalized_sha256": "9ab30795bb33adb286ff99129c03dd943b7159e1ca3a71fdb8407da02cff7f5b"
+    },
+    "src/homestay_bot/repositories/customers.py": {
+      "role": "index",
+      "sha256": "6748b2cabe6838d85666015d44b449e975c55e520c1cc98a956d2a16bd896b21",
+      "size": 78164,
+      "normalized_sha256": "6748b2cabe6838d85666015d44b449e975c55e520c1cc98a956d2a16bd896b21"
+    },
+    "src/homestay_bot/repositories/employees.py": {
+      "role": "index",
+      "sha256": "6ccb85f2c7c4ab19e0e381571cc4361fb61fe45d0bdeb3f0a67391b07a392762",
+      "size": 3193,
+      "normalized_sha256": "6ccb85f2c7c4ab19e0e381571cc4361fb61fe45d0bdeb3f0a67391b07a392762"
+    },
+    "src/homestay_bot/repositories/faq_candidates.py": {
+      "role": "index",
+      "sha256": "f449f40c5198523b06aa8f3ed7c305f7b62c2d15f5bcb4cb94dffcc99cea99e2",
+      "size": 19849,
+      "normalized_sha256": "f449f40c5198523b06aa8f3ed7c305f7b62c2d15f5bcb4cb94dffcc99cea99e2"
+    },
+    "src/homestay_bot/repositories/jobs.py": {
+      "role": "index",
+      "sha256": "dca84cc795e7a313678eddc66b7e93adc3837fb8380579efd6d1a47bf44a0c33",
+      "size": 16038,
+      "normalized_sha256": "dca84cc795e7a313678eddc66b7e93adc3837fb8380579efd6d1a47bf44a0c33"
+    },
+    "src/homestay_bot/repositories/knowledge.py": {
+      "role": "index",
+      "sha256": "27334eb55a896819a30961caddf7a406460aee90a96d71b0ce98d5dcc3c4aafd",
+      "size": 3822,
+      "normalized_sha256": "27334eb55a896819a30961caddf7a406460aee90a96d71b0ce98d5dcc3c4aafd"
+    },
+    "src/homestay_bot/repositories/lifecycle_reminders.py": {
+      "role": "index",
+      "sha256": "178b6c4a2504039488d9b329157bac5ecc2265238fd4f17d0ec96322fdc81856",
+      "size": 15254,
+      "normalized_sha256": "178b6c4a2504039488d9b329157bac5ecc2265238fd4f17d0ec96322fdc81856"
+    },
+    "src/homestay_bot/repositories/operations.py": {
+      "role": "index",
+      "sha256": "fb358c59cb96b301448333b4b5e9fd8aa2bca0249177194fb43a2a247f5f2486",
+      "size": 80570,
+      "normalized_sha256": "fb358c59cb96b301448333b4b5e9fd8aa2bca0249177194fb43a2a247f5f2486"
+    },
+    "src/homestay_bot/repositories/retention.py": {
+      "role": "index",
+      "sha256": "1543a44ae79b5222b53eea08862124d3696c9dea14406cb50c6936c4bff21276",
+      "size": 8655,
+      "normalized_sha256": "1543a44ae79b5222b53eea08862124d3696c9dea14406cb50c6936c4bff21276"
+    },
+    "src/homestay_bot/repositories/runtime_config.py": {
+      "role": "index",
+      "sha256": "67b3e4e0310799b8fefad1e9625a616a1feed0ef10bd1c9fdc37f67e5afe7ab3",
+      "size": 21630,
+      "normalized_sha256": "67b3e4e0310799b8fefad1e9625a616a1feed0ef10bd1c9fdc37f67e5afe7ab3"
+    },
+    "src/homestay_bot/repositories/wecom_sync.py": {
+      "role": "index",
+      "sha256": "93ec6c42d0b1c5bbc33bc0e3ede8179b6552f39dc6c20a2ebef08805b3f3505c",
+      "size": 1526,
+      "normalized_sha256": "93ec6c42d0b1c5bbc33bc0e3ede8179b6552f39dc6c20a2ebef08805b3f3505c"
+    },
+    "src/homestay_bot/routes/__init__.py": {
+      "role": "index",
+      "sha256": "2dddfa31b637f13687a99dfd99dbdf3415824fc74d65962d7526e8d4e8ffc6fd",
+      "size": 25,
+      "normalized_sha256": "2dddfa31b637f13687a99dfd99dbdf3415824fc74d65962d7526e8d4e8ffc6fd"
+    },
+    "src/homestay_bot/routes/admin.py": {
+      "role": "index",
+      "sha256": "ca840652f653a9445bc89e5809a72aa9462989d393f87b19794f4e879fefee9d",
+      "size": 24131,
+      "normalized_sha256": "ca840652f653a9445bc89e5809a72aa9462989d393f87b19794f4e879fefee9d"
+    },
+    "src/homestay_bot/routes/admin_debug.py": {
+      "role": "index",
+      "sha256": "41c29a1232b2080e10cfae0353ca8bc02139665ff115c2514a29bff564c0cf96",
+      "size": 8043,
+      "normalized_sha256": "41c29a1232b2080e10cfae0353ca8bc02139665ff115c2514a29bff564c0cf96"
+    },
+    "src/homestay_bot/routes/admin_form_csrf.py": {
+      "role": "index",
+      "sha256": "1b428787ae3c007c2a35734ba6cf710abdf4a474bfe14917eb0718e3c87fe855",
+      "size": 4402,
+      "normalized_sha256": "1b428787ae3c007c2a35734ba6cf710abdf4a474bfe14917eb0718e3c87fe855"
+    },
+    "src/homestay_bot/routes/approvals.py": {
+      "role": "index",
+      "sha256": "322481a0af544614f2a713ad55e19f95733d36d2bfce9a9483b802ade16a091d",
+      "size": 10580,
+      "normalized_sha256": "322481a0af544614f2a713ad55e19f95733d36d2bfce9a9483b802ade16a091d"
+    },
+    "src/homestay_bot/routes/complaints.py": {
+      "role": "index",
+      "sha256": "a7aa763378cd359755d784b8b9f0e01aed0b5a9ecef1bda1b3331dd0d12beef9",
+      "size": 10444,
+      "normalized_sha256": "a7aa763378cd359755d784b8b9f0e01aed0b5a9ecef1bda1b3331dd0d12beef9"
+    },
+    "src/homestay_bot/routes/customers.py": {
+      "role": "index",
+      "sha256": "98d586e52ca0d4167ae75adca81a356bce8c5145275de62d09e1053cfcdee4c1",
+      "size": 25648,
+      "normalized_sha256": "98d586e52ca0d4167ae75adca81a356bce8c5145275de62d09e1053cfcdee4c1"
+    },
+    "src/homestay_bot/routes/employee_auth.py": {
+      "role": "index",
+      "sha256": "d396d410afb4b5fe15c146dda6bb633052dc7be42ef63591034df8f745583f2e",
+      "size": 27242,
+      "normalized_sha256": "d396d410afb4b5fe15c146dda6bb633052dc7be42ef63591034df8f745583f2e"
+    },
+    "src/homestay_bot/routes/health.py": {
+      "role": "index",
+      "sha256": "8795a14b746c9ee1329a5db52f7681936055b030dbfeb512f2bd7a82c15093c9",
+      "size": 12567,
+      "normalized_sha256": "8795a14b746c9ee1329a5db52f7681936055b030dbfeb512f2bd7a82c15093c9"
+    },
+    "src/homestay_bot/routes/hostex_webhook.py": {
+      "role": "index",
+      "sha256": "15a43f9336842754b7e1e898652c688adcb7b642c026d33044e365fa92c7a9be",
+      "size": 9297,
+      "normalized_sha256": "15a43f9336842754b7e1e898652c688adcb7b642c026d33044e365fa92c7a9be"
+    },
+    "src/homestay_bot/routes/knowledge.py": {
+      "role": "index",
+      "sha256": "d03f246a224fdcd90db2bb8dd883617b8ce7c91c25092cf8c7e5ed28ee499fe1",
+      "size": 49941,
+      "normalized_sha256": "d03f246a224fdcd90db2bb8dd883617b8ce7c91c25092cf8c7e5ed28ee499fe1"
+    },
+    "src/homestay_bot/routes/page_errors.py": {
+      "role": "index",
+      "sha256": "8eed301afadb1ccb26582ba887e7e655374431be5e9717291b48aa086a970446",
+      "size": 5558,
+      "normalized_sha256": "8eed301afadb1ccb26582ba887e7e655374431be5e9717291b48aa086a970446"
+    },
+    "src/homestay_bot/routes/private_files.py": {
+      "role": "index",
+      "sha256": "86e780f7e0bbaf13bf90c4035e406b321d8f3ecf5a7badc560dc9ee56b9d08c5",
+      "size": 2234,
+      "normalized_sha256": "86e780f7e0bbaf13bf90c4035e406b321d8f3ecf5a7badc560dc9ee56b9d08c5"
+    },
+    "src/homestay_bot/routes/properties.py": {
+      "role": "index",
+      "sha256": "dcc5da15e9154df883f70f11e4bccb4f6c35be78330a5febef67561fa49e5656",
+      "size": 15588,
+      "normalized_sha256": "dcc5da15e9154df883f70f11e4bccb4f6c35be78330a5febef67561fa49e5656"
+    },
+    "src/homestay_bot/routes/query_params.py": {
+      "role": "index",
+      "sha256": "dc89bfdff5a6134f8e9e909fb7b21c8eececb0d78ed717ec1319868a7d45cc6f",
+      "size": 283,
+      "normalized_sha256": "dc89bfdff5a6134f8e9e909fb7b21c8eececb0d78ed717ec1319868a7d45cc6f"
+    },
+    "src/homestay_bot/routes/runtime_config.py": {
+      "role": "index",
+      "sha256": "8782dbce9de86e22022481dc55ca95fed2173d628f6bac874df47b597e71e54f",
+      "size": 16994,
+      "normalized_sha256": "8782dbce9de86e22022481dc55ca95fed2173d628f6bac874df47b597e71e54f"
+    },
+    "src/homestay_bot/routes/tasks.py": {
+      "role": "index",
+      "sha256": "d9f04e0a19cdaa988553e1d6de51c3bf24634b65127387d2cf8d08efb48d98ab",
+      "size": 32826,
+      "normalized_sha256": "d9f04e0a19cdaa988553e1d6de51c3bf24634b65127387d2cf8d08efb48d98ab"
+    },
+    "src/homestay_bot/routes/wecom_callback.py": {
+      "role": "index",
+      "sha256": "2ec6dd8f5be37343022f6fd1e891200456606bff776b20c19c313770b6c8bdfd",
+      "size": 8089,
+      "normalized_sha256": "2ec6dd8f5be37343022f6fd1e891200456606bff776b20c19c313770b6c8bdfd"
+    },
+    "src/homestay_bot/services/__init__.py": {
+      "role": "index",
+      "sha256": "430cf5cd43acec6a542f1f57ea520d66e77aa78decbb4cb0b728c54b46b8629a",
+      "size": 28,
+      "normalized_sha256": "430cf5cd43acec6a542f1f57ea520d66e77aa78decbb4cb0b728c54b46b8629a"
+    },
+    "src/homestay_bot/services/admin_auth_service.py": {
+      "role": "index",
+      "sha256": "f30239a2381beb286f2d89b56a9a589bf1e602c1ba2ba9b7a8f6299162272dad",
+      "size": 13112,
+      "normalized_sha256": "f30239a2381beb286f2d89b56a9a589bf1e602c1ba2ba9b7a8f6299162272dad"
+    },
+    "src/homestay_bot/services/admin_csrf.py": {
+      "role": "index",
+      "sha256": "5f516fad4bbabf9b1b4c9226f8b430f100503450ba915ce6eeadce53b6c294d0",
+      "size": 4795,
+      "normalized_sha256": "5f516fad4bbabf9b1b4c9226f8b430f100503450ba915ce6eeadce53b6c294d0"
+    },
+    "src/homestay_bot/services/admin_dashboard_service.py": {
+      "role": "index",
+      "sha256": "0cf20e41c70d431810b055d923139195797eef404c24ebbfaf3a8a3211593a8d",
+      "size": 8557,
+      "normalized_sha256": "0cf20e41c70d431810b055d923139195797eef404c24ebbfaf3a8a3211593a8d"
+    },
+    "src/homestay_bot/services/admin_debug_service.py": {
+      "role": "index",
+      "sha256": "4c4d883f04a5d471fbfc7a3e80a213aae3391e2d3b20671357fa5e1f231cc423",
+      "size": 12202,
+      "normalized_sha256": "4c4d883f04a5d471fbfc7a3e80a213aae3391e2d3b20671357fa5e1f231cc423"
+    },
+    "src/homestay_bot/services/admin_diagnostics_service.py": {
+      "role": "index",
+      "sha256": "7bbcfe18534f5fee5696a1b2dc7c659e4d3cf12c8ffad413bd85ab188d456232",
+      "size": 10584,
+      "normalized_sha256": "7bbcfe18534f5fee5696a1b2dc7c659e4d3cf12c8ffad413bd85ab188d456232"
+    },
+    "src/homestay_bot/services/admin_operations_service.py": {
+      "role": "index",
+      "sha256": "0367c19b9861e182042b77b119079a82bba439e337c0417411d2be91962c3d57",
+      "size": 50558,
+      "normalized_sha256": "0367c19b9861e182042b77b119079a82bba439e337c0417411d2be91962c3d57"
+    },
+    "src/homestay_bot/services/admin_passwords.py": {
+      "role": "index",
+      "sha256": "6069ad93acb7af57b19c32065e3afa32b5732a3732b0c43bc025193cb8c6f836",
+      "size": 1722,
+      "normalized_sha256": "6069ad93acb7af57b19c32065e3afa32b5732a3732b0c43bc025193cb8c6f836"
+    },
+    "src/homestay_bot/services/answer_policy.py": {
+      "role": "index",
+      "sha256": "3127dde04de8c7fec071cd958531112248fce0b6d4766223f57215219aa9d4a0",
+      "size": 15710,
+      "normalized_sha256": "3127dde04de8c7fec071cd958531112248fce0b6d4766223f57215219aa9d4a0"
+    },
+    "src/homestay_bot/services/approval_page_service.py": {
+      "role": "index",
+      "sha256": "7d4c52bc18ec68e9fe10b78648f6964f6ba6d7ee75d9c0e350fb363657f023a6",
+      "size": 23922,
+      "normalized_sha256": "7d4c52bc18ec68e9fe10b78648f6964f6ba6d7ee75d9c0e350fb363657f023a6"
+    },
+    "src/homestay_bot/services/approval_sensitive_data.py": {
+      "role": "index",
+      "sha256": "f4d69c3fd26ed2e42309e82396ef5d9e2d7259f10cfc869e6cc93a19eedc7a4b",
+      "size": 4452,
+      "normalized_sha256": "f4d69c3fd26ed2e42309e82396ef5d9e2d7259f10cfc869e6cc93a19eedc7a4b"
+    },
+    "src/homestay_bot/services/approval_service.py": {
+      "role": "index",
+      "sha256": "a30ed0e43f929a2b9e51c4f75a9be786e9a3e9cb5b97b61b47bc3dfc78f10dd0",
+      "size": 2870,
+      "normalized_sha256": "a30ed0e43f929a2b9e51c4f75a9be786e9a3e9cb5b97b61b47bc3dfc78f10dd0"
+    },
+    "src/homestay_bot/services/booking_service.py": {
+      "role": "index",
+      "sha256": "33049d8cdfd3a9995f2eb1eb5460b606c8a8e8a0326ac6283cd8ef747e9d536c",
+      "size": 16928,
+      "normalized_sha256": "33049d8cdfd3a9995f2eb1eb5460b606c8a8e8a0326ac6283cd8ef747e9d536c"
+    },
+    "src/homestay_bot/services/business_task_service.py": {
+      "role": "index",
+      "sha256": "5c0b26eade8f5fe4db8494d8fe1f82455c8b7f3d3e950bf967394d8a2fa5dffb",
+      "size": 6208,
+      "normalized_sha256": "5c0b26eade8f5fe4db8494d8fe1f82455c8b7f3d3e950bf967394d8a2fa5dffb"
+    },
+    "src/homestay_bot/services/cancellation.py": {
+      "role": "index",
+      "sha256": "5cbd7ef00b74514c73532e116e9f54bf3658180dccd8e15f6f90b9af46412a96",
+      "size": 1759,
+      "normalized_sha256": "5cbd7ef00b74514c73532e116e9f54bf3658180dccd8e15f6f90b9af46412a96"
+    },
+    "src/homestay_bot/services/complaint_admin_service.py": {
+      "role": "index",
+      "sha256": "0f12796a3eb12839b7cba23b62cba706a77157195dc16e51400cadca34327bb1",
+      "size": 9155,
+      "normalized_sha256": "0f12796a3eb12839b7cba23b62cba706a77157195dc16e51400cadca34327bb1"
+    },
+    "src/homestay_bot/services/complaint_review_job.py": {
+      "role": "index",
+      "sha256": "5bb8db52e6a21b323eb964fad4f883e1014a055ee8b054b799466c15b3e6c0b1",
+      "size": 8386,
+      "normalized_sha256": "5bb8db52e6a21b323eb964fad4f883e1014a055ee8b054b799466c15b3e6c0b1"
+    },
+    "src/homestay_bot/services/complaint_service.py": {
+      "role": "index",
+      "sha256": "4203dd7b7aaa24054aa66c38179facae94ed533d9535efe39918de10489f8eef",
+      "size": 2183,
+      "normalized_sha256": "4203dd7b7aaa24054aa66c38179facae94ed533d9535efe39918de10489f8eef"
+    },
+    "src/homestay_bot/services/context_retention.py": {
+      "role": "index",
+      "sha256": "da7d1a7be547c770388017036aa7041fb5037deb83eb33b69c94b72384842443",
+      "size": 10745,
+      "normalized_sha256": "da7d1a7be547c770388017036aa7041fb5037deb83eb33b69c94b72384842443"
+    },
+    "src/homestay_bot/services/conversation_service.py": {
+      "role": "index",
+      "sha256": "de2b6181756452dbf0ac354dff23285261d12d2e6b25066377ea46a8be335254",
+      "size": 96720,
+      "normalized_sha256": "de2b6181756452dbf0ac354dff23285261d12d2e6b25066377ea46a8be335254"
+    },
+    "src/homestay_bot/services/credential_delivery.py": {
+      "role": "index",
+      "sha256": "b1d679993a54ab6ce073c1e85a685ac473b23000d7f07bfa0b07ad7001d8f833",
+      "size": 13283,
+      "normalized_sha256": "b1d679993a54ab6ce073c1e85a685ac473b23000d7f07bfa0b07ad7001d8f833"
+    },
+    "src/homestay_bot/services/customer_admin_service.py": {
+      "role": "index",
+      "sha256": "c4e81078e7aa23aa9452fddbc16d22bdb6dbe58785668a0fe04af070e76d4ebc",
+      "size": 30529,
+      "normalized_sha256": "c4e81078e7aa23aa9452fddbc16d22bdb6dbe58785668a0fe04af070e76d4ebc"
+    },
+    "src/homestay_bot/services/customer_errors.py": {
+      "role": "index",
+      "sha256": "f9f13a8e323b1982fc77b469ff1687ff8ff203f5e7f6391979b23b52973b5e38",
+      "size": 511,
+      "normalized_sha256": "f9f13a8e323b1982fc77b469ff1687ff8ff203f5e7f6391979b23b52973b5e38"
+    },
+    "src/homestay_bot/services/customer_memory_policy.py": {
+      "role": "index",
+      "sha256": "1f5653d3971c4f1338abac2e094102a27d9bb800709d9786f93d1a80357cb56c",
+      "size": 14378,
+      "normalized_sha256": "1f5653d3971c4f1338abac2e094102a27d9bb800709d9786f93d1a80357cb56c"
+    },
+    "src/homestay_bot/services/customer_service.py": {
+      "role": "index",
+      "sha256": "029d65b88e66ab17e430f2a994412546b49457f5bba17d1c5a68fffd84e8eed9",
+      "size": 2500,
+      "normalized_sha256": "029d65b88e66ab17e430f2a994412546b49457f5bba17d1c5a68fffd84e8eed9"
+    },
+    "src/homestay_bot/services/customer_tag_sync.py": {
+      "role": "index",
+      "sha256": "603bb12be90b435bab61333baa2ae631dad630b0bdcfcf378b4e2402f9eccf29",
+      "size": 2601,
+      "normalized_sha256": "603bb12be90b435bab61333baa2ae631dad630b0bdcfcf378b4e2402f9eccf29"
+    },
+    "src/homestay_bot/services/delivery_rewrite_job.py": {
+      "role": "index",
+      "sha256": "9afc024232c1b2307fb9323705e27c922447d40cda661937417811354ab8f205",
+      "size": 13652,
+      "normalized_sha256": "9afc024232c1b2307fb9323705e27c922447d40cda661937417811354ab8f205"
+    },
+    "src/homestay_bot/services/emergency_service.py": {
+      "role": "index",
+      "sha256": "b8fecd9e78f3666ac57ce63457108de7c42a8fdad186aada672efab29ba8a213",
+      "size": 10170,
+      "normalized_sha256": "b8fecd9e78f3666ac57ce63457108de7c42a8fdad186aada672efab29ba8a213"
+    },
+    "src/homestay_bot/services/fact_policy.py": {
+      "role": "index",
+      "sha256": "78a3edbd8bf513fc4ea0956a42949eb9d9c58bfd1d3010e3d8355ecb40460700",
+      "size": 13767,
+      "normalized_sha256": "78a3edbd8bf513fc4ea0956a42949eb9d9c58bfd1d3010e3d8355ecb40460700"
+    },
+    "src/homestay_bot/services/faq_candidate_context.py": {
+      "role": "index",
+      "sha256": "7414584328c0c19d26358c9c1e3258dbe9ec331dc1d835338cf7cdd201794ffd",
+      "size": 1734,
+      "normalized_sha256": "7414584328c0c19d26358c9c1e3258dbe9ec331dc1d835338cf7cdd201794ffd"
+    },
+    "src/homestay_bot/services/faq_candidate_service.py": {
+      "role": "index",
+      "sha256": "b348f1a4b58919090615fe06479fe9a43c4cb0d5d0fa446725d47a03847f8517",
+      "size": 9449,
+      "normalized_sha256": "b348f1a4b58919090615fe06479fe9a43c4cb0d5d0fa446725d47a03847f8517"
+    },
+    "src/homestay_bot/services/faq_draft_job.py": {
+      "role": "index",
+      "sha256": "426b781481586ba9bba1227041d8523c34727f2a3aa10b31a19ce67e4699df79",
+      "size": 11574,
+      "normalized_sha256": "426b781481586ba9bba1227041d8523c34727f2a3aa10b31a19ce67e4699df79"
+    },
+    "src/homestay_bot/services/guest_reply_policy.py": {
+      "role": "index",
+      "sha256": "eb076b015fd7ae1548f51cb2dbfc9a9d1afb4bf30ad98318fa6040352b8fae1b",
+      "size": 42943,
+      "normalized_sha256": "eb076b015fd7ae1548f51cb2dbfc9a9d1afb4bf30ad98318fa6040352b8fae1b"
+    },
+    "src/homestay_bot/services/guest_verification.py": {
+      "role": "index",
+      "sha256": "1289004edd756630a89a08817704187a0e30e8733fbbbf2e96e8833b1e268be1",
+      "size": 6123,
+      "normalized_sha256": "1289004edd756630a89a08817704187a0e30e8733fbbbf2e96e8833b1e268be1"
+    },
+    "src/homestay_bot/services/handoff_card.py": {
+      "role": "index",
+      "sha256": "6b47dd1a6037cefb431040713ae3827f9571e899243db9ff0267e851fb60859b",
+      "size": 4876,
+      "normalized_sha256": "6b47dd1a6037cefb431040713ae3827f9571e899243db9ff0267e851fb60859b"
+    },
+    "src/homestay_bot/services/hostex_sync.py": {
+      "role": "index",
+      "sha256": "ca282a4177aa819a2d154611f7a49b62afb5769c7d9b3ef94b9e8846ce6f6d83",
+      "size": 8022,
+      "normalized_sha256": "ca282a4177aa819a2d154611f7a49b62afb5769c7d9b3ef94b9e8846ce6f6d83"
+    },
+    "src/homestay_bot/services/human_session.py": {
+      "role": "index",
+      "sha256": "b0f19102a007f0c4e262b730967eecb2a953f6feb2fc0f76570e1f32fc954c60",
+      "size": 11428,
+      "normalized_sha256": "b0f19102a007f0c4e262b730967eecb2a953f6feb2fc0f76570e1f32fc954c60"
+    },
+    "src/homestay_bot/services/knowledge_embeddings.py": {
+      "role": "index",
+      "sha256": "55f517e84de0d3d241601ad747887c7af3bc9c200b30733b854fd0335d68f321",
+      "size": 10367,
+      "normalized_sha256": "55f517e84de0d3d241601ad747887c7af3bc9c200b30733b854fd0335d68f321"
+    },
+    "src/homestay_bot/services/knowledge_evidence_policy.py": {
+      "role": "index",
+      "sha256": "1fdfc57f07fdee54aea26186e46e4bcc3e29ef6bd97865d50988fb237d58b95e",
+      "size": 38451,
+      "normalized_sha256": "1fdfc57f07fdee54aea26186e46e4bcc3e29ef6bd97865d50988fb237d58b95e"
+    },
+    "src/homestay_bot/services/knowledge_service.py": {
+      "role": "index",
+      "sha256": "6454c9f23252a5165d3afc827a213c35a1e585156d763af8fe6fcabd12488d20",
+      "size": 31612,
+      "normalized_sha256": "6454c9f23252a5165d3afc827a213c35a1e585156d763af8fe6fcabd12488d20"
+    },
+    "src/homestay_bot/services/latest_stay_note.py": {
+      "role": "index",
+      "sha256": "ce97ddfdb695890910ec3876c7017423a010284082351cd4acd97f75d36edfa1",
+      "size": 6351,
+      "normalized_sha256": "ce97ddfdb695890910ec3876c7017423a010284082351cd4acd97f75d36edfa1"
+    },
+    "src/homestay_bot/services/lifecycle_reminders.py": {
+      "role": "index",
+      "sha256": "1b0e7e6015d8d38876f273dc0c66c24e6ff86fb6d3a59d3d42831babf3db2b74",
+      "size": 14497,
+      "normalized_sha256": "1b0e7e6015d8d38876f273dc0c66c24e6ff86fb6d3a59d3d42831babf3db2b74"
+    },
+    "src/homestay_bot/services/live_fact_check.py": {
+      "role": "index",
+      "sha256": "ac7cd1af2863c39607b040bd1f3e0fd0399dac5de2ccbcbae118abfa69952ebc",
+      "size": 5750,
+      "normalized_sha256": "ac7cd1af2863c39607b040bd1f3e0fd0399dac5de2ccbcbae118abfa69952ebc"
+    },
+    "src/homestay_bot/services/message_service.py": {
+      "role": "index",
+      "sha256": "68f186b8a8983aaf512232c036df9707cd474958ccb58fbd3b9a25f84dcd6443",
+      "size": 8864,
+      "normalized_sha256": "68f186b8a8983aaf512232c036df9707cd474958ccb58fbd3b9a25f84dcd6443"
+    },
+    "src/homestay_bot/services/model_budget.py": {
+      "role": "index",
+      "sha256": "9f83bbed3a3ab83535924245a267f48b3b4ad34d31d272a8bc160d3fd1fb9528",
+      "size": 2642,
+      "normalized_sha256": "9f83bbed3a3ab83535924245a267f48b3b4ad34d31d272a8bc160d3fd1fb9528"
+    },
+    "src/homestay_bot/services/outbound_url_policy.py": {
+      "role": "index",
+      "sha256": "37412c79bd37bf0c0191620a24fdf06c4e71fcf0234e4a7d530d7087cb63519f",
+      "size": 14678,
+      "normalized_sha256": "37412c79bd37bf0c0191620a24fdf06c4e71fcf0234e4a7d530d7087cb63519f"
+    },
+    "src/homestay_bot/services/private_file_storage.py": {
+      "role": "index",
+      "sha256": "35a3cb2530c43f41e185ef4aceba00d58d9e0376b1058cc2086cfb6ce5f72fe5",
+      "size": 4846,
+      "normalized_sha256": "35a3cb2530c43f41e185ef4aceba00d58d9e0376b1058cc2086cfb6ce5f72fe5"
+    },
+    "src/homestay_bot/services/property_admin_service.py": {
+      "role": "index",
+      "sha256": "9ce3f4c5e40d39d4e849ad7f371f5a8806f09cff7b78eaa24670e26383b85689",
+      "size": 18159,
+      "normalized_sha256": "9ce3f4c5e40d39d4e849ad7f371f5a8806f09cff7b78eaa24670e26383b85689"
+    },
+    "src/homestay_bot/services/reply_plan.py": {
+      "role": "index",
+      "sha256": "7ba2118cbdf33db96c9d0f1e95751eefdf0c86775bb8ae69841166545ea9e226",
+      "size": 2621,
+      "normalized_sha256": "7ba2118cbdf33db96c9d0f1e95751eefdf0c86775bb8ae69841166545ea9e226"
+    },
+    "src/homestay_bot/services/room_readiness_service.py": {
+      "role": "index",
+      "sha256": "3ef6389e687138f3210c1758a1f6e3220411674af2de0336d4b06d9ca4dfa523",
+      "size": 9663,
+      "normalized_sha256": "3ef6389e687138f3210c1758a1f6e3220411674af2de0336d4b06d9ca4dfa523"
+    },
+    "src/homestay_bot/services/runtime_clients.py": {
+      "role": "index",
+      "sha256": "6dd6c526cf3d2fb9f6aa51b841d251205c84f20f4e9a873c092710a80731e67b",
+      "size": 22604,
+      "normalized_sha256": "6dd6c526cf3d2fb9f6aa51b841d251205c84f20f4e9a873c092710a80731e67b"
+    },
+    "src/homestay_bot/services/runtime_config_cipher.py": {
+      "role": "index",
+      "sha256": "810b1dfd99e428f0bb006987a1d748be6859617a6122195c0583f1a7125948cc",
+      "size": 3191,
+      "normalized_sha256": "810b1dfd99e428f0bb006987a1d748be6859617a6122195c0583f1a7125948cc"
+    },
+    "src/homestay_bot/services/runtime_config_service.py": {
+      "role": "index",
+      "sha256": "046ce97add1d2243ab12d771453c4c71a2ee0e14c0bce8b570b2a7208d2ed7f2",
+      "size": 31185,
+      "normalized_sha256": "046ce97add1d2243ab12d771453c4c71a2ee0e14c0bce8b570b2a7208d2ed7f2"
+    },
+    "src/homestay_bot/services/runtime_config_tester.py": {
+      "role": "index",
+      "sha256": "a2efda020156e23643ce7d516e4ef08153918b2fc6aa9d364a78d584c6e7eb24",
+      "size": 22022,
+      "normalized_sha256": "a2efda020156e23643ce7d516e4ef08153918b2fc6aa9d364a78d584c6e7eb24"
+    },
+    "src/homestay_bot/services/sensitive_data.py": {
+      "role": "index",
+      "sha256": "ac3cd99a13571cbacea1a108719e06eda812f0441fa8f7ac85730473a3f9eaed",
+      "size": 2333,
+      "normalized_sha256": "ac3cd99a13571cbacea1a108719e06eda812f0441fa8f7ac85730473a3f9eaed"
+    },
+    "src/homestay_bot/services/stay_date_range.py": {
+      "role": "index",
+      "sha256": "51b63c8293d2fbeca6d6c3c106e6955fe03c951e87f753077abe4990b6142b01",
+      "size": 1764,
+      "normalized_sha256": "51b63c8293d2fbeca6d6c3c106e6955fe03c951e87f753077abe4990b6142b01"
+    },
+    "src/homestay_bot/services/task_lifecycle_service.py": {
+      "role": "index",
+      "sha256": "7c997cf9166856f19923cfa7b69ef6298fa6f20473b45a5cf6b85d4f74b38dbe",
+      "size": 7925,
+      "normalized_sha256": "7c997cf9166856f19923cfa7b69ef6298fa6f20473b45a5cf6b85d4f74b38dbe"
+    },
+    "src/homestay_bot/services/task_page_service.py": {
+      "role": "index",
+      "sha256": "2a9bed216cf320f01dee18e5c5ccc2b04f684a25a547338d413a9ed05b3f5d38",
+      "size": 28977,
+      "normalized_sha256": "2a9bed216cf320f01dee18e5c5ccc2b04f684a25a547338d413a9ed05b3f5d38"
+    },
+    "src/homestay_bot/static/admin.js": {
+      "role": "index",
+      "sha256": "d9ccac62dc5146145d4f04a2b6340e9ac523c8930743d3ef63c0c8e1419faec4",
+      "size": 28901,
+      "normalized_sha256": "d9ccac62dc5146145d4f04a2b6340e9ac523c8930743d3ef63c0c8e1419faec4"
+    },
+    "src/homestay_bot/static/app.css": {
+      "role": "index",
+      "sha256": "13097515e1fdabd3547eb4eb4019d4f3684ba5c410487fed86120f7ac16c910a",
+      "size": 71014,
+      "normalized_sha256": "13097515e1fdabd3547eb4eb4019d4f3684ba5c410487fed86120f7ac16c910a"
+    },
+    "src/homestay_bot/static/theme.js": {
+      "role": "index",
+      "sha256": "dd1d3edb0436599a407aa60d2210cc21d7568806a08d4a2143d661b9f2f943b2",
+      "size": 1867,
+      "normalized_sha256": "dd1d3edb0436599a407aa60d2210cc21d7568806a08d4a2143d661b9f2f943b2"
+    },
+    "src/homestay_bot/templates/account/detail.html": {
+      "role": "index",
+      "sha256": "d33eca01bfd510bf9ce25116bdfa060c34edc12c5fbfc20e3aa368f743262a85",
+      "size": 1602,
+      "normalized_sha256": "d33eca01bfd510bf9ce25116bdfa060c34edc12c5fbfc20e3aa368f743262a85"
+    },
+    "src/homestay_bot/templates/admin/attention.html": {
+      "role": "index",
+      "sha256": "d7f8f7931a1e4cfb532c557e5e945ebf482123d791d773b6f2eb14c92de42ad2",
+      "size": 2659,
+      "normalized_sha256": "d7f8f7931a1e4cfb532c557e5e945ebf482123d791d773b6f2eb14c92de42ad2"
+    },
+    "src/homestay_bot/templates/admin/audits.html": {
+      "role": "index",
+      "sha256": "88b5d28974c5609ebe7e621ee4d80b391c50bf32f5cd5abdb8fe71a64be69fa6",
+      "size": 2225,
+      "normalized_sha256": "88b5d28974c5609ebe7e621ee4d80b391c50bf32f5cd5abdb8fe71a64be69fa6"
+    },
+    "src/homestay_bot/templates/admin/config_versions.html": {
+      "role": "index",
+      "sha256": "a7fd87e0257282d08c13addd3c8a845e71f3bc8b5239b8c68bc805b6c78200ba",
+      "size": 3677,
+      "normalized_sha256": "a7fd87e0257282d08c13addd3c8a845e71f3bc8b5239b8c68bc805b6c78200ba"
+    },
+    "src/homestay_bot/templates/admin/dashboard.html": {
+      "role": "index",
+      "sha256": "259785ac4282c567427dc938f8ebd9654777bfedf913d1e6077e3641ff9b8966",
+      "size": 6211,
+      "normalized_sha256": "259785ac4282c567427dc938f8ebd9654777bfedf913d1e6077e3641ff9b8966"
+    },
+    "src/homestay_bot/templates/admin/debug.html": {
+      "role": "index",
+      "sha256": "736a9d1b843181fbf4880e39fb9c50ce9f3ed15625d99403304cb3b17d8b8f0e",
+      "size": 3553,
+      "normalized_sha256": "736a9d1b843181fbf4880e39fb9c50ce9f3ed15625d99403304cb3b17d8b8f0e"
+    },
+    "src/homestay_bot/templates/admin/diagnostics.html": {
+      "role": "index",
+      "sha256": "84e1bdd2fb5d60ba1a19839a5818d1edc631def5fe137862a847d2489b17c0b8",
+      "size": 7847,
+      "normalized_sha256": "84e1bdd2fb5d60ba1a19839a5818d1edc631def5fe137862a847d2489b17c0b8"
+    },
+    "src/homestay_bot/templates/admin/operations.html": {
+      "role": "index",
+      "sha256": "5981c7c9298c7e8f59c88ba754b0ef6b5cccbb1285c812e4e8ae6f9f0adb8807",
+      "size": 7487,
+      "normalized_sha256": "5981c7c9298c7e8f59c88ba754b0ef6b5cccbb1285c812e4e8ae6f9f0adb8807"
+    },
+    "src/homestay_bot/templates/admin/settings.html": {
+      "role": "index",
+      "sha256": "0b056607f92bd3a13db7e6d4ed83a6e9809ab0a154400c1de944d13030c2e950",
+      "size": 9434,
+      "normalized_sha256": "0b056607f92bd3a13db7e6d4ed83a6e9809ab0a154400c1de944d13030c2e950"
+    },
+    "src/homestay_bot/templates/approvals/detail.html": {
+      "role": "index",
+      "sha256": "525fb7b8b81fcc76772390a0897fb14728a43cec8a782e0c68b3063502bb1ecc",
+      "size": 9555,
+      "normalized_sha256": "525fb7b8b81fcc76772390a0897fb14728a43cec8a782e0c68b3063502bb1ecc"
+    },
+    "src/homestay_bot/templates/approvals/index.html": {
+      "role": "index",
+      "sha256": "b3af27cf8004c7d0a225c485b58ea28aba07a5cb98a1ba349c9957b3ac504d89",
+      "size": 1340,
+      "normalized_sha256": "b3af27cf8004c7d0a225c485b58ea28aba07a5cb98a1ba349c9957b3ac504d89"
+    },
+    "src/homestay_bot/templates/auth/change_password.html": {
+      "role": "index",
+      "sha256": "00f2c36af86eac8078a70e4281216a98ade56fa37f7376576d629a00fd167d56",
+      "size": 981,
+      "normalized_sha256": "00f2c36af86eac8078a70e4281216a98ade56fa37f7376576d629a00fd167d56"
+    },
+    "src/homestay_bot/templates/auth/login.html": {
+      "role": "index",
+      "sha256": "8b26ab0bae4db6055334f90905bc204398145f1493e57b96329ee38fbc2ddc82",
+      "size": 690,
+      "normalized_sha256": "8b26ab0bae4db6055334f90905bc204398145f1493e57b96329ee38fbc2ddc82"
+    },
+    "src/homestay_bot/templates/complaints/edit.html": {
+      "role": "index",
+      "sha256": "89bce1e951bf6f45dc14184fcfc8c954eabacf2923759355dbde30e2fdc392fd",
+      "size": 8632,
+      "normalized_sha256": "89bce1e951bf6f45dc14184fcfc8c954eabacf2923759355dbde30e2fdc392fd"
+    },
+    "src/homestay_bot/templates/complaints/index.html": {
+      "role": "index",
+      "sha256": "759b906e0033b61328632dd67043184cea720941be2b4db8629148c7ff7d6e8f",
+      "size": 1880,
+      "normalized_sha256": "759b906e0033b61328632dd67043184cea720941be2b4db8629148c7ff7d6e8f"
+    },
+    "src/homestay_bot/templates/components/icons.html": {
+      "role": "index",
+      "sha256": "814d429f40267a8f3c447044524447e855d98212d3bfada54f38fa74b0f86a81",
+      "size": 1995,
+      "normalized_sha256": "814d429f40267a8f3c447044524447e855d98212d3bfada54f38fa74b0f86a81"
+    },
+    "src/homestay_bot/templates/components/ui.html": {
+      "role": "index",
+      "sha256": "fa7215ffc7b3c531fb58440a3b432f9f76c9db2ea87ed16868b613ea9650fad3",
+      "size": 16284,
+      "normalized_sha256": "fa7215ffc7b3c531fb58440a3b432f9f76c9db2ea87ed16868b613ea9650fad3"
+    },
+    "src/homestay_bot/templates/components/workbench.html": {
+      "role": "index",
+      "sha256": "c04fa4522fcdf1617cdb6e14696919ff1a6ebf9f4063cb9cb9e2ae1721a228a8",
+      "size": 826,
+      "normalized_sha256": "c04fa4522fcdf1617cdb6e14696919ff1a6ebf9f4063cb9cb9e2ae1721a228a8"
+    },
+    "src/homestay_bot/templates/customers/detail.html": {
+      "role": "index",
+      "sha256": "ba2f38ebc17b8baa913d98a35e36c85b364b80263e47470563739190162c2c67",
+      "size": 22427,
+      "normalized_sha256": "ba2f38ebc17b8baa913d98a35e36c85b364b80263e47470563739190162c2c67"
+    },
+    "src/homestay_bot/templates/customers/index.html": {
+      "role": "index",
+      "sha256": "ea0ce1f5bed01218508695683e7b5c02b192fcec739cfd09d29b34eecff727b3",
+      "size": 4477,
+      "normalized_sha256": "ea0ce1f5bed01218508695683e7b5c02b192fcec739cfd09d29b34eecff727b3"
+    },
+    "src/homestay_bot/templates/customers/merge.html": {
+      "role": "index",
+      "sha256": "c62c1034c65ed7192a56d446f8e000d1f875eba895c0325c17f6abb643eb65ec",
+      "size": 2006,
+      "normalized_sha256": "c62c1034c65ed7192a56d446f8e000d1f875eba895c0325c17f6abb643eb65ec"
+    },
+    "src/homestay_bot/templates/errors/unavailable.html": {
+      "role": "index",
+      "sha256": "3bca2254e072999f543c6fcd8dd668446b0334b7e4a0c77f49b0c7e5f7ea1755",
+      "size": 471,
+      "normalized_sha256": "3bca2254e072999f543c6fcd8dd668446b0334b7e4a0c77f49b0c7e5f7ea1755"
+    },
+    "src/homestay_bot/templates/knowledge/detail.html": {
+      "role": "index",
+      "sha256": "28f515eeeb28cf91260ff9c19528d2e3feb55d2f1b81bbbe38d95ed62cff49c8",
+      "size": 5060,
+      "normalized_sha256": "28f515eeeb28cf91260ff9c19528d2e3feb55d2f1b81bbbe38d95ed62cff49c8"
+    },
+    "src/homestay_bot/templates/knowledge/entry_state.html": {
+      "role": "index",
+      "sha256": "5a5a562bf1735c404715db672970574f0d73f30d9ba56dd5f7072b757c4ae8f6",
+      "size": 1698,
+      "normalized_sha256": "5a5a562bf1735c404715db672970574f0d73f30d9ba56dd5f7072b757c4ae8f6"
+    },
+    "src/homestay_bot/templates/knowledge/index.html": {
+      "role": "index",
+      "sha256": "5074e31e06984af7b96ea947bb8fa97f744ea4287a8bf49f82712392bc9f6289",
+      "size": 9164,
+      "normalized_sha256": "5074e31e06984af7b96ea947bb8fa97f744ea4287a8bf49f82712392bc9f6289"
+    },
+    "src/homestay_bot/templates/knowledge/scope_fields.html": {
+      "role": "index",
+      "sha256": "3651944d50f000ff71a57ac774bfbae2252089a4b9b85812d30c6a6bd9f710dd",
+      "size": 1795,
+      "normalized_sha256": "3651944d50f000ff71a57ac774bfbae2252089a4b9b85812d30c6a6bd9f710dd"
+    },
+    "src/homestay_bot/templates/layouts/admin.html": {
+      "role": "index",
+      "sha256": "3f191620de2889317b6aa3e3ac4c7f50e7e4177d0fe0b1e075a4ac9d97d02cab",
+      "size": 6663,
+      "normalized_sha256": "3f191620de2889317b6aa3e3ac4c7f50e7e4177d0fe0b1e075a4ac9d97d02cab"
+    },
+    "src/homestay_bot/templates/layouts/auth.html": {
+      "role": "index",
+      "sha256": "fd77078e6248679ecfe128f980371d5c2cc7145853c4ddb5e8444e9fd6ab6fca",
+      "size": 1117,
+      "normalized_sha256": "fd77078e6248679ecfe128f980371d5c2cc7145853c4ddb5e8444e9fd6ab6fca"
+    },
+    "src/homestay_bot/templates/properties/detail.html": {
+      "role": "index",
+      "sha256": "e15ddc885fa0b0038dcd492179f2493a45bc7529f2a18aa263bb0ccb7013d796",
+      "size": 6866,
+      "normalized_sha256": "e15ddc885fa0b0038dcd492179f2493a45bc7529f2a18aa263bb0ccb7013d796"
+    },
+    "src/homestay_bot/templates/properties/index.html": {
+      "role": "index",
+      "sha256": "abc34b642ea4bc7c917e93a048e1efa2027a130399bf3b7ee1565362c9ad6c3f",
+      "size": 3631,
+      "normalized_sha256": "abc34b642ea4bc7c917e93a048e1efa2027a130399bf3b7ee1565362c9ad6c3f"
+    },
+    "src/homestay_bot/templates/tasks/detail.html": {
+      "role": "index",
+      "sha256": "30a59da5d2de6971d1349822691767bdff115a82723cc0b4bea4915c04353355",
+      "size": 10342,
+      "normalized_sha256": "30a59da5d2de6971d1349822691767bdff115a82723cc0b4bea4915c04353355"
+    },
+    "src/homestay_bot/templates/tasks/index.html": {
+      "role": "index",
+      "sha256": "1a95a967aed88e4282cb18aa8f3f2d87fd9c7980bde8fd967576098f29845205",
+      "size": 15209,
+      "normalized_sha256": "1a95a967aed88e4282cb18aa8f3f2d87fd9c7980bde8fd967576098f29845205"
+    },
+    "src/homestay_bot/tools/__init__.py": {
+      "role": "index",
+      "sha256": "2feab448193e230d9ce6ec11cdbd5c44800c8df40d920b39a93b3c52596f61aa",
+      "size": 63,
+      "normalized_sha256": "2feab448193e230d9ce6ec11cdbd5c44800c8df40d920b39a93b3c52596f61aa"
+    },
+    "src/homestay_bot/tools/backfill_guest_plaintext.py": {
+      "role": "index",
+      "sha256": "5b202af34b5dee33f96c95a632ef5ee8497dc139772684f6bebb8da79990d02b",
+      "size": 4348,
+      "normalized_sha256": "5b202af34b5dee33f96c95a632ef5ee8497dc139772684f6bebb8da79990d02b"
+    },
+    "src/homestay_bot/tools/import_knowledge_drafts.py": {
+      "role": "index",
+      "sha256": "5c79f97334b1dc72675dfe12da0bd86db394ce25e6f22d4ec6e417bdc8663416",
+      "size": 16142,
+      "normalized_sha256": "5c79f97334b1dc72675dfe12da0bd86db394ce25e6f22d4ec6e417bdc8663416"
+    },
+    "src/homestay_bot/tools/knowledge_scope_report.py": {
+      "role": "index",
+      "sha256": "b0280a1c7bb4a83ac7db79d7647b7e5c18bf4af8897d380bf5b03e115a8b0061",
+      "size": 1566,
+      "normalized_sha256": "b0280a1c7bb4a83ac7db79d7647b7e5c18bf4af8897d380bf5b03e115a8b0061"
+    },
+    "src/homestay_bot/tools/reply_regression.py": {
+      "role": "index",
+      "sha256": "f5a0bfdc884a3d5bcfb834387f70fcfe73cbb49a2694a3129c01c839b3a5a343",
+      "size": 32584,
+      "normalized_sha256": "f5a0bfdc884a3d5bcfb834387f70fcfe73cbb49a2694a3129c01c839b3a5a343"
+    },
+    "src/homestay_bot/version.py": {
+      "role": "index",
+      "sha256": "9a4152d023ee88ba34d23115e4a8b3d4e02c88e466d2f64d82a4fe614985090f",
+      "size": 791,
+      "normalized_sha256": "9a4152d023ee88ba34d23115e4a8b3d4e02c88e466d2f64d82a4fe614985090f"
+    },
+    "src/homestay_bot/web.py": {
+      "role": "index",
+      "sha256": "6e2d440c91494cfbe57bc6dc20cb59f7daf438cac2f32f3ceb82ce03a9f9e301",
+      "size": 4200,
+      "normalized_sha256": "6e2d440c91494cfbe57bc6dc20cb59f7daf438cac2f32f3ceb82ce03a9f9e301"
+    },
+    "src/homestay_bot/worker.py": {
+      "role": "index",
+      "sha256": "95f77f6e307f92a51efdb1bc5299d01695041df83bf030abed3df5a66e287257",
+      "size": 16814,
+      "normalized_sha256": "95f77f6e307f92a51efdb1bc5299d01695041df83bf030abed3df5a66e287257"
+    },
+    "tasks/lessons.md": {
+      "role": "index",
+      "sha256": "c9556bc3926b827ac2ca4b8e349444f3f3d8369712e37198c5d22a170a726829",
+      "size": 3641,
+      "normalized_sha256": "c9556bc3926b827ac2ca4b8e349444f3f3d8369712e37198c5d22a170a726829"
+    },
+    "tasks/todo.md": {
+      "role": "index",
+      "sha256": "37b65c4b91949bb2e428433f4461152e4135a491c0ad1bf16e65bfa7c237362a",
+      "size": 107667,
+      "normalized_sha256": "37b65c4b91949bb2e428433f4461152e4135a491c0ad1bf16e65bfa7c237362a"
+    },
+    "tests/__init__.py": {
+      "role": "observe",
+      "sha256": "5c858ea99e3dff7696ca839c08e2bea6d0d3562818287c227965c0d0433392a7",
+      "size": 25,
+      "normalized_sha256": "5c858ea99e3dff7696ca839c08e2bea6d0d3562818287c227965c0d0433392a7"
+    },
+    "tests/admin_auth_helpers.py": {
+      "role": "observe",
+      "sha256": "2598395c3ddc899a6ec44f6e7dc5075293b8d3541f05fd1033acd710975f8182",
+      "size": 5341,
+      "normalized_sha256": "2598395c3ddc899a6ec44f6e7dc5075293b8d3541f05fd1033acd710975f8182"
+    },
+    "tests/browser/test_admin_batch_workbench.py": {
+      "role": "observe",
+      "sha256": "f8250fcd0e342bc4efa037b402982dc49f2506bd9ae29e86a52e4f68a53ab4de",
+      "size": 34028,
+      "normalized_sha256": "f8250fcd0e342bc4efa037b402982dc49f2506bd9ae29e86a52e4f68a53ab4de"
+    },
+    "tests/browser/test_admin_interactions.py": {
+      "role": "observe",
+      "sha256": "c66a2528b8c96cf170168668ae542c0c9e4a36d5f3c2503efde12d8ce9d3cc74",
+      "size": 68811,
+      "normalized_sha256": "c66a2528b8c96cf170168668ae542c0c9e4a36d5f3c2503efde12d8ce9d3cc74"
+    },
+    "tests/browser/test_admin_theme.py": {
+      "role": "observe",
+      "sha256": "28d4fc2b7b74d344f09734f3147021b874eab8779c767103e13510600e5aeac0",
+      "size": 35006,
+      "normalized_sha256": "28d4fc2b7b74d344f09734f3147021b874eab8779c767103e13510600e5aeac0"
+    },
+    "tests/browser/test_approval_late_results.py": {
+      "role": "observe",
+      "sha256": "6251bdc49281f44fa48064a41e9273e50f788dada8e712bd9b58db82149b3428",
+      "size": 6354,
+      "normalized_sha256": "6251bdc49281f44fa48064a41e9273e50f788dada8e712bd9b58db82149b3428"
+    },
+    "tests/contract/test_deepseek_contract.py": {
+      "role": "observe",
+      "sha256": "acd71082616c51a3eb778e7852691b6675d8818fc227232cabfe61e011ba8972",
+      "size": 10598,
+      "normalized_sha256": "acd71082616c51a3eb778e7852691b6675d8818fc227232cabfe61e011ba8972"
+    },
+    "tests/contract/test_hostex_contract.py": {
+      "role": "observe",
+      "sha256": "d01f9a7ac4007078e2b89361d89aacb760e88c8bf70fdc8a0481904fca3ca46b",
+      "size": 3081,
+      "normalized_sha256": "d01f9a7ac4007078e2b89361d89aacb760e88c8bf70fdc8a0481904fca3ca46b"
+    },
+    "tests/contract/test_wecom_contract.py": {
+      "role": "observe",
+      "sha256": "0b5b05f7b18d2118012e3c9e78968e62e303ace9aa3ecd2a89823c2f9473ec1b",
+      "size": 1702,
+      "normalized_sha256": "0b5b05f7b18d2118012e3c9e78968e62e303ace9aa3ecd2a89823c2f9473ec1b"
+    },
+    "tests/integration/test_admin_auth_routes.py": {
+      "role": "observe",
+      "sha256": "354c3427339d9e78c55a9e6d4fc7b30063018760edd35ca37942db6f262c834f",
+      "size": 28604,
+      "normalized_sha256": "354c3427339d9e78c55a9e6d4fc7b30063018760edd35ca37942db6f262c834f"
+    },
+    "tests/integration/test_admin_bootstrap.py": {
+      "role": "observe",
+      "sha256": "a8190a805abb44086e05b0346fef190fd5c33196c12fd6d2a7b2ddf4ec01893a",
+      "size": 7200,
+      "normalized_sha256": "a8190a805abb44086e05b0346fef190fd5c33196c12fd6d2a7b2ddf4ec01893a"
+    },
+    "tests/integration/test_admin_credential_repository.py": {
+      "role": "observe",
+      "sha256": "7b2a671a02bd25e62062103bbc6e17c678f0a1441f69a6e97a1709d722c8aa11",
+      "size": 13215,
+      "normalized_sha256": "7b2a671a02bd25e62062103bbc6e17c678f0a1441f69a6e97a1709d722c8aa11"
+    },
+    "tests/integration/test_admin_csrf.py": {
+      "role": "observe",
+      "sha256": "ed6332ff79f71f3122e4b2fe43be1ba8e12a811acad6a972e39a14760d0cba22",
+      "size": 17725,
+      "normalized_sha256": "ed6332ff79f71f3122e4b2fe43be1ba8e12a811acad6a972e39a14760d0cba22"
+    },
+    "tests/integration/test_admin_dashboard_routes.py": {
+      "role": "observe",
+      "sha256": "f17301c77e8d32f745bb5b9dabd0f33019a5038b7d091fa2597008695e8e916f",
+      "size": 47049,
+      "normalized_sha256": "f17301c77e8d32f745bb5b9dabd0f33019a5038b7d091fa2597008695e8e916f"
+    },
+    "tests/integration/test_admin_debug_routes.py": {
+      "role": "observe",
+      "sha256": "8647840071fee4da771971cb78ae7e222c20fcce24738ec697990e6cb24d90a6",
+      "size": 13152,
+      "normalized_sha256": "8647840071fee4da771971cb78ae7e222c20fcce24738ec697990e6cb24d90a6"
+    },
+    "tests/integration/test_admin_debug_side_effects.py": {
+      "role": "observe",
+      "sha256": "7f00709fc594528facf9b5240554e29ab50dde320667100cdd29b75689ca13e2",
+      "size": 16407,
+      "normalized_sha256": "7f00709fc594528facf9b5240554e29ab50dde320667100cdd29b75689ca13e2"
+    },
+    "tests/integration/test_admin_diagnostics_repository.py": {
+      "role": "observe",
+      "sha256": "4be302416df7b53aed69d069a445f6d95d3437453303cd672c4091c67111632e",
+      "size": 9385,
+      "normalized_sha256": "4be302416df7b53aed69d069a445f6d95d3437453303cd672c4091c67111632e"
+    },
+    "tests/integration/test_admin_hardening.py": {
+      "role": "observe",
+      "sha256": "73846c54a940d0bf35bbcc8fb5e6b781b5df02a906085300d8a0c63fa5e56e10",
+      "size": 6933,
+      "normalized_sha256": "73846c54a940d0bf35bbcc8fb5e6b781b5df02a906085300d8a0c63fa5e56e10"
+    },
+    "tests/integration/test_admin_unavailable.py": {
+      "role": "observe",
+      "sha256": "5e9384a66da37e372c54e0bbf97fb8bdb940f8cbe5c80b7712f60248a90c256d",
+      "size": 2982,
+      "normalized_sha256": "5e9384a66da37e372c54e0bbf97fb8bdb940f8cbe5c80b7712f60248a90c256d"
+    },
+    "tests/integration/test_approval_flow.py": {
+      "role": "observe",
+      "sha256": "86d71f472b9db39cdd633ff2f4ebfbd5d1750d55aa0fbc81efb8dcf495cae1cb",
+      "size": 12750,
+      "normalized_sha256": "86d71f472b9db39cdd633ff2f4ebfbd5d1750d55aa0fbc81efb8dcf495cae1cb"
+    },
+    "tests/integration/test_approval_repository.py": {
+      "role": "observe",
+      "sha256": "69066aef30d57a4e78e027ce6e7e5a6202c6859be8385a4602bd7aa08cff7a7d",
+      "size": 7986,
+      "normalized_sha256": "69066aef30d57a4e78e027ce6e7e5a6202c6859be8385a4602bd7aa08cff7a7d"
+    },
+    "tests/integration/test_approval_review_actions.py": {
+      "role": "observe",
+      "sha256": "fe57e1d56a247da64d891c148ab0e0770e6b70413540dc71aa9e18fda99d2ec5",
+      "size": 41557,
+      "normalized_sha256": "fe57e1d56a247da64d891c148ab0e0770e6b70413540dc71aa9e18fda99d2ec5"
+    },
+    "tests/integration/test_approval_review_postgresql.py": {
+      "role": "observe",
+      "sha256": "cbb9f9277a19b0951c8700debe521b4effdc15644d9afbcfce193f4d26e3c4dc",
+      "size": 2710,
+      "normalized_sha256": "cbb9f9277a19b0951c8700debe521b4effdc15644d9afbcfce193f4d26e3c4dc"
+    },
+    "tests/integration/test_approval_routes.py": {
+      "role": "observe",
+      "sha256": "23b6becc11798b07d8526ac96c99a79e09e382417581e0d2248f08794e78d3bc",
+      "size": 17526,
+      "normalized_sha256": "23b6becc11798b07d8526ac96c99a79e09e382417581e0d2248f08794e78d3bc"
+    },
+    "tests/integration/test_backfill_guest_plaintext.py": {
+      "role": "observe",
+      "sha256": "9b13b8efcf80433d7144fdf6240ccb9e86596c6ebfedb79aef71045f118d7950",
+      "size": 4263,
+      "normalized_sha256": "9b13b8efcf80433d7144fdf6240ccb9e86596c6ebfedb79aef71045f118d7950"
+    },
+    "tests/integration/test_complaint_delivery_guards.py": {
+      "role": "observe",
+      "sha256": "83fc31a3e598190a370631ef663f86f056444f242a3bdf410d61f78d7e8d3f66",
+      "size": 25191,
+      "normalized_sha256": "83fc31a3e598190a370631ef663f86f056444f242a3bdf410d61f78d7e8d3f66"
+    },
+    "tests/integration/test_complaint_delivery_postgresql.py": {
+      "role": "observe",
+      "sha256": "e08cbd9c7c90546ebf55009fd88b4f1308f63e3e58058aae0d0487a421d62bc4",
+      "size": 4109,
+      "normalized_sha256": "e08cbd9c7c90546ebf55009fd88b4f1308f63e3e58058aae0d0487a421d62bc4"
+    },
+    "tests/integration/test_complaint_repository.py": {
+      "role": "observe",
+      "sha256": "54d6ded20eca3e84a04b520ae4bf8a54570e7c4ce914200c8c52009d6e63f2fa",
+      "size": 21903,
+      "normalized_sha256": "54d6ded20eca3e84a04b520ae4bf8a54570e7c4ce914200c8c52009d6e63f2fa"
+    },
+    "tests/integration/test_context_repository.py": {
+      "role": "observe",
+      "sha256": "70aff058cd2c28e2172dc12f0dbf255b1eaa31d40086b6aff655b3f33e94d090",
+      "size": 44567,
+      "normalized_sha256": "70aff058cd2c28e2172dc12f0dbf255b1eaa31d40086b6aff655b3f33e94d090"
+    },
+    "tests/integration/test_conversation_release.py": {
+      "role": "observe",
+      "sha256": "0514b2e86bac9fe52a61f37087ce036edadd9d894a950b2fa1bc23374c6a41ac",
+      "size": 7378,
+      "normalized_sha256": "0514b2e86bac9fe52a61f37087ce036edadd9d894a950b2fa1bc23374c6a41ac"
+    },
+    "tests/integration/test_credential_delivery_repository.py": {
+      "role": "observe",
+      "sha256": "ddfd6e5691f744018070a90d586346f61553ca105c492c5ef9a6585bbd76ee70",
+      "size": 15362,
+      "normalized_sha256": "ddfd6e5691f744018070a90d586346f61553ca105c492c5ef9a6585bbd76ee70"
+    },
+    "tests/integration/test_customer_chat_history.py": {
+      "role": "observe",
+      "sha256": "89e4aa6c27d1a5449b883cb1f4d1a2d74f0d38173500f765800068d6c7959a20",
+      "size": 8533,
+      "normalized_sha256": "89e4aa6c27d1a5449b883cb1f4d1a2d74f0d38173500f765800068d6c7959a20"
+    },
+    "tests/integration/test_customer_repository.py": {
+      "role": "observe",
+      "sha256": "4ff3f06aa79302a7a07bf448233feba6b0662a1e7a8411eab61e61fd386db14f",
+      "size": 80049,
+      "normalized_sha256": "4ff3f06aa79302a7a07bf448233feba6b0662a1e7a8411eab61e61fd386db14f"
+    },
+    "tests/integration/test_customer_routes.py": {
+      "role": "observe",
+      "sha256": "9ea65e44885b8e9dcb2ae97197bdd39323f72cddfbc94cdfcd24c883825a7850",
+      "size": 46088,
+      "normalized_sha256": "9ea65e44885b8e9dcb2ae97197bdd39323f72cddfbc94cdfcd24c883825a7850"
+    },
+    "tests/integration/test_emergency_follow_up.py": {
+      "role": "observe",
+      "sha256": "3f0f3b42bbfba971052f62332c9068e9242ce8438ad7004ed8a7230a998dc4c4",
+      "size": 4648,
+      "normalized_sha256": "3f0f3b42bbfba971052f62332c9068e9242ce8438ad7004ed8a7230a998dc4c4"
+    },
+    "tests/integration/test_external_call_rollup.py": {
+      "role": "observe",
+      "sha256": "f861a9a69df98326586a4679ee3530705eca97f4c0f33d4b263d1f018cb4e79d",
+      "size": 3426,
+      "normalized_sha256": "f861a9a69df98326586a4679ee3530705eca97f4c0f33d4b263d1f018cb4e79d"
+    },
+    "tests/integration/test_faq_candidate_repository.py": {
+      "role": "observe",
+      "sha256": "e6ec9ff5a6daa460c533c81b447834d88bb81fedb414b97824f2b6a4edc6a754",
+      "size": 16416,
+      "normalized_sha256": "e6ec9ff5a6daa460c533c81b447834d88bb81fedb414b97824f2b6a4edc6a754"
+    },
+    "tests/integration/test_guest_reply_contract.py": {
+      "role": "observe",
+      "sha256": "7830910ad212ecf27efffd5748e36373653c46e9fa808bcf96438e7db43a0e1b",
+      "size": 7365,
+      "normalized_sha256": "7830910ad212ecf27efffd5748e36373653c46e9fa808bcf96438e7db43a0e1b"
+    },
+    "tests/integration/test_guest_reply_postgresql.py": {
+      "role": "observe",
+      "sha256": "fac4b12586c6ecd8ad48530e99cdc685d4711991ab7365adc373846fe6b68e13",
+      "size": 5707,
+      "normalized_sha256": "fac4b12586c6ecd8ad48530e99cdc685d4711991ab7365adc373846fe6b68e13"
+    },
+    "tests/integration/test_guest_verification.py": {
+      "role": "observe",
+      "sha256": "7f56bc68979d472511ec0127bf747803cb163da9fe45f31a74f275b11c474bc8",
+      "size": 7961,
+      "normalized_sha256": "7f56bc68979d472511ec0127bf747803cb163da9fe45f31a74f275b11c474bc8"
+    },
+    "tests/integration/test_human_session.py": {
+      "role": "observe",
+      "sha256": "a801341566df41f1e6825dce698059567dfc6ffef5c88bdfa7abb968bdbf757f",
+      "size": 9691,
+      "normalized_sha256": "a801341566df41f1e6825dce698059567dfc6ffef5c88bdfa7abb968bdbf757f"
+    },
+    "tests/integration/test_jobs.py": {
+      "role": "observe",
+      "sha256": "6589a51150f8cbecd5f28d1a8aa63086334f338dba2bbeecff5b0e1a0a7c273c",
+      "size": 37166,
+      "normalized_sha256": "6589a51150f8cbecd5f28d1a8aa63086334f338dba2bbeecff5b0e1a0a7c273c"
+    },
+    "tests/integration/test_knowledge_delete_postgresql.py": {
+      "role": "observe",
+      "sha256": "e5998b1c783173dc0a5ac7e20d8cba05805baf936bda6f0119a903d9d301ec09",
+      "size": 5445,
+      "normalized_sha256": "e5998b1c783173dc0a5ac7e20d8cba05805baf936bda6f0119a903d9d301ec09"
+    },
+    "tests/integration/test_knowledge_image_admin.py": {
+      "role": "observe",
+      "sha256": "86ce714249af339ffeb858986193c3394e7c0c5f7ba3f37486d82b84c121858d",
+      "size": 20097,
+      "normalized_sha256": "86ce714249af339ffeb858986193c3394e7c0c5f7ba3f37486d82b84c121858d"
+    },
+    "tests/integration/test_knowledge_repository.py": {
+      "role": "observe",
+      "sha256": "bbdf1030313a1ce6bcbf302ff8f3faa7e11077a172053b09084b5e18e515f9f7",
+      "size": 5189,
+      "normalized_sha256": "bbdf1030313a1ce6bcbf302ff8f3faa7e11077a172053b09084b5e18e515f9f7"
+    },
+    "tests/integration/test_knowledge_routes.py": {
+      "role": "observe",
+      "sha256": "e3e6b668fadd14c4f9ae25b3f8d2e48b4f7fb4685a494b46d14e4a93dd196986",
+      "size": 40807,
+      "normalized_sha256": "e3e6b668fadd14c4f9ae25b3f8d2e48b4f7fb4685a494b46d14e4a93dd196986"
+    },
+    "tests/integration/test_lifecycle_reminder_repository.py": {
+      "role": "observe",
+      "sha256": "b122123b4ee0fb7eb9d7680257022b9bf003b95906a800767d3f09d87cb49b4d",
+      "size": 15555,
+      "normalized_sha256": "b122123b4ee0fb7eb9d7680257022b9bf003b95906a800767d3f09d87cb49b4d"
+    },
+    "tests/integration/test_manual_task_creation.py": {
+      "role": "observe",
+      "sha256": "e120fe1beb8768b370a0d763673cf570734ca0f29a04e603334c674df44b3d49",
+      "size": 5898,
+      "normalized_sha256": "e120fe1beb8768b370a0d763673cf570734ca0f29a04e603334c674df44b3d49"
+    },
+    "tests/integration/test_message_flow.py": {
+      "role": "observe",
+      "sha256": "7d7fed5cd0f8aa1d880fd7086cd0fb67a1b326d0a6523bf2983c9bb522246b3b",
+      "size": 49905,
+      "normalized_sha256": "7d7fed5cd0f8aa1d880fd7086cd0fb67a1b326d0a6523bf2983c9bb522246b3b"
+    },
+    "tests/integration/test_operations_repository.py": {
+      "role": "observe",
+      "sha256": "e1e933eba2d03db719c6a9ae8c5cc6f5df1ab1459fa686333890498c54cea48c",
+      "size": 70687,
+      "normalized_sha256": "e1e933eba2d03db719c6a9ae8c5cc6f5df1ab1459fa686333890498c54cea48c"
+    },
+    "tests/integration/test_phase_one_flow.py": {
+      "role": "observe",
+      "sha256": "4df2edbfe028977b993685664bc42df87b5940ea727422ddc03a58aee624e91e",
+      "size": 16890,
+      "normalized_sha256": "4df2edbfe028977b993685664bc42df87b5940ea727422ddc03a58aee624e91e"
+    },
+    "tests/integration/test_property_routes.py": {
+      "role": "observe",
+      "sha256": "769b22bd9d6c3063c9f51c96001dbdc0b5776834b0204ea2c2682507869c81f1",
+      "size": 24630,
+      "normalized_sha256": "769b22bd9d6c3063c9f51c96001dbdc0b5776834b0204ea2c2682507869c81f1"
+    },
+    "tests/integration/test_reply_chain_sending.py": {
+      "role": "observe",
+      "sha256": "0800b7f4ae165ce41b4184d63b60ee53282ae8cc5f77209a346467edb0924c77",
+      "size": 18798,
+      "normalized_sha256": "0800b7f4ae165ce41b4184d63b60ee53282ae8cc5f77209a346467edb0924c77"
+    },
+    "tests/integration/test_reply_images.py": {
+      "role": "observe",
+      "sha256": "73e8e23d8eecc97c909b1990fac9265127cc8aabd30f8b6f40fad33a73c6cf34",
+      "size": 21500,
+      "normalized_sha256": "73e8e23d8eecc97c909b1990fac9265127cc8aabd30f8b6f40fad33a73c6cf34"
+    },
+    "tests/integration/test_retention_postgresql.py": {
+      "role": "observe",
+      "sha256": "f63ce1ba9edd45dc416a6cc8efae7813582033631a8f369a3dfeabe5293da95f",
+      "size": 18367,
+      "normalized_sha256": "f63ce1ba9edd45dc416a6cc8efae7813582033631a8f369a3dfeabe5293da95f"
+    },
+    "tests/integration/test_retention_repository.py": {
+      "role": "observe",
+      "sha256": "224a6a89eb9b4be69ca8df5302bc39ee53997ba0cd623cbd2143d1247e8f7fb6",
+      "size": 30555,
+      "normalized_sha256": "224a6a89eb9b4be69ca8df5302bc39ee53997ba0cd623cbd2143d1247e8f7fb6"
+    },
+    "tests/integration/test_runtime_config_repository.py": {
+      "role": "observe",
+      "sha256": "e0338d6a0eccec2c47427aa5df8a22d03a85128873c6b2027a15a677749f42c1",
+      "size": 24968,
+      "normalized_sha256": "e0338d6a0eccec2c47427aa5df8a22d03a85128873c6b2027a15a677749f42c1"
+    },
+    "tests/integration/test_runtime_config_routes.py": {
+      "role": "observe",
+      "sha256": "16ce682678cc924ff66b4c01319b8a961558229b135fa7af23cef89e44a97397",
+      "size": 20575,
+      "normalized_sha256": "16ce682678cc924ff66b4c01319b8a961558229b135fa7af23cef89e44a97397"
+    },
+    "tests/integration/test_runtime_startup.py": {
+      "role": "observe",
+      "sha256": "160f387e26b92dd77d143b7dc6bb27bf7d54e5cf949c8021b8572641b3d7b12c",
+      "size": 51930,
+      "normalized_sha256": "160f387e26b92dd77d143b7dc6bb27bf7d54e5cf949c8021b8572641b3d7b12c"
+    },
+    "tests/integration/test_schema_indexes.py": {
+      "role": "observe",
+      "sha256": "bdf424b391ecb47b3c5df532c9d990c66e1aecb5c4369a39969ccbe35493098f",
+      "size": 2048,
+      "normalized_sha256": "bdf424b391ecb47b3c5df532c9d990c66e1aecb5c4369a39969ccbe35493098f"
+    },
+    "tests/integration/test_stay_confirmation.py": {
+      "role": "observe",
+      "sha256": "ca228134a2af4008e890b1e136644e3a602a45be902644eac5f34fe15044844a",
+      "size": 6298,
+      "normalized_sha256": "ca228134a2af4008e890b1e136644e3a602a45be902644eac5f34fe15044844a"
+    },
+    "tests/integration/test_task_routes.py": {
+      "role": "observe",
+      "sha256": "466cf980933efb5c390ee4db55fc3b84f8ebb939ff794981f849b2ace0646718",
+      "size": 76572,
+      "normalized_sha256": "466cf980933efb5c390ee4db55fc3b84f8ebb939ff794981f849b2ace0646718"
+    },
+    "tests/integration/test_wecom_sync_cursor.py": {
+      "role": "observe",
+      "sha256": "5533165d9b74fa4b4a7ad1eba3eeeeb1e6578ce9cb831c837c0ee2c34bcaa351",
+      "size": 979,
+      "normalized_sha256": "5533165d9b74fa4b4a7ad1eba3eeeeb1e6578ce9cb831c837c0ee2c34bcaa351"
+    },
+    "tests/unit/__init__.py": {
+      "role": "observe",
+      "sha256": "60c174f0f447efcafe2d032be1dd3dc393ec6e89e5ff99ebb43f9662e71440ad",
+      "size": 97,
+      "normalized_sha256": "60c174f0f447efcafe2d032be1dd3dc393ec6e89e5ff99ebb43f9662e71440ad"
+    },
+    "tests/unit/test_admin_assets.py": {
+      "role": "observe",
+      "sha256": "ee4747a1a69ffd56403606b515800eca50e20f614586481be7ec54a1d8fac02c",
+      "size": 17328,
+      "normalized_sha256": "ee4747a1a69ffd56403606b515800eca50e20f614586481be7ec54a1d8fac02c"
+    },
+    "tests/unit/test_admin_auth_service.py": {
+      "role": "observe",
+      "sha256": "2e35e9616ac35d133b49a45740b8bb27f62c98bfc31e6d954f7a44687b9b0963",
+      "size": 17711,
+      "normalized_sha256": "2e35e9616ac35d133b49a45740b8bb27f62c98bfc31e6d954f7a44687b9b0963"
+    },
+    "tests/unit/test_admin_dashboard_service.py": {
+      "role": "observe",
+      "sha256": "ea4db615ba856ecf70e358901cf0945ba49cd584dd595c634da5a5ae5e1f9aa5",
+      "size": 12734,
+      "normalized_sha256": "ea4db615ba856ecf70e358901cf0945ba49cd584dd595c634da5a5ae5e1f9aa5"
+    },
+    "tests/unit/test_admin_debug_service.py": {
+      "role": "observe",
+      "sha256": "e98782710fa746d4920ac361d9df56598dd18c5474b3b0e41e7ee3463ba570c1",
+      "size": 13552,
+      "normalized_sha256": "e98782710fa746d4920ac361d9df56598dd18c5474b3b0e41e7ee3463ba570c1"
+    },
+    "tests/unit/test_admin_diagnostics_service.py": {
+      "role": "observe",
+      "sha256": "0ea84fbaca0adb16ed530ca8c54f2fe8bbedd3f58d6f694e1e35fb6f524ddbef",
+      "size": 9019,
+      "normalized_sha256": "0ea84fbaca0adb16ed530ca8c54f2fe8bbedd3f58d6f694e1e35fb6f524ddbef"
+    },
+    "tests/unit/test_admin_operations_service.py": {
+      "role": "observe",
+      "sha256": "cef57051236ca92470e956fa6d6718047327bfbd6a2a48e7e78edf5e886f1f69",
+      "size": 32921,
+      "normalized_sha256": "cef57051236ca92470e956fa6d6718047327bfbd6a2a48e7e78edf5e886f1f69"
+    },
+    "tests/unit/test_admin_passwords.py": {
+      "role": "observe",
+      "sha256": "ba00122b124f741a247ff643c05e68f8e980b993b35c7c65b4f1cebc21a51c9c",
+      "size": 904,
+      "normalized_sha256": "ba00122b124f741a247ff643c05e68f8e980b993b35c7c65b4f1cebc21a51c9c"
+    },
+    "tests/unit/test_answer_policy.py": {
+      "role": "observe",
+      "sha256": "16dadc67ab3f677f85d700c3eef592b549ae4e40f0d4a54b2ab065f13497e27b",
+      "size": 10919,
+      "normalized_sha256": "16dadc67ab3f677f85d700c3eef592b549ae4e40f0d4a54b2ab065f13497e27b"
+    },
+    "tests/unit/test_application.py": {
+      "role": "observe",
+      "sha256": "474d9766a93c79fcd3d99853738b4f1fad1ec31cdd1e5ca4fa0a69193e52648f",
+      "size": 67398,
+      "normalized_sha256": "474d9766a93c79fcd3d99853738b4f1fad1ec31cdd1e5ca4fa0a69193e52648f"
+    },
+    "tests/unit/test_approval_page_degradation.py": {
+      "role": "observe",
+      "sha256": "6a5c54f583a836b62c2cd94b99b9e91dd240b620d699b3b3697df74e17012529",
+      "size": 9875,
+      "normalized_sha256": "6a5c54f583a836b62c2cd94b99b9e91dd240b620d699b3b3697df74e17012529"
+    },
+    "tests/unit/test_approval_page_service.py": {
+      "role": "observe",
+      "sha256": "18dfce075190fc140e05b4ef4901d5767563349dcf8b42b3d343d11d503eaa2f",
+      "size": 3990,
+      "normalized_sha256": "18dfce075190fc140e05b4ef4901d5767563349dcf8b42b3d343d11d503eaa2f"
+    },
+    "tests/unit/test_approval_sensitive_data.py": {
+      "role": "observe",
+      "sha256": "9f521165a454890e11723e578eaf993c0bae09c6337b30dc2bf31ec8b53d365b",
+      "size": 4998,
+      "normalized_sha256": "9f521165a454890e11723e578eaf993c0bae09c6337b30dc2bf31ec8b53d365b"
+    },
+    "tests/unit/test_business_task_service.py": {
+      "role": "observe",
+      "sha256": "b675bfa8e56bd2644458e80c8e6675e1279315645b403021a448dabca138234d",
+      "size": 6587,
+      "normalized_sha256": "b675bfa8e56bd2644458e80c8e6675e1279315645b403021a448dabca138234d"
+    },
+    "tests/unit/test_callback_crypto.py": {
+      "role": "observe",
+      "sha256": "9f26367a45a21b50e2c012a13ffc36f35a46ae4704fdae56c5ed10322512af78",
+      "size": 2176,
+      "normalized_sha256": "9f26367a45a21b50e2c012a13ffc36f35a46ae4704fdae56c5ed10322512af78"
+    },
+    "tests/unit/test_cancellation_cleanup.py": {
+      "role": "observe",
+      "sha256": "0f4df6238cc0f9d27a83e98e27c86eda94eefb1b96b91582711d4c230500ffd0",
+      "size": 2039,
+      "normalized_sha256": "0f4df6238cc0f9d27a83e98e27c86eda94eefb1b96b91582711d4c230500ffd0"
+    },
+    "tests/unit/test_complaint_review_job.py": {
+      "role": "observe",
+      "sha256": "70278aab4159fd41f2311198d86b4b12f2d3473a5404246aaab9afcb36e726b5",
+      "size": 7831,
+      "normalized_sha256": "70278aab4159fd41f2311198d86b4b12f2d3473a5404246aaab9afcb36e726b5"
+    },
+    "tests/unit/test_complaint_service.py": {
+      "role": "observe",
+      "sha256": "b7d39fab7881fed6bdca1d6fb303e4866cb2e05c8c3070ab44e3782cce1c82b5",
+      "size": 1552,
+      "normalized_sha256": "b7d39fab7881fed6bdca1d6fb303e4866cb2e05c8c3070ab44e3782cce1c82b5"
+    },
+    "tests/unit/test_compose_security.py": {
+      "role": "observe",
+      "sha256": "aa8fd5ba5d8a58f51b7207f3da8405f37d8695ac22c9055a28e98304e1b51fac",
+      "size": 4817,
+      "normalized_sha256": "aa8fd5ba5d8a58f51b7207f3da8405f37d8695ac22c9055a28e98304e1b51fac"
+    },
+    "tests/unit/test_config.py": {
+      "role": "observe",
+      "sha256": "5d73d68eaca38af5f4947dd4a576469e7fd259254d3be7ea14d60e8641f68f24",
+      "size": 9110,
+      "normalized_sha256": "5d73d68eaca38af5f4947dd4a576469e7fd259254d3be7ea14d60e8641f68f24"
+    },
+    "tests/unit/test_context_retention.py": {
+      "role": "observe",
+      "sha256": "f08c44278092f550dc0a23265022019c525b3cb30cf1db7b76fae374e0ded86c",
+      "size": 21680,
+      "normalized_sha256": "f08c44278092f550dc0a23265022019c525b3cb30cf1db7b76fae374e0ded86c"
+    },
+    "tests/unit/test_conversation_service.py": {
+      "role": "observe",
+      "sha256": "0eab2f50c52cf2dd0930f98edd8789e695fd14aa895d471c831ed2b8c4a87f1d",
+      "size": 117915,
+      "normalized_sha256": "0eab2f50c52cf2dd0930f98edd8789e695fd14aa895d471c831ed2b8c4a87f1d"
+    },
+    "tests/unit/test_credential_delivery.py": {
+      "role": "observe",
+      "sha256": "7d3842bfaf27aa2c05fa61c14d6922b2cf84bae94d3da404a87da2b43d022736",
+      "size": 13589,
+      "normalized_sha256": "7d3842bfaf27aa2c05fa61c14d6922b2cf84bae94d3da404a87da2b43d022736"
+    },
+    "tests/unit/test_customer_admin_service.py": {
+      "role": "observe",
+      "sha256": "643aadb5b149373f0dd8bf99e67cca5706d29aa5d061b71649844db5d1432d54",
+      "size": 24045,
+      "normalized_sha256": "643aadb5b149373f0dd8bf99e67cca5706d29aa5d061b71649844db5d1432d54"
+    },
+    "tests/unit/test_customer_memory_policy.py": {
+      "role": "observe",
+      "sha256": "971248788b62e08e8ac4d6f49277f1a8873ecfd4920803b54ae53bda8cb01bc2",
+      "size": 8956,
+      "normalized_sha256": "971248788b62e08e8ac4d6f49277f1a8873ecfd4920803b54ae53bda8cb01bc2"
+    },
+    "tests/unit/test_customer_service.py": {
+      "role": "observe",
+      "sha256": "3405e3d4d73e4b1d3127763239f0f13d7557853389aadef3f6b17c004223cdb2",
+      "size": 4235,
+      "normalized_sha256": "3405e3d4d73e4b1d3127763239f0f13d7557853389aadef3f6b17c004223cdb2"
+    },
+    "tests/unit/test_customer_tag_sync.py": {
+      "role": "observe",
+      "sha256": "a4ce501e7182c9e13ed2bc0cb21deb1764164257aa92021ee95a1ab14c474b97",
+      "size": 3346,
+      "normalized_sha256": "a4ce501e7182c9e13ed2bc0cb21deb1764164257aa92021ee95a1ab14c474b97"
+    },
+    "tests/unit/test_db.py": {
+      "role": "observe",
+      "sha256": "157e84ac3f0f0c1741512cb089215236dfab625669c834a92d3e993382704721",
+      "size": 4523,
+      "normalized_sha256": "157e84ac3f0f0c1741512cb089215236dfab625669c834a92d3e993382704721"
+    },
+    "tests/unit/test_deepseek_client.py": {
+      "role": "observe",
+      "sha256": "f322f44892f403d3f6087aedc751dd6bbe97cb9402cb4975530c588c1004aa52",
+      "size": 130883,
+      "normalized_sha256": "f322f44892f403d3f6087aedc751dd6bbe97cb9402cb4975530c588c1004aa52"
+    },
+    "tests/unit/test_deepseek_complaint.py": {
+      "role": "observe",
+      "sha256": "e81fc067e872c72eca40970397295d165a005ed0f96c16895feaba92ce5988d9",
+      "size": 6234,
+      "normalized_sha256": "e81fc067e872c72eca40970397295d165a005ed0f96c16895feaba92ce5988d9"
+    },
+    "tests/unit/test_deepseek_delivery_rewriter.py": {
+      "role": "observe",
+      "sha256": "4c0499ef699185adcb01ec0572ad15f95a727c717c3fcc043f8948fa6fb1a55e",
+      "size": 19644,
+      "normalized_sha256": "4c0499ef699185adcb01ec0572ad15f95a727c717c3fcc043f8948fa6fb1a55e"
+    },
+    "tests/unit/test_deepseek_faq_drafter.py": {
+      "role": "observe",
+      "sha256": "20f1622bf7f1b487f7cbfed62bc7c3e1ad03622beb346bae73c469f732e20951",
+      "size": 10063,
+      "normalized_sha256": "20f1622bf7f1b487f7cbfed62bc7c3e1ad03622beb346bae73c469f732e20951"
+    },
+    "tests/unit/test_deepseek_tourism.py": {
+      "role": "observe",
+      "sha256": "86034c535b2e6ff51e0081758ec04ffd1ad43762b89025fce8d6eae133f056eb",
+      "size": 28821,
+      "normalized_sha256": "86034c535b2e6ff51e0081758ec04ffd1ad43762b89025fce8d6eae133f056eb"
+    },
+    "tests/unit/test_delivery_failure_rollup.py": {
+      "role": "observe",
+      "sha256": "a1ddc331fb16c9914f6abb52faef40c048365b8172e6fbf38a8140481c67c2fb",
+      "size": 8915,
+      "normalized_sha256": "a1ddc331fb16c9914f6abb52faef40c048365b8172e6fbf38a8140481c67c2fb"
+    },
+    "tests/unit/test_delivery_rewrite_job.py": {
+      "role": "observe",
+      "sha256": "981b2ff51969c241bb7b182b0b3faba08f8d7c91ca26ef8b51d3461fcf551e0a",
+      "size": 25430,
+      "normalized_sha256": "981b2ff51969c241bb7b182b0b3faba08f8d7c91ca26ef8b51d3461fcf551e0a"
+    },
+    "tests/unit/test_emergency_service.py": {
+      "role": "observe",
+      "sha256": "adc7352a48c64cfec3b24add79d267ddc51bbac308972021eb6e669d1beb94a1",
+      "size": 11509,
+      "normalized_sha256": "adc7352a48c64cfec3b24add79d267ddc51bbac308972021eb6e669d1beb94a1"
+    },
+    "tests/unit/test_employee_auth.py": {
+      "role": "observe",
+      "sha256": "69780c30263a1893144daf1f110f0b8ae6183ef96a28b7f218abc222267ef984",
+      "size": 5137,
+      "normalized_sha256": "69780c30263a1893144daf1f110f0b8ae6183ef96a28b7f218abc222267ef984"
+    },
+    "tests/unit/test_fact_policy.py": {
+      "role": "observe",
+      "sha256": "b9795c27c8c63a9c7f85e2b97bf42616241104b4fd77abc0fa5d3c204b5fc6cb",
+      "size": 11186,
+      "normalized_sha256": "b9795c27c8c63a9c7f85e2b97bf42616241104b4fd77abc0fa5d3c204b5fc6cb"
+    },
+    "tests/unit/test_faq_candidate_context.py": {
+      "role": "observe",
+      "sha256": "3ec406bb3a294b3fd2a68b26f21caa04789d21c86224ffe8c990a9552cdfda59",
+      "size": 1618,
+      "normalized_sha256": "3ec406bb3a294b3fd2a68b26f21caa04789d21c86224ffe8c990a9552cdfda59"
+    },
+    "tests/unit/test_faq_candidate_service.py": {
+      "role": "observe",
+      "sha256": "7b5ae28ceaf6d9c8f92b47102d7b564e498bf13fde34a0b7ce57df063dc6e8ff",
+      "size": 10429,
+      "normalized_sha256": "7b5ae28ceaf6d9c8f92b47102d7b564e498bf13fde34a0b7ce57df063dc6e8ff"
+    },
+    "tests/unit/test_faq_draft_job.py": {
+      "role": "observe",
+      "sha256": "3f5efeec55262795333ef6350896fd07bb97fe8ba0d56501010596f423d004d9",
+      "size": 16386,
+      "normalized_sha256": "3f5efeec55262795333ef6350896fd07bb97fe8ba0d56501010596f423d004d9"
+    },
+    "tests/unit/test_guest_reply_policy.py": {
+      "role": "observe",
+      "sha256": "400556a1412132f520119e635c7f0fc7369e5815f78909d514f7c39f6f3d1499",
+      "size": 25117,
+      "normalized_sha256": "400556a1412132f520119e635c7f0fc7369e5815f78909d514f7c39f6f3d1499"
+    },
+    "tests/unit/test_guest_reply_scenarios.py": {
+      "role": "observe",
+      "sha256": "8f6e95ad019cd4b7545ec390d4eef3f52fe1d47ffd3b5f4053bef0a12a49bb59",
+      "size": 2750,
+      "normalized_sha256": "8f6e95ad019cd4b7545ec390d4eef3f52fe1d47ffd3b5f4053bef0a12a49bb59"
+    },
+    "tests/unit/test_health.py": {
+      "role": "observe",
+      "sha256": "787b243c64a51870f46e64f16539f6dc1a58c13187beccb1c79421ed06a8469b",
+      "size": 19097,
+      "normalized_sha256": "787b243c64a51870f46e64f16539f6dc1a58c13187beccb1c79421ed06a8469b"
+    },
+    "tests/unit/test_hostex_client.py": {
+      "role": "observe",
+      "sha256": "491084cd02890312d414daac0fea4b94fb885d1ecdfe69f3f1eccffd5135ac9b",
+      "size": 23248,
+      "normalized_sha256": "491084cd02890312d414daac0fea4b94fb885d1ecdfe69f3f1eccffd5135ac9b"
+    },
+    "tests/unit/test_hostex_sync.py": {
+      "role": "observe",
+      "sha256": "02b77c22c60dd4ca741262368859289e91df1ae6dc663c3f3c659c80dc2a0856",
+      "size": 8528,
+      "normalized_sha256": "02b77c22c60dd4ca741262368859289e91df1ae6dc663c3f3c659c80dc2a0856"
+    },
+    "tests/unit/test_hostex_webhook.py": {
+      "role": "observe",
+      "sha256": "864a16db5efa17bf5a9a934f5652c05e8e68a4949e6ee0e4e59453d7cf0c930b",
+      "size": 7110,
+      "normalized_sha256": "864a16db5efa17bf5a9a934f5652c05e8e68a4949e6ee0e4e59453d7cf0c930b"
+    },
+    "tests/unit/test_import_knowledge_drafts.py": {
+      "role": "observe",
+      "sha256": "99db0b7b63ae015e56a8d9011f1777363c73798fe87850a7c2b3e77bdeeb2f9e",
+      "size": 11223,
+      "normalized_sha256": "99db0b7b63ae015e56a8d9011f1777363c73798fe87850a7c2b3e77bdeeb2f9e"
+    },
+    "tests/unit/test_knowledge_embeddings.py": {
+      "role": "observe",
+      "sha256": "ff34d561b2f8019fd1376c353d4c977452997af7ad4f3252fd3f40c3edac6004",
+      "size": 15441,
+      "normalized_sha256": "ff34d561b2f8019fd1376c353d4c977452997af7ad4f3252fd3f40c3edac6004"
+    },
+    "tests/unit/test_knowledge_evidence_gate.py": {
+      "role": "observe",
+      "sha256": "7bf577ede983d0d634c31395ad24e6307ebda5d8da523287085a1678da53f079",
+      "size": 24963,
+      "normalized_sha256": "7bf577ede983d0d634c31395ad24e6307ebda5d8da523287085a1678da53f079"
+    },
+    "tests/unit/test_knowledge_retrieval_eval.py": {
+      "role": "observe",
+      "sha256": "8cbcbfd889f9758162db393bc7d2aeb7293560b68b674c96712d3dc1a1cbe037",
+      "size": 40176,
+      "normalized_sha256": "8cbcbfd889f9758162db393bc7d2aeb7293560b68b674c96712d3dc1a1cbe037"
+    },
+    "tests/unit/test_knowledge_scope.py": {
+      "role": "observe",
+      "sha256": "54e89792b9d6c13e90fb36ccaccfb0af67c7414005f2b0270445e9579c15f076",
+      "size": 3641,
+      "normalized_sha256": "54e89792b9d6c13e90fb36ccaccfb0af67c7414005f2b0270445e9579c15f076"
+    },
+    "tests/unit/test_knowledge_scope_migration.py": {
+      "role": "observe",
+      "sha256": "64d92edf20a2ff97d704f1ae39ef23bda18f97d275cc8dfd60d75465c7b00472",
+      "size": 4597,
+      "normalized_sha256": "64d92edf20a2ff97d704f1ae39ef23bda18f97d275cc8dfd60d75465c7b00472"
+    },
+    "tests/unit/test_knowledge_service.py": {
+      "role": "observe",
+      "sha256": "9bf2a7236a8fe45acfcfcd30a3faf64a404bad423e764dd53ca20b9c533d7be1",
+      "size": 7663,
+      "normalized_sha256": "9bf2a7236a8fe45acfcfcd30a3faf64a404bad423e764dd53ca20b9c533d7be1"
+    },
+    "tests/unit/test_latest_stay_note.py": {
+      "role": "observe",
+      "sha256": "4cd3bc32a5828ef6f740bac8dfd387a5e28834fdad0ea7cafdfba02dcf739105",
+      "size": 9729,
+      "normalized_sha256": "4cd3bc32a5828ef6f740bac8dfd387a5e28834fdad0ea7cafdfba02dcf739105"
+    },
+    "tests/unit/test_launch_agent.py": {
+      "role": "observe",
+      "sha256": "48749a95d412f919f6f3244ade28c18514cd1ba980d50b9a7550ac6c36cd47aa",
+      "size": 1548,
+      "normalized_sha256": "48749a95d412f919f6f3244ade28c18514cd1ba980d50b9a7550ac6c36cd47aa"
+    },
+    "tests/unit/test_lifecycle_reminders.py": {
+      "role": "observe",
+      "sha256": "d0211b4c80586a4aff76b403cec69cca2e77f221777701e55a1e3c7efa125b83",
+      "size": 18966,
+      "normalized_sha256": "d0211b4c80586a4aff76b403cec69cca2e77f221777701e55a1e3c7efa125b83"
+    },
+    "tests/unit/test_live_fact_check.py": {
+      "role": "observe",
+      "sha256": "53330d61c85f50928459dec9cdc3c70824063472b51c978ac7b5b4331fb2ad47",
+      "size": 1421,
+      "normalized_sha256": "53330d61c85f50928459dec9cdc3c70824063472b51c978ac7b5b4331fb2ad47"
+    },
+    "tests/unit/test_live_price_scope.py": {
+      "role": "observe",
+      "sha256": "3bf48890b65f80e7f67eb1ab6b3bd2ccf03ebd15781f39edcc82459383af4e04",
+      "size": 19835,
+      "normalized_sha256": "3bf48890b65f80e7f67eb1ab6b3bd2ccf03ebd15781f39edcc82459383af4e04"
+    },
+    "tests/unit/test_log_redaction.py": {
+      "role": "observe",
+      "sha256": "adddd006a2ac7882adbdb1e5fc9f8a6faad3c38eabad5793a9880d8dd86bcecf",
+      "size": 6927,
+      "normalized_sha256": "adddd006a2ac7882adbdb1e5fc9f8a6faad3c38eabad5793a9880d8dd86bcecf"
+    },
+    "tests/unit/test_log_redaction_aes.py": {
+      "role": "observe",
+      "sha256": "f941aa0f26bf98efcbed3aee237d70c11d2287a0a6ca292403c8983d0aff7c86",
+      "size": 1317,
+      "normalized_sha256": "f941aa0f26bf98efcbed3aee237d70c11d2287a0a6ca292403c8983d0aff7c86"
+    },
+    "tests/unit/test_main_session.py": {
+      "role": "observe",
+      "sha256": "6ff87daab69530115092173cde7f5a6d74d389e7e2f59183c9952321890413f8",
+      "size": 689,
+      "normalized_sha256": "6ff87daab69530115092173cde7f5a6d74d389e7e2f59183c9952321890413f8"
+    },
+    "tests/unit/test_message_service.py": {
+      "role": "observe",
+      "sha256": "038bc46298ad8c81fe9a661c2738f8752aac7c3d610ce2a1dbf4c1b5f0523bb1",
+      "size": 6674,
+      "normalized_sha256": "038bc46298ad8c81fe9a661c2738f8752aac7c3d610ce2a1dbf4c1b5f0523bb1"
+    },
+    "tests/unit/test_migrations.py": {
+      "role": "observe",
+      "sha256": "93b507ceaefb03bbc5c299ab9e2ffa546f7029f5b44329b90ad9695d659729ed",
+      "size": 32180,
+      "normalized_sha256": "93b507ceaefb03bbc5c299ab9e2ffa546f7029f5b44329b90ad9695d659729ed"
+    },
+    "tests/unit/test_models.py": {
+      "role": "observe",
+      "sha256": "b9ce36c98e6a8cec741a5821df821c7a834e830428439e2ffb23a8c3018b470e",
+      "size": 5122,
+      "normalized_sha256": "b9ce36c98e6a8cec741a5821df821c7a834e830428439e2ffb23a8c3018b470e"
+    },
+    "tests/unit/test_outbound_url_policy.py": {
+      "role": "observe",
+      "sha256": "a9d1df6bd61a2419d36c2726f48dd41f318a2a5048fd5c918e5e1e126f56a868",
+      "size": 13258,
+      "normalized_sha256": "a9d1df6bd61a2419d36c2726f48dd41f318a2a5048fd5c918e5e1e126f56a868"
+    },
+    "tests/unit/test_private_file_storage.py": {
+      "role": "observe",
+      "sha256": "6ce5ec3016bf70dfddfd766c9c3aad67932df22b2b1e04861f98a82c4ee473b2",
+      "size": 3147,
+      "normalized_sha256": "6ce5ec3016bf70dfddfd766c9c3aad67932df22b2b1e04861f98a82c4ee473b2"
+    },
+    "tests/unit/test_property_admin_service.py": {
+      "role": "observe",
+      "sha256": "eb8327d1fcd63126758d4a5fb7206d63714821c59c553509004a107563ec9d87",
+      "size": 5484,
+      "normalized_sha256": "eb8327d1fcd63126758d4a5fb7206d63714821c59c553509004a107563ec9d87"
+    },
+    "tests/unit/test_property_lorebook.py": {
+      "role": "observe",
+      "sha256": "b23d1eb9a57b78e31b74c7456b2b4d31329552c9bc0ca60a68e5514c9ce5292b",
+      "size": 19178,
+      "normalized_sha256": "b23d1eb9a57b78e31b74c7456b2b4d31329552c9bc0ca60a68e5514c9ce5292b"
+    },
+    "tests/unit/test_recording_transport.py": {
+      "role": "observe",
+      "sha256": "d52157231e2d5b3e75994b601bd0e23302347d061bba3db091e6e123fbb6c3f9",
+      "size": 3750,
+      "normalized_sha256": "d52157231e2d5b3e75994b601bd0e23302347d061bba3db091e6e123fbb6c3f9"
+    },
+    "tests/unit/test_release_scripts.py": {
+      "role": "observe",
+      "sha256": "a4df94798f5cbd1e26a9e1c59ddd77ea83ebf85d753ea9a07d016402458cb2d8",
+      "size": 7434,
+      "normalized_sha256": "a4df94798f5cbd1e26a9e1c59ddd77ea83ebf85d753ea9a07d016402458cb2d8"
+    },
+    "tests/unit/test_reply_evidence_boundaries.py": {
+      "role": "observe",
+      "sha256": "febefd50137edfbf8c8a33a99157dc66d3b1df296aa59af3bd1063bdae0462f9",
+      "size": 10220,
+      "normalized_sha256": "febefd50137edfbf8c8a33a99157dc66d3b1df296aa59af3bd1063bdae0462f9"
+    },
+    "tests/unit/test_reply_layout_and_facility_advice.py": {
+      "role": "observe",
+      "sha256": "a49d9256a85edb787a27deec73e2e2b12dfb752f991dca92ce426c6436c108cb",
+      "size": 11477,
+      "normalized_sha256": "a49d9256a85edb787a27deec73e2e2b12dfb752f991dca92ce426c6436c108cb"
+    },
+    "tests/unit/test_reply_regression.py": {
+      "role": "observe",
+      "sha256": "56221928953668e188a2c421bf45a8945c4e5290e4f049d146e6fa49d9bf971e",
+      "size": 13043,
+      "normalized_sha256": "56221928953668e188a2c421bf45a8945c4e5290e4f049d146e6fa49d9bf971e"
+    },
+    "tests/unit/test_repository_guest_data_guard.py": {
+      "role": "observe",
+      "sha256": "ae0c68687bf13305a95dff189c5865acfe2d4a099f8c577625157a4e426e0acc",
+      "size": 3217,
+      "normalized_sha256": "ae0c68687bf13305a95dff189c5865acfe2d4a099f8c577625157a4e426e0acc"
+    },
+    "tests/unit/test_retry_latch_migration.py": {
+      "role": "observe",
+      "sha256": "e2f8bc98c3ed254b71434ef73fb87941c557700e5e82915a5d663a8caa2e601a",
+      "size": 3920,
+      "normalized_sha256": "e2f8bc98c3ed254b71434ef73fb87941c557700e5e82915a5d663a8caa2e601a"
+    },
+    "tests/unit/test_room_events.py": {
+      "role": "observe",
+      "sha256": "e15ee50bd61f3b6d13affbdbb14f714a17a98a15060429b72361cd19278066f0",
+      "size": 7602,
+      "normalized_sha256": "e15ee50bd61f3b6d13affbdbb14f714a17a98a15060429b72361cd19278066f0"
+    },
+    "tests/unit/test_room_primary_status.py": {
+      "role": "observe",
+      "sha256": "ade63b340fec33b19e81e2a0d8b91b5fc0b21ab01ca4221269668664c1b8d649",
+      "size": 5019,
+      "normalized_sha256": "ade63b340fec33b19e81e2a0d8b91b5fc0b21ab01ca4221269668664c1b8d649"
+    },
+    "tests/unit/test_room_readiness_service.py": {
+      "role": "observe",
+      "sha256": "93b5ac3ff5dfdb2ec6f701a5c1f7441c21f1c79439dd7ef88cc9a22ed4643eb7",
+      "size": 11316,
+      "normalized_sha256": "93b5ac3ff5dfdb2ec6f701a5c1f7441c21f1c79439dd7ef88cc9a22ed4643eb7"
+    },
+    "tests/unit/test_runtime_client_registry.py": {
+      "role": "observe",
+      "sha256": "33ad9121c2c65867332912dd0a98bb82d335842bd06c19502d843742cbf6932c",
+      "size": 27596,
+      "normalized_sha256": "33ad9121c2c65867332912dd0a98bb82d335842bd06c19502d843742cbf6932c"
+    },
+    "tests/unit/test_runtime_config_cipher.py": {
+      "role": "observe",
+      "sha256": "8a22b69888c33227ee06cd7ac96624b3b7b3660cf9932d0a233ad51b4614ef40",
+      "size": 4833,
+      "normalized_sha256": "8a22b69888c33227ee06cd7ac96624b3b7b3660cf9932d0a233ad51b4614ef40"
+    },
+    "tests/unit/test_runtime_config_service.py": {
+      "role": "observe",
+      "sha256": "2d253894c5c84248430d05fd0788b6d78f02c2dc1bc206c4c2e4f7e9500976df",
+      "size": 27691,
+      "normalized_sha256": "2d253894c5c84248430d05fd0788b6d78f02c2dc1bc206c4c2e4f7e9500976df"
+    },
+    "tests/unit/test_runtime_config_tester.py": {
+      "role": "observe",
+      "sha256": "ee219ade360a752b9a0fab666df765e16974acf834d489d0fda9eaa7a1e3677d",
+      "size": 26380,
+      "normalized_sha256": "ee219ade360a752b9a0fab666df765e16974acf834d489d0fda9eaa7a1e3677d"
+    },
+    "tests/unit/test_runtime_consumers.py": {
+      "role": "observe",
+      "sha256": "d6b391c8b3d2ef2fadbe2ffba31c98411ed82768ca031f592bf171ec995dddb3",
+      "size": 10805,
+      "normalized_sha256": "d6b391c8b3d2ef2fadbe2ffba31c98411ed82768ca031f592bf171ec995dddb3"
+    },
+    "tests/unit/test_safe_return_path.py": {
+      "role": "observe",
+      "sha256": "458c0d44ad4d7f8453b92ad7b9036a41aa0a7dd90cbdad1d13faa5e287bcf2ac",
+      "size": 2007,
+      "normalized_sha256": "458c0d44ad4d7f8453b92ad7b9036a41aa0a7dd90cbdad1d13faa5e287bcf2ac"
+    },
+    "tests/unit/test_sensitive_data.py": {
+      "role": "observe",
+      "sha256": "37c3e6a406e94fa5f11dfa2cffa3dc00b7a8e22c201516ff7081dc8ce1b86c51",
+      "size": 1958,
+      "normalized_sha256": "37c3e6a406e94fa5f11dfa2cffa3dc00b7a8e22c201516ff7081dc8ce1b86c51"
+    },
+    "tests/unit/test_task_lifecycle_service.py": {
+      "role": "observe",
+      "sha256": "26125dc9bce39bcf2c0abc35018abee973328d9eacd4aac2a491c9ded4bf1576",
+      "size": 7449,
+      "normalized_sha256": "26125dc9bce39bcf2c0abc35018abee973328d9eacd4aac2a491c9ded4bf1576"
+    },
+    "tests/unit/test_task_page_service.py": {
+      "role": "observe",
+      "sha256": "eeab1f546b66ce14baeb96ba0a99618facb43f08d7d38298066903718c2f85ad",
+      "size": 15907,
+      "normalized_sha256": "eeab1f546b66ce14baeb96ba0a99618facb43f08d7d38298066903718c2f85ad"
+    },
+    "tests/unit/test_template_helpers.py": {
+      "role": "observe",
+      "sha256": "a0e89ee3db8a0c6a0406249ea6cba5ca3eb8daaf899482bf822cd6532e40967a",
+      "size": 4869,
+      "normalized_sha256": "a0e89ee3db8a0c6a0406249ea6cba5ca3eb8daaf899482bf822cd6532e40967a"
+    },
+    "tests/unit/test_timeline_geometry.py": {
+      "role": "observe",
+      "sha256": "080e43256979f9ab28f466d9aad05e65fbc2fb91e4a7f8a2ef7ef384f9cb5258",
+      "size": 5579,
+      "normalized_sha256": "080e43256979f9ab28f466d9aad05e65fbc2fb91e4a7f8a2ef7ef384f9cb5258"
+    },
+    "tests/unit/test_tourism.py": {
+      "role": "observe",
+      "sha256": "dd23fe271105c8ad432c6fec950dcaca4cc6c46f86d9b38a7b8049b45a7ff42a",
+      "size": 21708,
+      "normalized_sha256": "dd23fe271105c8ad432c6fec950dcaca4cc6c46f86d9b38a7b8049b45a7ff42a"
+    },
+    "tests/unit/test_version.py": {
+      "role": "observe",
+      "sha256": "8a5f5bd4e659e44edbc66ff73b8c69ea4c3b3013257a5508145b02ca60329781",
+      "size": 2825,
+      "normalized_sha256": "8a5f5bd4e659e44edbc66ff73b8c69ea4c3b3013257a5508145b02ca60329781"
+    },
+    "tests/unit/test_wecom_api_client.py": {
+      "role": "observe",
+      "sha256": "a912fe329ead321b4a150c7d294652e2487f5e0e27fc46ea157e195041b45eea",
+      "size": 16844,
+      "normalized_sha256": "a912fe329ead321b4a150c7d294652e2487f5e0e27fc46ea157e195041b45eea"
+    },
+    "tests/unit/test_wecom_callback.py": {
+      "role": "observe",
+      "sha256": "bf8ba4d675b855e3b1b4d71436b59f86f7e7d574de6234955a03d39ff969089c",
+      "size": 9356,
+      "normalized_sha256": "bf8ba4d675b855e3b1b4d71436b59f86f7e7d574de6234955a03d39ff969089c"
+    },
+    "tests/unit/test_wecom_contact_client.py": {
+      "role": "observe",
+      "sha256": "809969d2ad727630fd850fcf9156738a4bafd17a131e760036d535e461d14b82",
+      "size": 2160,
+      "normalized_sha256": "809969d2ad727630fd850fcf9156738a4bafd17a131e760036d535e461d14b82"
+    },
+    "tests/unit/test_wecom_text_byte_limit.py": {
+      "role": "observe",
+      "sha256": "07a30ddd0cb7275cd6addb39c63fe94f5fd03c2bcc2208da191b6459ccb3539e",
+      "size": 6570,
+      "normalized_sha256": "07a30ddd0cb7275cd6addb39c63fe94f5fd03c2bcc2208da191b6459ccb3539e"
+    },
+    "tests/unit/test_worker.py": {
+      "role": "observe",
+      "sha256": "d4513eacd979c63b47de46fda7ea9a11c9885608b65a32c13af239869ae4a224",
+      "size": 26759,
+      "normalized_sha256": "d4513eacd979c63b47de46fda7ea9a11c9885608b65a32c13af239869ae4a224"
+    }
+  },
+  "managed_scope": {
+    "version": "managed-scope-baseline/v1",
+    "policy_identity": "c81414aa1ad20edc6cdd8c9d904678ca476240ca1a991b5d31759dcae114efd1",
+    "observe_change_policy": "review_required",
+    "budget_policy_identity": "15e9b37a6c57e9bf03c9df3d0d049eb5b9a7f5540f9d34960408114e2538a32d",
+    "budget_policy": {
+      "version": "cognition-budget-policy/v1",
+      "mode": "enforce",
+      "whole_index": {
+        "target_tokens": 200000,
+        "warning_tokens": 300000,
+        "max_tokens": 400000
+      },
+      "r": [
+        {
+          "min_c": 1,
+          "max_c": 4,
+          "target_tokens": 25,
+          "max_tokens": 50
+        },
+        {
+          "min_c": 5,
+          "max_c": 7,
+          "target_tokens": 45,
+          "max_tokens": 90
+        },
+        {
+          "min_c": 8,
+          "max_c": 8,
+          "target_tokens": 70,
+          "max_tokens": 140
+        },
+        {
+          "min_c": 9,
+          "max_c": 9,
+          "target_tokens": 90,
+          "max_tokens": 180
+        }
+      ],
+      "s": [
+        {
+          "min_c": 1,
+          "max_c": 4,
+          "target_tokens": 20,
+          "max_tokens": 40
+        },
+        {
+          "min_c": 5,
+          "max_c": 7,
+          "target_tokens": 40,
+          "max_tokens": 80
+        },
+        {
+          "min_c": 8,
+          "max_c": 8,
+          "target_tokens": 70,
+          "max_tokens": 140
+        },
+        {
+          "min_c": 9,
+          "max_c": 9,
+          "target_tokens": 100,
+          "max_tokens": 200
+        }
+      ]
+    },
+    "apply_authorization_mode": "auto"
+  }
+}

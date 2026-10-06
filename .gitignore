@@ -58,3 +58,7 @@ clients/yumi/.local/
 # 由 src-tauri/build.rs 生成的构建输入，随构建模式变化，不进版本库。
 clients/yumi/src-tauri/gen/android/app/build-mode.properties
 clients/yumi/src-tauri/gen/android/app/src/main/res/values/generated_entry.xml
+
+# AOCI agent host integration (machine-bound; do not commit)
+.codex/config.toml
+.codex/config.toml.backup.*
