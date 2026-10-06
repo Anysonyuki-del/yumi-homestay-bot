@@ -5,7 +5,7 @@
       "command": "/Users/rin/.local/bin/aoci",
       "args": [
         "--repo",
-        "/Volumes/02/obsidian codex/homestay-bot",
+        "/Volumes/02/code/homestay-bot",
         "mcp"
       ],
       "env": {}

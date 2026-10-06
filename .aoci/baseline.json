@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-10-06T02:15:30Z",
+  "updated_at": "2026-10-06T02:48:13Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -53,9 +53,9 @@
     },
     ".mcp.json": {
       "role": "index",
-      "sha256": "58d5f4cc89eae41c35498d14af851d293cefb35f4a199f9ffd2479a90400d491",
-      "size": 239,
-      "normalized_sha256": "58d5f4cc89eae41c35498d14af851d293cefb35f4a199f9ffd2479a90400d491"
+      "sha256": "6c15e3a26ec8e0dfdb4f7747ca4874ec9b7f73bd6cd6d984613f66222e31b451",
+      "size": 229,
+      "normalized_sha256": "6c15e3a26ec8e0dfdb4f7747ca4874ec9b7f73bd6cd6d984613f66222e31b451"
     },
     ".stage/test_release_gate_bash_regression.py": {
       "role": "observe",
