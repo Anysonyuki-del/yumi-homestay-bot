@@ -1,4 +1,4 @@
-# 当前任务：1.68.2 回复泛用化第一批（2026-10-07）
+# 已完成：1.68.2 回复泛用化第一批（2026-10-07）
 
 依据 `docs/specs/2026-10-07_emergency-exemption-scope-spec.md` v4 与 `docs/specs/2026-10-06_reply-generalization-spec.md` v7.1（三段均已确认）。用户明确「开始，直接做完，全量模型也通过，发版部署上线也做，全部做完之后写报告」。本次只做第一批：紧急豁免范围修复 + 门禁判定修正；第二至第四批另行实施。
 
@@ -6,9 +6,10 @@
 - [x] 门禁 `judge`、`_Runner._respond` 修正与 4 个判别测试（改前失败、改后通过）；D2、D7 场景预期与基线 `expectation_changes`
 - [x] 本地全量 2544 passed / 61 skipped；Ruff、Mypy 通过
 - [x] 版本 1.68.2、CHANGELOG、发布记录
-- [ ] 提交、标签、推送；main/标签 CI
-- [ ] 完整备份、全量真实模型门禁、仅替换 API 部署、独立核对
-- [ ] 补录现场证据、提交新基线；写给 Codex 的实施报告
+- [x] 提交 `2cfff79`、标签 v1.68.2、原子推送；main/标签 CI success（2544 passed / 61 skipped，PostgreSQL 21 passed）
+- [x] 完整备份复验；全量真实模型门禁通过（154 场景，首轮 114，无退步，新纳入 8 个）；仅替换 API 部署；独立核对与生产容器内分类函数行为核对
+- [x] 补录现场证据、提交新基线（必过 115 / 已知失败 39）；实施报告见 `docs/reviews/2026-10-07_claude-to-codex-reply-generalization-batch1-implementation-handoff.md`
+- 下一步：第二批（轮次计划 + 知识与只读查询）开工前列出文件与符号清单，单独确认
 
 ---
 # 已完成：1.68.1 提交发版（2026-10-06）
