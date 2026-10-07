@@ -548,3 +548,25 @@ def test_same_question_conflict_cannot_be_hidden_by_a_related_label() -> None:
     for answers, related in (([1], [2]), ([1], []), ([2], [1]), ([1, 2], [])):
         verdict = verify_selected_evidence("健身房几点开放？", answers, related, [first, second])
         assert verdict.status == "missing", (answers, related)
+
+
+@pytest.mark.asyncio
+async def test_non_action_plan_without_static_items_keeps_the_evidence_plan() -> None:
+    """候选门禁 rc-1.69.1-1 实测（K-无障碍-D、MT-停车EN）：规划把本店事实问题判成房型推荐
+    或房价时，计划里没有本店事实项，但现行证据计划仍须照常作答；只有全是动作项的计划
+    （服务申请、报修等）才不让证据计划接管。"""
+    accessible = KnowledgeSnippet(
+        source_id=9020, category="无障碍", question="有无障碍房间吗？坐轮椅方便吗？",
+        answer="本店没有无障碍客房，入口有2级台阶，没有坡道。", scope="global",
+    )
+    text = "有无障碍房间吗？"
+    plan = _plan_items(text, ("catalog_query", "有无障碍房间吗", {}))
+    assistant, _ = _assistant(
+        [plan, _decision(reply_text="我们有无障碍客房。")], _Knowledge([accessible])
+    )
+    assistant._tool_executor = SimpleNamespace(execute=None)
+    decision = await assistant.respond(
+        guest_identifier="g", language=Language.ZH, messages=[{"role": "user", "content": text}]
+    )
+    assert "本店没有无障碍客房" in decision.reply_text
+    assert "我们有无障碍客房" not in decision.reply_text

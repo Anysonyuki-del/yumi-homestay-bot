@@ -82,6 +82,7 @@ from homestay_bot.services.stay_date_range import (
     wuhan_today,
 )
 from homestay_bot.services.turn_plan import (
+    REQUEST_KINDS,
     PlanItem,
     PlanOutcome,
     failed_plan,
@@ -1517,6 +1518,13 @@ class DeepSeekGuestAssistant:
             )
         return merged, item_candidates
 
+    @staticmethod
+    def _action_only_plan(plan_items: Sequence[PlanItem]) -> bool:
+        """计划的有效项是否全是动作项；只有这种轮次不让静态证据计划接管整轮回复。"""
+        return bool(plan_items) and all(
+            item.kind in REQUEST_KINDS or item.kind == "request_withdraw" for item in plan_items
+        )
+
     @classmethod
     def _with_item_answers(
         cls,
@@ -2812,7 +2820,7 @@ class DeepSeekGuestAssistant:
                         target_end_date - timedelta(days=1) if target_end_date else None
                     ),
             )
-            if plan_items and not any(item.kind == "static_fact" for item in plan_items):
+            if self._action_only_plan(plan_items):
                 tourism_evidence = None
             if tourism_evidence is not None and tourism_evidence.handles_reply:
                 decision = self._apply_evidence_plan(
@@ -3042,9 +3050,11 @@ class DeepSeekGuestAssistant:
                 knowledge_question, question_text, plan
             ),
         )
-        if plan_items and not any(item.kind == "static_fact" for item in plan_items):
-            # 计划确认本轮没有本店事实项（例如只有服务申请）：证据计划不接管整轮回复，
-            # 否则会按话题回「尚未确认」覆盖动作回复（修复 Spec §2.4，SR-毛巾、SR-遗失）。
+        if self._action_only_plan(plan_items):
+            # 计划确认本轮只有动作项（服务申请、报修、订房、撤回、报失）：证据计划不接管整轮
+            # 回复，否则会按话题回「尚未确认」覆盖动作回复（修复 Spec §2.4，SR-毛巾、SR-遗失）。
+            # 只收窄到动作项：规划把本店事实问题判成房型推荐或房价时，现行证据计划仍要作答
+            # （候选门禁 rc-1.69.1-1：K-无障碍-D、MT-停车EN 因收得太宽退步）。
             evidence_plan = None
         selection_dates = (
             target_date or local_today,
