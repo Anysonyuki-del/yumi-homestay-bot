@@ -205,11 +205,15 @@ def test_history_and_negation_never_register_despite_lexical_signals(text: str) 
 
 
 def test_only_unclear_items_ask_for_confirmation() -> None:
-    """只有 unclear：不登记，回确认话术。"""
-    text = "能来收一下吗"
+    """只有 unclear：不登记；像申请时回确认话术，信息问题不回「需要安排什么」。"""
+    text = "麻烦送一下那个"
     resolution = resolve_task_request(plan_for(text, ("unclear", text)), text)
     assert not resolution.register
     assert resolution.ask_confirm
+    question = "它能烘干吗"
+    info = resolve_task_request(plan_for(question, ("unclear", question)), question)
+    assert not info.register
+    assert not info.ask_confirm
 
 
 def test_failed_planning_never_creates_service_tasks() -> None:

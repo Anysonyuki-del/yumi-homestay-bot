@@ -322,3 +322,39 @@ def test_period_policy_wins_a_conflict_and_out_of_range_ids_fall_back() -> None:
     )
     assert crossing.status == "invalid"
     assert verify_selected_evidence("早餐几点", [99], [], [regular]).status == "invalid"
+
+
+def test_entries_outside_the_target_dates_are_not_legal_answers() -> None:
+    """门禁实测：9 月 25 日问早餐，模型选了国庆期间条目。有效期不覆盖目标日期即越界，
+    交回现行证据计划；冲突分组也不纳入它。"""
+    from datetime import date
+
+    regular = _breakfast(1, "早餐7:30开始。")
+    holiday = _breakfast(
+        2, "国庆期间早餐8:00开始。", valid_from=date(2026, 10, 1), valid_until=date(2026, 10, 7)
+    )
+    chose_holiday = verify_selected_evidence(
+        "早餐几点", [2], [], [regular, holiday], target_date=date(2026, 9, 25)
+    )
+    assert (chose_holiday.status, chose_holiday.reason) == ("invalid", "outside_validity")
+    chose_regular = verify_selected_evidence(
+        "早餐几点", [1], [], [regular, holiday], target_date=date(2026, 9, 25)
+    )
+    assert chose_regular.status == "grounded"
+    assert chose_regular.parts[0].text == regular.answer
+
+
+def test_unasked_attributes_and_passing_mentions_do_not_conflict() -> None:
+    """门禁实测：问婴儿床时，早餐条目里顺带写到儿童收费，不能判成费用冲突。
+
+    冲突只查客人问到的钟点或收费，同组只取问法点名同一主题的条目。"""
+    crib = KnowledgeSnippet(
+        source_id=1, category="儿童", question="有婴儿床吗？",
+        answer="可以免费提供一张婴儿床，需提前告知。", scope="global",
+    )
+    breakfast = KnowledgeSnippet(
+        source_id=2, category="餐饮", question="早餐多少钱？",
+        answer="早餐每位28元，儿童早餐每位15元。", scope="global",
+    )
+    verdict = verify_selected_evidence("宝宝一岁多，有婴儿床吗", [1], [], [crib, breakfast])
+    assert verdict.status == "grounded"

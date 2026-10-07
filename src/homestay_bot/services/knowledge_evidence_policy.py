@@ -864,6 +864,15 @@ class SelectionVerdict:
     parts: tuple[ReplyPart, ...] = ()
 
 
+def _valid_during(entry: Any, start: date, end: date) -> bool:
+    """条目有效期与目标区间是否相交；无有效期的条目始终有效。"""
+    valid_from = getattr(entry, "valid_from", None)
+    valid_until = getattr(entry, "valid_until", None)
+    return (valid_from is None or valid_from <= end) and (
+        valid_until is None or valid_until >= start
+    )
+
+
 def _crosses_validity_boundary(entry: Any, start: date, end: date) -> bool:
     """条目有效期的起止落在目标区间内部时，单条答案不能覆盖整段住宿。"""
     valid_from = getattr(entry, "valid_from", None)
@@ -921,25 +930,36 @@ def verify_selected_evidence(
         return SelectionVerdict("invalid", "out_of_candidates")
     if not answer_ids:
         return SelectionVerdict("missing", "none_selected")
+    if target_date is not None:
+        end = target_end_date or target_date
+        # 有效期不覆盖目标日期的条目不是本轮合法候选：选中它按越界处理，交回现行证据计划；
+        # 冲突分组也不纳入它（门禁实测：9 月 25 日问早餐，模型选了国庆期间条目）。
+        if any(
+            not _valid_during(by_id[item], target_date, end)
+            for item in (*answer_ids, *related_ids)
+        ):
+            return SelectionVerdict("invalid", "outside_validity")
+        candidates = [entry for entry in candidates if _valid_during(entry, target_date, end)]
     answers = [by_id[item] for item in dict.fromkeys(answer_ids)]
     related = [by_id[item] for item in dict.fromkeys(related_ids) if item not in answer_ids]
     topics = tuple(detect_property_topics(question))
     topic_names = {topic.name for topic in topics}
+    # 同组只取问法本身点名同一主题的条目；按答案正文分组会把顺带提到主题的条目拉进来，
+    # 造成假冲突（门禁实测：问婴儿床时早餐条目里的儿童收费被判成费用冲突）。
     same_group = [
         entry
         for entry in candidates
         if topic_names
-        and topic_names & {
-            item.name
-            for item in detect_property_topics(f"{getattr(entry, 'question', '')} {entry.answer}")
-        }
+        and topic_names
+        & {item.name for item in detect_property_topics(str(getattr(entry, "question", "")))}
     ]
     group = list({id(entry): entry for entry in (*answers, *related, *same_group)}.values())
     if target_date is not None:
         end = target_end_date or target_date
         if any(_crosses_validity_boundary(entry, target_date, end) for entry in group):
             return SelectionVerdict("invalid", "period_boundary")
-    attributes = (asked_attributes(question) & {"time", "fee"}) or {"time", "fee"}
+    # 与现行证据计划同一口径：只对客人问到的钟点或收费检查冲突；其他属性的矛盾规则查不出。
+    attributes = asked_attributes(question) & {"time", "fee"}
 
     def conflicting(entries: Sequence[Any]) -> str | None:
         """返回第一个出现矛盾的属性；主题认得出时只比较该主题该属性的分句。"""

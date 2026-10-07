@@ -447,8 +447,9 @@ def resolve_task_request(plan_outcome: PlanOutcome | None, text: str) -> TaskRes
     if not active:
         unclear = any(item.kind == "unclear" for item in plan.plan.valid_items)
         return TaskResolution(
-            # 只有不明确项（Spec §2.5 表末行）：不登记，请客人确认（D11）。
-            ask_confirm=unclear and not withdraws,
+            # 只有不明确项（Spec §2.5 表末行）：不登记；词面像申请时请客人确认（D11 针对「意图
+            # 不明确的请求」）。门禁实测：信息问题被标为不明确时，回「需要安排什么」答非所问。
+            ask_confirm=unclear and not withdraws and _lexical_request(text),
             safety_tip=safety_tip,
             withdrawn=tuple(filter(None, withdrawn)),
             planned=True,
