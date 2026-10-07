@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-10-07T15:31:03Z",
+  "updated_at": "2026-10-07T15:50:17Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "8e7c43d0ae6c9e63a7978e982bd4661d765f8c704180f01266d788ac83dcc135",
-      "size": 250243,
-      "normalized_sha256": "8e7c43d0ae6c9e63a7978e982bd4661d765f8c704180f01266d788ac83dcc135"
+      "sha256": "2679a05bb7f17913b5e13303095221b8fd49b2b5a8682dd7eb7887cca7f92691",
+      "size": 250254,
+      "normalized_sha256": "2679a05bb7f17913b5e13303095221b8fd49b2b5a8682dd7eb7887cca7f92691"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1148,9 +1148,9 @@
     },
     "docs/releases/1.69.1.md": {
       "role": "index",
-      "sha256": "b8a4f9325060f626501f53f1bdcd6472e478b636386d9fa8f657523cc6c3a0ed",
-      "size": 7910,
-      "normalized_sha256": "b8a4f9325060f626501f53f1bdcd6472e478b636386d9fa8f657523cc6c3a0ed"
+      "sha256": "ef31bcbfb3b72ca364022d20e6736160aa0995ace2acca67fa0451a4c8d5c4eb",
+      "size": 10008,
+      "normalized_sha256": "ef31bcbfb3b72ca364022d20e6736160aa0995ace2acca67fa0451a4c8d5c4eb"
     },
     "docs/releases/README.md": {
       "role": "index",
