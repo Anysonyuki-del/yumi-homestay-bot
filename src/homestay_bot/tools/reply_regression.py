@@ -704,7 +704,8 @@ class _Runner:
                 else ""
             )
             final = prepare_facility_advice_reply(
-                decision.facility_advice, language, action_reply=closing
+                decision.facility_advice, language, action_reply=closing,
+                safety_tip=resolution.safety_tip,
             )
         else:
             final = prepare_planned_reply(

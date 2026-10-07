@@ -484,6 +484,12 @@ _FACILITY_ITEM_ACKNOWLEDGEMENT = re.compile(r"^(?:收到|好的)[，,、\s]*")
 _FACILITY_ITEM_SPLIT = re.compile(r"(?<=[。！？；;!?])")
 _FACILITY_ITEM_END = re.compile(r"[。．.！!；;，,、\s]+$")
 FACILITY_ADVICE_MAX_ITEMS = 2
+_ZH_SAFETY_TIP = "如涉及设备，请先停止使用，不要自行拆卸"
+_EN_SAFETY_TIP = "If any equipment is involved, please stop using it and don't take it apart"
+# 建议里已经包含停用意思时不再重复补本地安全提示。
+_STOP_USE_ADVICE = re.compile(
+    r"停止使用|停用|暂停使用|不要再用|别再用|先别用|stop using|don't use|do not use", re.I
+)
 _ZH_FACILITY_ITEM_MAX_CHARS = 40
 _EN_FACILITY_ITEM_MAX_CHARS = 120
 
@@ -522,11 +528,14 @@ def prepare_facility_advice_reply(
     language: Language,
     *,
     action_reply: str | None = None,
+    safety_tip: bool = False,
 ) -> str:
     """用模型给出的建议清单组装设施故障回复，开头、结尾与标点全部由本地负责。
 
     成功时使用默认收尾；任务或通知失败时必须传入实际动作结果。
     清单缺失或逐条检查后一条不剩时，使用固定兜底，不发送空回复。
+    `safety_tip` 为真表示存在当前故障信号：模型建议里没有「停止使用」时由本地补在最前，
+    与是否建任务无关（回复泛用化 Spec §2.5）。
     """
     # 一条建议里写了几句时拆开逐句检查：夹带的承诺只删那一句，安全建议保留。
     candidates = [
@@ -543,6 +552,10 @@ def prepare_facility_advice_reply(
             kept.append(cleaned)
         if len(kept) >= FACILITY_ADVICE_MAX_ITEMS:
             break
+    if safety_tip and kept and not any(_STOP_USE_ADVICE.search(item) for item in kept):
+        # 候选门禁实测：模型建议有时只写「暂停开合」「换插座试试」，停用提示不稳定。追加在
+        # 模型建议之后、不挤掉它们；措辞带条件，噪音等住宿环境问题也不会答非所问。
+        kept = [*kept, _EN_SAFETY_TIP if language is Language.EN else _ZH_SAFETY_TIP]
     if language is Language.EN:
         body = " ".join(f"{item}." for item in kept) or _EN_FACILITY_FALLBACK
         closing = action_reply if action_reply is not None else _EN_FACILITY_SUBMITTED

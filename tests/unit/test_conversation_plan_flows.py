@@ -297,3 +297,26 @@ def test_payload_without_a_plan_restores_no_plan() -> None:
     )
     assert "turn_plan" not in (message.metadata or {})
     assert replace(message).content == "早餐"
+
+
+@pytest.mark.asyncio
+async def test_current_fault_always_carries_a_stop_using_tip() -> None:
+    """当前故障的安全提示与建任务分开、由本地保证（Spec §2.5）：模型建议没写停用时补上，
+    不挤掉模型建议；已写停用时不重复（候选门禁 F-跳闸 实测建议措辞不稳定）。"""
+    decision = AssistantDecision(
+        reply_text="好的。", language=Language.ZH, intent="facility_issue", confidence=0.9,
+        facility_issue=FacilityIssue(scope="homestay_facility"),
+        facility_advice=["把跳下的电闸开关推回一次"],
+    )
+    _, wecom, _ = await _guest_turn(
+        "吹风机一开就跳闸了", AssistantStub(decision=decision, plan="facility_fault")
+    )
+    reply = wecom.guest_messages[-1]
+    assert "把跳下的电闸开关推回一次" in reply
+    assert "请先停止使用" in reply
+
+    stop = decision.model_copy(update={"facility_advice": ["先停止使用吹风机"]})
+    _, wecom, _ = await _guest_turn(
+        "吹风机一开就跳闸了", AssistantStub(decision=stop, plan="facility_fault")
+    )
+    assert wecom.guest_messages[-1].count("停止使用") == 1

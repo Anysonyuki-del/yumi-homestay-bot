@@ -1196,7 +1196,8 @@ class ConversationService:
                     else FACILITY_CONFIRM_REPLY_ZH
                 )
             reply = prepare_facility_advice_reply(
-                advice, conversation.language, action_reply=closing
+                advice, conversation.language, action_reply=closing,
+                safety_tip=resolution.safety_tip,
             )
             if extra_reply:
                 reply = f"{extra_reply}\n\n{reply}"
@@ -1220,6 +1221,7 @@ class ConversationService:
                 None if decision.action_result and decision.action_result.notification_queued
                 else action_reply
             ),
+            safety_tip=resolution.safety_tip,
         )
         if extra_reply:
             reply = f"{extra_reply}\n\n{reply}"
