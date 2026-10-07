@@ -798,19 +798,17 @@ def _build_evidence_plan_for_period(
             # 「免费还是收费」互相矛盾只对费用问题有意义。问位置时若也检查，一条
             # 「30分钟内免费、超过按2元/小时」的收费条目会被判成自相矛盾，连带把
             # 停车位置也判为未确认（春和景明知识导入后「开车停哪里」回「尚未确认」）。
-            conflict = attribute == "fee" and _conflicting_fee_claims(evidence_texts)
-            times = {
-                tuple(_TIME_EVIDENCE.findall(text))
-                for text in evidence_texts
-                if _TIME_EVIDENCE.search(text)
-            }
-            conflict = conflict or (attribute == "time" and len(times) > 1)
-            fees = {
-                tuple(re.findall(r"\d+(?:\.\d+)?\s*(?:元|yuan|CNY)", text))
-                for text in evidence_texts
-                if re.search(r"\d+\s*(?:元|yuan|CNY)", text)
-            }
-            conflict = conflict or (attribute == "fee" and len(fees) > 1)
+            conflict = _attribute_conflict(attribute, evidence_texts)
+            periodic = [item for item in covering_items if _has_validity(item)]
+            if conflict and periodic and len(periodic) < len(covering_items):
+                # D6：同主题同属性的特殊时期政策与平时政策矛盾时，以特殊时期为准。本函数按
+                # 生效边界分段调用，段内有有效期的条目覆盖整段；不矛盾时两者照常并存。
+                covering_items = periodic
+                evidence_texts = [
+                    _attribute_evidence_text(topic, question_text, attribute, item.answer)
+                    for item in covering_items
+                ]
+                conflict = _attribute_conflict(attribute, evidence_texts)
             covering = covering_items[0] if covering_items and not conflict else None
             label = {"time": "时间", "fee": "费用", "location": "位置", "procedure": "流程"}.get(
                 attribute, ""
@@ -841,6 +839,143 @@ def _build_evidence_plan_for_period(
         tuple(chosen),
         "partial" if missing else "covered",
         tuple(parts),
+    )
+
+
+def _has_validity(entry: Any) -> bool:
+    """条目是否带有效期（特殊时期政策）。"""
+    return (
+        getattr(entry, "valid_from", None) is not None
+        or getattr(entry, "valid_until", None) is not None
+    )
+
+
+@dataclass(frozen=True)
+class SelectionVerdict:
+    """模型证据选择的本地核验结论。
+
+    - grounded：选中条目通过核验，`parts` 为审核原文分项；
+    - missing：模型选「无」、冲突、待复核或超长，该项回未确认；
+    - invalid：越界编号或跨越政策生效边界，该项回到现行证据计划。
+    """
+
+    status: Literal["grounded", "missing", "invalid"]
+    reason: str
+    parts: tuple[ReplyPart, ...] = ()
+
+
+def _crosses_validity_boundary(entry: Any, start: date, end: date) -> bool:
+    """条目有效期的起止落在目标区间内部时，单条答案不能覆盖整段住宿。"""
+    valid_from = getattr(entry, "valid_from", None)
+    valid_until = getattr(entry, "valid_until", None)
+    return bool(
+        (valid_from is not None and start < valid_from <= end)
+        or (valid_until is not None and start <= valid_until < end)
+    )
+
+
+def _attribute_conflict(attribute: str, texts: Sequence[str]) -> bool:
+    """沿用证据计划的冲突口径：收费免费互斥、金额集合不一致、钟点集合不一致。"""
+    if attribute == "fee":
+        covering = [text for text in texts if _covers_attribute("fee", text)]
+        fees = {
+            tuple(re.findall(r"\d+(?:\.\d+)?\s*(?:元|yuan|CNY)", text))
+            for text in covering
+            if re.search(r"\d+\s*(?:元|yuan|CNY)", text)
+        }
+        return _conflicting_fee_claims(covering) or len(fees) > 1
+    if attribute == "time":
+        times = {
+            tuple(_TIME_EVIDENCE.findall(text)) for text in texts if _TIME_EVIDENCE.search(text)
+        }
+        return len(times) > 1
+    return False
+
+
+def verify_selected_evidence(
+    question: str,
+    answer_ids: Sequence[int],
+    related_ids: Sequence[int],
+    candidates: Sequence[Any],
+    *,
+    target_date: date | None = None,
+    target_end_date: date | None = None,
+) -> SelectionVerdict:
+    """确定性核验主调用为一个子问题选择的证据（Spec §2.4）。
+
+    1. 全部编号必须属于本轮合法候选，否则该项回到现行证据计划；
+    2. 期间政策优先（D6）：同主题有特殊时期条目时以它为准，跨越生效边界交回现行计划分段；
+    3. 冲突检查覆盖 answer ∪ related ∪ 同主题同属性的全部合法候选；主题认不出时只在
+       answer 与 related 之间互查（查不出冲突不等于证明没有冲突）；
+    4. 保留指令注入与长度规则；核验通过的条目整条发出，不截断、不改写。
+
+    ponytail: 冲突只按收费、金额与钟点三类规则识别，其他属性的矛盾查不出；新主题依赖
+    模型标出的相关集。扩充冲突规则前，不能把本函数当作语义一致性的证明。
+    """
+    by_id = {
+        int(getattr(entry, "source_id", 0)): entry
+        for entry in candidates
+        if isinstance(getattr(entry, "source_id", None), int)
+    }
+    if any(item not in by_id for item in (*answer_ids, *related_ids)):
+        return SelectionVerdict("invalid", "out_of_candidates")
+    if not answer_ids:
+        return SelectionVerdict("missing", "none_selected")
+    answers = [by_id[item] for item in dict.fromkeys(answer_ids)]
+    related = [by_id[item] for item in dict.fromkeys(related_ids) if item not in answer_ids]
+    topics = tuple(detect_property_topics(question))
+    topic_names = {topic.name for topic in topics}
+    same_group = [
+        entry
+        for entry in candidates
+        if topic_names
+        and topic_names & {
+            item.name
+            for item in detect_property_topics(f"{getattr(entry, 'question', '')} {entry.answer}")
+        }
+    ]
+    group = list({id(entry): entry for entry in (*answers, *related, *same_group)}.values())
+    if target_date is not None:
+        end = target_end_date or target_date
+        if any(_crosses_validity_boundary(entry, target_date, end) for entry in group):
+            return SelectionVerdict("invalid", "period_boundary")
+    attributes = (asked_attributes(question) & {"time", "fee"}) or {"time", "fee"}
+
+    def conflicting(entries: Sequence[Any]) -> str | None:
+        """返回第一个出现矛盾的属性；主题认得出时只比较该主题该属性的分句。"""
+        for attribute in sorted(attributes):
+            if topics:
+                texts = [
+                    _attribute_evidence_text(topic, question, attribute, entry.answer)
+                    for topic in topics
+                    for entry in entries
+                ]
+            else:
+                texts = [entry.answer for entry in entries]
+            if _attribute_conflict(attribute, [text for text in texts if text]):
+                return attribute
+        return None
+
+    conflict = conflicting(group)
+    periodic = [entry for entry in group if _has_validity(entry)]
+    if conflict and periodic and len(periodic) < len(group):
+        # D6：特殊时期政策与平时政策矛盾时以特殊时期为准；模型漏选期间条目时也以它作答。
+        answers = [entry for entry in answers if _has_validity(entry)] or periodic
+        group = periodic
+        conflict = conflicting(group)
+    if conflict:
+        return SelectionVerdict("missing", f"conflict_{conflict}")
+    texts = [str(entry.answer) for entry in answers]
+    if any(_INSTRUCTION_INJECTION.search(text) for text in texts):
+        return SelectionVerdict("missing", "answer_needs_review")
+    if not fits_guest_reply_parts(compose_static_reply(texts)) or (
+        len(texts) > 1 and sum(len(text) for text in texts) > STATIC_REPLY_MAX_CHARS
+    ):
+        return SelectionVerdict("missing", "reply_exceeds_message_limit")
+    return SelectionVerdict(
+        "grounded",
+        "selected",
+        tuple(_knowledge_part(question, entry) for entry in answers),
     )
 
 

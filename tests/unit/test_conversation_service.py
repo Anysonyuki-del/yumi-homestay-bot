@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -30,6 +31,8 @@ from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.message_service import IncomingMessage
+from homestay_bot.services.turn_plan import PlanOutcome, failed_plan
+from tests.plan_helpers import plan_for
 
 
 class ConversationRepositoryStub:
@@ -197,6 +200,13 @@ class CustomerContextStub:
         return CustomerModelContext("偏好安静", "曾入住", [])
 
 
+def _water_and_late_checkout_plan(text: str) -> PlanOutcome:
+    """补水与延迟退房两个申请项的计划。"""
+    return plan_for(
+        text, ("service_request", "帮我补两瓶矿泉水"), ("service_request", "申请延迟退房")
+    )
+
+
 class AssistantStub:
     """返回固定客服决定并统计调用次数。"""
 
@@ -205,26 +215,46 @@ class AssistantStub:
         *,
         handoff_reason: str | None = None,
         decision: AssistantDecision | None = None,
+        plan: str | Callable[[str], PlanOutcome] | None = None,
     ) -> None:
+        """plan 为计划类型时按整句生成单项已核验计划；为函数时按本轮正文生成计划。"""
         self.calls = 0
         self.ack_calls = 0
+        self.plan_calls = 0
         self.handoff_reason = handoff_reason
         self.decision = decision
+        self.plan = plan
         self.last_kwargs = None
         self.last_ack_kwargs = None
 
+    def _plan(self, text: str) -> PlanOutcome | None:
+        """按测试声明构造计划，经过与生产相同的本地核验。"""
+        if self.plan is None:
+            return None
+        return self.plan(text) if callable(self.plan) else plan_for(text, (self.plan, text))
+
+    async def plan_turn(self, *, text: str, language: Language) -> PlanOutcome:
+        """模拟规划入口；未声明计划时返回规划失败。"""
+        self.plan_calls += 1
+        return self._plan(text) or failed_plan(text, "timeout")
+
     async def respond(self, **kwargs) -> AssistantDecision:
-        """生成固定中文回复。"""
+        """生成固定中文回复，并像适配器一样附上本轮计划。"""
         self.calls += 1
         self.last_kwargs = kwargs
+        messages = kwargs.get("messages") or [{"content": ""}]
+        turn_plan = kwargs.get("turn_plan") or self._plan(messages[-1]["content"])
         if self.decision is not None:
-            return self.decision
+            if turn_plan is None:
+                return self.decision
+            return self.decision.model_copy(update={"turn_plan": turn_plan})
         return AssistantDecision(
             reply_text="下午三点后可以入住。",
             language=Language.ZH,
             intent="faq",
             confidence=0.98,
             handoff_reason=self.handoff_reason,
+            turn_plan=turn_plan,
         )
 
     async def respond_ack(self, **kwargs) -> str:
@@ -252,9 +282,11 @@ class FailingAssistantStub(AssistantStub):
     """模拟 DeepSeek 普通客服无法生成安全回复。"""
 
     async def respond(self, **kwargs) -> AssistantDecision:
-        """抛出统一模型不可用异常。"""
+        """抛出统一模型不可用异常；声明了计划时像适配器一样随异常带回（V6-R1）。"""
         self.calls += 1
-        raise AssistantUnavailableError()
+        raise AssistantUnavailableError(
+            plan_outcome=self._plan(kwargs["messages"][-1]["content"])
+        )
 
 
 class BlockingAssistantStub(AssistantStub):
@@ -780,7 +812,7 @@ async def test_merged_equipment_fault_gets_advice_and_manual_task() -> None:
     ]
     messages.recorded.extend(fragments)
     tasks = BusinessTaskStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="facility_fault",
         decision=AssistantDecision(
             reply_text="收到，请先停止使用洗衣机，不要自行拆卸。",
             language=Language.ZH,
@@ -880,7 +912,7 @@ async def test_split_early_check_in_records_pending_request_without_handoff() ->
     ]
     messages.recorded.extend(fragments)
     tasks = BusinessTaskStub()
-    proposal = AssistantStub(
+    proposal = AssistantStub(plan="service_request",
         decision=AssistantDecision(
             reply_text="提前入住需要确认。",
             language=Language.ZH,
@@ -1719,7 +1751,7 @@ async def test_high_risk_decision_switches_to_human_after_guest_reply() -> None:
 async def test_ai_task_is_recorded_before_guest_reply_and_notifies_staff() -> None:
     """结构化任务先登记和通知，再回复真实登记状态。"""
     tasks = BusinessTaskStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="service_request",
         decision=AssistantDecision(
             reply_text="好的，我先帮您记录补水需求。",
             language=Language.ZH,
@@ -1808,7 +1840,7 @@ async def test_guest_task_reply_hides_natural_staff_confirmation_wording() -> No
 @pytest.mark.asyncio
 async def test_guest_task_reply_does_not_invent_unrequested_services() -> None:
     """补被子时不得把历史退款、纸巾或矿泉水承诺带给客人。"""
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="service_request",
         decision=AssistantDecision(
             reply_text=(
                 "床单被子我这就安排更换。矿泉水和纸巾也一并给您补上，"
@@ -1875,7 +1907,7 @@ async def test_guest_wording_filter_keeps_scenic_staff_reference() -> None:
 @pytest.mark.asyncio
 async def test_guest_task_reply_hides_staff_delivery_wording() -> None:
     """服务安排回复不得把内部人员调度直接展示给客人。"""
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="service_request",
         decision=AssistantDecision(
             reply_text="好的，这就帮您安排补两瓶矿泉水，马上让工作人员给您送过去，稍等一下就好。",
             language=Language.ZH,
@@ -1899,7 +1931,7 @@ async def test_guest_task_reply_hides_staff_delivery_wording() -> None:
 async def test_washer_task_uses_model_advice_without_promising_a_technician() -> None:
     """洗衣机故障应保留同轮模型的安全建议并删除人员与结果承诺。"""
     tasks = BusinessTaskStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="facility_fault",
         decision=AssistantDecision(
             reply_text=(
                 "别急哈，我会尽快安排师傅上门帮您查看处理。"
@@ -1986,7 +2018,7 @@ async def test_soft_washer_fault_gives_advice_after_submitting_manual_task() -> 
 
     tasks = OrderedBusinessTaskStub()
     wecom = OrderedWeComStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="facility_fault",
         decision=AssistantDecision(
             reply_text="请先停止使用洗衣机，不要自行拆卸。",
             language=Language.ZH,
@@ -2027,7 +2059,7 @@ async def test_soft_washer_fault_gives_advice_after_submitting_manual_task() -> 
 async def test_equipment_task_failure_never_claims_manual_submission() -> None:
     """维修任务失败时明确未登记，客人侧不得收到虚假提交说明。"""
     tasks = BusinessTaskStub(fail=True)
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="facility_fault",
         decision=AssistantDecision(
             reply_text="收到，我先给您一个安全排查建议。",
             language=Language.ZH,
@@ -2078,7 +2110,7 @@ async def test_new_facility_is_handled_on_first_occurrence(
 ) -> None:
     """新设施首次出现时应直接使用模型的针对性建议并创建维修任务。"""
     tasks = BusinessTaskStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="facility_fault",
         decision=AssistantDecision(
             reply_text=model_reply,
             language=Language.ZH,
@@ -2107,7 +2139,7 @@ async def test_new_facility_is_handled_on_first_occurrence(
 async def test_missing_facility_classification_falls_back_to_generic_reply() -> None:
     """模型漏填设施字段时，明确故障仍应使用通用安全建议并建任务。"""
     tasks = BusinessTaskStub()
-    service, _, assistant, wecom = build_service(
+    service, _, assistant, wecom = build_service(assistant=AssistantStub(plan="facility_fault"),
         customer_profiles=CustomerProfileStub(),
         business_tasks=tasks,
     )
@@ -2124,7 +2156,7 @@ async def test_missing_facility_classification_falls_back_to_generic_reply() -> 
 async def test_low_confidence_facility_reply_falls_back_to_generic_advice() -> None:
     """低置信度危险建议仍须由逐句安全门清除并使用通用降级。"""
     tasks = BusinessTaskStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="facility_fault",
         decision=AssistantDecision(
             reply_text="可以重置路由器。",
             language=Language.ZH,
@@ -2175,7 +2207,7 @@ async def test_low_confidence_stay_issue_keeps_safe_contextual_advice(
 ) -> None:
     """住宿环境问题的安全建议不得仅因整体置信度较低而被丢弃。"""
     tasks = BusinessTaskStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="facility_fault",
         decision=AssistantDecision(
             reply_text=model_reply,
             language=Language.ZH,
@@ -2204,7 +2236,7 @@ async def test_low_confidence_stay_issue_keeps_safe_contextual_advice(
 async def test_uncertain_unlisted_facility_scope_still_submits_manual_task() -> None:
     """模型确认是设施异常但归属不确定时，应提交候选任务并使用通用建议。"""
     tasks = BusinessTaskStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="facility_fault",
         decision=AssistantDecision(
             reply_text="请拆开设备检查线路。",
             language=Language.ZH,
@@ -2232,7 +2264,7 @@ async def test_uncertain_unlisted_facility_scope_still_submits_manual_task() -> 
 async def test_model_unavailable_explicit_fault_uses_generic_advice_and_task() -> None:
     """模型不可用时，民宿渠道的明确设施故障仍须完成确定性兜底。"""
     tasks = BusinessTaskStub()
-    assistant = FailingAssistantStub()
+    assistant = FailingAssistantStub(plan="facility_fault")
     service, conversations, _, wecom = build_service(
         assistant=assistant,
         customer_profiles=CustomerProfileStub(),
@@ -2308,7 +2340,7 @@ async def test_high_confidence_model_external_scope_blocks_homestay_task() -> No
 async def test_ai_task_failure_does_not_claim_registration(caplog) -> None:
     """任务登记失败时发送未登记说明，不能先声称成功。"""
     tasks = BusinessTaskStub(fail=True)
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="service_request",
         decision=AssistantDecision(
             reply_text="好的，我先帮您记录补水需求。",
             language=Language.ZH,
@@ -2435,7 +2467,7 @@ async def test_explicit_booking_creates_staff_request_without_approval() -> None
     """客人明确预订只登记管家请求，不创建审批或订单。"""
     approvals = ApprovalServiceStub()
     tasks = BusinessTaskStub()
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="booking_request",
         decision=AssistantDecision(
             reply_text="资料已提交工作人员确认。",
             language=Language.ZH,
@@ -2747,7 +2779,7 @@ async def test_service_registration_precedes_reply_and_preserves_policy() -> Non
             events.append("guest")
             return await super().send_text(*args, **kwargs)
 
-    assistant = AssistantStub(
+    assistant = AssistantStub(plan="service_request",
         decision=AssistantDecision(
             reply_text="延迟退房需视当天房态确认，节假日不提供。",
             language=Language.ZH,
@@ -2774,7 +2806,7 @@ async def test_service_registration_precedes_reply_and_preserves_policy() -> Non
 async def test_failed_registration_never_claims_staff_notified() -> None:
     """任务保存失败必须显式失败，不沿用模型成功话术。"""
     service, _, _, wecom = build_service(
-        assistant=AssistantStub(
+        assistant=AssistantStub(plan="service_request",
             decision=AssistantDecision(
                 reply_text="已安排管家送毛巾。",
                 language=Language.ZH,
@@ -2813,7 +2845,7 @@ async def test_multiple_requests_are_preserved_in_one_pending_task() -> None:
     service, _, _, _ = build_service(
         customer_profiles=CustomerProfileStub(),
         business_tasks=tasks,
-        assistant=AssistantStub(
+        assistant=AssistantStub(plan=_water_and_late_checkout_plan,
             decision=AssistantDecision(
                 reply_text="延迟退房需要确认。",
                 language=Language.ZH,
@@ -3000,7 +3032,7 @@ async def test_handoff_notification_is_sent_after_the_reply_and_quotes_it() -> N
 async def test_task_notification_says_reply_is_in_progress() -> None:
     """登记请求的通知必须先入队（回复要写登记结果），通知里写「正在回复」，不写「尚未回复」。"""
     wecom = _OrderedWeCom()
-    service, conversations, _, _ = build_service(
+    service, conversations, _, _ = build_service(assistant=AssistantStub(plan="service_request"),
         wecom=wecom,
         customer_profiles=CustomerProfileStub(),
         business_tasks=BusinessTaskStub(),

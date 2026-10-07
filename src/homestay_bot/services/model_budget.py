@@ -22,6 +22,10 @@ class ModelBudget:
     faq_candidates: int = 20
     faq_candidates_chars: int = 4_000
     tool_result_chars: int = 24_000
+    # 轮次计划（Spec P1，D5）：超时按规划失败处理，下游回到各能力的失败回退。
+    planning_timeout_seconds: float = 6.0
+    planning_max_tokens: int = 900
+    planning_text_chars: int = 2_000
 
 
 MODEL_BUDGET = ModelBudget()

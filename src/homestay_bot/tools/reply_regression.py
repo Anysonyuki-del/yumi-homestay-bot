@@ -309,6 +309,14 @@ class _MemoryKnowledge:
         """返回全部虚构条目。"""
         return list(self._entries)
 
+    async def find_property_by_room(self, room: str) -> int | None:
+        """资料里房源编号就是房号：有该房专属条目时返回编号，与线上按房号查房源同一入口。"""
+        if not room.isdigit():
+            return None
+        return next(
+            (int(room) for entry in self._entries if entry.property_id == int(room)), None
+        )
+
 
 class FakeHostexClient:
     """按共用资料返回百居易客户端的线上数据模型，不访问百居易。
@@ -469,9 +477,12 @@ def pre_route(
             "route": "emergency",
             "final": emergency_follow_up_reply(active, language, entries),
         }
-    if ComplaintService.classify(question).is_complaint:
+    complaint = ComplaintService.classify(question)
+    if complaint.is_complaint:
         return {
             "route": "complaint",
+            # 只命中情绪词是软判定：线上会先规划复核，门禁同样交给 _respond 复核。
+            "soft": complaint.reason == "agitated",
             "final": prepare_guest_reply(
                 ComplaintService.guest_acknowledgement(language),
                 language=language,
@@ -482,7 +493,7 @@ def pre_route(
         # 转人工与无关问题走固定话术，正文与模型无关，只判路由；占位与草稿区探针同一口径。
         return {"route": "handoff", "final": "<转人工固定话术>"}
     if not is_homestay_related(question):
-        return {"route": "unrelated", "final": _UNRELATED_REPLY}
+        return {"route": "unrelated", "final": _UNRELATED_REPLY, "soft": True}
     return None
 
 
@@ -569,8 +580,16 @@ class _Runner:
         ]
         question = next(item["content"] for item in reversed(messages) if item["role"] == "user")
         language = ConversationService._detect_language(question, Language.ZH)
+        from homestay_bot.services.answer_policy import (
+            TASK_CONFIRM_REPLY_EN,
+            TASK_CONFIRM_REPLY_ZH,
+            agitated_cleared_by_plan,
+            resolve_task_request,
+        )
+        from homestay_bot.services.turn_plan import plan_risks, usable_plan
+
         routed = pre_route(scenario, self._entries, language)
-        if routed is not None:
+        if routed is not None and not routed.pop("soft", False):
             return routed
         tools = _RecordingExecutor(
             HostexReadOnlyToolExecutor(
@@ -591,7 +610,22 @@ class _Runner:
             safety_hmac_key=b"reply-regression",
             tool_executor=tools,
             local_date_provider=lambda: self._today,
+            plan_turns=True,
         )
+        stages: list[tuple[str, int]] = []
+        turn_plan = None
+        if routed is not None:
+            # 软判定与线上合并阶段同序：规划复核后，客诉须计划标为投诉，无关须全部为无关项。
+            started = time.monotonic()
+            turn_plan = await assistant.plan_turn(text=question, language=language)
+            stages.append(("plan", round((time.monotonic() - started) * 1000)))
+            keep = (
+                agitated_cleared_by_plan(turn_plan, question)
+                if routed["route"] == "complaint"
+                else ConversationService._plan_keeps_related(turn_plan, question)
+            )
+            if not keep:
+                return {**routed, "stages": stages}
         # 场景声明了客人已确认的住宿时，按线上同一入口（客户上下文的 confirmed_stay）传入，
         # 让检索按目标房间与日期过滤；没有声明的场景保持原样。
         confirmed_stay = ((scenario.get("expect") or {}).get("context") or {}).get("confirmed_stay")
@@ -605,7 +639,31 @@ class _Runner:
                 else None
             ),
             tool_trace_sink=lambda trace: traces.append(trace.name),
+            stage_timing_sink=lambda name, ms: stages.append((name, ms)),
+            turn_plan=turn_plan,
         )
+        plan = usable_plan(decision.turn_plan, question)
+        hazard = next(
+            (
+                risk.split(":", 1)[1]
+                for risk in sorted(plan_risks(plan))
+                if risk.startswith("current_hazard:")
+            ),
+            None,
+        )
+        if hazard is not None:
+            # 线上计划判为当前危险时升级完整处置（只升不降），门禁同样走固定安全回复。
+            from homestay_bot.services.emergency_service import (
+                EmergencyClassification,
+                EmergencyService,
+            )
+            return {
+                "route": "emergency",
+                "final": EmergencyService().safety_reply(
+                    EmergencyClassification(True, hazard), language
+                ),
+                "stages": stages,
+            }
         # 会话在设施分支之前处理模型升级的紧急事件；门禁同样使用固定安全回复。
         if decision.handoff_reason in {
             "emergency:fire", "emergency:gas", "emergency:electric",
@@ -622,25 +680,44 @@ class _Runner:
                     language,
                 ),
             }
+        resolution = resolve_task_request(plan, question)
+        # 与会话层同一判据：计划判定没有当前故障时不进设施流程（Spec §2.5）。
         facility = (
-            decision.facility_issue is not None
-            and decision.facility_issue.scope == "homestay_facility"
+            not decision.handoff_reason
+            and ConversationService._is_facility_issue(question, decision)
+            and (plan is None or resolution.safety_tip)
         )
-        # 门禁不执行真实的任务登记与员工通知，设施收尾用固定占位，不生成「已提交」这类
-        # 成功结论；登记与通知是否成功由会话服务的集成测试单独证明（Spec P0，R3）。
-        final = (
-            prepare_facility_advice_reply(
-                decision.facility_advice, language, action_reply=_FACILITY_ACTION_PLACEHOLDER
+        english = language is Language.EN
+        if facility:
+            # 门禁不执行真实的任务登记与员工通知，登记收尾用固定占位，不生成「已提交」这类
+            # 成功结论；登记与通知是否成功由会话服务的集成测试单独证明（Spec P0，R3）。
+            # 不登记时与线上同一文案：请客人确认（D14）或不加收尾。
+            from homestay_bot.services.answer_policy import (
+                FACILITY_CONFIRM_REPLY_EN,
+                FACILITY_CONFIRM_REPLY_ZH,
             )
-            if facility
-            else prepare_planned_reply(
+            closing = (
+                _FACILITY_ACTION_PLACEHOLDER
+                if resolution.register
+                else (FACILITY_CONFIRM_REPLY_EN if english else FACILITY_CONFIRM_REPLY_ZH)
+                if resolution.ask_confirm or not resolution.planned
+                else ""
+            )
+            final = prepare_facility_advice_reply(
+                decision.facility_advice, language, action_reply=closing
+            )
+        else:
+            final = prepare_planned_reply(
                 decision.reply_parts,
                 fallback=decision.reply_text,
                 language=language,
                 high_risk=bool(decision.handoff_reason),
                 question=question,
             )
-        )
+            if not resolution.register and resolution.ask_confirm:
+                # 规划失败或关联不明时线上回确认话术（D13），门禁照样附上。
+                confirm = TASK_CONFIRM_REPLY_EN if english else TASK_CONFIRM_REPLY_ZH
+                final = f"{final}\n\n{confirm}"
         return {
             "route": "facility" if facility else "model",
             "final": final,
@@ -649,6 +726,9 @@ class _Runner:
             "knowledge_gap": decision.knowledge_gap,
             # 当前会话只有本地归一化接管理由才切人工，模型辅助标记只用于通知资料预加载。
             "staff_confirmation_required": bool(decision.handoff_reason),
+            "task_registered": resolution.register,
+            "plan_status": decision.turn_plan.status if decision.turn_plan else "none",
+            "stages": stages,
         }
 
 

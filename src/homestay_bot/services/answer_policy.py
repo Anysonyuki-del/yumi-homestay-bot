@@ -1,7 +1,10 @@
 import re
+from dataclasses import dataclass
 from typing import Literal
 
+from homestay_bot.domain.enums import BusinessTaskType
 from homestay_bot.services.knowledge_service import detect_property_topics
+from homestay_bot.services.turn_plan import REQUEST_KINDS, PlanOutcome, plan_risks, usable_plan
 
 # 住宿意图：问能不能住、有没有房。联网分流、房态工具开放和交易判定共用这一处定义。
 # 以前各处各有一份词表，1.39.16 只在分流处补了「能住」「几个人住」，房态工具那几处
@@ -333,3 +336,146 @@ def is_static_service_fee(text: str) -> bool:
         )
         is not None
     )
+
+
+def policy_variants(text: str) -> tuple[str, ...]:
+    """确定性规则的候选文本：原文、跨消息空白归一化、去空白；不改变交给模型的原文。"""
+    flattened = " ".join(text.split())
+    compact = re.sub(r"\s+", "", text)
+    return tuple(dict.fromkeys((text, flattened, compact)))
+
+
+def agitated_cleared_by_plan(plan_outcome: PlanOutcome | None, text: str) -> bool:
+    """情绪词是否被计划复核去除：规划成功、针对本轮正文且没有任何项标为投诉（Spec §2.6）。
+
+    规划失败或摘要不一致时返回假，保留现行保守行为。
+    """
+    plan = usable_plan(plan_outcome, text)
+    return plan is not None and "complaint" not in plan_risks(plan)
+
+
+def resolve_handoff_reason(text: str, plan_outcome: PlanOutcome | None = None) -> str | None:
+    """统一接管理由：各出口都调用它，情绪词复核结果不会在后续出口重新生效（V4-R1）。
+
+    硬理由（退款、平台投诉、议价）保持确定性，不受计划影响；只有 agitated 可复核。
+    """
+    reason = next(
+        (found for variant in policy_variants(text) if (found := handoff_reason(variant))),
+        None,
+    )
+    if reason == "agitated" and agitated_cleared_by_plan(plan_outcome, text):
+        return None
+    return reason
+
+
+@dataclass(frozen=True)
+class TaskResolution:
+    """统一任务写入口的结论（Spec §2.5）。
+
+    - register：本轮是否登记任务；
+    - task_type：多事项或订房意向为 SPECIAL_SERVICE，单个设施故障为维修，None 表示沿用
+      模型建议的类型（缺省时为 SPECIAL_SERVICE）；
+    - ask_confirm：不登记并请客人确认（规划失败、关联不明或意图不明）；
+    - safety_tip：存在当前设施故障信号，需即时给安全提示，与是否建任务无关；
+    - current_fault：计划判定存在当前设施故障；
+    - withdrawn：本轮撤回的事项名称，用于通知管家（D11），不取消已有任务。
+    """
+
+    register: bool = False
+    task_type: BusinessTaskType | None = None
+    subjects: tuple[str, ...] = ()
+    ask_confirm: bool = False
+    safety_tip: bool = False
+    current_fault: bool = False
+    withdrawn: tuple[str, ...] = ()
+    planned: bool = False
+
+
+def _lexical_request(text: str) -> bool:
+    """词面服务或订房信号；只用于规划失败时决定是否回确认话术，不能授权登记。"""
+    return any(is_service_request(variant) for variant in policy_variants(text)) or (
+        is_booking_action_request(text)
+    )
+
+
+def _lexical_facility(text: str) -> bool:
+    """词面设施故障信号，排除私人物品与外部场所。"""
+    return has_facility_fault_signal(text) and facility_fault_exclusion(text) is None
+
+
+def resolve_task_request(plan_outcome: PlanOutcome | None, text: str) -> TaskResolution:
+    """所有任务写入口共用的判定：相同计划与正文必得相同结论（V3-R5、V4-R3、V4-R5）。
+
+    规划成功时按事项与原文顺序取最终状态：撤回通过 `withdraws` 指向它撤回的申请项，
+    撤回在前且本计划内没有更早申请时表示对象不在本计划；有更早申请却关联不明、或
+    撤回项位置失效时，不登记并转确认。规划失败时服务类不新建任务，词面命中只回确认
+    话术（D13）；设施有故障信号时给安全提示并请客人确认（D14）。
+    """
+    plan = usable_plan(plan_outcome, text)
+    if plan is None:
+        if _lexical_facility(text):
+            return TaskResolution(ask_confirm=True, safety_tip=True)
+        return TaskResolution(ask_confirm=_lexical_request(text))
+    assert plan.plan is not None
+    items = plan.plan.items
+    requests_all = [item for item in items if item.kind in REQUEST_KINDS]
+    requests = [item for item in plan.plan.valid_items if item.kind in REQUEST_KINDS]
+    withdraws = [item for item in items if item.kind == "request_withdraw"]
+    safety_tip = any(item.kind == "facility_fault" for item in requests)
+    confirm = TaskResolution(ask_confirm=True, safety_tip=safety_tip, planned=True)
+    # 失效撤回无法判断先后：同轮有任何申请项就转确认；有撤回时失效申请同理。
+    if requests_all and any(not item.valid for item in withdraws):
+        return confirm
+    if withdraws and any(not item.valid for item in requests_all):
+        return confirm
+    by_id = {item.id: item for item in requests}
+    cancelled: set[int] = set()
+    withdrawn: list[str] = []
+    for withdraw in (item for item in withdraws if item.valid):
+        if withdraw.withdraws is not None:
+            target = by_id.get(withdraw.withdraws)
+            if target is None or target.start >= withdraw.start:
+                return confirm
+            cancelled.add(target.id)
+            withdrawn.append(target.subject or withdraw.subject)
+        elif any(item.start < withdraw.start for item in requests):
+            # 本计划内有更早申请，却没给出撤回对象：无法可靠关联。
+            return confirm
+        else:
+            withdrawn.append(withdraw.subject)
+    active = [item for item in requests if item.id not in cancelled]
+    if not active:
+        unclear = any(item.kind == "unclear" for item in plan.plan.valid_items)
+        return TaskResolution(
+            # 只有不明确项（Spec §2.5 表末行）：不登记，请客人确认（D11）。
+            ask_confirm=unclear and not withdraws,
+            safety_tip=safety_tip,
+            withdrawn=tuple(filter(None, withdrawn)),
+            planned=True,
+        )
+    facility = [item for item in active if item.kind == "facility_fault"]
+    if len(active) > 1 or any(item.kind == "booking_request" for item in active):
+        task_type: BusinessTaskType | None = BusinessTaskType.SPECIAL_SERVICE
+    elif facility:
+        task_type = BusinessTaskType.MAINTENANCE
+    else:
+        task_type = None
+    return TaskResolution(
+        register=True,
+        task_type=task_type,
+        subjects=tuple(item.subject for item in active if item.subject),
+        safety_tip=safety_tip,
+        current_fault=bool(facility),
+        withdrawn=tuple(filter(None, withdrawn)),
+        planned=True,
+    )
+
+
+TASK_CONFIRM_REPLY_ZH = "请问需要我们现在为您安排什么？确认后我马上登记。"
+TASK_CONFIRM_REPLY_EN = (
+    "What would you like us to arrange for you now? Once you confirm, I'll register it right away."
+)
+FACILITY_CONFIRM_REPLY_ZH = "如需安排维修，请回复确认，确认后我马上登记。"
+FACILITY_CONFIRM_REPLY_EN = (
+    "If you'd like us to arrange a repair, please reply to confirm and I'll register it right away."
+)

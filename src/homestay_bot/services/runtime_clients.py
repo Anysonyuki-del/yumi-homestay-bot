@@ -482,6 +482,8 @@ async def build_runtime_client_bundle(
             safety_hmac_key=safety_hmac_key,
             tool_executor=HostexReadOnlyToolExecutor(hostex),
             faq_candidate_context=faq_candidate_context,
+            # 生产每轮先产生轮次计划（回复泛用化 Spec P1，V-a）。
+            plan_turns=True,
         )
         duty_userids = tuple(
             dict.fromkeys(

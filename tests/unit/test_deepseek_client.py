@@ -24,6 +24,7 @@ from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
 )
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
+from tests.plan_helpers import plan_for
 
 
 class KnowledgeStub:
@@ -784,6 +785,8 @@ async def test_task_suggestion_is_returned_in_same_structured_response() -> None
         guest_identifier="wm-guest",
         language=Language.ZH,
         messages=[{"role": "user", "content": "请给101房补两瓶水"}],
+        # 服务授权来自已核验计划（Spec §2.5）；无计划时按 D13 不保留任务建议。
+        turn_plan=plan_for("请给101房补两瓶水", ("service_request", "请给101房补两瓶水")),
     )
 
     assert decision.task_suggestion is not None
@@ -2173,6 +2176,7 @@ async def test_operational_task_reply_is_not_overridden_by_property_gap() -> Non
         guest_identifier="wm-guest",
         language=Language.ZH,
         messages=[{"role": "user", "content": "房间没水了，补点矿泉水"}],
+        turn_plan=plan_for("房间没水了，补点矿泉水", ("service_request", "补点矿泉水")),
     )
 
     assert "马上为您安排" not in decision.reply_text
@@ -3176,8 +3180,35 @@ async def test_a_dated_price_question_forces_the_price_tool() -> None:
 
 @pytest.mark.asyncio
 async def test_a_price_question_without_dates_asks_for_dates_without_calling_the_model() -> None:
-    """没有日期时先问住哪天，不回「尚未确认」，也不调用模型。"""
+    """计划确认整轮只问无日期房价时先问住哪天，不回「尚未确认」，也不调用主模型。"""
     client = ChatClientStub([])
+    assistant = DeepSeekGuestAssistant(
+        chat_client=client,
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+    )
+    question = "你们房间一晚多少钱？"
+
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": question}],
+        turn_plan=plan_for(question, ("stay_query", "你们房间一晚多少钱")),
+    )
+
+    assert "哪天入住" in decision.reply_text
+    assert "尚未确认" not in decision.reply_text
+    assert client.chat.completions.requests == []
+
+
+@pytest.mark.asyncio
+async def test_unplanned_mixed_price_question_keeps_the_other_answer_and_asks_dates() -> None:
+    """无计划时不再整轮早退（V4-R7）：其他子问照常回答，不开放参考价，只追加日期澄清。"""
+    payload = decision_payload()
+    payload["reply_text"] = "早餐7:30开始。"
+    client = ChatClientStub([json.dumps(payload, ensure_ascii=False)])
     assistant = DeepSeekGuestAssistant(
         chat_client=client,
         tourism_searcher=TourismStub(),
@@ -3189,12 +3220,14 @@ async def test_a_price_question_without_dates_asks_for_dates_without_calling_the
     decision = await assistant.respond(
         guest_identifier="wm-guest",
         language=Language.ZH,
-        messages=[{"role": "user", "content": "你们房间一晚多少钱？"}],
+        messages=[{"role": "user", "content": "房价多少早餐几点"}],
     )
 
-    assert "哪天入住" in decision.reply_text
-    assert "尚未确认" not in decision.reply_text
-    assert client.chat.completions.requests == []
+    request = client.chat.completions.requests[0]
+    assert "search_reference_price" not in json.dumps(request.get("tools", []))
+    assert decision.reply_parts[-1].status == "clarification"
+    assert "哪天入住" in decision.reply_parts[-1].text
+    assert decision.reply_text.count("哪天入住") == 1
 
 
 class _PriceToolCompletionsStub:

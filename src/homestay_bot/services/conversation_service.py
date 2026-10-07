@@ -32,14 +32,19 @@ from homestay_bot.integrations.deepseek_client import (
 )
 from homestay_bot.integrations.tourism import TourismSearchError, classify_tourism_query
 from homestay_bot.services.answer_policy import (
+    FACILITY_CONFIRM_REPLY_EN,
+    FACILITY_CONFIRM_REPLY_ZH,
+    TASK_CONFIRM_REPLY_EN,
+    TASK_CONFIRM_REPLY_ZH,
+    TaskResolution,
+    agitated_cleared_by_plan,
     facility_fault_exclusion,
     has_facility_fault_signal,
     is_booking_action_request,
     is_homestay_related,
     is_service_request,
-)
-from homestay_bot.services.answer_policy import (
-    handoff_reason as determine_handoff_reason,
+    resolve_handoff_reason,
+    resolve_task_request,
 )
 from homestay_bot.services.context_retention import CustomerModelContext, HandoverBrief
 from homestay_bot.services.emergency_service import (
@@ -71,6 +76,13 @@ from homestay_bot.services.reply_plan import (
     ReplyPart,
     compose_reply_parts,
     prepare_planned_reply,
+)
+from homestay_bot.services.turn_plan import (
+    PlanOutcome,
+    failed_plan,
+    plan_kinds,
+    plan_risks,
+    usable_plan,
 )
 from homestay_bot.worker import DeferredRetryJobError
 
@@ -387,9 +399,14 @@ class GuestAssistantPort(Protocol):
         customer_context: CustomerModelContext | None = None,
         stage_timing_sink: Callable[[str, int], None] | None = None,
         guest_history: Sequence[str] | None = None,
+        turn_plan: PlanOutcome | None = None,
     ) -> AssistantDecision:
         """返回经过结构校验的客服决定；stage_timing_sink 只用于耗时观测，
-        guest_history 是客人本会话更早的消息，只用于追问沿用话题。"""
+        guest_history 是客人本会话更早的消息，只用于追问沿用话题；
+        turn_plan 是合并阶段已产生的计划，摘要一致时复用。"""
+
+    async def plan_turn(self, *, text: str, language: Language) -> PlanOutcome:
+        """产生本轮计划；任何失败都返回 failed 结果而不抛异常（Spec P1）。"""
 
     async def respond_ack(
         self,
@@ -857,6 +874,11 @@ class ConversationService:
         if self._complaint_service is not None:
             classification = self._complaint_service.classify(message.content)
             if classification.is_complaint:
+                if classification.reason == "agitated" and self._jobs is not None:
+                    # 软判定：只命中情绪词时不在请求里规划，登记合并作业后由后台在释放
+                    # 活动锁的情况下规划复核（Spec §2.3 V5-R2）。
+                    await self._enqueue_debounce(message)
+                    return
                 await self._enter_complaint_mode(
                     conversation,
                     message,
@@ -869,9 +891,17 @@ class ConversationService:
 
         # 人工接管只拦截新的高风险事项；客诉处理期间出现房态、旅游等
         # 独立低风险问题时继续由机器人回答，避免一次投诉永久阻塞客服。
+        human_reason = resolve_handoff_reason(message.content)
         if (
             conversation.mode is ConversationMode.HUMAN_ACTIVE
-            and self._determine_handoff_reason(message.content) is not None
+            and human_reason == "agitated"
+            and self._jobs is not None
+        ):
+            await self._enqueue_debounce(message)
+            return
+        if (
+            conversation.mode is ConversationMode.HUMAN_ACTIVE
+            and human_reason is not None
         ):
             await self._send_guest_reply(
                 conversation,
@@ -895,6 +925,10 @@ class ConversationService:
             return
 
         if not is_homestay_related(message.content):
+            if self._jobs is not None:
+                # 无关判定是软判定：交给合并作业规划复核，不在即时请求里等待模型。
+                await self._enqueue_debounce(message)
+                return
             await self._send_unrelated_reply(conversation)
             return
 
@@ -937,6 +971,7 @@ class ConversationService:
         if emergency.is_emergency:
             await self._escalate_emergency(conversation, merged_message, emergency)
             return
+        turn_plan: PlanOutcome | None = None
         if self._complaint_service is not None:
             classification = self._complaint_service.classify(rule_contents[0])
             for rule_content in rule_contents[1:]:
@@ -944,13 +979,29 @@ class ConversationService:
                     break
                 classification = self._complaint_service.classify(rule_content)
             if classification.is_complaint:
-                await self._enter_complaint_mode(
-                    conversation,
-                    merged_message,
-                    classification,
-                )
+                if classification.reason == "agitated":
+                    # 软判定：只命中情绪词时释放锁规划复核；计划判为非客诉则继续正常回复，
+                    # 且不通知员工（D9）。规划失败时沿用现行规则进入客诉。
+                    turn_plan = await self._plan_with_released_lock(conversation, merged_message)
+                    if turn_plan is None:
+                        return
+                if not agitated_cleared_by_plan(turn_plan, merged_message.content):
+                    await self._enter_complaint_mode(
+                        conversation,
+                        merged_message,
+                        classification,
+                    )
+                    return
+        handoff_reason = resolve_handoff_reason(merged_message.content, turn_plan)
+        if (
+            conversation.mode is ConversationMode.HUMAN_ACTIVE
+            and handoff_reason == "agitated"
+            and turn_plan is None
+        ):
+            turn_plan = await self._plan_with_released_lock(conversation, merged_message)
+            if turn_plan is None:
                 return
-        handoff_reason = self._determine_handoff_reason(merged_message.content)
+            handoff_reason = resolve_handoff_reason(merged_message.content, turn_plan)
         if conversation.mode is ConversationMode.HUMAN_ACTIVE and handoff_reason is not None:
             await self._send_guest_reply(
                 conversation,
@@ -969,9 +1020,14 @@ class ConversationService:
             await self._escalate_regular(conversation, merged_message)
             return
         if not is_homestay_related(merged_message.content):
-            await self._send_unrelated_reply(conversation)
-            return
-        await self._stage_fast_ack(conversation, merged_message)
+            if turn_plan is None:
+                turn_plan = await self._plan_with_released_lock(conversation, merged_message)
+                if turn_plan is None:
+                    return
+            if not self._plan_keeps_related(turn_plan, merged_message.content):
+                await self._send_unrelated_reply(conversation)
+                return
+        await self._stage_fast_ack(conversation, merged_message, turn_plan=turn_plan)
 
     async def process_recorded_message(self, message: IncomingMessage) -> None:
         """处理已完成入站提交的消息，供后台最终回复任务调用。"""
@@ -979,13 +1035,25 @@ class ConversationService:
         if await self._in_native_session(conversation):
             return
         message = await self._resolve_fast_ack_delivery(message)
+        turn_plan = usable_plan(
+            PlanOutcome.from_payload((message.metadata or {}).get("turn_plan")), message.content
+        )
         # 人工接管期间只丢弃当前高风险事项；房态、旅游等独立问题仍应回复，
         # 同时保留人工模式，让正在处理的客诉继续由管家跟进。
-        if (
-            conversation.mode is ConversationMode.HUMAN_ACTIVE
-            and self._determine_handoff_reason(message.content) is not None
-        ):
-            return
+        if conversation.mode is ConversationMode.HUMAN_ACTIVE:
+            reason = resolve_handoff_reason(message.content, turn_plan)
+            if reason == "agitated" and turn_plan is None:
+                # 只命中情绪词：释放锁规划复核（Spec §2.6）；计划判为非客诉时继续主回复。
+                turn_plan = await self._plan_with_released_lock(conversation, message)
+                if turn_plan is None:
+                    return
+                reason = resolve_handoff_reason(message.content, turn_plan)
+                if reason is None and self._commit_boundary is not None:
+                    # 继续主回复前先提交，释放复核时重新取得的活动锁；主回复结束后
+                    # 由 _discard_stale_final 再次加锁复查（V6-R2）。
+                    await self._commit_boundary()
+            if reason is not None:
+                return
         if await self._messages.has_newer_conversation_activity(
             conversation.id,
             message.msgid,
@@ -995,6 +1063,7 @@ class ConversationService:
             conversation,
             message,
             discard_if_stale=True,
+            turn_plan=turn_plan,
         )
 
     async def _resolve_fast_ack_delivery(
@@ -1107,11 +1176,32 @@ class ConversationService:
         advice: list[str] | None,
         *,
         extra_reply: str = "",
+        plan_outcome: PlanOutcome | None = None,
     ) -> None:
         """先登记住宿问题任务和员工通知，再发送由建议清单组装的回复。
 
         `advice` 为 None 表示模型不可用或未给出清单，回复策略会使用固定兜底。
+        `plan_outcome` 是本轮计划（含主回复失败时随异常带回的计划，已核对来源摘要）：
+        统一任务写入口判定为当前故障才建任务并用「已提交」收尾；规划失败或无计划时
+        只给安全提示并请客人确认后再登记（D14），不发「已提交」。
         """
+        resolution = resolve_task_request(plan_outcome, message.content)
+        if not resolution.register:
+            await self._notify_withdrawn(conversation, message, resolution)
+            closing = ""
+            if resolution.ask_confirm or not resolution.planned:
+                closing = (
+                    FACILITY_CONFIRM_REPLY_EN
+                    if conversation.language is Language.EN
+                    else FACILITY_CONFIRM_REPLY_ZH
+                )
+            reply = prepare_facility_advice_reply(
+                advice, conversation.language, action_reply=closing
+            )
+            if extra_reply:
+                reply = f"{extra_reply}\n\n{reply}"
+            await self._send_prepared_guest_reply(conversation, reply)
+            return
         decision = AssistantDecision(
             reply_text="", language=conversation.language, intent="facility_issue", confidence=1,
             facility_issue=FacilityIssue(scope="homestay_facility"),
@@ -1120,7 +1210,9 @@ class ConversationService:
                 description=message.content[:500],
             ),
         )
-        action_reply = await self._record_task_suggestion(conversation, message, decision)
+        action_reply = await self._record_task_suggestion(
+            conversation, message, decision, plan_outcome=plan_outcome
+        )
         # 复用请求登记的 savepoint 和失败口径，通知失败时不能沿用成功收尾。
         reply = prepare_facility_advice_reply(
             advice, conversation.language,
@@ -1137,6 +1229,8 @@ class ConversationService:
         self,
         conversation: Conversation,
         message: IncomingMessage,
+        *,
+        turn_plan: PlanOutcome | None = None,
     ) -> None:
         """按需发送快速安抚并登记最终处理任务，再提交让 worker 立即可见。"""
         jobs = self._jobs
@@ -1169,6 +1263,9 @@ class ConversationService:
         merged_guest_count = str((message.metadata or {}).get("merged_guest_count", ""))
         if merged_guest_count.isdigit() and int(merged_guest_count) > 1:
             payload["merged_guest_count"] = int(merged_guest_count)
+        if turn_plan is not None:
+            # 合并阶段已产生的计划随最终回复任务传递，后台按来源摘要复用（Spec §2.3）。
+            payload["turn_plan"] = turn_plan.to_payload()
         if fast_ack_sha256 is not None and sent_ack is not None and sent_ack.message_id is not None:
             payload["fast_ack_sha256"] = fast_ack_sha256
             if sent_ack.message_id and sent_ack.message_id.startswith("outbox:"):
@@ -1204,6 +1301,41 @@ class ConversationService:
         if self._commit_boundary is not None:
             await self._commit_boundary()
 
+    async def _plan_with_released_lock(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+    ) -> PlanOutcome | None:
+        """软判定复核的唯一规划入口：先提交释放活动锁，规划后重新加锁并按过时纪律复查。
+
+        返回 None 表示等待期间会话模式、原生人工或最新活动已变化，调用方必须丢弃本轮；
+        规划失败返回 failed 结果，调用方沿用现行保守规则。作业仍为 RUNNING，进程中断后
+        由 recover_stale 重放；客诉、任务与出站的去重键保证重放不重复副作用（Spec §2.3）。
+        没有提交边界或助手不支持规划时不规划，沿用现行规则（已知上限）。
+        """
+        planner = getattr(self._assistant, "plan_turn", None)
+        if planner is None or self._commit_boundary is None:
+            return failed_plan(message.content, "planning_unavailable")
+        mode = conversation.mode
+        await self._commit_boundary()
+        outcome: PlanOutcome = await planner(text=message.content, language=conversation.language)
+        # 重新加锁会刷新会话行；与 _discard_stale_final 同一判据复查。
+        await self._conversations.lock_activity(conversation.id)
+        if (
+            conversation.mode is not mode
+            or await self._in_native_session(conversation)
+            or await self._messages.has_newer_conversation_activity(conversation.id, message.msgid)
+        ):
+            logger.info("软判定规划结果已过时，丢弃本轮：conversation_id=%s", conversation.id)
+            return None
+        return outcome
+
+    @staticmethod
+    def _plan_keeps_related(turn_plan: PlanOutcome | None, text: str) -> bool:
+        """无关判定复核：计划成功且有任何非无关项时继续正常流程；规划失败沿用现行规则。"""
+        plan = usable_plan(turn_plan, text)
+        return plan is not None and bool(plan_kinds(plan) - {"unrelated"})
+
     async def _send_unrelated_reply(self, conversation: Conversation) -> None:
         """发送固定的非民宿问题边界说明。"""
         await self._send_guest_reply(
@@ -1237,24 +1369,13 @@ class ConversationService:
         compact = re.sub(r"\s+", "", question)
         return tuple(dict.fromkeys((question, flattened, compact)))
 
-    @classmethod
-    def _determine_handoff_reason(cls, question: str) -> str | None:
-        """在原文及跨消息空白归一化文本中识别人工接管原因。"""
-        return next(
-            (
-                reason
-                for policy_question in cls._policy_questions(question)
-                if (reason := determine_handoff_reason(policy_question)) is not None
-            ),
-            None,
-        )
-
     async def _process_model_reply(
         self,
         conversation: Conversation,
         message: IncomingMessage,
         *,
         discard_if_stale: bool = False,
+        turn_plan: PlanOutcome | None = None,
     ) -> None:
         """执行耗时模型和业务副作用，并输出一行主链耗时汇总（1.40.2）。
 
@@ -1269,6 +1390,7 @@ class ConversationService:
                 message,
                 discard_if_stale=discard_if_stale,
                 timing=timing,
+                turn_plan=turn_plan,
             )
         except BaseException as error:
             timing.outcome = f"error:{type(error).__name__}"
@@ -1301,10 +1423,12 @@ class ConversationService:
         *,
         discard_if_stale: bool,
         timing: "_ReplyTiming",
+        turn_plan: PlanOutcome | None = None,
     ) -> None:
         """执行耗时模型和业务副作用；快速安抚已在前一事务发送。
 
-        timing 只收集耗时与结果类别，不参与任何分支判断。
+        timing 只收集耗时与结果类别，不参与任何分支判断。turn_plan 为合并阶段已产生
+        的计划，交给 respond 复用；之后设施、任务、接管与危险补漏都读决定里的同一份计划。
         """
 
         stay_repository = (
@@ -1398,6 +1522,9 @@ class ConversationService:
             timing.context_ms = max(0, round((monotonic() - context_started) * 1000))
             respond_started = monotonic()
             try:
+                respond_options: dict[str, Any] = {}
+                if turn_plan is not None:
+                    respond_options["turn_plan"] = turn_plan
                 decision = await self._assistant.respond(
                     guest_identifier=message.external_userid,
                     language=conversation.language,
@@ -1405,6 +1532,7 @@ class ConversationService:
                     customer_context=model_context,
                     stage_timing_sink=timing.add_stage,
                     guest_history=await self._earlier_guest_messages(conversation, message),
+                    **respond_options,
                 )
             finally:
                 timing.respond_ms = max(0, round((monotonic() - respond_started) * 1000))
@@ -1418,21 +1546,27 @@ class ConversationService:
             timing.outcome = "tourism_failure"
             await self._escalate_tourism_failure(conversation, message, error)
             return
-        except AssistantUnavailableError:
+        except AssistantUnavailableError as error:
             if discard_if_stale and await self._discard_stale_final(
                 conversation,
                 message,
             ):
                 timing.outcome = "stale_discarded"
                 return
-            if self._determine_handoff_reason(message.content) is None and self._is_facility_issue(
-                message.content, None
+            # 规划成功、主回复失败时异常带回本轮计划；摘要不一致按无计划处理（V6-R1）。
+            failed_plan_outcome = usable_plan(error.plan_outcome, message.content)
+            failure_resolution = resolve_task_request(failed_plan_outcome, message.content)
+            if (
+                resolve_handoff_reason(message.content, failed_plan_outcome) is None
+                and self._is_facility_issue(message.content, None)
+                and (failed_plan_outcome is None or failure_resolution.safety_tip)
             ):
                 timing.outcome = "facility"
                 await self._handle_facility_issue(
                     conversation,
                     message,
                     None,
+                    plan_outcome=failed_plan_outcome,
                 )
                 return
             timing.outcome = "assistant_unavailable"
@@ -1466,6 +1600,21 @@ class ConversationService:
                 EmergencyClassification(True, decision.handoff_reason.split(":", 1)[1]),
             )
             return
+        plan = usable_plan(decision.turn_plan, message.content)
+        risks = plan_risks(plan)
+        lexical = self._emergency.classify(message.content)
+        hazard = next(
+            (risk.split(":", 1)[1] for risk in sorted(risks) if risk.startswith("current_hazard:")),
+            None,
+        )
+        if hazard is not None and not lexical.is_emergency:
+            # 危险语义补漏只升不降：计划判为当前危险而词面未命中时完整处置并接管（Spec §2.6）。
+            await self._escalate_emergency(
+                conversation, message, EmergencyClassification(True, hazard)
+            )
+            return
+        if "possible_hazard" in risks and not (lexical.is_possible or lexical.is_emergency):
+            await self._answer_possible_danger(conversation, message)
         confirmation_reply = ""
         current_stay: dict[str, Any] | None = None
         if stay_repository is not None:
@@ -1538,17 +1687,20 @@ class ConversationService:
                     source_message_id=message.msgid,
                     today=today,
                 )
-        local_handoff_reason = self._determine_handoff_reason(message.content)
+        local_handoff_reason = resolve_handoff_reason(message.content, decision.turn_plan)
         if (
             local_handoff_reason is None
             and decision.handoff_reason is None
             and self._is_facility_issue(message.content, decision)
+            # 计划判定没有当前故障（已修好、否定、过去发生）时不进设施流程（Spec §2.5）。
+            and (plan is None or resolve_task_request(plan, message.content).safety_tip)
         ):
             timing.outcome = "facility"
             await self._handle_facility_issue(
                 conversation,
                 message,
                 decision.facility_advice,
+                plan_outcome=plan,
                 extra_reply="\n\n".join(
                     filter(
                         None,
@@ -1562,7 +1714,9 @@ class ConversationService:
             )
             return
         # 先登记请求和通知，再根据实际结果组织收尾，模型不能生成成功承诺。
-        action_reply = await self._record_task_suggestion(conversation, message, decision)
+        action_reply = await self._record_task_suggestion(
+            conversation, message, decision, plan_outcome=plan
+        )
         high_risk = bool(local_handoff_reason or decision.handoff_reason)
         handoff_reason = local_handoff_reason or decision.handoff_reason
         if handoff_reason:
@@ -1642,23 +1796,47 @@ class ConversationService:
             message.msgid,
         )
 
+    async def _notify_withdrawn(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        resolution: TaskResolution,
+    ) -> None:
+        """客人撤回服务时通知管家（D11）；不自动取消已有任务，通知失败不影响客人回复。"""
+        if not resolution.withdrawn:
+            return
+        try:
+            async with self._savepoint_factory():
+                await self._notify_employee(
+                    conversation,
+                    message,
+                    "客人撤回申请：" + "、".join(resolution.withdrawn) + "（未自动取消已有任务）",
+                )
+        except Exception as error:
+            logger.warning("撤回通知入队失败：error_type=%s", type(error).__name__)
+
     async def _record_task_suggestion(
         self,
         conversation: Conversation,
         message: IncomingMessage,
         decision: AssistantDecision,
+        *,
+        plan_outcome: PlanOutcome | None = None,
     ) -> str:
-        """先幂等登记请求，隔离失败事务；仅从实际结果生成客人收尾。"""
+        """先幂等登记请求，隔离失败事务；仅从实际结果生成客人收尾。
+
+        是否登记只由统一任务写入口 `resolve_task_request` 决定（Spec §2.5）：词面信号与
+        模型建议都不能单独授权。规划失败而词面命中时只回确认话术、不通知管家（D13）。
+        """
         decision.action_result = GuestActionResult()
         if decision.facility_issue and decision.facility_issue.scope in {"private", "external"}:
             return ""
-        booking = is_booking_action_request(message.content)
-        requested = (
-            any(is_service_request(text) for text in self._policy_questions(message.content))
-            or booking
-            or self._is_facility_issue(message.content, decision)
-        )
-        if not requested:
+        english = conversation.language is Language.EN
+        resolution = resolve_task_request(plan_outcome, message.content)
+        await self._notify_withdrawn(conversation, message, resolution)
+        if not resolution.register:
+            if resolution.ask_confirm:
+                return TASK_CONFIRM_REPLY_EN if english else TASK_CONFIRM_REPLY_ZH
             return ""
         suggestion = decision.task_suggestion
         if suggestion is None:
@@ -1667,13 +1845,8 @@ class ConversationService:
                 description=message.content[:500],
             )
         # ponytail: 一条来源消息只有一个任务键；多事项合并，需独立分派时再拆任务模型。
-        clauses = re.split(r"[，,；;。]|并且|并|另外|以及|同时| and ", message.content)
-        multiple = sum(
-            is_service_request(clause) or has_facility_fault_signal(clause)
-            for clause in clauses
-        ) > 1
+        task_type = resolution.task_type or suggestion.task_type
         description = TaskSuggestion.redact_sensitive_description(message.content)[:500]
-        english = conversation.language is Language.EN
         failure = (
             "Your request could not be registered. Please contact the host directly."
             if english
@@ -1699,9 +1872,7 @@ class ConversationService:
                 task = await self._business_tasks.record_ai_suggestion(
                     customer_id=conversation.customer_id,
                     source_message_id=message.msgid,
-                    task_type=BusinessTaskType.SPECIAL_SERVICE
-                    if booking or multiple
-                    else suggestion.task_type,
+                    task_type=task_type,
                     description=description,
                     property_id=property_id,
                     service_date=None,

@@ -133,3 +133,99 @@ async def test_release_and_staff_message_serialize_on_conversation(pg_engine):  
             now=now,
             automatic=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_soft_judgment_planning_holds_no_lock_and_drops_stale_results(
+    pg_engine,  # noqa: F811
+) -> None:
+    """合并作业里的软判定规划：等待期间不持活动锁，新客人活动可推进；结果过时则不建客诉、
+    不排最终任务（回复泛用化 Spec §2.3 V4-R2、V6-R2，§2.7）。"""
+    from datetime import UTC, datetime
+
+    from homestay_bot.domain.enums import ConversationMode, Language, MessageOrigin
+    from homestay_bot.domain.models import ComplaintReview, Conversation
+    from homestay_bot.repositories.complaints import SQLAlchemyComplaintRepository
+    from homestay_bot.repositories.conversations import (
+        SQLAlchemyConversationRepository,
+        SQLAlchemyMessageRepository,
+    )
+    from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
+    from homestay_bot.services.complaint_service import ComplaintService
+    from homestay_bot.services.conversation_service import ConversationService
+    from homestay_bot.services.emergency_service import EmergencyService
+    from homestay_bot.services.message_service import IncomingMessage, MessageService
+    from homestay_bot.services.turn_plan import failed_plan
+
+    factory = async_sessionmaker(pg_engine, expire_on_commit=False)
+
+    def guest(msgid: str, content: str) -> IncomingMessage:
+        """合成客人消息。"""
+        return IncomingMessage(
+            msgid=msgid, open_kfid="synthetic-kf", external_userid="synthetic-guest",
+            origin=MessageOrigin.GUEST, msgtype="text", content=content,
+            sent_at=datetime.now(UTC),
+        )
+
+    source = guest("synthetic-soft-1", "第一次来太开心了!!!")
+    async with factory() as session:
+        conversations = SQLAlchemyConversationRepository(session)
+        conversation = await conversations.get_or_create(source)
+        await MessageService(SQLAlchemyMessageRepository(session)).record_incoming(
+            conversation.id, source
+        )
+        await session.commit()
+        conversation_id = conversation.id
+
+    planning = asyncio.Event()
+    release = asyncio.Event()
+
+    class _Planner:
+        """规划停在门闩处；主回复不应被调用。"""
+
+        async def plan_turn(self, *, text: str, language: Language):
+            planning.set()
+            await release.wait()
+            return failed_plan(text, "timeout")
+
+        async def respond(self, **kwargs):
+            raise AssertionError("过时结果不应进入主回复")
+
+    async with factory() as session:
+        service = ConversationService(
+            conversations=SQLAlchemyConversationRepository(session),
+            messages=MessageService(SQLAlchemyMessageRepository(session)),
+            assistant=_Planner(),  # type: ignore[arg-type]
+            emergency_service=EmergencyService(),
+            wecom=TransactionalOutboxWeCom(session, source_message_id=source.msgid),
+            agent_id=1,
+            duty_employee_userids=[],
+            jobs=SQLAlchemyJobRepository(session),
+            complaint_service=ComplaintService(),
+            complaint_reviews=SQLAlchemyComplaintRepository(session),
+            commit_boundary=session.commit,
+        )
+        job = asyncio.create_task(service.process_debounced_message(source))
+        try:
+            await asyncio.wait_for(planning.wait(), 5)
+            # 规划等待期间另一事务能立即锁住会话行并写入新客人消息（锁超时 5 秒会报错）。
+            async with factory() as other:
+                await SQLAlchemyConversationRepository(other).lock_activity(conversation_id)
+                await MessageService(SQLAlchemyMessageRepository(other)).record_incoming(
+                    conversation_id, guest("synthetic-soft-2", "还有个问题")
+                )
+                await other.commit()
+            release.set()
+            await asyncio.wait_for(job, 5)
+            await session.commit()
+        finally:
+            release.set()
+            if not job.done():
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
+
+    async with factory() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        assert conversation.mode is ConversationMode.BOT_ACTIVE
+        assert await session.scalar(select(func.count()).select_from(ComplaintReview)) == 0
+        assert await session.scalar(select(func.count()).select_from(Job)) == 0

@@ -849,6 +849,8 @@ def _deferred_message_from_payload(payload: dict[str, Any]) -> IncomingMessage:
         "fast_ack_sha256",
         "fast_ack_outbox_id",
         "merged_guest_count",
+        # 合并阶段软判定复核产生的轮次计划；后台按来源摘要复用（回复泛用化 Spec §2.3）。
+        "turn_plan",
     ):
         if payload.get(key):
             message_metadata[key] = str(payload[key])
@@ -1164,6 +1166,17 @@ class SessionKnowledgeRepository:
                 address_hint=room.address_hint,
                 parking_instructions=room.parking_instructions,
             )
+
+    async def find_property_by_room(self, room: str) -> int | None:
+        """按房号读取启用房源编号（轮次计划的 target_room 只作检索目标），返回前关闭会话。"""
+        async with self._factory() as session:
+            found: int | None = await session.scalar(
+                select(PropertyProfile.id)
+                .where(PropertyProfile.room_number == room, PropertyProfile.is_active.is_(True))
+                .order_by(PropertyProfile.id)
+                .limit(1)
+            )
+            return found
 
 
 class SessionKnowledgeVectorStore:
@@ -4418,7 +4431,9 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 # 紧急情况后续的固定处置答复取「紧急处置」审核知识，缺失时回退为安全提示。
                 emergency_knowledge=SQLAlchemyKnowledgeRepository(session),
                 defer_model=not deferred,
-                commit_boundary=session.commit if not deferred else None,
+                # 后台作业同样注入提交边界：软判定规划前后需要提交释放活动锁，规划与主回复
+                # 等待都不持锁（Spec §2.3 V6-R2）；作业仍为 RUNNING，中断后由 recover_stale 重放。
+                commit_boundary=session.commit,
             )
             if deferred:
                 await _dispatch_deferred_message(

@@ -45,6 +45,7 @@ from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.delivery_rewrite_job import GuestDeliveryRewriteJobService
 from homestay_bot.services.emergency_service import EmergencyService
 from homestay_bot.services.message_service import IncomingMessage, MessageService
+from tests.plan_helpers import plan_for
 
 
 @pytest.mark.asyncio
@@ -569,6 +570,8 @@ async def test_facility_task_and_two_outbox_messages_commit_together() -> None:
             conversation,
             message,
             decision.facility_advice,
+            # 建任务需要已核验计划判定为当前故障（回复泛用化 Spec §2.5）。
+            plan_outcome=plan_for(message.content, ("facility_fault", message.content)),
         )
         await session.commit()
 

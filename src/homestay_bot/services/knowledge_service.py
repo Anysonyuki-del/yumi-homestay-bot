@@ -468,6 +468,14 @@ class PropertyCardRepository(Protocol):
         """返回房源卡片；房间不存在时返回空。"""
 
 
+@runtime_checkable
+class PropertyRoomRepository(Protocol):
+    """可选：按客人点名的房号找到本地房源编号。没实现时房号不参与检索。"""
+
+    async def find_property_by_room(self, room: str) -> int | None:
+        """返回启用房源的编号；房号不存在时返回空。"""
+
+
 # 房源卡片以负的房源编号作为来源编号，与知识条目编号区分，便于审计时认出是卡片。
 PROPERTY_CARD_CATEGORY = "房源资料"
 
@@ -645,6 +653,7 @@ class KnowledgeService:
         property_id: int | None = None,
         target_date: date | None = None,
         target_end_date: date | None = None,
+        reserved_property_slots: int = 0,
     ) -> list[KnowledgeSnippet]:
         """按当前问题返回相关且受字符预算约束的审核知识。"""
         retrieval = await self.retrieve_detailed(
@@ -655,6 +664,7 @@ class KnowledgeService:
             property_id=property_id,
             target_date=target_date,
             target_end_date=target_end_date,
+            reserved_property_slots=reserved_property_slots,
         )
         return retrieval.snippets
 
@@ -668,12 +678,16 @@ class KnowledgeService:
         property_id: int | None = None,
         target_date: date | None = None,
         target_end_date: date | None = None,
+        reserved_property_slots: int = 0,
     ) -> KnowledgeRetrieval:
         """按相关度选取完整问答单元，放不进预算的整条跳过并计数。
 
         一条审核问答是最小证据单元：截断会切掉答案尾部的收费、时间、否定或
         适用条件，把「需收费」截成「可以」，比不给证据更危险。因此只整条放入，
         剩余预算不够就跳过换下一条；同分时按编号排序只为结果可复现。
+
+        `reserved_property_slots` 为目标房间的专属条目（scope=property）单独保留的名额
+        （Spec D8）：相关的房间专属条目先于通用条目入选，不靠整体放大 limit。
         """
         card_snippet = await self._property_card_snippet(property_id, language)
         if card_snippet is not None:
@@ -714,6 +728,13 @@ class KnowledgeService:
         ]
         semantic_ids = await self._semantic_ranking(language, query, entries)
         ranked = self._fuse(keyword_ranked, semantic_ids, entries)
+        if property_id is not None and reserved_property_slots > 0:
+            reserved = [entry for entry in ranked if entry.scope == "property"][
+                :reserved_property_slots
+            ]
+            # 专属条目移到最前，占用同一份预算；其余仍按相关度排序。
+            ranked = [*reserved, *(entry for entry in ranked if entry not in reserved)]
+            limit += len(reserved)
         snippets: list[KnowledgeSnippet] = []
         used_chars = 0
         budget_skipped = 0
@@ -753,6 +774,16 @@ class KnowledgeService:
             budget_skipped=budget_skipped,
             matched=matched,
         )
+
+    async def find_property_by_room(self, room: str) -> int | None:
+        """把客人点名的房号映射为本地房源编号；仓储不支持或读取失败时返回空。"""
+        if not isinstance(self._repository, PropertyRoomRepository):
+            return None
+        try:
+            return await self._repository.find_property_by_room(room)
+        except Exception as error:
+            logger.warning("房号映射失败，本轮不按房号检索：error_type=%s", type(error).__name__)
+            return None
 
     async def _property_card_snippet(
         self, property_id: int | None, language: Language

@@ -237,6 +237,7 @@ def test_runner_preserves_grounded_price_evidence(monkeypatch) -> None:
             ],
             knowledge_gap=False,
             staff_confirmation_required=True,
+            turn_plan=None,
         )
 
     monkeypatch.setattr(DeepSeekGuestAssistant, "respond", respond)
@@ -377,6 +378,7 @@ def test_runner_facility_reply_does_not_claim_submission(monkeypatch) -> None:
             reply_parts=[],
             knowledge_gap=False,
             staff_confirmation_required=False,
+            turn_plan=None,
         )
 
     monkeypatch.setattr(DeepSeekGuestAssistant, "respond", respond)
@@ -406,6 +408,7 @@ def test_runner_passes_the_scenario_confirmed_stay(monkeypatch) -> None:
             reply_parts=[],
             knowledge_gap=False,
             staff_confirmation_required=False,
+            turn_plan=None,
         )
 
     monkeypatch.setattr(DeepSeekGuestAssistant, "respond", respond)

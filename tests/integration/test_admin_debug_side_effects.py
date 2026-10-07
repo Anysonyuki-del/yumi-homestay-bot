@@ -163,7 +163,12 @@ class ProductionToolCompletions:
         self.requests: list[dict[str, object]] = []
 
     async def create(self, **kwargs):
-        """依次返回 tool call 和 AssistantDecision JSON。"""
+        """规划请求返回整句房态计划；主链依次返回 tool call 和 AssistantDecision JSON。"""
+        if "意图规划器" in str(kwargs["messages"][0]["content"]):
+            text = json.loads(kwargs["messages"][-1]["content"])["guest_text"]
+            plan = {"items": [{"id": 1, "kind": "stay_query", "quote": text, "start": 0}]}
+            message = SimpleNamespace(content=json.dumps(plan, ensure_ascii=False), tool_calls=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
         self.requests.append(kwargs)
         if len(self.requests) == 1:
             function = SimpleNamespace(

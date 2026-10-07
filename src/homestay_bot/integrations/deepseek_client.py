@@ -35,9 +35,8 @@ from homestay_bot.services.answer_policy import (
     is_service_request,
     is_static_service_fee,
     is_transaction_sensitive,
-)
-from homestay_bot.services.answer_policy import (
-    handoff_reason as determine_handoff_reason,
+    resolve_handoff_reason,
+    resolve_task_request,
 )
 from homestay_bot.services.context_retention import CustomerModelContext
 from homestay_bot.services.fact_policy import FACT_SOURCE_RULE_EN, FACT_SOURCE_RULE_ZH
@@ -58,6 +57,7 @@ from homestay_bot.services.knowledge_evidence_policy import (
     already_clarified,
     build_evidence_plan,
     carry_followup_topic,
+    verify_selected_evidence,
 )
 from homestay_bot.services.knowledge_service import (
     KnowledgeService,
@@ -80,6 +80,15 @@ from homestay_bot.services.reply_plan import (
 from homestay_bot.services.stay_date_range import (
     validate_stay_date_range,
     wuhan_today,
+)
+from homestay_bot.services.turn_plan import (
+    PlanItem,
+    PlanOutcome,
+    failed_plan,
+    plan_kinds,
+    planner_messages,
+    usable_plan,
+    verify_turn_plan,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,6 +257,34 @@ _ASSISTANT_FAILURE_REPLIES = {
     ),
 }
 
+# 计划里这些类型表示客人在问或要求本店事项；只有店外、寒暄、历史等项时不算本店专属。
+_PROPERTY_FACT_KINDS = frozenset({
+    "static_fact", "stay_query", "catalog_query", "booking_request", "service_request",
+    "lost_item_report", "facility_fault", "request_withdraw",
+})
+# 同时开放的子问题检索最多几项，每项单独限量，合并后不超过主调用请求预算。
+_PLAN_RETRIEVAL_ITEMS = 4
+_PLAN_ITEM_KNOWLEDGE_LIMIT = 4
+_PLAN_ITEM_KNOWLEDGE_CHARS = 3_000
+_PLAN_KNOWLEDGE_TOTAL_CHARS = 18_000
+# D8：目标房间专属知识在检索中单独保留的名额。
+_TARGET_ROOM_RESERVED_SLOTS = 3
+_PRICE_DATES_REPLY_ZH = "请问您计划哪天入住、住几晚？我帮您查一下参考价。"
+_PRICE_DATES_REPLY_EN = (
+    "Which dates would you like to stay? I'll check the reference price for you."
+)
+# 无日期问价由系统追问日期时附在系统提示后，避免模型重复追问或自行报价。
+_PRICE_WITHHELD_RULE = (
+    "本轮客人问的房价缺少入住日期，系统会单独追问日期：你不要回答房价、不要追问日期，"
+    "只回答其他问题；没有其他问题时 reply_text 留空。"
+)
+_EVIDENCE_SELECTION_RULE = (
+    "本轮信封 turn_plan 列出了需要用审核知识回答的本店事实项（item_id 与 question）。"
+    "请在 evidence_selection 中为每个这样的项给出 answer_ids（直接回答该项的知识 source_id）"
+    "和 related_ids（相关但不直接回答的 source_id）；知识里没有依据时 answer_ids 为空列表。"
+    "编号只能取自 approved_reference_data.knowledge。"
+)
+
 _HIGH_RISK_CONTEXT_PATTERN = re.compile(
     r"退款|退钱|退费|投诉|差评|举报|赔偿|赔付|平台介入|refund|complaint",
     re.IGNORECASE,
@@ -255,7 +292,16 @@ _HIGH_RISK_CONTEXT_PATTERN = re.compile(
 
 
 class AssistantUnavailableError(RuntimeError):
-    """表示普通模型无法生成可安全发送的客服决定。"""
+    """表示普通模型无法生成可安全发送的客服决定。
+
+    `plan_outcome` 只由适配器本地填写：本轮规划已完成、随后主回复失败时带上这份计划，
+    会话层核对来源摘要后据此判断设施与任务（Spec V6-R1）；规划未完成时为空，即无计划。
+    """
+
+    def __init__(self, *args: object, plan_outcome: PlanOutcome | None = None) -> None:
+        """保存可选的本轮计划，不改变异常消息。"""
+        super().__init__(*args)
+        self.plan_outcome = plan_outcome
 
 
 class BookingFields(BaseModel):
@@ -296,6 +342,14 @@ class FacilityIssue(BaseModel):
     scope: Literal["homestay_facility", "private", "external", "uncertain"]
 
 
+class EvidenceSelection(BaseModel):
+    """主调用为一个 static_fact 计划项选择的审核知识编号（Spec §2.4），只是候选，须本地核验。"""
+
+    item_id: int
+    answer_ids: list[int] = Field(default_factory=list, max_length=8)
+    related_ids: list[int] = Field(default_factory=list, max_length=8)
+
+
 class AssistantDecision(BaseModel):
     """约束模型每轮回复、风险标记和员工提醒决定。"""
 
@@ -321,6 +375,20 @@ class AssistantDecision(BaseModel):
     facility_issue: FacilityIssue | None = None
     # 设施故障时给客人的短建议清单；回复的开头、结尾与标点由本地组装。
     facility_advice: list[str] | None = None
+    evidence_selection: list[EvidenceSelection] | None = None
+    # 本轮已核验计划只由适配器本地填写，模型回传的同名字段在 respond 出口一律覆盖。
+    turn_plan: PlanOutcome | None = Field(default=None, exclude=True)
+
+    @field_validator("evidence_selection", mode="before")
+    @classmethod
+    def ignore_invalid_evidence_selection(cls, value: Any) -> list[EvidenceSelection] | None:
+        """选择格式异常时整体视为未回传，回到现行证据计划，不让坏格式否决回复。"""
+        if not isinstance(value, list) or not value:
+            return None
+        try:
+            return [EvidenceSelection.model_validate(item) for item in value]
+        except ValidationError:
+            return None
 
     @field_validator("facility_advice", mode="before")
     @classmethod
@@ -721,6 +789,23 @@ def assistant_decision_schema() -> dict[str, Any]:
                     {"type": "null"},
                 ]
             },
+            "evidence_selection": {
+                "anyOf": [
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "item_id": {"type": "integer"},
+                                "answer_ids": {"type": "array", "items": {"type": "integer"}},
+                                "related_ids": {"type": "array", "items": {"type": "integer"}},
+                            },
+                            "required": ["item_id", "answer_ids", "related_ids"],
+                        },
+                    },
+                    {"type": "null"},
+                ]
+            },
         },
     }
 
@@ -744,8 +829,13 @@ class DeepSeekGuestAssistant:
         tool_executor: ReadOnlyToolExecutor | None = None,
         local_date_provider: Callable[[], date] | None = None,
         faq_candidate_context: FaqCandidateContextService | None = None,
+        plan_turns: bool = False,
     ) -> None:
-        """注入 DeepSeek、知识、旅游搜索、候选上下文和只读工具。"""
+        """注入 DeepSeek、知识、旅游搜索、候选上下文和只读工具。
+
+        `plan_turns` 为真时 `respond` 在检索前产生轮次计划（Spec P1，V-a）；生产与回复门禁
+        装配都开启。为假时不规划，各能力按「无计划」回退，供只测单一环节的离线用例使用。
+        """
         self._chat_client = chat_client
         self._tourism_searcher = tourism_searcher
         self._knowledge = knowledge
@@ -754,6 +844,46 @@ class DeepSeekGuestAssistant:
         self._tool_executor = tool_executor
         self._local_date_provider = local_date_provider or _wuhan_today
         self._faq_candidate_context = faq_candidate_context
+        self._plan_turns = plan_turns
+
+    async def plan_turn(self, *, text: str, language: Language) -> PlanOutcome:
+        """产生本轮计划的唯一入口：一次无工具短调用，结果经本地核验（Spec P1）。
+
+        超时（D5：6 秒）、调用异常、格式或 Schema 不符、全部摘录失效都返回失败结果，
+        不抛异常；下游按各能力的失败回退处理。只记状态、原因类别、项数与耗时，不记正文。
+        """
+        del language  # 规划提示固定用中文描述类型；客人原文语言不影响类型枚举。
+        started = monotonic()
+        try:
+            response = await asyncio.wait_for(
+                self._chat_client.chat.completions.create(
+                    model=self._model,
+                    messages=planner_messages(
+                        text[: MODEL_BUDGET.planning_text_chars], self._local_date_provider()
+                    ),
+                    response_format={"type": "json_object"},
+                    max_tokens=MODEL_BUDGET.planning_max_tokens,
+                    extra_body={"thinking": {"type": "disabled"}},
+                    timeout=MODEL_BUDGET.planning_timeout_seconds,
+                ),
+                timeout=MODEL_BUDGET.planning_timeout_seconds,
+            )
+            content = response.choices[0].message.content or ""
+        except TimeoutError:
+            outcome = failed_plan(text, "timeout")
+        except Exception as error:
+            logger.info("轮次规划调用失败：error_type=%s", type(error).__name__)
+            outcome = failed_plan(text, "call_failed")
+        else:
+            outcome = verify_turn_plan(content, text, today_provider=self._local_date_provider)
+        logger.info(
+            "轮次规划：status=%s reason=%s items=%s elapsed_ms=%s",
+            outcome.status,
+            outcome.reason or "-",
+            len(outcome.plan.items) if outcome.plan else 0,
+            max(0, round((monotonic() - started) * 1000)),
+        )
+        return outcome
 
     async def respond_ack(
         self,
@@ -955,8 +1085,16 @@ class DeepSeekGuestAssistant:
         tool_grounded: bool = False,
         language: Language | None = None,
         live_grounding: str = "",
+        guest_question: str | None = None,
+        turn_plan: PlanOutcome | None = None,
+        selection_dates: tuple[date | None, date | None] = (None, None),
     ) -> AssistantDecision:
         """校验模型 JSON，并执行确定性风险归一化。
+
+        guest_question 是客人本轮原文（未接上文话题），接管理由与任务判定按它和
+        turn_plan 统一计算（Spec §2.5、§2.6）；缺省时用 question_text。
+        turn_plan 规划成功且模型回传了 evidence_selection 时，静态事实按核验后的选择作答，
+        否则回到现行证据计划（Spec §2.4）。
 
         live_grounding 是本轮交给模型的实时查询正文：一句多问时模型据此写天气等时效
         信息，店外状态过滤要把它当依据，否则照抄的天气也会被当成无来源断言删掉。
@@ -968,11 +1106,16 @@ class DeepSeekGuestAssistant:
         evidence_plan 只在静态本店问答分支传入：证据齐全时直接采用审核答案原文，
         不确认时给保守回复，模型改写不参与最终事实。
         """
-        decision = AssistantDecision.model_validate_json(output_text)
+        raw_decision = json.loads(output_text)
+        if isinstance(raw_decision, dict):
+            # 计划只由适配器本地填写：模型回传的同名字段直接丢弃，不能借它影响校验结果。
+            raw_decision.pop("turn_plan", None)
+        decision = AssistantDecision.model_validate(raw_decision)
         # 会话语言由有效客人消息确定，模型回传的语言不能覆盖本地切换规则。
         if language is not None:
             decision = decision.model_copy(update={"language": language})
-        local_handoff_reason = determine_handoff_reason(question_text)
+        guest_text = question_text if guest_question is None else guest_question
+        local_handoff_reason = resolve_handoff_reason(guest_text, turn_plan)
         semantic_emergency = decision.handoff_reason in {
             "emergency:fire",
             "emergency:gas",
@@ -992,8 +1135,8 @@ class DeepSeekGuestAssistant:
         ):
             # 人工接管任务只能由本地规则创建，不能信任模型自行提出。
             updates["task_suggestion"] = None
-        if not is_service_request(question_text):
-            # 历史、摘要和模型推断都不能替代本轮客人的服务授权。
+        if not resolve_task_request(turn_plan, guest_text).register:
+            # 统一任务写入口：历史、撤回、否定、规划失败和模型推断都不能替代本轮服务授权。
             updates["task_suggestion"] = None
         if (excluded_scope := facility_fault_exclusion(question_text)) is not None:
             # 私人物品和外部场所归属由本地证据覆盖模型误判。
@@ -1003,7 +1146,7 @@ class DeepSeekGuestAssistant:
             updates["booking_fields"] = None
             if decision.intent == "booking_confirmed":
                 updates["intent"] = "booking_inquiry"
-        property_specific = is_property_specific(question_text)
+        property_specific = self._plan_property_specific(question_text, guest_text, turn_plan)
         transaction_sensitive = is_transaction_sensitive(
             question_text
         ) and not is_static_service_fee(question_text)
@@ -1105,6 +1248,11 @@ class DeepSeekGuestAssistant:
                 }
             )
         normalized = decision.model_copy(update=updates)
+        selection_plan = self._selection_evidence_plan(
+            decision, guest_text, turn_plan, knowledge_evidence, selection_dates
+        )
+        if selection_plan is not None:
+            evidence_plan = selection_plan
         if evidence_plan is not None and self._plan_handles_reply(
             evidence_plan,
             normalized,
@@ -1154,6 +1302,156 @@ class DeepSeekGuestAssistant:
                 "faq_canonical_question": canonical_question,
                 "faq_category": category,
             }
+        )
+
+    @staticmethod
+    def _plan_property_specific(
+        question_text: str, guest_text: str, turn_plan: PlanOutcome | None
+    ) -> bool:
+        """本店专属判定：计划成功且没有任何本店事项时，词面的「你们」不再单独否决回复。
+
+        例如「你们推荐什么景点」只有店外信息项，按通用问题回答，并照常经过本店事实过滤。
+        """
+        specific = is_property_specific(question_text)
+        plan = usable_plan(turn_plan, guest_text)
+        if specific and plan is not None and not plan_kinds(plan) & _PROPERTY_FACT_KINDS:
+            return False
+        return specific
+
+    def _selection_evidence_plan(
+        self,
+        decision: AssistantDecision,
+        guest_text: str,
+        turn_plan: PlanOutcome | None,
+        knowledge: list[Any] | None,
+        dates: tuple[date | None, date | None],
+    ) -> EvidencePlan | None:
+        """把主调用回传的证据选择逐项核验为证据计划；不可用时返回空，回到现行证据计划。
+
+        结果矩阵（Spec §2.4）：核验通过的项发审核原文；选「无」、漏选、冲突的项回未确认；
+        越界编号或跨越政策边界的项按现行证据计划单独判定。
+        """
+        plan = usable_plan(turn_plan, guest_text)
+        if plan is None or plan.plan is None or decision.evidence_selection is None:
+            return None
+        items = [item for item in plan.plan.valid_items if item.kind == "static_fact"]
+        if not items or knowledge is None:
+            return None
+        selections = {item.item_id: item for item in decision.evidence_selection}
+        parts: list[ReplyPart] = []
+        for item in items:
+            target_date, target_end_date = self._item_dates(item, dates)
+            missing = ReplyPart(question=item.question, status="missing", text="")
+            selected = selections.get(item.id)
+            if selected is None:
+                logger.info("证据选择：item=%s reason=not_selected", item.id)
+                parts.append(missing)
+                continue
+            verdict = verify_selected_evidence(
+                item.question,
+                selected.answer_ids,
+                selected.related_ids,
+                knowledge,
+                target_date=target_date,
+                target_end_date=target_end_date,
+            )
+            logger.info("证据选择：item=%s status=%s reason=%s", item.id, verdict.status,
+                        verdict.reason)
+            if verdict.status == "grounded":
+                parts.extend(verdict.parts)
+            elif verdict.status == "missing":
+                parts.append(missing)
+            else:
+                fallback = build_evidence_plan(
+                    item.question,
+                    knowledge,
+                    supporting_for_topic=self._supporting_knowledge,
+                    is_property_question=True,
+                    target_date=target_date,
+                    target_end_date=target_end_date,
+                )
+                parts.extend(fallback.parts or (missing,))
+        missing_any = any(part.status == "missing" for part in parts)
+        return EvidencePlan(
+            "insufficient" if missing_any else "grounded",
+            (),
+            tuple(part.text for part in parts if part.status == "grounded"),
+            "selection",
+            tuple(parts),
+        )
+
+    @staticmethod
+    def _item_dates(
+        item: PlanItem, dates: tuple[date | None, date | None]
+    ) -> tuple[date | None, date | None]:
+        """计划项自带合法日期时按该项（退房日不含），否则沿用本轮目标日期。"""
+        if item.check_in_date is not None and item.check_out_date is not None:
+            return item.check_in_date, item.check_out_date - timedelta(days=1)
+        return dates
+
+    async def _merge_item_knowledge(
+        self,
+        knowledge: list[Any],
+        plan_items: Sequence[PlanItem],
+        *,
+        language: Language,
+        property_id: int | None,
+        dates: tuple[date | None, date | None],
+    ) -> list[Any]:
+        """按计划的每个本店事实项单独检索，与整句结果合并去重（Spec §2.4）。
+
+        项点名房号时按该房检索并给房间专属条目保留名额（D8）；房号只作检索目标，
+        不认定住宿。员工配置的触发词与审核状态过滤由检索本身保持不变。
+        """
+        items = [item for item in plan_items if item.kind == "static_fact"]
+        if not items:
+            return knowledge
+        merged = list(knowledge)
+        seen = {getattr(entry, "source_id", None) for entry in merged}
+        used = sum(len(str(entry.question)) + len(str(entry.answer)) for entry in merged)
+        finder = getattr(self._knowledge, "find_property_by_room", None)
+        rooms: dict[str, int | None] = {}
+        for item in items[:_PLAN_RETRIEVAL_ITEMS]:
+            item_property = property_id
+            if item.target_room and finder is not None:
+                if item.target_room not in rooms:
+                    rooms[item.target_room] = await finder(item.target_room)
+                item_property = rooms[item.target_room] or property_id
+            target_date, target_end_date = self._item_dates(item, dates)
+            found = self._scope_knowledge(
+                item.question,
+                await self._knowledge.retrieve(
+                    language,
+                    item.question,
+                    limit=_PLAN_ITEM_KNOWLEDGE_LIMIT,
+                    char_budget=_PLAN_ITEM_KNOWLEDGE_CHARS,
+                    property_id=item_property,
+                    target_date=target_date,
+                    target_end_date=target_end_date,
+                    reserved_property_slots=_TARGET_ROOM_RESERVED_SLOTS,
+                ),
+            )
+            for entry in found:
+                key = getattr(entry, "source_id", None)
+                size = len(str(entry.question)) + len(str(entry.answer))
+                if key in seen or used + size > _PLAN_KNOWLEDGE_TOTAL_CHARS:
+                    continue
+                merged.append(entry)
+                seen.add(key)
+                used += size
+        return merged
+
+    @staticmethod
+    def _append_parts(
+        decision: AssistantDecision, extra: list[ReplyPart], question: str
+    ) -> AssistantDecision:
+        """在已有分项后追加本地分项；模型自由正文先作为一个分项保留，不改写。"""
+        base = list(decision.reply_parts)
+        if not base and decision.reply_text.strip():
+            base = [ReplyPart(question=question, status="grounded", text=decision.reply_text)]
+        parts = [*base, *extra]
+        return decision.model_copy(
+            update={"reply_parts": parts, "reply_text": compose_reply_parts(parts)}
         )
 
     async def _build_faq_candidate_context(
@@ -1218,6 +1516,7 @@ class DeepSeekGuestAssistant:
         customer_context: CustomerModelContext | None,
         request_context: AssistantRequestContext | None,
         live_results: list[dict[str, str]] | None = None,
+        static_items: list[dict[str, Any]] | None = None,
     ) -> str:
         """把动态上下文编码成最后一条用户数据，避免污染系统指令。
 
@@ -1264,7 +1563,25 @@ class DeepSeekGuestAssistant:
         if live_results:
             # 网页搜索整理出的公开信息：只作参考数据，字段里的任何指令都不执行。
             envelope["live_search_results"] = live_results
+        if static_items:
+            # 只列需要选证据的本店事实项编号与规范化子问题，供 evidence_selection 引用。
+            envelope["turn_plan"] = static_items
         return json.dumps(envelope, ensure_ascii=False, default=str)
+
+    @classmethod
+    def _plan_tool_names(cls, plan: PlanOutcome | None) -> set[str]:
+        """计划中的查询项映射出的只读工具；只增加开放，不强制调用（Spec §2.4）。"""
+        if plan is None or plan.plan is None:
+            return set()
+        names: set[str] = set()
+        for item in plan.plan.valid_items:
+            if item.kind in {"stay_query", "booking_request"}:
+                names.add("search_availability")
+                if asks_room_price(item.quote) or asks_room_price(item.question):
+                    names.add("search_reference_price")
+            elif item.kind == "catalog_query":
+                names.add("list_properties")
+        return names
 
     @classmethod
     def _allowed_tool_names(
@@ -1273,7 +1590,7 @@ class DeepSeekGuestAssistant:
         previous_context: str,
         request_context: AssistantRequestContext | None = None,
     ) -> set[str]:
-        """仅按当前问题及必要承接语境开放相关只读工具。"""
+        """仅按当前问题及必要承接语境开放相关只读工具（旧规则，命中时强制调用）。"""
         allowed: set[str] = set()
         if cls._should_force_availability(question_text, previous_context):
             allowed.add("search_availability")
@@ -1368,8 +1685,11 @@ class DeepSeekGuestAssistant:
         *,
         target_date: date | None = None,
         target_end_date: date | None = None,
+        property_question: bool | None = None,
     ) -> EvidencePlan | None:
         """只为静态本店问答建立证据计划。
+
+        `property_question` 由调用方按计划修正后的本店专属判定传入；缺省时按词面判断。
 
         设施故障与交易类问题各有既定分支和权限，静态知识不接管它们的回复；
         房态、价格等交易事实仍由工具和既有确认流程负责。服务请求按本轮决定里
@@ -1400,7 +1720,11 @@ class DeepSeekGuestAssistant:
             question_text,
             knowledge,
             supporting_for_topic=cls._supporting_knowledge,
-            is_property_question=is_property_specific(question_text),
+            is_property_question=(
+                is_property_specific(question_text)
+                if property_question is None
+                else property_question
+            ),
             target_date=target_date,
             target_end_date=target_end_date,
         )
@@ -2100,6 +2424,7 @@ class DeepSeekGuestAssistant:
         tool_trace_sink: Callable[[AssistantToolTrace], None] | None = None,
         stage_timing_sink: Callable[[str, int], None] | None = None,
         guest_history: Sequence[str] | None = None,
+        turn_plan: PlanOutcome | None = None,
     ) -> AssistantDecision:
         """调用 DeepSeek，并把连续失败收敛为统一领域异常。
 
@@ -2107,6 +2432,8 @@ class DeepSeekGuestAssistant:
         分支、异常或重试；为空时行为与之前完全一致。
         `guest_history` 是这位客人本会话更早的全部消息（不含本轮），只用于追问沿用
         话题（Spec F3）；为空时退回用 `messages` 里的客人消息。
+        `turn_plan` 是合并阶段已产生的计划：来源摘要与本轮正文一致时复用，否则重新规划。
+        返回的决定总是带上本轮实际使用的计划；主回复失败时计划随异常带出（V6-R1）。
         """
         question_text = latest_user_question(messages)["content"]
         if is_internal_system_probe(question_text) and not detect_property_topics(question_text):
@@ -2121,6 +2448,49 @@ class DeepSeekGuestAssistant:
                 intent="internal_system",
                 confidence=1.0,
             )
+        if turn_plan is not None and turn_plan.matches(question_text):
+            plan: PlanOutcome | None = turn_plan
+        elif self._plan_turns:
+            plan_started = monotonic()
+            try:
+                plan = await self.plan_turn(text=question_text, language=language)
+            finally:
+                _record_stage(stage_timing_sink, "plan", plan_started)
+        else:
+            plan = None
+        try:
+            decision = await self._respond_with_plan(
+                language=language,
+                messages=messages,
+                customer_context=customer_context,
+                request_context=request_context,
+                tool_trace_sink=tool_trace_sink,
+                stage_timing_sink=stage_timing_sink,
+                guest_history=guest_history,
+                plan=plan,
+            )
+        except AssistantUnavailableError as error:
+            if error.plan_outcome is None:
+                error.plan_outcome = plan
+            raise
+        return decision.model_copy(update={"turn_plan": plan})
+
+    async def _respond_with_plan(
+        self,
+        *,
+        language: Language,
+        messages: list[dict[str, str]],
+        customer_context: CustomerModelContext | None,
+        request_context: AssistantRequestContext | None,
+        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
+        stage_timing_sink: Callable[[str, int], None] | None,
+        guest_history: Sequence[str] | None,
+        plan: PlanOutcome | None,
+    ) -> AssistantDecision:
+        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
+        question_text = latest_user_question(messages)["content"]
+        plan_ok = usable_plan(plan, question_text)
+        plan_items = plan_ok.plan.valid_items if plan_ok and plan_ok.plan else ()
         earlier_guest = (
             list(guest_history)
             if guest_history is not None
@@ -2186,20 +2556,35 @@ class DeepSeekGuestAssistant:
         service_fee_followup = knowledge_question != question_text and is_static_service_fee(
             knowledge_question
         )
+        price_clarification: ReplyPart | None = None
         if not service_fee_followup and self._price_question_needs_dates(
             price_question, messages, request_context
         ):
-            # 问价没有日期时查不了参考价：直接问住哪天，不回「尚未确认」，也不调用模型。
-            return AssistantDecision(
-                reply_text=(
-                    "Which dates would you like to stay? I'll check the reference price for you."
-                    if language is Language.EN
-                    else "请问您计划哪天入住、住几晚？我帮您查一下参考价。"
-                ),
-                language=language,
-                intent="price",
-                confidence=1.0,
-            )
+            priced = [
+                item for item in plan_items
+                if item.kind in {"stay_query", "booking_request"}
+                and (asks_room_price(item.quote) or asks_room_price(item.question))
+            ]
+            if not any(item.check_in_date for item in priced):
+                clarify_text = (
+                    _PRICE_DATES_REPLY_EN if language is Language.EN else _PRICE_DATES_REPLY_ZH
+                )
+                if plan_items and len(priced) == len(plan_items):
+                    # 计划确认整轮只问无日期房价：直接问住哪天，不调用主模型。
+                    return AssistantDecision(
+                        reply_text=clarify_text, language=language, intent="price",
+                        confidence=1.0,
+                    )
+                # 其余子问题照常回答，只对房价追加日期澄清；本轮不开放参考价工具（V4-R7）。
+                price_clarification = ReplyPart(
+                    question="房价日期", status="clarification", text=clarify_text
+                )
+
+        def finish(result: AssistantDecision) -> AssistantDecision:
+            """返回前追加房价日期澄清分项；没有澄清时原样返回。"""
+            if price_clarification is None:
+                return result
+            return self._append_parts(result, [price_clarification], question_text)
 
         knowledge_started = monotonic()
         try:
@@ -2213,6 +2598,17 @@ class DeepSeekGuestAssistant:
                     target_end_date=(
                         target_end_date - timedelta(days=1) if target_end_date else None
                     ),
+                    reserved_property_slots=_TARGET_ROOM_RESERVED_SLOTS,
+                ),
+            )
+            knowledge = await self._merge_item_knowledge(
+                knowledge,
+                plan_items,
+                language=language,
+                property_id=property_id,
+                dates=(
+                    target_date,
+                    target_end_date - timedelta(days=1) if target_end_date else None,
                 ),
             )
         finally:
@@ -2295,7 +2691,7 @@ class DeepSeekGuestAssistant:
             decision = AssistantDecision(
                 reply_text="", language=language, intent="tourism", confidence=0.95
             )
-            plan = self._static_evidence_plan(
+            tourism_evidence = self._static_evidence_plan(
                 knowledge_question,
                 knowledge,
                 messages,
@@ -2304,14 +2700,16 @@ class DeepSeekGuestAssistant:
                         target_end_date - timedelta(days=1) if target_end_date else None
                     ),
             )
-            if plan is not None and plan.handles_reply:
-                decision = self._apply_evidence_plan(decision, plan, knowledge_question)
+            if tourism_evidence is not None and tourism_evidence.handles_reply:
+                decision = self._apply_evidence_plan(
+                    decision, tourism_evidence, knowledge_question
+                )
             parts = [*decision.reply_parts, *public_parts]
             # 剩下的小句没有被知识固定答案覆盖时不能提前返回：此前「武汉最近有啥玩的，
             # 天气咋样」只把天气送去联网，玩法这句既不联网也不进模型，直接丢了
             # （2026-09-30 测试号）。继续走模型，只让它回答剩下的部分。
             remaining_answered = not remaining_question or (
-                plan is not None and plan.handles_reply
+                tourism_evidence is not None and tourism_evidence.handles_reply
             )
             if (
                 remaining_answered
@@ -2319,9 +2717,9 @@ class DeepSeekGuestAssistant:
                 and not is_transaction_sensitive(remaining_question)
                 and not getattr(customer_context, "stay_confirmation", None)
             ):
-                return decision.model_copy(
+                return finish(decision.model_copy(
                     update={"reply_parts": parts, "reply_text": compose_reply_parts(parts)}
-                )
+                ))
 
         faq_started = monotonic()
         try:
@@ -2414,11 +2812,17 @@ class DeepSeekGuestAssistant:
         previous_context = "\n".join(
             str(item.get("content", "")) for item in minimized_messages[:-1]
         )
-        allowed_tool_names = self._allowed_tool_names(
+        # 旧规则命中的工具仍强制调用；计划只增加开放，不关闭旧规则要求的工具（Spec §2.4）。
+        forced_tool_names = self._allowed_tool_names(
             knowledge_question if service_fee_followup else question_text,
             previous_context,
             request_context,
         )
+        allowed_tool_names = forced_tool_names | self._plan_tool_names(plan_ok)
+        if price_clarification is not None:
+            # 无日期问价查不了参考价，由本地追问日期。
+            forced_tool_names.discard("search_reference_price")
+            allowed_tool_names.discard("search_reference_price")
         tool_definitions = [
             item
             for item in self.tool_definitions()
@@ -2443,11 +2847,20 @@ class DeepSeekGuestAssistant:
             customer_context=(None if standalone_availability else customer_context),
             request_context=request_context,
             live_results=live_results or None,
+            static_items=[
+                {"item_id": item.id, "question": item.question}
+                for item in plan_items
+                if item.kind == "static_fact"
+            ],
         )
         if live_results:
             system_prompt += (
                 _LIVE_RESULTS_RULE_EN if language is Language.EN else _LIVE_RESULTS_RULE_ZH
             )
+        if any(item.kind == "static_fact" for item in plan_items):
+            system_prompt += _EVIDENCE_SELECTION_RULE
+        if price_clarification is not None:
+            system_prompt += _PRICE_WITHHELD_RULE
         # 保留必要的上一轮对话，但最后一条用户消息固定替换为结构化数据信封。
         prompt_messages = [
             *minimized_messages[:-1],
@@ -2472,18 +2885,18 @@ class DeepSeekGuestAssistant:
                     "type": "function",
                     "function": {"name": "search_reference_price"},
                 }
-                if "search_reference_price" in allowed_tool_names
+                if "search_reference_price" in forced_tool_names
                 else {
                     "type": "function",
                     "function": {"name": "search_availability"},
                 }
-                if "search_availability" in allowed_tool_names
+                if "search_availability" in forced_tool_names
                 else (
                     {
                         "type": "function",
                         "function": {"name": "list_properties"},
                     }
-                    if "list_properties" in allowed_tool_names
+                    if "list_properties" in forced_tool_names
                     else "auto"
                 )
             )
@@ -2499,6 +2912,13 @@ class DeepSeekGuestAssistant:
             target_end_date=(
                         target_end_date - timedelta(days=1) if target_end_date else None
                     ),
+            property_question=self._plan_property_specific(
+                knowledge_question, question_text, plan
+            ),
+        )
+        selection_dates = (
+            target_date or local_today,
+            target_end_date - timedelta(days=1) if target_end_date else None,
         )
         tool_parts: list[ReplyPart] = []
         availability_fallback: AssistantDecision | None = None
@@ -2529,7 +2949,7 @@ class DeepSeekGuestAssistant:
                         or cumulative_request_chars + request_chars > MODEL_BUDGET.main_chain_chars
                     ):
                         if availability_fallback is not None:
-                            return availability_fallback
+                            return finish(availability_fallback)
                         raise AssistantUnavailableError()
                     model_calls += 1
                     cumulative_request_chars += request_chars
@@ -2558,6 +2978,9 @@ class DeepSeekGuestAssistant:
                             evidence_plan=evidence_plan,
                             language=language,
                             live_grounding="\n".join(item["result"] for item in live_results),
+                            guest_question=question_text,
+                            turn_plan=plan,
+                            selection_dates=selection_dates,
                         )
                         if tool_parts or public_parts:
                             model_parts = list(decision.reply_parts)
@@ -2574,7 +2997,7 @@ class DeepSeekGuestAssistant:
                                     language=language,
                                 )
                             parts = [*model_parts, *tool_parts, *live_parts]
-                            return decision.model_copy(
+                            return finish(decision.model_copy(
                                 update={
                                     "reply_parts": parts,
                                     "reply_text": compose_reply_parts(parts),
@@ -2587,9 +3010,12 @@ class DeepSeekGuestAssistant:
                                     "staff_confirmation_required": False,
                                     "staff_confirmation_reason": None,
                                 }
-                            )
-                        if self._plan_handles_reply(evidence_plan, decision):
-                            return decision
+                            ))
+                        if decision.reply_parts or self._plan_handles_reply(
+                            evidence_plan, decision
+                        ):
+                            # 证据计划或核验后的证据选择已接管：审核原文不再精炼改写。
+                            return finish(decision)
                         refined_reply = decision.reply_text
                         if model_calls < MODEL_BUDGET.main_calls:
                             refine_started = monotonic()
@@ -2609,9 +3035,9 @@ class DeepSeekGuestAssistant:
                             decision.language,
                             grounded_in=self._knowledge_grounding(knowledge),
                         )
-                        return decision.model_copy(
+                        return finish(decision.model_copy(
                             update={"reply_text": refined_reply}
-                        )
+                        ))
                     if self._tool_executor is None:
                         raise AssistantUnavailableError()
                     if tool_result_rounds >= MODEL_BUDGET.tool_result_rounds:
@@ -2758,7 +3184,7 @@ class DeepSeekGuestAssistant:
                 raise AssistantUnavailableError()
             except AssistantUnavailableError:
                 if availability_fallback is not None:
-                    return availability_fallback
+                    return finish(availability_fallback)
                 raise
             except (
                 IndexError,
@@ -2771,7 +3197,7 @@ class DeepSeekGuestAssistant:
                         "DeepSeek 房态结果整理失败，返回安全查询回执：error_type=%s",
                         type(error).__name__,
                     )
-                    return availability_fallback
+                    return finish(availability_fallback)
                 # 仅记校验字段位置和错误类别，不写输入值、响应正文或密钥。
                 if isinstance(error, ValidationError):
                     logger.warning(

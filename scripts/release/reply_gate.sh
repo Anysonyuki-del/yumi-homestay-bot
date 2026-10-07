@@ -56,6 +56,7 @@ REPLY_PATHS=(
   src/homestay_bot/services/model_budget.py
   src/homestay_bot/services/reply_plan.py
   src/homestay_bot/services/stay_date_range.py
+  src/homestay_bot/services/turn_plan.py
   src/homestay_bot/domain/stay_status.py
   src/homestay_bot/tools/reply_regression.py
   tests/fixtures/guest_reply_scenarios.json
