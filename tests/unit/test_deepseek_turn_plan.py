@@ -358,3 +358,18 @@ def test_unasked_attributes_and_passing_mentions_do_not_conflict() -> None:
     )
     verdict = verify_selected_evidence("宝宝一岁多，有婴儿床吗", [1], [], [crib, breakfast])
     assert verdict.status == "grounded"
+
+
+def test_related_entries_do_not_create_time_conflicts() -> None:
+    """候选门禁实测：问安静时段，模型把客厅开放时间标为相关条目，不能判成钟点冲突。"""
+    quiet = KnowledgeSnippet(
+        source_id=1, category="规则", question="晚上几点以后要保持安静？",
+        answer="每天22:00至次日8:00是安静时段。", scope="global",
+    )
+    lounge = KnowledgeSnippet(
+        source_id=2, category="公共区域", question="有公共客厅吗？几点开放？",
+        answer="一楼公共客厅9:00至21:00开放。", scope="global",
+    )
+    verdict = verify_selected_evidence("晚上几点以后要保持安静？", [1], [2], [quiet, lounge])
+    assert verdict.status == "grounded"
+    assert verdict.parts[0].text == quiet.answer

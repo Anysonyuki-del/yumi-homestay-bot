@@ -914,8 +914,8 @@ def verify_selected_evidence(
 
     1. 全部编号必须属于本轮合法候选，否则该项回到现行证据计划；
     2. 期间政策优先（D6）：同主题有特殊时期条目时以它为准，跨越生效边界交回现行计划分段；
-    3. 冲突检查覆盖 answer ∪ related ∪ 同主题同属性的全部合法候选；主题认不出时只在
-       answer 与 related 之间互查（查不出冲突不等于证明没有冲突）；
+    3. 冲突检查覆盖 answer ∪ 问法点名同一主题的全部合法候选，只查客人问到的钟点或收费；
+       主题认不出时只在 answer 之间互查，related 只参与越界核验（查不出冲突不等于证明没有冲突）；
     4. 保留指令注入与长度规则；核验通过的条目整条发出，不截断、不改写。
 
     ponytail: 冲突只按收费、金额与钟点三类规则识别，其他属性的矛盾查不出；新主题依赖
@@ -941,7 +941,6 @@ def verify_selected_evidence(
             return SelectionVerdict("invalid", "outside_validity")
         candidates = [entry for entry in candidates if _valid_during(entry, target_date, end)]
     answers = [by_id[item] for item in dict.fromkeys(answer_ids)]
-    related = [by_id[item] for item in dict.fromkeys(related_ids) if item not in answer_ids]
     topics = tuple(detect_property_topics(question))
     topic_names = {topic.name for topic in topics}
     # 同组只取问法本身点名同一主题的条目；按答案正文分组会把顺带提到主题的条目拉进来，
@@ -953,7 +952,10 @@ def verify_selected_evidence(
         and topic_names
         & {item.name for item in detect_property_topics(str(getattr(entry, "question", "")))}
     ]
-    group = list({id(entry): entry for entry in (*answers, *related, *same_group)}.values())
+    # 冲突范围：直接回答的条目与问法点名同一主题的全部合法候选。related 只用于越界核验，
+    # 不进冲突分组：它按定义不直接回答该项，同主题的 related 已在同组候选里，其余是别的
+    # 主题，钟点不同并不矛盾（候选门禁 rc-1.69.0-2 实测：安静时段与客厅开放时间被判冲突）。
+    group = list({id(entry): entry for entry in (*answers, *same_group)}.values())
     if target_date is not None:
         end = target_end_date or target_date
         if any(_crosses_validity_boundary(entry, target_date, end) for entry in group):
