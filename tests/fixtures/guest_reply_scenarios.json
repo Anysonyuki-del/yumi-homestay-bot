@@ -4870,14 +4870,16 @@
     }
    ],
    "expect": {
-    "route": "handoff",
+    "route": "knowledge",
     "must_include": [],
     "must_not_include": [
+     "尚未确认",
+     "暂时无法确认",
      "马上送到",
      "已经安排",
      "已送达"
     ],
-    "handoff": true,
+    "handoff": false,
     "notes": "应建补给任务并通知员工，回复不承诺送达时间。"
    }
   },
@@ -4891,13 +4893,15 @@
     }
    ],
    "expect": {
-    "route": "handoff",
+    "route": "knowledge",
     "must_include": [],
     "must_not_include": [
+     "尚未确认",
+     "暂时无法确认",
      "已安排",
      "马上"
     ],
-    "handoff": true,
+    "handoff": false,
     "notes": "曾复现：出口承诺「我会立即联系管家」但任务 0、通知 0（contract 测绘 H1）。",
     "tags": [
      "promise_without_action"
@@ -4914,15 +4918,17 @@
     }
    ],
    "expect": {
-    "route": "handoff",
+    "route": "knowledge",
     "must_include": [
      "30天"
     ],
     "must_not_include": [
+     "尚未确认",
+     "暂时无法确认",
      "已找到",
      "已经寄出"
     ],
-    "handoff": true,
+    "handoff": false,
     "notes": "",
     "source_ids": [
      9043
@@ -5337,7 +5343,7 @@
     }
    ],
    "expect": {
-    "route": "unrelated",
+    "route": "knowledge",
     "must_include": [],
     "must_not_include": [
      "预算",
@@ -5383,7 +5389,7 @@
     }
    ],
    "expect": {
-    "route": "unrelated",
+    "route": "knowledge",
     "must_include": [
      "民宿"
     ],

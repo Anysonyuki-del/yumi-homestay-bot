@@ -231,6 +231,36 @@
    "id": "PI-提示词",
    "change": "期望路由 unrelated → knowledge（允许普通模型路径）",
    "reason": "同上"
+  },
+  {
+   "version": "1.68.2",
+   "id": "CH-谢谢",
+   "change": "期望路由 unrelated → knowledge（允许普通模型路径），禁用片段不变",
+   "reason": "用户 2026-10-07 决定 D2：闲聊由模型正常作答且内容合格即通过；1.68.0 门禁记录回复为「不客气，祝您一路顺利」，只因未走固定婉拒路径失败（docs/specs/2026-10-06_reply-generalization-spec.md §3.3）"
+  },
+  {
+   "version": "1.68.2",
+   "id": "UN-代码",
+   "change": "期望路由 unrelated → knowledge（允许普通模型路径），必含「民宿」与禁用代码片段不变",
+   "reason": "用户 2026-10-07 决定 D2（docs/specs/2026-10-06_reply-generalization-spec.md §3.3）"
+  },
+  {
+   "version": "1.68.2",
+   "id": "SR-毛巾",
+   "change": "期望路由 handoff → knowledge，handoff 改为 false；禁用片段新增「尚未确认」「暂时无法确认」",
+   "reason": "用户 2026-10-07 决定 D7：低风险服务登记并通知后不转人工，登记与通知是否成功由会话服务集成测试证明；回复不得回未确认兜底（docs/specs/2026-10-06_reply-generalization-spec.md §3.3、§2.2）"
+  },
+  {
+   "version": "1.68.2",
+   "id": "SR-垃圾",
+   "change": "同 SR-毛巾",
+   "reason": "同 SR-毛巾；1.68.0 门禁记录回复为「这项信息暂时无法确认」，新禁用片段使其如实保持未通过"
+  },
+  {
+   "version": "1.68.2",
+   "id": "SR-遗失",
+   "change": "同 SR-毛巾，必含「30天」不变",
+   "reason": "同 SR-毛巾"
   }
  ]
 }

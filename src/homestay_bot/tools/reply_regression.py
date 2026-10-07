@@ -46,6 +46,8 @@ RERUN_TOTAL = 3
 REGRESSION_FAILURES = 2
 _SCENARIO_TIMEOUT_SECONDS = 180
 # 与 ConversationService._send_unrelated_reply 的固定话术一致。
+# 设施场景的动作收尾占位：门禁不登记任务，不能用默认成功收尾冒充动作已完成。
+_FACILITY_ACTION_PLACEHOLDER = "<动作结果由会话服务决定>"
 _UNRELATED_REPLY = "我主要协助民宿入住或武汉旅行相关问题，这类问题暂时无法回答。"
 # ponytail: 与 ConversationService._send_unrelated_reply 的文本各写一份；那边改文案时这里要同步，
 # 只影响无关问题场景的正文比对（这类场景只判路由），不影响门禁结论。
@@ -89,7 +91,9 @@ def judge(
     """判定一次运行：路由符合、必含片段全部命中、禁用片段与正则一个都不出现。
 
     必含片段的某一项可以是同义说法列表，命中其一即可；「知识」「稳定旅游」允许由
-    普通模型路径作答。运行出错一律判为不通过。
+    普通模型路径作答。场景本身期望知识缺口（`expect.knowledge_gap`）时，回「尚未确认」
+    的 unconfirmed 路径就是正确结果，不能因路由名不同判失败。运行出错或最终正文为空
+    一律判为不通过：空正文不是任何场景的合格回复（2026-10-07 回复泛用化 Spec P0）。
     """
     expect = scenario["expect"]
     final = normalize(record.get("final"))
@@ -112,9 +116,13 @@ def judge(
     ]
     got = observed_route(record)
     wanted = expect.get("route")
-    route_ok = got == wanted or (wanted in ("knowledge", "stable_tourism") and got == "model")
+    route_ok = (
+        got == wanted
+        or (wanted in ("knowledge", "stable_tourism") and got == "model")
+        or (wanted == "knowledge" and got == "unconfirmed" and expect.get("knowledge_gap") is True)
+    )
     return {
-        "ok": route_ok and not missing and not forbidden and got != "error",
+        "ok": route_ok and not missing and not forbidden and got != "error" and bool(final),
         "route_ok": route_ok,
         "expected_route": wanted,
         "route": got,
@@ -548,6 +556,7 @@ class _Runner:
             HostexReadOnlyToolExecutor,
         )
         from homestay_bot.integrations.deepseek_tourism import DeepSeekTourismSearcher
+        from homestay_bot.services.context_retention import CustomerModelContext
         from homestay_bot.services.conversation_service import ConversationService
         from homestay_bot.services.guest_reply_policy import (
             prepare_facility_advice_reply,
@@ -583,10 +592,18 @@ class _Runner:
             tool_executor=tools,
             local_date_provider=lambda: self._today,
         )
+        # 场景声明了客人已确认的住宿时，按线上同一入口（客户上下文的 confirmed_stay）传入，
+        # 让检索按目标房间与日期过滤；没有声明的场景保持原样。
+        confirmed_stay = ((scenario.get("expect") or {}).get("context") or {}).get("confirmed_stay")
         decision = await assistant.respond(
             guest_identifier="reply-regression",
             language=language,
             messages=messages,
+            customer_context=(
+                CustomerModelContext(confirmed_stay=dict(confirmed_stay))
+                if confirmed_stay
+                else None
+            ),
             tool_trace_sink=lambda trace: traces.append(trace.name),
         )
         # 会话在设施分支之前处理模型升级的紧急事件；门禁同样使用固定安全回复。
@@ -609,8 +626,12 @@ class _Runner:
             decision.facility_issue is not None
             and decision.facility_issue.scope == "homestay_facility"
         )
+        # 门禁不执行真实的任务登记与员工通知，设施收尾用固定占位，不生成「已提交」这类
+        # 成功结论；登记与通知是否成功由会话服务的集成测试单独证明（Spec P0，R3）。
         final = (
-            prepare_facility_advice_reply(decision.facility_advice, language)
+            prepare_facility_advice_reply(
+                decision.facility_advice, language, action_reply=_FACILITY_ACTION_PLACEHOLDER
+            )
             if facility
             else prepare_planned_reply(
                 decision.reply_parts,

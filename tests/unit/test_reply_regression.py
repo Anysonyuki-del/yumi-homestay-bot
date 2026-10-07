@@ -313,3 +313,116 @@ def test_scoped_gate_only_judges_scenarios_it_ran() -> None:
     assert rr.resolve_scope("", scenarios) is None
     with pytest.raises(ValueError):
         rr.resolve_scope("W-不存在", scenarios)
+
+
+def test_expected_knowledge_gap_accepts_the_unconfirmed_route() -> None:
+    """场景本身期望知识缺口时，回「尚未确认」的 unconfirmed 路径就是正确结果。"""
+    gap = {
+        "id": "U",
+        "expect": {
+            "route": "knowledge",
+            "knowledge_gap": True,
+            "must_include": [["尚未确认"]],
+            "must_not_include": [],
+        },
+    }
+    record = {"route": "model", "knowledge_gap": True, "final": "当前审核资料尚未确认这一信息。"}
+    assert rr.judge(gap, record)["ok"]
+    # 没有声明知识缺口的知识场景，回未确认仍是失败。
+    plain = {"id": "K", "expect": {**gap["expect"], "knowledge_gap": False}}
+    assert not rr.judge(plain, record)["ok"]
+
+
+def test_an_empty_final_reply_never_passes() -> None:
+    """空正文不是任何场景的合格回复，即使路由和禁用片段都符合。"""
+    facility = {
+        "id": "F",
+        "expect": {"route": "facility", "must_include": [], "must_not_include": ["已提交"]},
+    }
+    assert not rr.judge(facility, {"route": "facility", "final": ""})["ok"]
+    assert not rr.judge(facility, {"route": "facility", "final": "   "})["ok"]
+
+
+def _synthetic_runner():
+    """构造不连接任何外部服务的门禁运行器，供替换 respond 的用例使用。"""
+    from types import SimpleNamespace
+
+    fixture = json.loads(FIXTURE.read_text())
+    return rr._Runner(
+        fixture,
+        SimpleNamespace(
+            deepseek_api_key="synthetic-only",
+            deepseek_base_url="https://example.invalid",
+            deepseek_model="synthetic",
+        ),
+    )
+
+
+def test_runner_facility_reply_does_not_claim_submission(monkeypatch) -> None:
+    """门禁不登记任务，设施收尾不能用默认的「已提交」冒充动作已完成。"""
+    from types import SimpleNamespace
+
+    from homestay_bot.integrations.deepseek_client import (
+        DeepSeekGuestAssistant,
+        FacilityIssue,
+    )
+
+    async def respond(self, **kwargs):
+        """仅替代模型调用，返回一条民宿设施故障决定。"""
+        return SimpleNamespace(
+            facility_issue=FacilityIssue(scope="homestay_facility"),
+            facility_advice=["用遥控器确认模式为制冷"],
+            reply_text="",
+            handoff_reason=None,
+            reply_parts=[],
+            knowledge_gap=False,
+            staff_confirmation_required=False,
+        )
+
+    monkeypatch.setattr(DeepSeekGuestAssistant, "respond", respond)
+    result = asyncio.run(
+        _synthetic_runner()._respond({"messages": [{"role": "user", "content": "空调不制冷了"}]})
+    )
+    assert result["route"] == "facility"
+    assert "已提交" not in result["final"]
+    assert "制冷" in result["final"]
+
+
+def test_runner_passes_the_scenario_confirmed_stay(monkeypatch) -> None:
+    """场景声明已确认住宿时，运行器按线上入口把房间与日期交给回复链路。"""
+    from types import SimpleNamespace
+
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+
+    seen: list[object] = []
+
+    async def respond(self, **kwargs):
+        """记录传入的客户上下文，返回最小的普通回复。"""
+        seen.append(kwargs.get("customer_context"))
+        return SimpleNamespace(
+            facility_issue=None,
+            reply_text="好的",
+            handoff_reason=None,
+            reply_parts=[],
+            knowledge_gap=False,
+            staff_confirmation_required=False,
+        )
+
+    monkeypatch.setattr(DeepSeekGuestAssistant, "respond", respond)
+    stay = {"property_id": 202, "check_in_date": "2026-10-03", "check_out_date": "2026-10-05"}
+    runner = _synthetic_runner()
+    asyncio.run(
+        runner._respond(
+            {
+                "messages": [{"role": "user", "content": "早餐几点开始？"}],
+                "expect": {"route": "knowledge", "context": {"confirmed_stay": stay}},
+            }
+        )
+    )
+    asyncio.run(
+        runner._respond(
+            {"messages": [{"role": "user", "content": "早餐几点开始？"}], "expect": {}}
+        )
+    )
+    assert seen[0].confirmed_stay == stay
+    assert seen[1] is None

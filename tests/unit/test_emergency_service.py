@@ -260,3 +260,61 @@ def test_possible_danger_has_a_separate_level(text):
     """含糊安全情况提醒并通知，但不直接要求撤离。"""
     result = EmergencyService().classify(text)
     assert result.is_possible and not result.is_emergency
+
+
+# 2026-10-07 紧急豁免作用范围修复（docs/specs/2026-10-07_emergency-exemption-scope-spec.md）：
+# 询问、假设、引用的豁免只能覆盖它自己描述的那段文字，同一句里正在发生的危险必须照常判出。
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        ("房间的插座冒烟了还有燃气灶吗", "fire"),
+        ("闻到燃气味燃气灶在哪", "gas"),
+        ("烟雾报警器在哪里一直在响", "fire"),
+        ("厨房着火了报警器在哪里", "fire"),
+        ("厨房着火了报警器位置在哪", "fire"),
+        ("What is the fire safety policy there is smoke coming from the socket", "fire"),
+        ("如果着火怎么办现在厨房冒烟了", "fire"),
+        ("What if there is a fire there is smoke coming from the socket", "fire"),
+        ("说明书写着漏电时切断电源现在插座冒烟了", "fire"),
+        # 「What is」只是问句开头，不能证明危险不在现场（V5-R1）。
+        ("What is causing smoke to come out of the socket", "fire"),
+        ("What is causing this gas smell", "gas"),
+        # 用户决定 D1：带疑问语气的现场描述按确定危险处理。
+        ("燃气灶旁边着火了吗", "fire"),
+        # 用户决定 D2：「怎么赔」不再豁免危险命中。
+        ("插座冒烟了怎么赔", "fire"),
+        # 有意的保守误报：假设没有结束边界、引用没有引号或释义询问词时不豁免。
+        ("如果着火", "fire"),
+    ],
+)
+def test_exemptions_do_not_cover_other_current_hazards(text: str, category: str) -> None:
+    """同一句里的咨询短语、假设或引用，不能连带放过另一处正在发生的危险。"""
+    assert EmergencyService().classify(text) == EmergencyClassification(True, category)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "房间提供煤气炉吗",
+        "厨房是燃气灶还是电磁炉？",
+        "你们有燃气灶吗",
+        "如果着火或者冒烟怎么办",
+        "如果着火导致漏电怎么办",
+        "In case of fire, what should we do?",
+        "What is the fire safety policy?",
+        "火灾安全规定是什么",
+        "说明书写着漏电时切断电源是什么意思",
+        "Where is the fire extinguisher?",
+    ],
+)
+def test_recognizable_non_current_ranges_stay_exempt(text: str) -> None:
+    """能明确识别为设备咨询、条件假设、引用释义或安全规定的说法，仍不是正在发生的事故。"""
+    assert not EmergencyService().classify(text).is_emergency
+
+
+def test_merged_batch_with_alarm_location_and_ringing_is_detected() -> None:
+    """连发合并后的三种规则文本里，至少一种要判出正在响的烟雾报警器。"""
+    from homestay_bot.services.conversation_service import ConversationService
+
+    candidates = ConversationService._policy_questions("烟雾报警器在哪\n一直在响")
+    assert any(EmergencyService().classify(item).is_emergency for item in candidates)

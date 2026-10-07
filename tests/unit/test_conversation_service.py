@@ -3143,3 +3143,52 @@ async def test_servicer_reply_marks_native_session_accepted() -> None:
     assert audit.accepted_at == datetime(2026, 7, 29, tzinfo=UTC)
     assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
     assert assistant.calls == 0 and wecom.guest_messages == []
+
+
+@pytest.mark.asyncio
+async def test_same_sentence_live_hazard_is_not_hidden_by_appliance_question() -> None:
+    """同一句里的设备咨询不能放过另一处正在发生的冒烟：必须撤离、转人工并通知员工。"""
+    service, conversations, assistant, wecom = build_service()
+
+    await service.handle_message(incoming(content="房间的插座冒烟了还有燃气灶吗"))
+
+    assert assistant.calls == 0
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert "119" in wecom.guest_messages[0]
+    assert len(wecom.internal_messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_merged_alarm_location_and_ringing_escalates_after_debounce() -> None:
+    """连发「烟雾报警器在哪」「一直在响」合并后，按现场危险撤离并转人工。"""
+    jobs = DeferredJobStub()
+    messages = MessageServiceStub()
+    fragments = [
+        incoming(content="烟雾报警器在哪", msgid="msg-1"),
+        incoming(content="一直在响", msgid="msg-2"),
+    ]
+    messages.recorded.extend(fragments)
+    service, conversations, assistant, wecom = build_service(
+        jobs=jobs,
+        messages=messages,
+        wecom=OutboxWeComStub(),
+    )
+
+    await service.process_debounced_message(fragments[-1])
+
+    assert assistant.calls == 0
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert any("119" in text for text in wecom.guest_messages)
+    assert jobs.jobs == []
+
+
+@pytest.mark.asyncio
+async def test_appliance_type_question_is_answered_without_evacuation() -> None:
+    """只问灶具类型时不发撤离模板、不转人工，照常交给模型回答。"""
+    service, conversations, assistant, wecom = build_service()
+
+    await service.handle_message(incoming(content="厨房是燃气灶还是电磁炉？"))
+
+    assert assistant.calls == 1
+    assert conversations.conversation.mode is not ConversationMode.HUMAN_ACTIVE
+    assert not any("开窗通风" in text for text in wecom.guest_messages)
