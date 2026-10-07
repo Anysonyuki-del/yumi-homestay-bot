@@ -259,3 +259,37 @@ def test_agitated_is_the_only_reviewable_handoff_reason() -> None:
     assert resolve_handoff_reason(text) == "agitated"
     refund = "我要退款!!!"
     assert resolve_handoff_reason(refund, plan_for(refund, ("chitchat", refund))) == "refund"
+
+
+@pytest.mark.parametrize("risk", [[], {}, 1, True, ["complaint"], {"x": 1}, "angry"])
+def test_malformed_risk_types_fail_the_plan_without_raising(risk) -> None:
+    """B24-R5：风险字段是数组、对象、数值、布尔或未知字符串时整份计划失败，不抛异常。"""
+    outcome = _verify("请帮我送水", [_item(kind="service_request", quote="请帮我送水", risk=risk)])
+    assert outcome.status == "failed"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"kind": ["service_request"]},
+        {"kind": {"a": 1}},
+        {"id": "1"},
+        {"withdraws": "1", "kind": "request_withdraw"},
+        {"target_room": ["401"]},
+        {"check_in_date": ["2026-10-08"], "check_out_date": {"d": 1}},
+        {"question": ["x"], "subject": {"y": 1}},
+        {"start": "0"},
+    ],
+)
+def test_any_json_shape_yields_ok_or_failed(fields: dict) -> None:
+    """B24-R5：同一 JSON 边界的其他字段任何形状都只得到 ok 或 failed。"""
+    item = _item(kind="service_request", quote="请帮我送水")
+    item.update(fields)
+    assert _verify("请帮我送水", [item]).status in {"ok", "failed"}
+
+
+def test_hard_reason_in_any_text_variant_beats_agitated_review() -> None:
+    """B24-R2：情绪词先命中，但去空白后的变体里有「退款」：硬理由优先，计划不能清除。"""
+    text = "第一次来太开心了!!! 退\n款"
+    assert resolve_handoff_reason(text, plan_for(text, ("chitchat", text))) == "refund"
+    assert resolve_handoff_reason(text) == "refund"

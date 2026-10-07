@@ -1,6 +1,7 @@
 """复用已受限的本机测试库，验证请求与 outbox 事务及并发幂等。"""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 from sqlalchemy import func, select
@@ -229,3 +230,175 @@ async def test_soft_judgment_planning_holds_no_lock_and_drops_stale_results(
         assert conversation.mode is ConversationMode.BOT_ACTIVE
         assert await session.scalar(select(func.count()).select_from(ComplaintReview)) == 0
         assert await session.scalar(select(func.count()).select_from(Job)) == 0
+
+
+async def _seed_guest_message(factory, msgid: str, content: str, *, human: bool = False):
+    """在隔离库建会话并记录一条客人消息，返回（会话编号, 消息）。"""
+    from datetime import UTC, datetime
+
+    from homestay_bot.domain.enums import ConversationMode, MessageOrigin
+    from homestay_bot.repositories.conversations import (
+        SQLAlchemyConversationRepository,
+        SQLAlchemyMessageRepository,
+    )
+    from homestay_bot.services.message_service import IncomingMessage, MessageService
+
+    message = IncomingMessage(
+        msgid=msgid, open_kfid="synthetic-kf", external_userid="synthetic-guest",
+        origin=MessageOrigin.GUEST, msgtype="text", content=content, sent_at=datetime.now(UTC),
+    )
+    async with factory() as session:
+        conversation = await SQLAlchemyConversationRepository(session).get_or_create(message)
+        if human:
+            conversation.mode = ConversationMode.HUMAN_ACTIVE
+        await MessageService(SQLAlchemyMessageRepository(session)).record_incoming(
+            conversation.id, message
+        )
+        await session.commit()
+        return conversation.id, message
+
+
+def _service_for(session, assistant, source_msgid: str, *, phase: str):
+    """按生产 deferred 装配构造会话服务：真实仓储、作业、出站与提交边界。"""
+    from homestay_bot.repositories.complaints import SQLAlchemyComplaintRepository
+    from homestay_bot.repositories.conversations import (
+        SQLAlchemyConversationRepository,
+        SQLAlchemyMessageRepository,
+    )
+    from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
+    from homestay_bot.services.complaint_service import ComplaintService
+    from homestay_bot.services.conversation_service import ConversationService
+    from homestay_bot.services.emergency_service import EmergencyService
+    from homestay_bot.services.message_service import MessageService
+
+    return ConversationService(
+        conversations=SQLAlchemyConversationRepository(session),
+        messages=MessageService(SQLAlchemyMessageRepository(session)),
+        assistant=assistant,
+        emergency_service=EmergencyService(),
+        wecom=TransactionalOutboxWeCom(
+            session, source_message_id=source_msgid, source_guest_message_id=source_msgid,
+            delivery_phase=phase,
+        ),
+        agent_id=1,
+        duty_employee_userids=["staff-1"],
+        jobs=SQLAlchemyJobRepository(session),
+        complaint_service=ComplaintService(),
+        complaint_reviews=SQLAlchemyComplaintRepository(session),
+        commit_boundary=session.commit,
+        savepoint_factory=session.begin_nested,
+    )
+
+
+def _calm_or_complaint_plan(text: str, *, complaint: bool):
+    """经生产核验的单项闲聊计划，可选标为投诉。"""
+    import json
+    from datetime import date
+
+    from homestay_bot.services.turn_plan import verify_turn_plan
+
+    item = {"id": 1, "kind": "chitchat", "quote": text, "start": 0,
+            "risk": "complaint" if complaint else "none"}
+    return verify_turn_plan(
+        json.dumps({"items": [item]}, ensure_ascii=False), text,
+        today_provider=lambda: date(2026, 10, 7),
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_reply_wait_after_soft_review_holds_no_lock(pg_engine) -> None:  # noqa: F811
+    """人工接待中只命中情绪词：后台复核后继续主回复，等主回复期间不持活动锁；期间新客人
+    消息推进后，旧结果按过时纪律丢弃，不登记出站（修复 Spec §2.7 / Codex 审查 §4.1）。"""
+    from homestay_bot.domain.enums import Language
+    from homestay_bot.integrations.deepseek_client import AssistantDecision
+    from homestay_bot.repositories.conversations import (
+        SQLAlchemyConversationRepository,
+        SQLAlchemyMessageRepository,
+    )
+    from homestay_bot.services.message_service import MessageService
+
+    factory = async_sessionmaker(pg_engine, expire_on_commit=False)
+    text = "第一次来太开心了!!!"
+    conversation_id, source = await _seed_guest_message(
+        factory, "synthetic-final-1", text, human=True
+    )
+    replying = asyncio.Event()
+    release = asyncio.Event()
+
+    class _Assistant:
+        """规划判为闲聊；主回复停在门闩处。"""
+
+        async def plan_turn(self, *, text: str, language: Language):
+            return _calm_or_complaint_plan(text, complaint=False)
+
+        async def respond(self, **kwargs):
+            replying.set()
+            await release.wait()
+            return AssistantDecision(
+                reply_text="欢迎入住！", language=Language.ZH, intent="chitchat", confidence=0.9
+            )
+
+    async with factory() as session:
+        service = _service_for(session, _Assistant(), source.msgid, phase="final")
+        job = asyncio.create_task(service.process_recorded_message(source))
+        try:
+            await asyncio.wait_for(replying.wait(), 5)
+            async with factory() as other:
+                await SQLAlchemyConversationRepository(other).lock_activity(conversation_id)
+                newer = replace(source, msgid="synthetic-final-2", content="还有个问题")
+                await MessageService(SQLAlchemyMessageRepository(other)).record_incoming(
+                    conversation_id, newer
+                )
+                await other.commit()
+            release.set()
+            await asyncio.wait_for(job, 5)
+            await session.commit()
+        finally:
+            release.set()
+            if not job.done():
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
+
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(Job)) == 0
+        assert await session.scalar(select(func.count()).select_from(BusinessTask)) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complaint", [False, True])
+async def test_replayed_debounce_job_does_not_duplicate_side_effects(
+    pg_engine, complaint: bool  # noqa: F811
+) -> None:
+    """合并作业规划复核中途提交；作业重放（recover_stale）后，最终任务、客诉复核、客诉
+    分析作业与客人/员工出站各只有一份（修复 Spec §2.7 / Codex 审查 §4.1）。"""
+    from homestay_bot.domain.enums import Language
+    from homestay_bot.domain.models import ComplaintReview
+
+    factory = async_sessionmaker(pg_engine, expire_on_commit=False)
+    text = "第一次来太开心了!!!"
+    _, source = await _seed_guest_message(factory, "synthetic-replay-1", text)
+
+    class _Planner:
+        """规划按参数判为闲聊或投诉；本用例不进入主回复。"""
+
+        async def plan_turn(self, *, text: str, language: Language):
+            return _calm_or_complaint_plan(text, complaint=complaint)
+
+    async def run_once() -> tuple[int, int]:
+        async with factory() as session:
+            await _service_for(
+                session, _Planner(), source.msgid, phase="ack"
+            ).process_debounced_message(source)
+            await session.commit()
+        async with factory() as session:
+            return (
+                await session.scalar(select(func.count()).select_from(Job)),
+                await session.scalar(select(func.count()).select_from(ComplaintReview)),
+            )
+
+    first = await run_once()
+    replayed = await run_once()
+    assert first == replayed
+    jobs, reviews = first
+    assert reviews == (1 if complaint else 0)
+    assert jobs >= 1

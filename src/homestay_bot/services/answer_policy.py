@@ -345,6 +345,10 @@ def policy_variants(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((text, flattened, compact)))
 
 
+# 与 handoff_reason 的判定顺序一致：议价最先，其次退款、平台投诉，情绪词最后。
+_HANDOFF_PRIORITY = ("price", "refund", "complaint", "early_check_in", "agitated")
+
+
 def agitated_cleared_by_plan(plan_outcome: PlanOutcome | None, text: str) -> bool:
     """情绪词是否被计划复核去除：规划成功、针对本轮正文且没有任何项标为投诉（Spec §2.6）。
 
@@ -358,14 +362,16 @@ def resolve_handoff_reason(text: str, plan_outcome: PlanOutcome | None = None) -
     """统一接管理由：各出口都调用它，情绪词复核结果不会在后续出口重新生效（V4-R1）。
 
     硬理由（退款、平台投诉、议价）保持确定性，不受计划影响；只有 agitated 可复核。
+    全部文本变体都要看完：情绪词在原文先命中、退款只在去空白的变体里出现时，仍按退款处理
+    （Codex 审查 B24-R2：取第一个命中变体会让平静计划连带清掉退款）。
     """
-    reason = next(
-        (found for variant in policy_variants(text) if (found := handoff_reason(variant))),
-        None,
-    )
-    if reason == "agitated" and agitated_cleared_by_plan(plan_outcome, text):
-        return None
-    return reason
+    reasons = {found for variant in policy_variants(text) if (found := handoff_reason(variant))}
+    hard = sorted(reasons - {"agitated"}, key=_HANDOFF_PRIORITY.index)
+    if hard:
+        return hard[0]
+    if "agitated" in reasons and not agitated_cleared_by_plan(plan_outcome, text):
+        return "agitated"
+    return None
 
 
 @dataclass(frozen=True)

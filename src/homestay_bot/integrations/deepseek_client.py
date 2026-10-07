@@ -258,10 +258,13 @@ _ASSISTANT_FAILURE_REPLIES = {
 }
 
 # 计划里这些类型表示客人在问或要求本店事项；只有店外、寒暄、历史等项时不算本店专属。
-_PROPERTY_FACT_KINDS = frozenset({
-    "static_fact", "stay_query", "catalog_query", "booking_request", "service_request",
-    "lost_item_report", "facility_fault", "request_withdraw",
-})
+# 询问本店事实的计划项类型；只有这些项会让问题按本店专属事实核验。服务、报修、订房、撤回
+# 是动作，回复内容由实际登记结果决定，不能按话题回「尚未确认」（修复 Spec §2.4，SR-毛巾）。
+_PROPERTY_FACT_KINDS = frozenset({"static_fact", "stay_query", "catalog_query"})
+# 由主模型逐项作答的非静态计划项类型：静态证据只接管 static_fact，其余项靠这些回答保留。
+_MODEL_ANSWERED_KINDS = frozenset(
+    {"external_info", "chitchat", "unclear", "history_mention", "unrelated"}
+)
 # 同时开放的子问题检索最多几项，每项单独限量，合并后不超过主调用请求预算。
 _PLAN_RETRIEVAL_ITEMS = 4
 _PLAN_ITEM_KNOWLEDGE_LIMIT = 4
@@ -277,6 +280,10 @@ _PRICE_DATES_REPLY_EN = (
 _PRICE_WITHHELD_RULE = (
     "本轮客人问的房价缺少入住日期，系统会单独追问日期：你不要回答房价、不要追问日期，"
     "只回答其他问题；没有其他问题时 reply_text 留空。"
+)
+_ITEM_ANSWERS_RULE = (
+    "信封 other_items 列出的子问题不由审核知识回答。请在 item_answers 中为每项给出一段只回答"
+    "该项的简短正文（item_id 与 text），不要在其中写本店事实；本店事实由系统按审核资料单独回答。"
 )
 _EVIDENCE_SELECTION_RULE = (
     "本轮信封 turn_plan 列出了需要用审核知识回答的本店事实项（item_id 与 question）。"
@@ -350,6 +357,13 @@ class EvidenceSelection(BaseModel):
     related_ids: list[int] = Field(default_factory=list, max_length=8)
 
 
+class ItemAnswer(BaseModel):
+    """主调用对一个非静态计划项（店外信息、寒暄等）的单独回答（修复 Spec D-F1）。"""
+
+    item_id: int
+    text: str = Field(max_length=800)
+
+
 class AssistantDecision(BaseModel):
     """约束模型每轮回复、风险标记和员工提醒决定。"""
 
@@ -376,8 +390,20 @@ class AssistantDecision(BaseModel):
     # 设施故障时给客人的短建议清单；回复的开头、结尾与标点由本地组装。
     facility_advice: list[str] | None = None
     evidence_selection: list[EvidenceSelection] | None = None
+    item_answers: list[ItemAnswer] | None = None
     # 本轮已核验计划只由适配器本地填写，模型回传的同名字段在 respond 出口一律覆盖。
     turn_plan: PlanOutcome | None = Field(default=None, exclude=True)
+
+    @field_validator("item_answers", mode="before")
+    @classmethod
+    def ignore_invalid_item_answers(cls, value: Any) -> list[ItemAnswer] | None:
+        """逐项回答格式异常时整体视为未回传：对应项留空，不让坏格式否决整轮回复。"""
+        if not isinstance(value, list) or not value:
+            return None
+        try:
+            return [ItemAnswer.model_validate(item) for item in value]
+        except ValidationError:
+            return None
 
     @field_validator("evidence_selection", mode="before")
     @classmethod
@@ -789,6 +815,22 @@ def assistant_decision_schema() -> dict[str, Any]:
                     {"type": "null"},
                 ]
             },
+            "item_answers": {
+                "anyOf": [
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "item_id": {"type": "integer"},
+                                "text": {"type": "string"},
+                            },
+                            "required": ["item_id", "text"],
+                        },
+                    },
+                    {"type": "null"},
+                ]
+            },
             "evidence_selection": {
                 "anyOf": [
                     {
@@ -1088,6 +1130,8 @@ class DeepSeekGuestAssistant:
         guest_question: str | None = None,
         turn_plan: PlanOutcome | None = None,
         selection_dates: tuple[date | None, date | None] = (None, None),
+        item_knowledge: dict[int, list[Any]] | None = None,
+        other_items: Sequence[PlanItem] = (),
     ) -> AssistantDecision:
         """校验模型 JSON，并执行确定性风险归一化。
 
@@ -1249,7 +1293,7 @@ class DeepSeekGuestAssistant:
             )
         normalized = decision.model_copy(update=updates)
         selection_plan = self._selection_evidence_plan(
-            decision, guest_text, turn_plan, knowledge_evidence, selection_dates
+            decision, guest_text, turn_plan, knowledge_evidence, selection_dates, item_knowledge
         )
         if selection_plan is not None:
             evidence_plan = selection_plan
@@ -1262,6 +1306,17 @@ class DeepSeekGuestAssistant:
                 evidence_plan,
                 question_text,
             )
+            if other_items:
+                normalized = self._with_item_answers(
+                    normalized,
+                    other_items,
+                    decision.item_answers or [],
+                    grounded_in="\n".join(
+                        item
+                        for item in (self._knowledge_grounding(knowledge_evidence), live_grounding)
+                        if item
+                    ),
+                )
             if evidence_plan.status == "unclear":
                 # 连问的是哪一项都没确认，不能据此沉淀 FAQ 候选。
                 return normalized.model_copy(
@@ -1325,11 +1380,13 @@ class DeepSeekGuestAssistant:
         turn_plan: PlanOutcome | None,
         knowledge: list[Any] | None,
         dates: tuple[date | None, date | None],
+        item_knowledge: dict[int, list[Any]] | None = None,
     ) -> EvidencePlan | None:
         """把主调用回传的证据选择逐项核验为证据计划；不可用时返回空，回到现行证据计划。
 
         结果矩阵（Spec §2.4）：核验通过的项发审核原文；选「无」、漏选、冲突的项回未确认；
-        越界编号或跨越政策边界的项按现行证据计划单独判定。
+        越界编号或跨越政策边界的项按现行证据计划单独判定。核验、冲突与回退都只用该项
+        自己的合法候选（`item_knowledge`），没有逐项候选时才用整轮候选。
         """
         plan = usable_plan(turn_plan, guest_text)
         if plan is None or plan.plan is None or decision.evidence_selection is None:
@@ -1347,11 +1404,12 @@ class DeepSeekGuestAssistant:
                 logger.info("证据选择：item=%s reason=not_selected", item.id)
                 parts.append(missing)
                 continue
+            candidates = (item_knowledge or {}).get(item.id, knowledge)
             verdict = verify_selected_evidence(
                 item.question,
                 selected.answer_ids,
                 selected.related_ids,
-                knowledge,
+                candidates,
                 target_date=target_date,
                 target_end_date=target_end_date,
             )
@@ -1364,7 +1422,7 @@ class DeepSeekGuestAssistant:
             else:
                 fallback = build_evidence_plan(
                     item.question,
-                    knowledge,
+                    candidates,
                     supporting_for_topic=self._supporting_knowledge,
                     is_property_question=True,
                     target_date=target_date,
@@ -1397,49 +1455,99 @@ class DeepSeekGuestAssistant:
         language: Language,
         property_id: int | None,
         dates: tuple[date | None, date | None],
-    ) -> list[Any]:
-        """按计划的每个本店事实项单独检索，与整句结果合并去重（Spec §2.4）。
+    ) -> tuple[list[Any], dict[int, list[Any]]]:
+        """按计划的每个本店事实项单独检索，返回（交给模型的合并候选, 各项自己的合法候选）。
 
-        项点名房号时按该房检索并给房间专属条目保留名额（D8）；房号只作检索目标，
-        不认定住宿。员工配置的触发词与审核状态过滤由检索本身保持不变。
+        合并候选只决定模型能看到什么；每项的证据选择、同组冲突与回退都只能用该项自己的
+        合法候选（Codex 审查 B24-R3：共用一个池会让 401 的问题用 402 的审核事实作答）。
+        项的合法候选 = 该项按自己的房源、日期与问法检索到的条目，加上整句检索结果中不属于
+        房间专属、或属于该项房源的条目；点名的房号映射不到已知房源时，不含任何房间专属
+        条目，不拿已确认住宿房间的事实回答点名的另一间房。房号只作检索目标，不认定住宿。
         """
         items = [item for item in plan_items if item.kind == "static_fact"]
         if not items:
-            return knowledge
+            return knowledge, {}
         merged = list(knowledge)
         seen = {getattr(entry, "source_id", None) for entry in merged}
         used = sum(len(str(entry.question)) + len(str(entry.answer)) for entry in merged)
         finder = getattr(self._knowledge, "find_property_by_room", None)
         rooms: dict[str, int | None] = {}
-        for item in items[:_PLAN_RETRIEVAL_ITEMS]:
+        item_candidates: dict[int, list[Any]] = {}
+        for index, item in enumerate(items):
             item_property = property_id
-            if item.target_room and finder is not None:
+            if item.target_room:
                 if item.target_room not in rooms:
-                    rooms[item.target_room] = await finder(item.target_room)
-                item_property = rooms[item.target_room] or property_id
-            target_date, target_end_date = self._item_dates(item, dates)
-            found = self._scope_knowledge(
-                item.question,
-                await self._knowledge.retrieve(
-                    language,
+                    rooms[item.target_room] = (
+                        await finder(item.target_room) if finder is not None else None
+                    )
+                item_property = rooms[item.target_room]
+            legal = [
+                entry
+                for entry in knowledge
+                if getattr(entry, "scope", None) != "property"
+                or (item_property is not None and entry.property_id == item_property)
+            ]
+            if index < _PLAN_RETRIEVAL_ITEMS:
+                target_date, target_end_date = self._item_dates(item, dates)
+                found = self._scope_knowledge(
                     item.question,
-                    limit=_PLAN_ITEM_KNOWLEDGE_LIMIT,
-                    char_budget=_PLAN_ITEM_KNOWLEDGE_CHARS,
-                    property_id=item_property,
-                    target_date=target_date,
-                    target_end_date=target_end_date,
-                    reserved_property_slots=_TARGET_ROOM_RESERVED_SLOTS,
-                ),
+                    await self._knowledge.retrieve(
+                        language,
+                        item.question,
+                        limit=_PLAN_ITEM_KNOWLEDGE_LIMIT,
+                        char_budget=_PLAN_ITEM_KNOWLEDGE_CHARS,
+                        property_id=item_property,
+                        target_date=target_date,
+                        target_end_date=target_end_date,
+                        reserved_property_slots=_TARGET_ROOM_RESERVED_SLOTS,
+                    ),
+                )
+                for entry in found:
+                    key = getattr(entry, "source_id", None)
+                    size = len(str(entry.question)) + len(str(entry.answer))
+                    if key not in seen and used + size <= _PLAN_KNOWLEDGE_TOTAL_CHARS:
+                        merged.append(entry)
+                        seen.add(key)
+                        used += size
+                    if key in seen:
+                        # 只有模型实际看得到的条目才是可选的合法候选。
+                        legal.append(entry)
+            item_candidates[item.id] = list(
+                {getattr(entry, "source_id", id(entry)): entry for entry in legal}.values()
             )
-            for entry in found:
-                key = getattr(entry, "source_id", None)
-                size = len(str(entry.question)) + len(str(entry.answer))
-                if key in seen or used + size > _PLAN_KNOWLEDGE_TOTAL_CHARS:
-                    continue
-                merged.append(entry)
-                seen.add(key)
-                used += size
-        return merged
+        return merged, item_candidates
+
+    @classmethod
+    def _with_item_answers(
+        cls,
+        decision: AssistantDecision,
+        other_items: Sequence[PlanItem],
+        answers: Sequence[ItemAnswer],
+        *,
+        grounded_in: str,
+    ) -> AssistantDecision:
+        """静态证据接管后，按计划顺序接上其余项的模型逐项回答（Codex 审查 B24-R4）。
+
+        只采用编号属于其余项的回答，并照常删除说不出来源的本店断言与店外时效断言；
+        模型没答的项留空，不把未限定的整段原文补回来。
+        """
+        by_id = {answer.item_id: answer.text for answer in answers}
+        extra: list[ReplyPart] = []
+        for item in other_items:
+            text = by_id.get(item.id, "").strip()
+            if not text:
+                continue
+            body = split_tourism_reply(text)[0]
+            cleaned = remove_ungrounded_property_claims(body, grounded_in=grounded_in)
+            cleaned = remove_unsourced_external_state_claims(cleaned, grounded_in=grounded_in)
+            if cleaned.strip():
+                extra.append(ReplyPart(question=item.question, status="grounded", text=cleaned))
+        if not extra:
+            return decision
+        parts = [*decision.reply_parts, *extra]
+        return decision.model_copy(
+            update={"reply_parts": parts, "reply_text": compose_reply_parts(parts)}
+        )
 
     @staticmethod
     def _append_parts(
@@ -1517,6 +1625,7 @@ class DeepSeekGuestAssistant:
         request_context: AssistantRequestContext | None,
         live_results: list[dict[str, str]] | None = None,
         static_items: list[dict[str, Any]] | None = None,
+        other_items: list[dict[str, Any]] | None = None,
     ) -> str:
         """把动态上下文编码成最后一条用户数据，避免污染系统指令。
 
@@ -1566,6 +1675,9 @@ class DeepSeekGuestAssistant:
         if static_items:
             # 只列需要选证据的本店事实项编号与规范化子问题，供 evidence_selection 引用。
             envelope["turn_plan"] = static_items
+        if other_items:
+            # 静态证据只接管本店事实项；其余项由模型逐项回答，供 item_answers 引用。
+            envelope["other_items"] = other_items
         return json.dumps(envelope, ensure_ascii=False, default=str)
 
     @classmethod
@@ -2601,7 +2713,7 @@ class DeepSeekGuestAssistant:
                     reserved_property_slots=_TARGET_ROOM_RESERVED_SLOTS,
                 ),
             )
-            knowledge = await self._merge_item_knowledge(
+            knowledge, item_knowledge = await self._merge_item_knowledge(
                 knowledge,
                 plan_items,
                 language=language,
@@ -2700,6 +2812,8 @@ class DeepSeekGuestAssistant:
                         target_end_date - timedelta(days=1) if target_end_date else None
                     ),
             )
+            if plan_items and not any(item.kind == "static_fact" for item in plan_items):
+                tourism_evidence = None
             if tourism_evidence is not None and tourism_evidence.handles_reply:
                 decision = self._apply_evidence_plan(
                     decision, tourism_evidence, knowledge_question
@@ -2840,6 +2954,13 @@ class DeepSeekGuestAssistant:
             }
             for part in public_parts
         ]
+        # 有本店事实项时，静态证据只接管这些项；同轮的店外、寒暄等项由模型逐项回答后接上
+        # （修复 Spec D-F1）。本轮有联网结果时那些项已由联网分项回答，不再另要模型作答。
+        other_items = (
+            [item for item in plan_items if item.kind in _MODEL_ANSWERED_KINDS]
+            if any(item.kind == "static_fact" for item in plan_items) and not public_parts
+            else []
+        )
         envelope = self._build_context_envelope(
             question_text=minimized_question,
             knowledge=knowledge,
@@ -2852,7 +2973,12 @@ class DeepSeekGuestAssistant:
                 for item in plan_items
                 if item.kind == "static_fact"
             ],
+            other_items=[
+                {"item_id": item.id, "question": item.question} for item in other_items
+            ],
         )
+        if other_items:
+            system_prompt += _ITEM_ANSWERS_RULE
         if live_results:
             system_prompt += (
                 _LIVE_RESULTS_RULE_EN if language is Language.EN else _LIVE_RESULTS_RULE_ZH
@@ -2916,6 +3042,10 @@ class DeepSeekGuestAssistant:
                 knowledge_question, question_text, plan
             ),
         )
+        if plan_items and not any(item.kind == "static_fact" for item in plan_items):
+            # 计划确认本轮没有本店事实项（例如只有服务申请）：证据计划不接管整轮回复，
+            # 否则会按话题回「尚未确认」覆盖动作回复（修复 Spec §2.4，SR-毛巾、SR-遗失）。
+            evidence_plan = None
         selection_dates = (
             target_date or local_today,
             target_end_date - timedelta(days=1) if target_end_date else None,
@@ -2981,6 +3111,8 @@ class DeepSeekGuestAssistant:
                             guest_question=question_text,
                             turn_plan=plan,
                             selection_dates=selection_dates,
+                            item_knowledge=item_knowledge,
+                            other_items=other_items,
                         )
                         if tool_parts or public_parts:
                             model_parts = list(decision.reply_parts)

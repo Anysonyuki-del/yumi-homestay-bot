@@ -128,15 +128,15 @@ def usable_plan(outcome: PlanOutcome | None, text: str) -> PlanOutcome | None:
 
 def _verify_risk(value: object) -> str | None:
     """风险标签白名单；不认识的值让整份计划失败，不能被当成「无风险」去掉情绪词。"""
-    if value is None or value == "none":
+    if value is None:
         return "none"
-    if value in {"possible_hazard", "complaint"}:
-        return str(value)
-    if (
-        isinstance(value, str)
-        and value.startswith("current_hazard:")
-        and value.split(":", 1)[1] in HAZARD_CATEGORIES
-    ):
+    if not isinstance(value, str):
+        # 先判类型再查白名单：数组、对象不可哈希，直接做集合成员判断会抛 TypeError，
+        # 越过「规划失败」契约（Codex 审查 B24-R5）。
+        return None
+    if value in {"none", "possible_hazard", "complaint"}:
+        return value
+    if value.startswith("current_hazard:") and value.split(":", 1)[1] in HAZARD_CATEGORIES:
         return value
     return None
 

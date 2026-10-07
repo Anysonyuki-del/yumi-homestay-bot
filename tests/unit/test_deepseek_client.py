@@ -24,6 +24,7 @@ from homestay_bot.services.faq_candidate_context import (
     FaqCandidateContextService,
 )
 from homestay_bot.services.knowledge_service import KnowledgeSnippet
+from homestay_bot.services.reply_plan import prepare_planned_reply
 from tests.plan_helpers import plan_for
 
 
@@ -2179,7 +2180,14 @@ async def test_operational_task_reply_is_not_overridden_by_property_gap() -> Non
         turn_plan=plan_for("房间没水了，补点矿泉水", ("service_request", "补点矿泉水")),
     )
 
-    assert "马上为您安排" not in decision.reply_text
+    # 只有服务申请的轮次不再被证据计划按话题替换（修复 Spec §2.4）；执行承诺由客人出口
+    # 过滤，会话层再接上实际登记结果，客人看不到「马上为您安排」，也看不到「尚未确认」。
+    assert "尚未确认" not in decision.reply_text
+    guest_text = prepare_planned_reply(
+        decision.reply_parts, fallback=decision.reply_text, language=Language.ZH,
+        question="房间没水了，补点矿泉水",
+    )
+    assert "马上为您安排" not in guest_text
     assert decision.task_suggestion is not None
 
 

@@ -373,3 +373,178 @@ def test_related_entries_do_not_create_time_conflicts() -> None:
     verdict = verify_selected_evidence("晚上几点以后要保持安静？", [1], [2], [quiet, lounge])
     assert verdict.status == "grounded"
     assert verdict.parts[0].text == quiet.answer
+
+
+def _plan_items(text: str, *items: tuple[str, str, dict]) -> str:
+    """规划 JSON：每项带可选附加字段。"""
+    return json.dumps(
+        {
+            "items": [
+                {"id": index, "kind": kind, "quote": quote, "start": text.find(quote), **extra}
+                for index, (kind, quote, extra) in enumerate(items, start=1)
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+def _room_entry(room: int, answer: str) -> KnowledgeSnippet:
+    """某房间专属的吹风机条目。"""
+    return KnowledgeSnippet(
+        source_id=room, category="设施", question="房间吹风机在哪里", answer=answer,
+        scope="property", property_id=room,
+    )
+
+
+class _RoomKnowledge(_Knowledge):
+    """按检索房源过滤房间专属条目，模拟知识服务的房间过滤。"""
+
+    async def retrieve(self, language, query, **kwargs):
+        """只返回通用条目与当前房源的专属条目。"""
+        self.calls.append((query, kwargs))
+        room = kwargs.get("property_id")
+        return [
+            entry for entry in self.entries
+            if entry.scope != "property" or entry.property_id == room
+        ]
+
+
+@pytest.mark.asyncio
+async def test_each_item_only_accepts_evidence_for_its_own_room() -> None:
+    """B24-R3：一句问两间房、模型交换编号时，不能用另一间房的审核事实回答本房间。"""
+    text = "401房间吹风机在哪里，402房间吹风机在哪里"
+    knowledge = _RoomKnowledge(
+        [_room_entry(401, "401房间的吹风机在抽屉。"), _room_entry(402, "402房间的吹风机在衣柜。")],
+        rooms={"401": 401, "402": 402},
+    )
+    plan = _plan_items(
+        text,
+        ("static_fact", "401房间吹风机在哪里", {"target_room": "401"}),
+        ("static_fact", "402房间吹风机在哪里", {"target_room": "402"}),
+    )
+    swapped = [
+        {"item_id": 1, "answer_ids": [402], "related_ids": []},
+        {"item_id": 2, "answer_ids": [401], "related_ids": []},
+    ]
+    assistant, _ = _assistant([plan, _decision(evidence_selection=swapped)], knowledge)
+    decision = await assistant.respond(
+        guest_identifier="g", language=Language.ZH, messages=[{"role": "user", "content": text}]
+    )
+    for part in decision.reply_parts:
+        for evidence in part.evidence:
+            assert part.question.startswith(str(evidence.property_id))
+    assert "401房间吹风机在哪里" not in [
+        part.question for part in decision.reply_parts if "衣柜" in part.text
+    ]
+
+    correct = [
+        {"item_id": 1, "answer_ids": [401], "related_ids": []},
+        {"item_id": 2, "answer_ids": [402], "related_ids": []},
+    ]
+    assistant, _ = _assistant([plan, _decision(evidence_selection=correct)], knowledge)
+    decision = await assistant.respond(
+        guest_identifier="g", language=Language.ZH, messages=[{"role": "user", "content": text}]
+    )
+    assert "401房间的吹风机在抽屉。" in decision.reply_text
+    assert "402房间的吹风机在衣柜。" in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_unknown_named_room_does_not_borrow_the_confirmed_room_facts() -> None:
+    """B24-R3：点名的房号映射不到已知房源时，不用已确认住宿房间的专属事实回答。"""
+    from homestay_bot.services.context_retention import CustomerModelContext
+
+    text = "909房间吹风机在哪里"
+    knowledge = _RoomKnowledge([_room_entry(401, "401房间的吹风机在抽屉。")], rooms={})
+    plan = _plan_items(text, ("static_fact", text, {"target_room": "909"}))
+    selection = [{"item_id": 1, "answer_ids": [401], "related_ids": []}]
+    assistant, _ = _assistant([plan, _decision(evidence_selection=selection)], knowledge)
+    decision = await assistant.respond(
+        guest_identifier="g", language=Language.ZH,
+        messages=[{"role": "user", "content": text}],
+        customer_context=CustomerModelContext(
+            confirmed_stay={"property_id": 401, "check_in_date": "2026-10-08",
+                            "check_out_date": "2026-10-09"}
+        ),
+    )
+    assert "抽屉" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_static_evidence_only_replaces_its_own_item() -> None:
+    """B24-R4：吹风机加景点推荐，审核答案只接管吹风机项，景点推荐按模型逐项回答保留。"""
+    text = "房间有吹风机吗，武汉有哪些经典景点推荐"
+    plan = _plan_items(
+        text, ("static_fact", "房间有吹风机吗", {}), ("external_info", "武汉有哪些经典景点推荐", {})
+    )
+    assistant, completions = _assistant(
+        [
+            plan,
+            _decision(
+                reply_text="每间房都有吹风机。武汉经典景点可以逛黄鹤楼、东湖和省博物馆。",
+                evidence_selection=[{"item_id": 1, "answer_ids": [9040], "related_ids": []}],
+                item_answers=[{"item_id": 2, "text": "武汉经典景点可以逛黄鹤楼、东湖和省博物馆。"}],
+            ),
+        ],
+        _Knowledge([HAIRDRYER]),
+    )
+    decision = await assistant.respond(
+        guest_identifier="g", language=Language.ZH, messages=[{"role": "user", "content": text}]
+    )
+    assert HAIRDRYER.answer in decision.reply_text
+    assert "黄鹤楼" in decision.reply_text
+    assert decision.reply_text.index(HAIRDRYER.answer) < decision.reply_text.index("黄鹤楼")
+    envelope = json.loads(completions.requests[1]["messages"][-1]["content"])
+    assert {"item_id": 2, "question": "武汉有哪些经典景点推荐"} in envelope["other_items"]
+
+
+@pytest.mark.asyncio
+async def test_unanswered_item_is_not_backfilled_with_the_raw_model_text() -> None:
+    """B24-R4：模型没逐项回答的项留空，不把未限定的整段原文补回来（其中可能有本店断言）。"""
+    text = "房间有吹风机吗，武汉有哪些经典景点推荐"
+    plan = _plan_items(
+        text, ("static_fact", "房间有吹风机吗", {}), ("external_info", "武汉有哪些经典景点推荐", {})
+    )
+    assistant, _ = _assistant(
+        [
+            plan,
+            _decision(
+                reply_text="我们民宿还有免费健身房。黄鹤楼很好玩。",
+                evidence_selection=[{"item_id": 1, "answer_ids": [9040], "related_ids": []}],
+            ),
+        ],
+        _Knowledge([HAIRDRYER]),
+    )
+    decision = await assistant.respond(
+        guest_identifier="g", language=Language.ZH, messages=[{"role": "user", "content": text}]
+    )
+    assert decision.reply_text == HAIRDRYER.answer
+
+
+@pytest.mark.asyncio
+async def test_service_only_plan_is_not_replaced_by_an_unconfirmed_topic_reply() -> None:
+    """B24-R4 / SR-毛巾：计划只有服务申请时，证据计划不按话题回「尚未确认」覆盖整轮。"""
+    text = "毛巾不够用了，能再给两条吗"
+    plan = _plan_items(text, ("service_request", text, {"subject": "毛巾"}))
+    assistant, _ = _assistant(
+        [plan, _decision(reply_text="好的，给您登记补两条毛巾。")], _Knowledge([])
+    )
+    decision = await assistant.respond(
+        guest_identifier="g", language=Language.ZH, messages=[{"role": "user", "content": text}]
+    )
+    assert "尚未确认" not in decision.reply_text
+
+
+def test_same_question_conflict_cannot_be_hidden_by_a_related_label() -> None:
+    """B24-R6：标准问题相同的两条健身房开放时间 8:00/10:00，无论怎样分配标签都不能放行。"""
+    first = KnowledgeSnippet(
+        source_id=1, category="设施", question="健身房几点开放？", answer="健身房每天8:00开放。",
+        scope="global",
+    )
+    second = KnowledgeSnippet(
+        source_id=2, category="设施", question="健身房几点开放？",
+        answer="健身房每天10:00开放。", scope="global",
+    )
+    for answers, related in (([1], [2]), ([1], []), ([2], [1]), ([1, 2], [])):
+        verdict = verify_selected_evidence("健身房几点开放？", answers, related, [first, second])
+        assert verdict.status == "missing", (answers, related)

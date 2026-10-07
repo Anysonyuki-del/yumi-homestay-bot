@@ -715,7 +715,14 @@ class _Runner:
                 high_risk=bool(decision.handoff_reason),
                 question=question,
             )
-            if not resolution.register and resolution.ask_confirm:
+            if resolution.register:
+                # 线上会接上实际登记结果；模型正文被出口过滤成中性兜底时只发登记结果。
+                from homestay_bot.services.guest_reply_policy import unconfirmed_fallback
+
+                if final.strip() == unconfirmed_fallback(language):
+                    final = ""
+                final = f"{final}\n\n{_FACILITY_ACTION_PLACEHOLDER}".lstrip("\n")
+            elif resolution.ask_confirm:
                 # 规划失败或关联不明时线上回确认话术（D13），门禁照样附上。
                 confirm = TASK_CONFIRM_REPLY_EN if english else TASK_CONFIRM_REPLY_ZH
                 final = f"{final}\n\n{confirm}"

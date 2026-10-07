@@ -57,6 +57,7 @@ from homestay_bot.services.guest_reply_policy import (
     prepare_facility_advice_reply,
     prepare_guest_reply,
     split_guest_reply,
+    unconfirmed_fallback,
 )
 from homestay_bot.services.guest_verification import GuestVerificationService
 from homestay_bot.services.handoff_card import HandoffCard
@@ -871,20 +872,19 @@ class ConversationService:
                 )
                 return
 
-        if self._complaint_service is not None:
-            classification = self._complaint_service.classify(message.content)
-            if classification.is_complaint:
-                if classification.reason == "agitated" and self._jobs is not None:
-                    # 软判定：只命中情绪词时不在请求里规划，登记合并作业后由后台在释放
-                    # 活动锁的情况下规划复核（Spec §2.3 V5-R2）。
-                    await self._enqueue_debounce(message)
-                    return
-                await self._enter_complaint_mode(
-                    conversation,
-                    message,
-                    classification,
-                )
+        classification = self._classify_complaint(self._policy_questions(message.content))
+        if classification is not None:
+            if classification.reason == "agitated" and self._jobs is not None:
+                # 软判定：只命中情绪词时不在请求里规划，登记合并作业后由后台在释放
+                # 活动锁的情况下规划复核（Spec §2.3 V5-R2）。
+                await self._enqueue_debounce(message)
                 return
+            await self._enter_complaint_mode(
+                conversation,
+                message,
+                classification,
+            )
+            return
 
         if await self._answer_emergency_follow_up(conversation, message):
             return
@@ -972,26 +972,21 @@ class ConversationService:
             await self._escalate_emergency(conversation, merged_message, emergency)
             return
         turn_plan: PlanOutcome | None = None
-        if self._complaint_service is not None:
-            classification = self._complaint_service.classify(rule_contents[0])
-            for rule_content in rule_contents[1:]:
-                if classification.is_complaint:
-                    break
-                classification = self._complaint_service.classify(rule_content)
-            if classification.is_complaint:
-                if classification.reason == "agitated":
-                    # 软判定：只命中情绪词时释放锁规划复核；计划判为非客诉则继续正常回复，
-                    # 且不通知员工（D9）。规划失败时沿用现行规则进入客诉。
-                    turn_plan = await self._plan_with_released_lock(conversation, merged_message)
-                    if turn_plan is None:
-                        return
-                if not agitated_cleared_by_plan(turn_plan, merged_message.content):
-                    await self._enter_complaint_mode(
-                        conversation,
-                        merged_message,
-                        classification,
-                    )
+        classification = self._classify_complaint(rule_contents)
+        if classification is not None:
+            if classification.reason == "agitated":
+                # 软判定：只命中情绪词时释放锁规划复核；计划判为非客诉则继续正常回复，
+                # 且不通知员工（D9）。规划失败时沿用现行规则进入客诉。
+                turn_plan = await self._plan_with_released_lock(conversation, merged_message)
+                if turn_plan is None:
                     return
+            if not agitated_cleared_by_plan(turn_plan, merged_message.content):
+                await self._enter_complaint_mode(
+                    conversation,
+                    merged_message,
+                    classification,
+                )
+                return
         handoff_reason = resolve_handoff_reason(merged_message.content, turn_plan)
         if (
             conversation.mode is ConversationMode.HUMAN_ACTIVE
@@ -1303,6 +1298,53 @@ class ConversationService:
         if self._commit_boundary is not None:
             await self._commit_boundary()
 
+    async def _apply_plan_risk(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        plan: PlanOutcome | None,
+    ) -> bool:
+        """消费已核验计划里的危险标签，主回复成功与失败两个出口共用；返回真表示本轮已结束。
+
+        危险语义补漏只升不降（Spec §2.6）：计划判为当前危险而词面未判紧急时完整分类处置并
+        接管；判为可能危险而词面未判危险时先给避险提醒，本轮继续。`plan` 须已由调用方
+        核对来源摘要，摘要不一致或规划失败时传空，不处置。
+        """
+        risks = plan_risks(plan)
+        if not risks - {"none", "complaint"}:
+            return False
+        lexical = self._emergency.classify(message.content)
+        hazard = next(
+            (risk.split(":", 1)[1] for risk in sorted(risks) if risk.startswith("current_hazard:")),
+            None,
+        )
+        if hazard is not None and not lexical.is_emergency:
+            await self._escalate_emergency(
+                conversation, message, EmergencyClassification(True, hazard)
+            )
+            return True
+        if "possible_hazard" in risks and not (lexical.is_possible or lexical.is_emergency):
+            await self._answer_possible_danger(conversation, message)
+        return False
+
+    def _classify_complaint(self, texts: Sequence[str]) -> Any | None:
+        """对全部规则文本做客诉分类，返回应处理的结果；没有客诉时返回空。
+
+        任一文本变体命中退款或平台投诉时优先返回它（保留其风险等级）；只有全部命中都是
+        情绪词时才返回 agitated，交给软判定复核。即时与合并入口共用，避免各自取第一个
+        命中变体，让情绪词遮住被空白拆开的退款（Codex 审查 B24-R2）。
+        """
+        if self._complaint_service is None:
+            return None
+        complaints = [
+            result
+            for result in (self._complaint_service.classify(text) for text in texts)
+            if result.is_complaint
+        ]
+        if not complaints:
+            return None
+        return next((item for item in complaints if item.reason != "agitated"), complaints[0])
+
     async def _plan_with_released_lock(
         self,
         conversation: Conversation,
@@ -1557,6 +1599,10 @@ class ConversationService:
                 return
             # 规划成功、主回复失败时异常带回本轮计划；摘要不一致按无计划处理（V6-R1）。
             failed_plan_outcome = usable_plan(error.plan_outcome, message.content)
+            # 计划里的危险与成功出口同样处置，不能因主回复失败退成通用失败话术（B24-R1）。
+            if await self._apply_plan_risk(conversation, message, failed_plan_outcome):
+                timing.outcome = "emergency"
+                return
             failure_resolution = resolve_task_request(failed_plan_outcome, message.content)
             if (
                 resolve_handoff_reason(message.content, failed_plan_outcome) is None
@@ -1603,20 +1649,9 @@ class ConversationService:
             )
             return
         plan = usable_plan(decision.turn_plan, message.content)
-        risks = plan_risks(plan)
-        lexical = self._emergency.classify(message.content)
-        hazard = next(
-            (risk.split(":", 1)[1] for risk in sorted(risks) if risk.startswith("current_hazard:")),
-            None,
-        )
-        if hazard is not None and not lexical.is_emergency:
-            # 危险语义补漏只升不降：计划判为当前危险而词面未命中时完整处置并接管（Spec §2.6）。
-            await self._escalate_emergency(
-                conversation, message, EmergencyClassification(True, hazard)
-            )
+        if await self._apply_plan_risk(conversation, message, plan):
+            timing.outcome = "emergency"
             return
-        if "possible_hazard" in risks and not (lexical.is_possible or lexical.is_emergency):
-            await self._answer_possible_danger(conversation, message)
         confirmation_reply = ""
         current_stay: dict[str, Any] | None = None
         if stay_repository is not None:
@@ -1729,12 +1764,17 @@ class ConversationService:
             decision.reply_parts, fallback=decision.reply_text,
             language=conversation.language, question=message.content, high_risk=high_risk,
         )
+        if action_reply and prepared_reply.strip() == unconfirmed_fallback(conversation.language):
+            # 模型正文全是执行承诺、被出口过滤成中性兜底时，本轮回复就是实际动作结果，
+            # 不在登记结果前加「这项信息暂时无法确认」（修复 Spec §2.4，SR-毛巾）。
+            prepared_reply = ""
         if progress_reply:
             prepared_reply = f"{prepared_reply}\n\n{progress_reply}"
         if confirmation_reply:
             prepared_reply = f"{prepared_reply}\n\n{confirmation_reply}"
         if action_reply:
             prepared_reply = f"{prepared_reply}\n\n{action_reply}"
+        prepared_reply = prepared_reply.lstrip("\n")
         fast_ack_sha256 = str((message.metadata or {}).get("fast_ack_sha256", ""))
         prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
         unchanged_ack = (

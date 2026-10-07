@@ -320,3 +320,84 @@ async def test_current_fault_always_carries_a_stop_using_tip() -> None:
         "吹风机一开就跳闸了", AssistantStub(decision=stop, plan="facility_fault")
     )
     assert wecom.guest_messages[-1].count("停止使用") == 1
+
+
+def _fire_plan(text: str) -> PlanOutcome:
+    """词面未命中、计划判为当前火情的计划。"""
+    return plan_for(text, ("facility_fault", text, {"risk": "current_hazard:fire"}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stub", [AssistantStub, FailingAssistantStub])
+async def test_planned_hazard_is_handled_whether_main_reply_succeeds_or_fails(stub) -> None:
+    """B24-R1：同一当前危险计划，主回复成功或失败都发完整紧急处置、接管并按紧急事件通知。"""
+    tasks, wecom, conversations = await _guest_turn("插座那边窜白烟", stub(plan=_fire_plan))
+    assert "119" in wecom.guest_messages[-1]
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert any("紧急事件" in message for message in wecom.internal_messages)
+    assert not any("模型服务暂时不可用" in message for message in wecom.internal_messages)
+    assert tasks.calls == []
+
+
+@pytest.mark.asyncio
+async def test_failed_reply_with_a_stale_plan_does_not_escalate() -> None:
+    """B24-R1 对照：异常带回的计划与本轮正文摘要不一致时按无计划处理，不升级紧急。"""
+    stale = _fire_plan("另一句话")
+    _, wecom, _ = await _guest_turn("插座那边窜白烟", FailingAssistantStub(plan=lambda _t: stale))
+    assert "119" not in wecom.guest_messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_failed_reply_with_possible_hazard_plan_warns_first() -> None:
+    """B24-R1：主回复失败时，计划的可能危险同样先给避险提醒。"""
+    text = "房间里有点怪味"
+    plan = lambda t: plan_for(t, ("facility_fault", t, {"risk": "possible_hazard"}))  # noqa: E731
+    _, wecom, _ = await _guest_turn(text, FailingAssistantStub(plan=plan))
+    assert any("避开可能有危险" in message for message in wecom.guest_messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [ConversationMode.BOT_ACTIVE, ConversationMode.HUMAN_ACTIVE])
+async def test_split_refund_after_happy_exclamation_keeps_the_refund_route(mode) -> None:
+    """B24-R2：「第一次来太开心了!!! 退\\n款」不受平静计划影响，按退款进客诉或高风险护栏。"""
+    text = "第一次来太开心了!!! 退\n款"
+    service, conversations, wecom, jobs, source, _ = _deferred(
+        text, AssistantStub(plan=lambda t: plan_for(t, ("chitchat", t)))
+    )
+    conversations.conversation.mode = mode
+    await service.process_debounced_message(source)
+    assert jobs.jobs == []
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert wecom.internal_messages
+    assert service._assistant.plan_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_immediate_entry_routes_split_refund_without_deferring() -> None:
+    """B24-R2：即时入口同样先看全部文本变体里的硬理由，不把退款当成软判定延后。"""
+    jobs = DeferredJobStub()
+    service, conversations, _, wecom = build_service(
+        assistant=AssistantStub(plan="chitchat"), jobs=jobs, complaint_service=ComplaintService()
+    )
+    await service.handle_message(incoming(content="第一次来太开心了!!! 退\n款"))
+    assert jobs.jobs == []
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert wecom.internal_messages
+
+
+@pytest.mark.asyncio
+async def test_service_reply_is_the_action_result_when_model_text_is_all_promise() -> None:
+    """SR-毛巾：模型正文全是执行承诺被出口过滤时，客人只收到实际登记结果，不出现
+    「暂时无法确认」或「尚未确认」。"""
+    decision = AssistantDecision(
+        reply_text="马上为您安排送两条毛巾。", language=Language.ZH, intent="service",
+        confidence=0.9,
+    )
+    tasks, wecom, _ = await _guest_turn(
+        "毛巾不够用了，能再给两条吗", AssistantStub(decision=decision, plan="service_request")
+    )
+    reply = wecom.guest_messages[-1]
+    assert len(tasks.calls) == 1
+    assert reply.startswith("您的请求已登记")
+    assert "暂时无法确认" not in reply
+    assert "尚未确认" not in reply
