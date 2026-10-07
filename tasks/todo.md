@@ -5,7 +5,10 @@
 - [x] 红测：修复前 16 个失败；R1–R6 修复；PostgreSQL 专项 3 个（含变异检查）
 - [x] 本地全量 2638 passed / 65 skipped；Ruff、Mypy；隔离 PostgreSQL 25 passed
 - [x] 候选门禁：rc-1.69.1-1 退步 2 个（收窄偏差 F1 已修）；rc-1.69.1-2 首跑遇 DeepSeek 余额不足（402），用户充值后重跑通过（首轮 137/154，无退步，新纳入 SR-毛巾）
-- [ ] 版本 1.69.1、CHANGELOG、发布记录、AOCI；提交、标签、推送、CI；备份、部署、独立核对；复审报告
+- [x] 版本 1.69.1、CHANGELOG、发布记录、AOCI；提交 `9a08a39`、标签 v1.69.1（GitHub 故障，部署后推送成功）；CI success（2638 / 65，PostgreSQL 25）
+- [x] 完整备份；复用 rc-1.69.1-2 门禁部署；独立核对与容器内行为核对；新基线必过 136 / 已知未通过 18
+- [x] 复审报告 `docs/reviews/2026-10-07_claude-to-codex-reply-generalization-b24-fix-handoff.md`
+- 未做：测试号真实收发（需当次授权）
 
 ---
 # 已完成：1.69.0 回复泛用化第二至四批（2026-10-07）

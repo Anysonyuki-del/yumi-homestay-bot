@@ -129,6 +129,7 @@
   "PR-讲价",
   "SC-国庆早餐",
   "SR-垃圾",
+  "SR-毛巾",
   "T-checkout-EN",
   "T-wifi",
   "T-早餐",
@@ -159,7 +160,6 @@
   "M-儿童早餐": "0/3 次通过；路由 knowledge→unconfirmed，缺 免费，出现 尚未确认",
   "SC-401无上下文": "0/3 次通过；路由 knowledge→unconfirmed，缺 木梯",
   "SC-401有上下文": "0/3 次通过；缺 木梯",
-  "SR-毛巾": "0/3 次通过；路由 handoff→model",
   "SR-遗失": "0/3 次通过；路由 handoff→unconfirmed，缺 30天",
   "T-吸烟": "0/3 次通过；路由 knowledge→unconfirmed，缺 禁止吸烟",
   "UN-代码": "0/3 次通过；路由 unrelated→model",
@@ -253,6 +253,14 @@
     "W-推荐"
    ],
    "source": "部署门禁 3 次全过（轮次计划贯通工具、证据选择、任务写入口与软判定复核后）"
+  },
+  {
+   "version": "1.69.1",
+   "date": "2026-10-07",
+   "added": [
+    "SR-毛巾"
+   ],
+   "source": "候选门禁 rc-1.69.1-2 三次全过（审查修复 B24-R1–R6 后；正式标签回复代码与资料一致，部署复用该结果）"
   }
  ],
  "expectation_changes": [
