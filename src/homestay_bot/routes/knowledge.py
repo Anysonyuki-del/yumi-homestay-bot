@@ -1,5 +1,6 @@
 import hashlib
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal, Protocol, cast
@@ -18,10 +19,15 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BeforeValidator
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from homestay_bot.domain.enums import EmployeeRole, KnowledgeCandidateStatus
+from homestay_bot.domain.enums import (
+    EmployeeRole,
+    KnowledgeCandidateStatus,
+    KnowledgeReferralStatus,
+)
 from homestay_bot.domain.errors import OperationRefused
 from homestay_bot.domain.models import (
     AuditLog,
@@ -29,17 +35,31 @@ from homestay_bot.domain.models import (
     KnowledgeEmbedding,
     KnowledgeEntry,
     KnowledgeImage,
+    KnowledgeReferral,
+    Message,
     PropertyProfile,
 )
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
 from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
+from homestay_bot.repositories.knowledge_referrals import (
+    DRAFT_SOURCE_LIMIT,
+    DRAFTABLE_STATUSES,
+    OPEN_STATUSES,
+    SQLAlchemyKnowledgeReferralRepository,
+    window_start,
+)
 from homestay_bot.routes.admin_form_csrf import AdminCsrfServicePort
 from homestay_bot.routes.employee_auth import require_employee_session
 from homestay_bot.routes.page_errors import safe_return_path
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.admin_csrf import AdminCsrfCapacityError
-from homestay_bot.services.knowledge_service import validate_knowledge_scope
+from homestay_bot.services.knowledge_referral_service import KNOWLEDGE_REFERRAL_DRAFT_JOB_TYPE
+from homestay_bot.services.knowledge_service import (
+    validate_knowledge_content,
+    validate_knowledge_scope,
+)
 from homestay_bot.services.private_file_storage import StoredPrivateFile
+from homestay_bot.services.sensitive_text import contains_sensitive_text
 from homestay_bot.services.task_page_service import ATTACHMENT_CLEANUP_JOB_TYPE
 from homestay_bot.web import pop_page_notice, set_page_notice, templates
 
@@ -53,6 +73,10 @@ KNOWLEDGE_IMAGE_MAX_BYTES = 2 * 1024 * 1024
 KNOWLEDGE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg"})
 
 
+# 发给客人的中英问答字段；占位符检查只看这四项。
+_QA_FIELDS = ("question_zh", "answer_zh", "question_en", "answer_en")
+
+
 class KnowledgeFormError(OperationRefused):
     """知识表单的范围、日期或房间填写有误；文案写给管理员看，可以原样展示。
 
@@ -60,6 +84,39 @@ class KnowledgeFormError(OperationRefused):
     """
 
     status_code = 422
+
+
+# 入库时管理员提交的全部文本字段，逐项做凭据检测（Spec 2026-10-08 fix2 §2.6(0)(5)）。
+_REFERRAL_TEXT_FIELDS = ("category", *_QA_FIELDS)
+_REFERRAL_SUPPRESSION = timedelta(days=30)
+
+
+@dataclass(frozen=True)
+class ReferralStaffMessage:
+    """详情页的一条管家消息：敏感消息只列出不交给模型，与转交同一秒的标注核对。"""
+
+    message: Message
+    sensitive: bool
+    near_time: bool
+    frozen: bool
+    used: bool
+
+
+@dataclass(frozen=True)
+class ReferralListItem:
+    """列表一行：转交记录与按窗口实时计算的管家回复条数。"""
+
+    referral: KnowledgeReferral
+    reply_count: int
+
+
+@dataclass(frozen=True)
+class ReferralDetail:
+    """资料核实详情页需要的全部数据，模板不自行访问数据库。"""
+
+    referral: KnowledgeReferral
+    property: PropertyProfile | None
+    messages: list[ReferralStaffMessage] = field(default_factory=list)
 
 
 class KnowledgeAdminServicePort(Protocol):
@@ -135,6 +192,32 @@ class KnowledgeAdminServicePort(Protocol):
 
     async def image_file(self, entry_id: int, image_id: int) -> StoredPrivateFile:
         """返回配图私有文件供后台预览。"""
+
+    async def list_referrals(self, *, limit: int = 50, offset: int = 0) -> list[Any]:
+        """资料核实列表。"""
+
+    async def count_open_referrals(self) -> int:
+        """待处理的资料核实数量。"""
+
+    async def referral_detail(self, referral_id: int) -> Any:
+        """资料核实详情。"""
+
+    async def start_referral_draft(self, referral_id: int, employee_id: int) -> None:
+        """管理员点「整理草稿」：换代并冻结本代次的管家消息。"""
+
+    async def convert_referral(
+        self,
+        referral_id: int,
+        employee_id: int,
+        *,
+        generation: int,
+        reviewed: bool,
+        **fields: Any,
+    ) -> Any:
+        """把已整理的草稿核对后入库。"""
+
+    async def close_referral(self, referral_id: int, employee_id: int) -> None:
+        """关闭为「不入库」并写入 30 天抑制。"""
 
 
 class KnowledgeAdminService:
@@ -221,12 +304,23 @@ class KnowledgeAdminService:
         ):
             raise KnowledgeFormError("所选房间不存在，请重新选择")
 
+    @staticmethod
+    def _validate_content(fields: dict[str, Any]) -> None:
+        """写入前拒绝仍带草稿占位符的问答，候选页预填的草稿必须先核实替换。"""
+        try:
+            validate_knowledge_content(
+                *(fields.get(name) for name in _QA_FIELDS)
+            )
+        except ValueError as error:
+            raise KnowledgeFormError(str(error)) from error
+
     async def get_detail(self, entry_id: int) -> KnowledgeEntry:
         """按主键读取知识详情，模板不得自行访问数据库。"""
         return await self._require_entry(entry_id)
 
     async def create(self, employee_id: int, **fields: Any) -> KnowledgeEntry:
         """创建默认启用的双语知识，并记录最小审计信息。"""
+        self._validate_content(fields)
         await self._validate_scope(fields)
         entry = KnowledgeEntry(**fields, is_enabled=True, updated_by=employee_id)
         self._session.add(entry)
@@ -238,6 +332,10 @@ class KnowledgeAdminService:
     async def update(self, entry_id: int, employee_id: int, **fields: Any) -> KnowledgeEntry:
         """更新允许编辑的知识字段，并记录条目级审计。"""
         entry = await self._require_entry(entry_id)
+        # 只改了部分字段时，按改后的完整问答核对，未改的字段取库里的现值。
+        self._validate_content(
+            {name: fields.get(name, getattr(entry, name)) for name in _QA_FIELDS}
+        )
         await self._validate_scope(
             {
                 name: fields.get(name, getattr(entry, name))
@@ -269,6 +367,10 @@ class KnowledgeAdminService:
     async def set_enabled(self, entry_id: int, employee_id: int, enabled: bool) -> None:
         """立即切换知识可用状态并写入最小审计记录。"""
         entry = await self._require_entry(entry_id)
+        if enabled:
+            # 启用等于把问答重新发给客人：占位符拦截上线前存下的历史条目也要先核实。
+            # 停用不校验，含占位符的已启用条目必须能随时止损下线。
+            self._validate_content({name: getattr(entry, name) for name in _QA_FIELDS})
         entry.is_enabled = enabled
         entry.updated_by = employee_id
         action = "knowledge.enable" if enabled else "knowledge.disable"
@@ -364,6 +466,7 @@ class KnowledgeAdminService:
         candidate = await self._require_candidate(candidate_id)
         if candidate.status is not KnowledgeCandidateStatus.OPEN:
             raise LookupError(f"FAQ 候选不可转换: {candidate_id}")
+        self._validate_content(fields)
         await self._validate_scope(fields)
         entry = KnowledgeEntry(**fields, is_enabled=True, updated_by=employee_id)
         self._session.add(entry)
@@ -498,6 +601,224 @@ class KnowledgeAdminService:
         if image is None or image.knowledge_entry_id != entry_id:
             raise LookupError(f"配图不存在: {image_id}")
         return image
+
+    # ---- 资料核实（修复 Spec 2026-10-08 fix2 §2.6(3)(5)） ----
+
+    async def list_referrals(
+        self, *, limit: int = 50, offset: int = 0,
+    ) -> list[ReferralListItem]:
+        """列表与「管家已回复 N 条」，N 按管家消息窗口实时计算。"""
+        repository = SQLAlchemyKnowledgeReferralRepository(self._session)
+        return [
+            ReferralListItem(
+                referral=referral,
+                reply_count=len(await repository.servicer_messages(referral)),
+            )
+            for referral in await repository.list_recent(limit=limit, offset=offset)
+        ]
+
+    async def count_open_referrals(self) -> int:
+        """待处理数量（D-G17：不催办，只在后台显示）。"""
+        return await SQLAlchemyKnowledgeReferralRepository(self._session).count_open()
+
+    async def referral_detail(self, referral_id: int) -> ReferralDetail:
+        """详情：原问、房源、窗口内管家消息（管理员已鉴权，可看原文）与草稿。"""
+        repository = SQLAlchemyKnowledgeReferralRepository(self._session)
+        referral = await self._require_referral(referral_id)
+        draft = referral.draft or {}
+        used = set(draft.get("used_message_ids", []))
+        frozen = set(referral.source_message_ids or [])
+        start = window_start(referral.created_at)
+        messages = [
+            ReferralStaffMessage(
+                message=message,
+                sensitive=contains_sensitive_text(message.content or ""),
+                near_time=message.sent_at.replace(microsecond=0) == start,
+                frozen=message.id in frozen,
+                used=message.id in used,
+            )
+            for message in await repository.servicer_messages(referral)
+        ]
+        return ReferralDetail(
+            referral=referral,
+            property=(
+                await self._session.get(PropertyProfile, referral.property_id)
+                if referral.property_id is not None
+                else None
+            ),
+            messages=messages,
+        )
+
+    async def start_referral_draft(self, referral_id: int, employee_id: int) -> None:
+        """一个事务内：锁定记录、代次加一、改为整理中、清空旧草稿、冻结来源并入队。
+
+        冻结窗口内最新的 5 条非敏感管家消息编号（按发送时间、消息编号排序），只存编号不复制
+        原文；之后新到的消息需要再次点击、进入新代次。窗口内没有可用消息时直接记为「没找到
+        答案」，不调用模型。整理中不能强制重开（V8-R2）。
+        """
+        repository = SQLAlchemyKnowledgeReferralRepository(self._session)
+        referral = await repository.get(referral_id, lock=True)
+        if referral is None:
+            raise LookupError(f"资料核实不存在: {referral_id}")
+        if referral.status not in DRAFTABLE_STATUSES:
+            raise KnowledgeFormError("这条资料核实当前不能整理草稿，请刷新页面查看最新状态")
+        candidates = [
+            message
+            for message in await repository.servicer_messages(referral)
+            if not contains_sensitive_text(message.content or "")
+        ]
+        frozen = [message.id for message in candidates[-DRAFT_SOURCE_LIMIT:]]
+        generation = referral.generation
+        try:
+            # SQLite 不提供行锁；状态和代次必须在同一 UPDATE 中争取资格。
+            result = cast(CursorResult[Any], await self._session.execute(
+                update(KnowledgeReferral).where(
+                    KnowledgeReferral.id == referral_id,
+                    KnowledgeReferral.status.in_(DRAFTABLE_STATUSES),
+                    KnowledgeReferral.generation == generation,
+                ).values(
+                    generation=generation + 1, draft=None, source_message_ids=frozen,
+                    status=(KnowledgeReferralStatus.DRAFTING if frozen
+                            else KnowledgeReferralStatus.NO_ANSWER),
+                ).execution_options(synchronize_session=False)
+            ))
+            if result.rowcount != 1:
+                raise KnowledgeFormError("草稿已变化，请刷新页面查看最新状态")
+            if frozen:
+                await SQLAlchemyJobRepository(self._session).enqueue(
+                    KNOWLEDGE_REFERRAL_DRAFT_JOB_TYPE,
+                    {"referral_id": referral_id, "generation": generation + 1},
+                    dedupe_key=f"referral-draft:{referral_id}:{generation + 1}",
+                )
+            self._add_referral_audit(employee_id, "knowledge_referral.draft", referral_id)
+            await self._session.commit()
+        except BaseException:
+            await self._session.rollback()
+            raise
+
+    async def convert_referral(
+        self,
+        referral_id: int,
+        employee_id: int,
+        *,
+        generation: int,
+        reviewed: bool,
+        **fields: Any,
+    ) -> KnowledgeEntry:
+        """一个事务完成入库，仿照 `convert_candidate`，不调用会自行提交的 `create`。
+
+        锁定记录，核对「状态 = 已整理、代次 = 页面携带的代次、草稿完整」；服务端校验
+        「已核对」勾选；全部提交字段做凭据检测与占位符拦截，按范围校验后建启用知识；只结束
+        实际采用的这条记录。中途失败全部回滚，不留下孤立的启用知识（V6-R6、V7-R4）。
+        """
+        repository = SQLAlchemyKnowledgeReferralRepository(self._session)
+        referral = await repository.get(referral_id, lock=True)
+        if referral is None:
+            raise LookupError(f"资料核实不存在: {referral_id}")
+        draft = referral.draft or {}
+        if (
+            referral.status is not KnowledgeReferralStatus.DRAFTED
+            or referral.generation != generation
+            or not all(str(draft.get(name, "")).strip() for name in _QA_FIELDS)
+        ):
+            raise KnowledgeFormError("草稿已变化或尚未整理完成，请刷新页面后重新核对")
+        if not reviewed:
+            raise KnowledgeFormError("请先核对中英答案与适用范围，并勾选「已核对」")
+        if fields.get("scope") not in {"property", "global"}:
+            raise KnowledgeFormError("请选择「仅此房间」或「全店」")
+        texts = [str(fields.get(name) or "") for name in _REFERRAL_TEXT_FIELDS]
+        texts.extend(str(item) for item in fields.get("keywords") or [])
+        if any(contains_sensitive_text(text) for text in texts):
+            raise KnowledgeFormError(
+                "内容含密码、验证码、链接或客人隐私信息，请删除后再入库"
+            )
+        self._validate_content(fields)
+        await self._validate_scope(fields)
+        try:
+            # 先原子取得入库资格，清空或换代先提交时不能再创建孤立知识。
+            result = cast(CursorResult[Any], await self._session.execute(
+                update(KnowledgeReferral).where(
+                    KnowledgeReferral.id == referral_id,
+                    KnowledgeReferral.status == KnowledgeReferralStatus.DRAFTED,
+                    KnowledgeReferral.generation == generation,
+                ).values(status=KnowledgeReferralStatus.CONVERTED)
+                .execution_options(synchronize_session=False)
+            ))
+            if result.rowcount != 1:
+                raise KnowledgeFormError("草稿已变化或尚未整理完成，请刷新页面后重新核对")
+            entry = KnowledgeEntry(**fields, is_enabled=True, updated_by=employee_id)
+            self._session.add(entry)
+            await self._session.flush()
+            await self._session.execute(
+                update(KnowledgeReferral).where(KnowledgeReferral.id == referral_id)
+                .values(knowledge_entry_id=entry.id).execution_options(synchronize_session=False)
+            )
+            self._add_referral_audit(
+                employee_id, "knowledge_referral.convert", referral_id, knowledge_entry_id=entry.id
+            )
+            await self._session.commit()
+        except BaseException:
+            await self._session.rollback()
+            raise
+        return entry
+
+    async def close_referral(self, referral_id: int, employee_id: int) -> None:
+        """关闭为「不入库」：同一问题与房源 30 天内不再转交（D-G16），在途草稿写回失配。"""
+        repository = SQLAlchemyKnowledgeReferralRepository(self._session)
+        referral = await repository.get(referral_id, lock=True)
+        if referral is None:
+            raise LookupError(f"资料核实不存在: {referral_id}")
+        if referral.status not in OPEN_STATUSES:
+            raise KnowledgeFormError("这条资料核实已结束，请刷新页面查看最新状态")
+        try:
+            result = cast(CursorResult[Any], await self._session.execute(
+                update(KnowledgeReferral).where(
+                    KnowledgeReferral.id == referral_id,
+                    KnowledgeReferral.status.in_(OPEN_STATUSES),
+                ).values(status=KnowledgeReferralStatus.CLOSED)
+                .execution_options(synchronize_session=False)
+            ))
+            if result.rowcount != 1:
+                raise KnowledgeFormError("这条资料核实已结束，请刷新页面查看最新状态")
+            if referral.normalized_question:
+                await repository.suppress(
+                    referral.normalized_question, referral.property_id,
+                    until=self._now() + _REFERRAL_SUPPRESSION, closed_by=employee_id,
+                )
+            self._add_referral_audit(employee_id, "knowledge_referral.close", referral_id)
+            await self._session.commit()
+        except BaseException:
+            await self._session.rollback()
+            raise
+
+    async def _require_referral(self, referral_id: int) -> KnowledgeReferral:
+        """读取资料核实记录，不存在时抛出稳定异常。"""
+        referral = await SQLAlchemyKnowledgeReferralRepository(self._session).get(referral_id)
+        if referral is None:
+            raise LookupError(f"资料核实不存在: {referral_id}")
+        return referral
+
+    def _add_referral_audit(
+        self,
+        employee_id: int,
+        action: str,
+        referral_id: int,
+        *,
+        knowledge_entry_id: int | None = None,
+    ) -> None:
+        """审计只记编号与动作，不复制原问、管家消息或草稿。"""
+        details = {"referral_id": referral_id}
+        if knowledge_entry_id is not None:
+            details["knowledge_entry_id"] = knowledge_entry_id
+        self._session.add(
+            AuditLog(
+                actor_employee_id=employee_id,
+                action=action,
+                target_type="knowledge_referral",
+                target_id=str(referral_id),
+                details=details,
+            )
+        )
 
     async def _require_entry(self, entry_id: int) -> KnowledgeEntry:
         """读取目标知识，不存在时抛出稳定异常。"""
@@ -820,6 +1141,8 @@ async def _render_index(
         else []
     )
     csrf_token = await _issue_csrf(request) if is_admin else ""
+    # 资料核实待处理数量只给管理员看（D-G17：不催办，只在后台显示）。
+    referral_open_count = await service.count_open_referrals() if is_admin else 0
     filters = {
         key: value
         for key, value in {
@@ -855,6 +1178,7 @@ async def _render_index(
             "candidates": candidates[:50],
             "can_edit": is_admin,
             "csrf_token": csrf_token,
+            "referral_open_count": referral_open_count,
             "page": page,
             "candidate_page": candidate_page,
             "query": query or "",
@@ -1208,9 +1532,13 @@ async def toggle_knowledge(
         raise HTTPException(status_code=404, detail="未知知识操作")
     employee_id = await _require_admin(request)
     await _consume_csrf(request, csrf_token)
-    await _get_service(request).set_enabled(entry_id, employee_id, enabled=action == "enable")
     # 回到来源视图；来源里没带锚点时才补上条目区锚点。
     target = safe_return_path(return_to, fallback="/employee/knowledge")
     if "#" not in target:
         target = f"{target}#knowledge-entries"
+    try:
+        await _get_service(request).set_enabled(entry_id, employee_id, enabled=action == "enable")
+    except KnowledgeFormError as error:
+        error.return_to = target
+        raise
     return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)

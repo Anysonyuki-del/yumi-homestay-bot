@@ -8,7 +8,8 @@
 {% set failed_values = failed.get("values") %}
 <nav class="tab-nav" aria-label="知识库分区">
   <a href="{{ entries_url }}"{% if view == 'entries' %} aria-current="page"{% endif %}>现有知识</a>
-  {% if can_edit %}<a href="{{ candidates_url }}"{% if view == 'candidates' %} aria-current="page"{% endif %}>待审核候选</a>{% endif %}
+  {% if can_edit %}<a href="{{ candidates_url }}"{% if view == 'candidates' %} aria-current="page"{% endif %}>待审核候选</a>
+  <a href="/employee/knowledge-referrals">资料核实{% if referral_open_count %}（{{ referral_open_count }} 待处理）{% endif %}</a>{% endif %}
 </nav>
 
 {% if view == "candidates" %}

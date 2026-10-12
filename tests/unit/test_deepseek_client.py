@@ -1055,7 +1055,8 @@ async def test_faq_candidate_is_returned_in_same_structured_guest_response() -> 
     request = client.chat.completions.requests[0]
     system_prompt = request["messages"][0]["content"]
     envelope = request["messages"][-1]["content"]
-    assert '"canonical_question"' not in system_prompt
+    # 候选上下文只进信封；系统提示里的 canonical_question 只是 gap_referrals 输出结构的字段名。
+    assert "标准问题20" not in system_prompt and "标准问题20" in envelope
     assert envelope.count('"canonical_question"') == 20
     assert '"id": 20' in envelope
     assert '"id": 21' not in envelope

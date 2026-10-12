@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from homestay_bot.domain.enums import Language
 
@@ -29,6 +29,9 @@ class ReplyPart(BaseModel):
     status: Literal["grounded", "missing", "clarification", "query_failed", "out_of_scope"]
     text: str
     evidence: tuple[ReplyEvidence, ...] = ()
+    # 本分项对应的缺口单元编号，只由适配器本地填写；会话层据此把已转交管家的缺口分项
+    # 换成转交说明（修复 Spec 2026-10-08 fix2 §2.6(2)）。不序列化、不进客人正文。
+    gap_unit: str | None = Field(default=None, exclude=True)
 
 
 class GuestActionResult(BaseModel):

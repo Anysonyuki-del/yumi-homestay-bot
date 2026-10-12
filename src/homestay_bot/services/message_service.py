@@ -77,6 +77,9 @@ class MessageRepository(Protocol):
     ) -> bool:
         """判断来源消息之后是否出现客人或员工的新活动。"""
 
+    async def source_cleared(self, external_message_id: str) -> bool:
+        """来源消息是否已被测试数据清空。"""
+
 
 class MessageService:
     """统一保存企业微信入站消息和机器人出站消息。"""
@@ -240,3 +243,7 @@ class MessageService:
             conversation_id,
             external_message_id,
         )
+
+    async def source_cleared(self, external_message_id: str) -> bool:
+        """来源消息是否已被测试数据清空；等待模型或规划后与过时复核一起检查。"""
+        return await self._repository.source_cleared(external_message_id)

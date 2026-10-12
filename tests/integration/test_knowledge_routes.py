@@ -20,11 +20,13 @@ from homestay_bot.domain.models import (
     Base,
     Employee,
     KnowledgeCandidate,
+    KnowledgeEntry,
 )
 from homestay_bot.repositories.employees import SQLAlchemyEmployeeRepository
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
 from homestay_bot.routes.knowledge import (
     KnowledgeAdminService,
+    KnowledgeFormError,
 )
 from homestay_bot.routes.knowledge import (
     router as knowledge_router,
@@ -180,6 +182,10 @@ class KnowledgeAdminStub:
     async def snooze_candidate(self, candidate_id: int, employee_id: int) -> None:
         """记录管理员关闭候选。"""
         self.snoozed = (candidate_id, employee_id)
+
+    async def count_open_referrals(self) -> int:
+        """资料核实待处理数量；本组用例不涉及转交。"""
+        return 0
 
     async def delete_entry(self, entry_id: int, employee_id: int) -> None:
         """删除条目；不存在时保持 LookupError 语义。"""
@@ -703,6 +709,122 @@ async def test_admin_service_converts_candidate_and_clears_private_content() -> 
             "knowledge_entry_id": entry.id,
         }
         assert "敏感" not in str(audit.details)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_admin_service_rejects_unconfirmed_draft_placeholder() -> None:
+    """草稿占位符未替换时，转换、新增、编辑都不得写成启用知识发给客人。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    confirmed = {
+        "category": "交通",
+        "question_zh": "民宿是否提供停车位？",
+        "answer_zh": "院外有公共停车位，收费以现场为准。",
+        "question_en": "Is parking available?",
+        "answer_en": "Public parking is outside; fees are charged on site.",
+        "keywords": ["停车"],
+        "scope": "global",
+    }
+
+    async with factory() as session:
+        employee = Employee(wecom_userid="admin-1", name="管理员", role=EmployeeRole.ADMIN)
+        session.add(employee)
+        await session.flush()
+        candidates = SQLAlchemyFaqCandidateRepository(session)
+        candidate = await candidates.get_or_create(
+            canonical_question="是否提供停车位？", category="交通"
+        )
+        await session.commit()
+        # 回滚会让已加载对象过期，先记下编号，避免异步会话里触发懒加载。
+        employee_id, candidate_id = employee.id, candidate.id
+        service = KnowledgeAdminService(session)
+
+        # 管理员直接提交候选页预填的草稿：中文答案仍带占位符。
+        with pytest.raises(KnowledgeFormError, match="待管理员确认"):
+            await service.convert_candidate(
+                candidate_id,
+                employee_id,
+                **{**confirmed, "answer_zh": "停车位数量为【待管理员确认】。"},
+            )
+        await session.rollback()
+        still_open = await session.get(KnowledgeCandidate, candidate_id)
+        assert still_open is not None
+        assert still_open.status is KnowledgeCandidateStatus.OPEN
+        assert await session.scalar(select(KnowledgeEntry)) is None
+
+        with pytest.raises(KnowledgeFormError, match="待管理员确认"):
+            await service.create(
+                employee_id, **{**confirmed, "answer_en": "【待管理员确认】"}
+            )
+        await session.rollback()
+        assert await session.scalar(select(KnowledgeEntry)) is None
+
+        # 编辑只改问题时，也要按改后的完整正文核对。
+        entry_id = (await service.create(employee_id, **confirmed)).id
+        with pytest.raises(KnowledgeFormError, match="待管理员确认"):
+            await service.update(
+                entry_id, employee_id, question_zh="【待管理员确认】的停车问题"
+            )
+        await session.rollback()
+        unchanged = await session.get(KnowledgeEntry, entry_id)
+        assert unchanged is not None
+        assert unchanged.question_zh == confirmed["question_zh"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_admin_service_refuses_enabling_entry_with_placeholder() -> None:
+    """历史停用条目若含草稿占位符，启用前必须拒绝；停用仍然允许。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as session:
+        employee = Employee(wecom_userid="admin-1", name="管理员", role=EmployeeRole.ADMIN)
+        # 直接写库模拟占位符拦截上线之前存下的历史条目，绕过服务层校验。
+        legacy = KnowledgeEntry(
+            category="交通",
+            question_zh="停车怎么收费？",
+            answer_zh="停车费每晚20元，车位位置为【待管理员确认】。",
+            question_en="How is parking charged?",
+            answer_en="Parking is CNY 20 per night.",
+            keywords=["停车"],
+            scope="global",
+            is_enabled=False,
+        )
+        live = KnowledgeEntry(
+            category="交通",
+            question_zh="能停车吗？",
+            answer_zh="【待管理员确认】",
+            question_en="Can I park?",
+            answer_en="Yes.",
+            keywords=["停车"],
+            scope="global",
+            is_enabled=True,
+        )
+        session.add_all([employee, legacy, live])
+        await session.commit()
+        employee_id, legacy_id, live_id = employee.id, legacy.id, live.id
+        service = KnowledgeAdminService(session)
+
+        with pytest.raises(KnowledgeFormError, match="待管理员确认"):
+            await service.set_enabled(legacy_id, employee_id, enabled=True)
+        await session.rollback()
+        still_disabled = await session.get(KnowledgeEntry, legacy_id)
+        assert still_disabled is not None
+        assert still_disabled.is_enabled is False
+
+        # 已经启用的含占位符条目必须能被停用，不能因为校验卡住止损操作。
+        await service.set_enabled(live_id, employee_id, enabled=False)
+        stopped = await session.get(KnowledgeEntry, live_id)
+        assert stopped is not None
+        assert stopped.is_enabled is False
 
     await engine.dispose()
 

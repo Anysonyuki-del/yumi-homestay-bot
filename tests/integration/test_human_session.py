@@ -48,7 +48,7 @@ class KfStub:
         self.cards.append(kwargs)
 
 
-async def _card(conversation: Conversation) -> HandoffCard:
+async def _card(conversation: Conversation, task_id: str | None = None) -> HandoffCard:
     """更新卡片用的固定内容。"""
     return HandoffCard(
         conversation_id=conversation.id,

@@ -477,7 +477,8 @@ def pre_route(
             "route": "emergency",
             "final": emergency_follow_up_reply(active, language, entries),
         }
-    complaint = ComplaintService.classify(question)
+    # 与线上同一路由：对全部规则文本变体分类并按业务优先级合并（修复 Spec §2.2）。
+    complaint = ComplaintService.classify_all(ConversationService._policy_questions(question))
     if complaint.is_complaint:
         return {
             "route": "complaint",

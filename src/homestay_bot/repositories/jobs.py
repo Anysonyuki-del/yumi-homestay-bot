@@ -12,12 +12,14 @@ from homestay_bot.domain.enums import (
     ComplaintReviewStatus,
     CredentialDeliveryStatus,
     JobStatus,
+    KnowledgeReferralStatus,
 )
 from homestay_bot.domain.models import (
     ComplaintReview,
     CredentialDelivery,
     CredentialDeliveryPart,
     Job,
+    KnowledgeReferral,
 )
 
 _SQLITE_CLAIM_LOCKS: WeakKeyDictionary[AsyncEngine, asyncio.Lock] = WeakKeyDictionary()
@@ -190,6 +192,7 @@ class SQLAlchemyJobRepository:
         # 必须在清空载荷之前：part_id 只存在于 payload 里，先把它抹掉再补偿，
         # 就再也找不到这条任务对应的是哪个凭证部件了。
         await self._compensate_stale_credential_parts(before)
+        await self._fail_stale_referral_drafts(before, max(1, max_attempts))
         failed_statement = (
             update(Job)
             .where(
@@ -297,6 +300,40 @@ class SQLAlchemyJobRepository:
                 "guest_delivery_failure_compensate",
                 {"message_id": message_id},
                 dedupe_key=f"delivery-compensate:{message_id}",
+            )
+
+    async def _fail_stale_referral_drafts(self, before: datetime, max_attempts: int) -> None:
+        """超时耗尽的资料核实草稿作业：在清空载荷之前把对应转交写为草稿失败。
+
+        `recover_stale` 对达到上限的 RUNNING 作业直接置 FAILED、清空载荷，不调用失败回调；
+        载荷清空后就找不到转交编号与代次（Spec 2026-10-08 fix2 §2.6(3)，V8-R2）。只更新
+        「整理中 + 当前代次」，数据库错误照常传播。
+        """
+        stale_jobs = (
+            await self._session.scalars(
+                select(Job).where(
+                    Job.status == JobStatus.RUNNING,
+                    Job.locked_at < before,
+                    Job.job_type == "knowledge_referral_draft",
+                    Job.attempts >= max_attempts,
+                    *self._job_type_conditions(),
+                )
+            )
+        ).all()
+        for job in stale_jobs:
+            referral_id = job.payload.get("referral_id")
+            generation = job.payload.get("generation")
+            if not isinstance(referral_id, int) or not isinstance(generation, int):
+                continue
+            await self._session.execute(
+                update(KnowledgeReferral)
+                .where(
+                    KnowledgeReferral.id == referral_id,
+                    KnowledgeReferral.status == KnowledgeReferralStatus.DRAFTING,
+                    KnowledgeReferral.generation == generation,
+                )
+                .values(status=KnowledgeReferralStatus.DRAFT_FAILED)
+                .execution_options(synchronize_session=False)
             )
 
     async def _compensate_stale_credential_parts(self, before: datetime) -> None:

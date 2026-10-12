@@ -146,6 +146,10 @@ class MessageServiceStub:
         content = "\n".join(item.content for item in selected)[-max_characters:]
         return SimpleNamespace(content=content, message_count=len(selected))
 
+    async def source_cleared(self, external_message_id: str) -> bool:
+        """来源消息是否已被测试数据清空（用例按需登记）。"""
+        return external_message_id in getattr(self, "cleared_sources", set())
+
     async def has_newer_conversation_activity(
         self,
         conversation_id: int,

@@ -47,14 +47,17 @@ REPLY_PATHS=(
   src/homestay_bot/services/emergency_service.py
   src/homestay_bot/services/fact_policy.py
   src/homestay_bot/services/faq_candidate_context.py
+  src/homestay_bot/services/faq_candidate_service.py
   src/homestay_bot/services/guest_reply_policy.py
   src/homestay_bot/services/guest_verification.py
+  src/homestay_bot/services/item_coverage.py
   src/homestay_bot/services/knowledge_evidence_policy.py
   src/homestay_bot/services/knowledge_service.py
   src/homestay_bot/services/live_fact_check.py
   src/homestay_bot/services/message_service.py
   src/homestay_bot/services/model_budget.py
   src/homestay_bot/services/reply_plan.py
+  src/homestay_bot/services/sensitive_text.py
   src/homestay_bot/services/stay_date_range.py
   src/homestay_bot/services/turn_plan.py
   src/homestay_bot/domain/stay_status.py

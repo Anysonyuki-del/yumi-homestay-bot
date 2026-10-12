@@ -24,6 +24,15 @@ TIMEOUT_TEXT = (
 ACCEPT_KEY = "accept"
 RELEASE_KEY = "release"
 
+# 转人工卡片的出站作业类型；会话层登记资料核实卡片也用它（D-G19），放在纯函数模块里
+# 避免会话服务反向依赖应用装配。
+HANDOFF_CARD_JOB_TYPE = "wecom_send_handoff_card"
+# 资料核实卡片的 task_id 前缀与载荷用途（修复 Spec 2026-10-08 fix2 §2.6(2)）。前缀只用于
+# 路由用途，按钮处理仍要读取转交记录核对编号与会话。
+REFERRAL_TASK_PREFIX = "referral-"
+REFERRAL_PURPOSE = "referral"
+REFERRAL_REASON = "资料待核实"
+
 CardStage = Literal["pending", "accepted", "closed"]
 
 
@@ -116,3 +125,45 @@ def build_handoff_card(
     if task_id:
         template["task_id"] = task_id
     return template
+
+
+def referral_task_id(referral_id: int) -> str:
+    """资料核实卡片的 task_id。"""
+    return f"{REFERRAL_TASK_PREFIX}{referral_id}"
+
+
+def referral_id_from_task(task_id: str | None) -> int | None:
+    """从 task_id 解析转交编号；不是资料核实卡片返回 None。"""
+    if not task_id or not task_id.startswith(REFERRAL_TASK_PREFIX):
+        return None
+    raw = task_id.removeprefix(REFERRAL_TASK_PREFIX)
+    return int(raw) if raw.isdigit() else None
+
+
+def referral_card(
+    *, conversation_id: int, question: str, room: str, link: str
+) -> HandoffCard:
+    """资料核实卡片只带最小内容：原因、净化后的原问、房间与对话记录链接（V6-R1）。
+
+    不带接手要点、偏好、客人最近原话或机器人回复；`question` 由调用方从转交记录取已净化的
+    原问，这里只组卡。
+    """
+    return HandoffCard(
+        conversation_id=conversation_id,
+        reason=REFERRAL_REASON,
+        guest="客人问题待管家核实",
+        link=link,
+        room=room,
+        original=question,
+        footer="请在企业微信里直接回复客人；管理员会在后台整理入库。",
+    )
+
+
+def closed_referral_card(*, conversation_id: int, link: str) -> HandoffCard:
+    """转交已失效或交还后显示的固定卡片，不含旧正文。"""
+    return HandoffCard(
+        conversation_id=conversation_id,
+        reason=REFERRAL_REASON,
+        guest="客人问题待管家核实",
+        link=link,
+    )

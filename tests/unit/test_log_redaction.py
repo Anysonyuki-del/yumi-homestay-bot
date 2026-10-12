@@ -1,6 +1,10 @@
+import json
 import logging
+import os
+import subprocess
 import sys
 from io import StringIO
+from pathlib import Path
 
 from uvicorn.logging import AccessFormatter
 
@@ -216,3 +220,143 @@ def test_log_filter_redacts_stack_info_text() -> None:
 
     assert SensitiveDataFilter().filter(record) is True
     assert "secret-value" not in (record.stack_info or "")
+
+
+# 子进程按生产顺序装配：uvicorn 先配置自身日志，再导入应用模块；不添加任何测试 handler。
+_PRODUCTION_ASSEMBLY_PROBE = """
+import logging
+import uvicorn
+
+uvicorn.Config("homestay_bot.main:app").load()
+logging.getLogger("homestay_bot.integrations.deepseek_client").info(
+    "轮次规划：status=ok elapsed_ms=12 Hostex-Access-Token: probe-secret"
+)
+"""
+
+
+def test_production_assembly_emits_redacted_application_info_logs() -> None:
+    """生产装配下应用 INFO 日志必须输出到 stderr，且经过脱敏过滤器。
+
+    此前应用日志器链上没有 handler，INFO 被根日志器 WARNING 门槛丢弃，
+    子模块 WARNING 经 logging.lastResort 输出时也绕过了脱敏。
+    """
+    source_root = Path(__file__).resolve().parents[2] / "src"
+    # 显式指向当前工作树源码，避免子进程解析到虚拟环境里安装的另一份代码。
+    environment = dict(
+        os.environ,
+        PYTHONPATH=os.pathsep.join(
+            item for item in (str(source_root), os.environ.get("PYTHONPATH")) if item
+        ),
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _PRODUCTION_ASSEMBLY_PROBE],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INFO homestay_bot.integrations.deepseek_client: 轮次规划：status=ok" in result.stderr
+    assert "probe-secret" not in result.stderr
+
+
+def test_log_filter_redacts_bearer_credential_in_plain_message_idempotently() -> None:
+    """普通消息里 Authorization 的方案词之后的凭证也要脱敏，重复过滤不叠加。"""
+    record = logging.LogRecord(
+        "homestay_bot.test",
+        logging.WARNING,
+        __file__,
+        1,
+        "Authorization: Bearer secret-xyz",
+        (),
+        None,
+    )
+    filter_instance = SensitiveDataFilter()
+
+    assert filter_instance.filter(record) is True
+    first = record.getMessage()
+    assert "secret-xyz" not in first
+
+    # 同一条记录可能同时经过 logger 和 handler 上的过滤器。
+    assert filter_instance.filter(record) is True
+    assert record.getMessage() == first
+    assert first.count("[REDACTED]") == 1
+
+
+def _filtered_twice(message: str, args: tuple[object, ...] = ()) -> tuple[str, str]:
+    """同一条记录先后经过两层过滤器，返回两次过滤后的正文。"""
+    record = logging.LogRecord(
+        "homestay_bot.test", logging.WARNING, __file__, 1, message, args, None
+    )
+    filter_instance = SensitiveDataFilter()
+    assert filter_instance.filter(record) is True
+    first = record.getMessage()
+    assert filter_instance.filter(record) is True
+    return first, record.getMessage()
+
+
+def test_plain_message_redacts_bearer_in_every_common_form() -> None:
+    """等号、引号、与带查询参数的 URL 同行时，Bearer 令牌都不得残留，重复过滤不叠加。"""
+    cases = [
+        ("Authorization=Bearer secret-a1", ()),
+        ("GET /oauth/callback?code=code-a2&next=/ Authorization: Bearer secret-a2", ()),
+        ('Authorization: "Bearer secret-a3"', ()),
+        ("请求头 Authorization: %s", ("Bearer secret-a4",)),
+    ]
+    for message, args in cases:
+        first, second = _filtered_twice(message, args)
+        assert "secret-a" not in first, first
+        assert "code-a2" not in first, first
+        assert second == first
+        assert "[REDACTED][REDACTED]" not in first
+
+    # URL 以外的普通文本保持原样，不被当成 URL 重新编码。
+    first, _ = _filtered_twice("客人问：能看江景吗？房间 401 Authorization: Bearer secret-a5")
+    assert first.startswith("客人问：能看江景吗？房间 401 ")
+    assert "secret-a5" not in first
+
+
+def test_actual_handler_redacts_quoted_keys_and_escaped_values() -> None:
+    """真实 handler 的 JSON、repr、异常与多字段输出不能留下转义引号后的秘密尾部。"""
+    from homestay_bot.logging import redact_text
+
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(SensitiveDataFilter())
+    logger = logging.getLogger("synthetic.fix3.quoted_secrets")
+    original_handlers, original_level, original_propagate = (
+        logger.handlers, logger.level, logger.propagate
+    )
+    logger.handlers, logger.level, logger.propagate = [handler], logging.INFO, False
+    try:
+        logger.info("fields=%s status=%s", json.dumps({
+            "password": 'A1!"SYNTHETIC_JSON_SUFFIX',
+            "Authorization": "Bearer SYNTHETIC_BEARER_SUFFIX",
+            "request_id": "RT-1",
+        }), 401)
+        logger.warning("fields=%s status=%s", {
+            "api_key": "A1!'\"SYNTHETIC_REPR_SUFFIX",
+            "secret": "A1!\\\\SYNTHETIC_SLASH_SUFFIX",
+        }, 403)
+        try:
+            raise RuntimeError(json.dumps({
+                "api_key": 'A1!"SYNTHETIC_EXCEPTION_SUFFIX',
+                "authorization": "Basic SYNTHETIC_BASIC_SUFFIX",
+            }))
+        except RuntimeError:
+            logger.exception("调用失败")
+    finally:
+        logger.handlers, logger.level, logger.propagate = (
+            original_handlers, original_level, original_propagate
+        )
+        handler.close()
+
+    output = stream.getvalue()
+    assert "SYNTHETIC_" not in output
+    assert "A1!" not in output
+    assert "RT-1" in output and "status=401" in output and "status=403" in output
+    assert "Traceback (most recent call last):" in output and "RuntimeError:" in output
+    assert output.count("\n") >= 5
+    assert redact_text(output) == output

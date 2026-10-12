@@ -26,6 +26,9 @@ from homestay_bot.services.reply_plan import ReplyEvidence, ReplyPart
 # 审核答案原文直接发给客人，超过这个长度就请客人细化问题，不截断条件与例外。
 STATIC_REPLY_MAX_CHARS = 1_000
 
+# 缺口分项的属性名后缀，供未确认文案识别「早餐时间」「停车费用」等具体缺口。
+_ATTRIBUTE_LABELS = {"time": "时间", "fee": "费用", "location": "位置", "procedure": "流程"}
+
 PlanStatus = Literal["grounded", "insufficient", "unclear", "general"]
 
 _CLAUSE_SPLIT = re.compile(r"[，,。；;！？!?\n]")
@@ -638,14 +641,21 @@ def build_evidence_plan(
     is_property_question: bool,
     target_date: date | None = None,
     target_end_date: date | None = None,
+    object_scoped: bool = False,
 ) -> EvidencePlan:
-    """按知识生效边界分段核验，不让跨期入住沿用单日答案。"""
+    """按知识生效边界分段核验，不让跨期入住沿用单日答案。
+
+    `object_scoped` 为真时，冲突与特殊时期优先只在同一对象内进行，并执行 D-G8 保守否决
+    （修复 Spec §2.3(3)）；只在计划成功的逐项回退时开启，与证据选择核验同一口径。
+    计划失败的整句路径保持现状（已声明边界）。
+    """
     if target_date is None:
         return _build_evidence_plan_for_period(
             question_text,
             knowledge,
             supporting_for_topic=supporting_for_topic,
             is_property_question=is_property_question,
+            object_scoped=object_scoped,
         )
     end = target_end_date or target_date
     boundaries = {target_date, end + timedelta(days=1)}
@@ -673,6 +683,7 @@ def build_evidence_plan(
             entries,
             supporting_for_topic=supporting_for_topic,
             is_property_question=is_property_question,
+            object_scoped=object_scoped,
         )
         plans.append(plan)
         for part in plan.parts:
@@ -711,6 +722,7 @@ def _build_evidence_plan_for_period(
     *,
     supporting_for_topic: Callable[[PropertyTopic, str, list[Any]], list[Any]],
     is_property_question: bool,
+    object_scoped: bool = False,
 ) -> EvidencePlan:
     """给出本轮静态问答的证据计划。
 
@@ -757,6 +769,8 @@ def _build_evidence_plan_for_period(
 
     chosen: list[str] = []
     parts: list[ReplyPart] = []
+    # 按对象约束时记录第一个冲突或期间否决：缺口原因不是「资料缺失」，不可转交。
+    blocked = ""
     for topic in topics:
         supporting = supporting_for_topic(topic, question_text, entries)
         attributes = asked_attributes(question_text, topic)
@@ -791,6 +805,21 @@ def _build_evidence_plan_for_period(
             asked = _bigrams(question_text)
 
             covering_items.sort(key=lambda item: -_rank_covering(item, topic, asked))
+            if object_scoped:
+                covering, outcome = _object_scoped_covering(
+                    question_text, topic, attribute, covering_items
+                )
+                label = _ATTRIBUTE_LABELS.get(attribute, "")
+                if covering is None:
+                    if outcome in {"conflict", "period_veto"}:
+                        blocked = blocked or outcome
+                    parts.append(ReplyPart(question=topic.name + label, status="missing", text=""))
+                    continue
+                answer_text = _answer_for_topic(topic, covering)
+                if answer_text not in chosen:
+                    chosen.append(answer_text)
+                    parts.append(_knowledge_part(topic.name, covering, text=answer_text))
+                continue
             evidence_texts = [
                 _attribute_evidence_text(topic, question_text, attribute, item.answer)
                 for item in covering_items
@@ -810,9 +839,7 @@ def _build_evidence_plan_for_period(
                 ]
                 conflict = _attribute_conflict(attribute, evidence_texts)
             covering = covering_items[0] if covering_items and not conflict else None
-            label = {"time": "时间", "fee": "费用", "location": "位置", "procedure": "流程"}.get(
-                attribute, ""
-            )
+            label = _ATTRIBUTE_LABELS.get(attribute, "")
             if covering is None:
                 parts.append(ReplyPart(question=topic.name + label, status="missing", text=""))
                 continue
@@ -837,9 +864,39 @@ def _build_evidence_plan_for_period(
         "insufficient" if missing else "grounded",
         topics,
         tuple(chosen),
-        "partial" if missing else "covered",
+        (blocked or "partial") if missing else "covered",
         tuple(parts),
     )
+
+
+def _object_scoped_covering(
+    question_text: str, topic: PropertyTopic, attribute: str, covering_items: Sequence[Any]
+) -> tuple[Any | None, str]:
+    """按对象约束为一个主题属性选出作答条目（修复 Spec §2.3(3)）。
+
+    返回（条目, 原因）：作答时原因为 covered；没有覆盖条目为 uncovered；同一对象内矛盾为
+    conflict；D-G8 否决为 period_veto。原因供调用方区分「资料缺失」与其他缺口。
+
+    `covering_items` 已按相关度排序，且只含本生效时段有效的条目。取排名第一的条目，只与
+    同一对象的条目比较冲突；同一对象内特殊时期与平时矛盾时以特殊时期为准（D6）；同主题、
+    不同对象的期间条目与答案矛盾时保守否决（D-G8）。不同对象的普通条目不互相判冲突。
+    """
+    if not covering_items:
+        return None, "uncovered"
+    top = covering_items[0]
+    group = [top, *(item for item in covering_items[1:] if same_object(item, top))]
+    attributes = {attribute} & {"time", "fee"}
+    conflict = _object_conflict(question_text, (topic,), attributes, group)
+    periodic = [item for item in group if _has_validity(item)]
+    if conflict and periodic and len(periodic) < len(group):
+        group = periodic
+        conflict = _object_conflict(question_text, (topic,), attributes, group)
+    if conflict:
+        return None, "conflict"
+    chosen = group[0]
+    if _period_veto(question_text, (topic,), attributes, [chosen], covering_items):
+        return None, "period_veto"
+    return chosen, "covered"
 
 
 def _has_validity(entry: Any) -> bool:
@@ -864,19 +921,56 @@ class SelectionVerdict:
     parts: tuple[ReplyPart, ...] = ()
 
 
-# 两条标准问题相邻两字重合度（Jaccard）达到此值即视为同一件事（D-F2）。
-# ponytail: 确定性近似，措辞差异很大的同主体条目仍会漏组；以健身房同问法（1.0）与
-# 安静时段/客厅开放（≈0.1）两组对照校准，出现漏组实例再调阈值或引入其他信号。
-_SAME_QUESTION_OVERLAP = 0.6
+# 同一对象判定只删除的纯疑问与语气形式（修复 Spec §2.3(1)，D-G1）。只收不改变所指对象的
+# 形式词：否定、收费限定、数量、地点、楼层、指代一律保留，「免费健身房」与「收费健身房」、
+# 「一楼早餐厅」与「二楼早餐厅」因此不会归一成同一件事。长短语排在短短语之前，避免
+# 「几点钟」只删掉「几点」。不复用追问填充词表 `_FOLLOW_UP_FILLERS`：它会删实义词。
+_OBJECT_FORM_PHRASES = tuple(
+    sorted(
+        (
+            "什么时候", "何时", "几点钟", "几点", "多久", "多少钱", "多少", "哪里", "在哪儿",
+            "在哪", "怎么", "如何", "是否", "能否", "可不可以", "可以", "有没有",
+            "吗", "呢", "吧", "啊", "呀", "请问",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+_OBJECT_FORM_EN = re.compile(
+    r"\b(?:what\s+time|how\s+much|how\s+long|when|where|can|could|is|are|do|does|please)\b",
+    re.IGNORECASE,
+)
+_OBJECT_PUNCTUATION = re.compile(r"[\W_]+")
 
 
-def _same_question(first: Any, second: Any) -> bool:
-    """两条知识的标准问题是否实质相同：归一化后相同，或相邻两字重合度足够高。"""
-    left = _bigrams(str(getattr(first, "question", "")))
-    right = _bigrams(str(getattr(second, "question", "")))
-    if not left or not right:
+def object_question_key(question: str) -> str:
+    """知识标准问题的「同一对象」归一化：去掉纯疑问、语气、标点与空白后的剩余文本。
+
+    只用于合组判定，不改变客人原问或任何分类输入。结果为空时调用方不得据此认定同一对象。
+    """
+    value = _OBJECT_FORM_EN.sub(" ", normalize_text(question))
+    for phrase in _OBJECT_FORM_PHRASES:
+        value = value.replace(phrase, "")
+    return _OBJECT_PUNCTUATION.sub("", value)
+
+
+def same_object(first: Any, second: Any) -> bool:
+    """两条审核知识是否为同一对象（修复 Spec §2.3(2)，D-G5 修订）。
+
+    唯一判据：适用范围与房源一致，且归一化后的标准问题非空且完全相同。同主题、问法互相
+    包含、有效期都不单独证明同一对象（一楼、二楼早餐厅同主题不同对象；国庆期间早餐与
+    平时早餐问法不同时也不是同一对象，见 D-G8）。
+
+    ponytail: 只认字面同问法。同对象但措辞不同（「几点开门」与「开放时间」）会被当成
+    不同对象，矛盾可能漏检，包括两条同时被模型选中时；要识别需另行确认主体关系依据，
+    不在这里补楼层、套餐等词表。
+    """
+    if getattr(first, "scope", None) != getattr(second, "scope", None):
         return False
-    return left == right or len(left & right) / len(left | right) >= _SAME_QUESTION_OVERLAP
+    if getattr(first, "property_id", None) != getattr(second, "property_id", None):
+        return False
+    left = object_question_key(str(getattr(first, "question", "")))
+    return bool(left) and left == object_question_key(str(getattr(second, "question", "")))
 
 
 def _valid_during(entry: Any, start: date, end: date) -> bool:
@@ -916,6 +1010,66 @@ def _attribute_conflict(attribute: str, texts: Sequence[str]) -> bool:
     return False
 
 
+def _object_conflict(
+    question: str,
+    topics: Sequence[PropertyTopic],
+    attributes: set[str],
+    entries: Sequence[Any],
+) -> str | None:
+    """返回一组条目在客人问到的钟点或收费上第一个出现矛盾的属性，没有矛盾返回空。
+
+    主题认得出时只比较该主题该属性的分句，与证据计划同一口径。选择核验与逐项回退共用。
+    """
+    for attribute in sorted(attributes):
+        if topics:
+            texts = [
+                _attribute_evidence_text(topic, question, attribute, entry.answer)
+                for topic in topics
+                for entry in entries
+            ]
+        else:
+            texts = [entry.answer for entry in entries]
+        if _attribute_conflict(attribute, [text for text in texts if text]):
+            return attribute
+    return None
+
+
+def _period_veto(
+    question: str,
+    topics: Sequence[PropertyTopic],
+    attributes: set[str],
+    answers: Sequence[Any],
+    candidates: Sequence[Any],
+) -> bool:
+    """D-G8：同主题、无法确认同一对象、在目标日期有效的特殊时期条目与答案矛盾时否决。
+
+    `candidates` 必须已按目标日期过滤（只含有效期覆盖目标日期的条目）。命中时既不用期间
+    条目替换答案，也不发出可能已被它覆盖的平时答案，该项回未确认。
+
+    ponytail: 保守否决。只看所问属性（钟点或收费）是否矛盾，无法区分楼层、餐厅或「开放与
+    领取」两种时间，同主题、在期间有效但与本题无关的政策（二楼早餐厅、打包早餐）也会拦下
+    平时答案；要消除这类误拦需另行确认主体关系依据。员工把特殊时期条目的标准问题写成与
+    平时条目相同，即属同一对象，按 D6 发出期间答案。
+    """
+    names = {topic.name for topic in topics}
+    if not names or not attributes:
+        return False
+    for other in candidates:
+        if not _has_validity(other) or any(other is answer for answer in answers):
+            continue
+        if any(same_object(other, answer) for answer in answers):
+            continue
+        other_topics = {
+            item.name for item in detect_property_topics(str(getattr(other, "question", "")))
+        }
+        if not names & other_topics:
+            continue
+        for answer in answers:
+            if _object_conflict(question, topics, attributes, [answer, other]):
+                return True
+    return False
+
+
 def verify_selected_evidence(
     question: str,
     answer_ids: Sequence[int],
@@ -928,11 +1082,12 @@ def verify_selected_evidence(
     """确定性核验主调用为一个子问题选择的证据（Spec §2.4）。
 
     1. 全部编号必须属于本轮合法候选，否则该项回到现行证据计划；
-    2. 期间政策优先（D6）：同主题有特殊时期条目时以它为准，跨越生效边界交回现行计划分段；
-    3. 冲突检查覆盖 answer ∪ 问法点名同一主题的合法候选 ∪ 标准问题与回答条目实质相同的
-       合法候选，只查客人问到的钟点或收费；是否同组不看 related 标签，related 只参与越界核验
-       （查不出冲突不等于证明没有冲突）；
+    2. 冲突检查只在同一对象内进行（`same_object`）：每个回答条目与同一对象的合法候选比较
+       客人问到的钟点或收费；related 标签不决定分组，只参与越界核验；
+    3. 期间政策优先（D6）只在同一对象内生效；同主题但无法确认同一对象的期间条目与答案
+       矛盾时按 D-G8 保守否决（`_period_veto`）；跨越生效边界交回现行计划分段；
     4. 保留指令注入与长度规则；核验通过的条目整条发出，不截断、不改写。
+    查不出冲突不等于证明没有冲突。
 
     ponytail: 冲突只按收费、金额与钟点三类规则识别，其他属性的矛盾查不出；新主题依赖
     模型标出的相关集。扩充冲突规则前，不能把本函数当作语义一致性的证明。
@@ -942,8 +1097,12 @@ def verify_selected_evidence(
         for entry in candidates
         if isinstance(getattr(entry, "source_id", None), int)
     }
-    if any(item not in by_id for item in (*answer_ids, *related_ids)):
+    if any(item not in by_id for item in answer_ids):
         return SelectionVerdict("invalid", "out_of_candidates")
+    # 相关编号只是模型的提示，不决定分组：逐项取证后本项合法候选只来自本项检索，信封里
+    # 却仍能看到别项的条目，模型标它为相关是正常的。忽略本项候选之外的相关编号，不让它
+    # 否决本项合法的回答（1.70.0 候选门禁 K-访客：答 9033、相关 9032 被整条判越界）。
+    related_ids = [item for item in related_ids if item in by_id]
     if not answer_ids:
         return SelectionVerdict("missing", "none_selected")
     if target_date is not None:
@@ -958,57 +1117,70 @@ def verify_selected_evidence(
         candidates = [entry for entry in candidates if _valid_during(entry, target_date, end)]
     answers = [by_id[item] for item in dict.fromkeys(answer_ids)]
     topics = tuple(detect_property_topics(question))
-    topic_names = {topic.name for topic in topics}
-    # 同组只取问法本身点名同一主题的条目；按答案正文分组会把顺带提到主题的条目拉进来，
-    # 造成假冲突（门禁实测：问婴儿床时早餐条目里的儿童收费被判成费用冲突）。
-    same_group = [
-        entry
-        for entry in candidates
-        if topic_names
-        and topic_names
-        & {item.name for item in detect_property_topics(str(getattr(entry, "question", "")))}
-    ]
-    # 冲突范围：回答条目、问法点名同一主题的候选，以及标准问题与任一回答条目实质相同的
-    # 候选（D-F2）。是否同组只看条目自身的问法，不看模型给的 related 标签：标签未经语义
-    # 证明，「健身房几点开放」8:00/10:00 改个标签就放行（Codex 审查 B24-R6）；问法不同的
-    # 条目（安静时段与客厅开放时间）钟点不同不算矛盾（候选门禁 rc-1.69.0-2 实测）。
-    same_question = [
-        entry
-        for entry in candidates
-        if any(_same_question(entry, answer) for answer in answers)
-    ]
-    group = list({id(entry): entry for entry in (*answers, *same_group, *same_question)}.values())
-    if target_date is not None:
-        end = target_end_date or target_date
-        if any(_crosses_validity_boundary(entry, target_date, end) for entry in group):
-            return SelectionVerdict("invalid", "period_boundary")
     # 与现行证据计划同一口径：只对客人问到的钟点或收费检查冲突；其他属性的矛盾规则查不出。
     attributes = asked_attributes(question) & {"time", "fee"}
 
     def conflicting(entries: Sequence[Any]) -> str | None:
         """返回第一个出现矛盾的属性；主题认得出时只比较该主题该属性的分句。"""
-        for attribute in sorted(attributes):
-            if topics:
-                texts = [
-                    _attribute_evidence_text(topic, question, attribute, entry.answer)
-                    for topic in topics
-                    for entry in entries
-                ]
-            else:
-                texts = [entry.answer for entry in entries]
-            if _attribute_conflict(attribute, [text for text in texts if text]):
-                return attribute
-        return None
+        return _object_conflict(question, topics, attributes, entries)
 
-    conflict = conflicting(group)
-    periodic = [entry for entry in group if _has_validity(entry)]
-    if conflict and periodic and len(periodic) < len(group):
-        # D6：特殊时期政策与平时政策矛盾时以特殊时期为准；模型漏选期间条目时也以它作答。
-        answers = [entry for entry in answers if _has_validity(entry)] or periodic
-        group = periodic
+    # 冲突与特殊时期优先只在同一对象内进行（修复 Spec §2.3(3)）：每个回答条目只与同一
+    # 对象的合法候选比较；多个回答条目属于不同对象时各自检查、各自作答，不互相判冲突
+    # （一楼、二楼健身房开放时间不同不是矛盾，Codex 审查 F5）。是否同组只看条目自身的范围、
+    # 房源与问法，不看模型给的 related 标签（Codex 审查 B24-R6）。
+    groups = [
+        [
+            answer,
+            *(entry for entry in candidates if entry is not answer and same_object(entry, answer)),
+        ]
+        for answer in answers
+    ]
+    if target_date is not None:
+        end = target_end_date or target_date
+        if any(
+            _crosses_validity_boundary(entry, target_date, end)
+            for group in groups
+            for entry in group
+        ):
+            return SelectionVerdict("invalid", "period_boundary")
+    resolved: list[Any] = []
+    for answer, group in zip(answers, groups, strict=True):
         conflict = conflicting(group)
-    if conflict:
-        return SelectionVerdict("missing", f"conflict_{conflict}")
+        periodic = [entry for entry in group if _has_validity(entry)]
+        if conflict and periodic and len(periodic) < len(group):
+            # D6：同一对象的特殊时期政策与平时政策矛盾时以特殊时期为准；模型漏选期间条目时
+            # 也以它作答。
+            group = periodic
+            conflict = conflicting(group)
+            chosen = [answer] if _has_validity(answer) else periodic
+        else:
+            chosen = [answer]
+        if conflict:
+            return SelectionVerdict("missing", f"conflict_{conflict}")
+        if target_date is not None and _period_veto(
+            question, topics, attributes, chosen, candidates
+        ):
+            return SelectionVerdict("missing", "period_veto")
+        resolved.extend(entry for entry in chosen if entry not in resolved)
+    # 模型自己标出的条目参与否决（用户 2026-10-08 决定，1.70.0 候选门禁 K-洗衣-X）：选为回答
+    # 或标为相关、但不属于同一对象的条目，在客人问到的收费或钟点上与回答矛盾时回未确认，
+    # 只否决不替换。标签只能增加否决，不会让同对象内的冲突逃过上面的检查（B24-R6）。
+    # 只在客人问题的主题认得出时比较，且只比较该主题该属性的分句：主题认不出时整段答案互比
+    # 会误判（1.69.0 门禁：问安静时段，模型把客厅开放时间标为相关，不是钟点冲突）。
+    # ponytail: 模型只选一条、不标另一条，或主题认不出时仍会漏检；一项里问两个对象（「一楼
+    # 和二楼早餐厅分别几点开」）且两条都选为回答时也会被否决为未确认。要区分需另行确认
+    # 主体关系依据。
+    flagged = (
+        [by_id[item] for item in dict.fromkeys((*answer_ids, *related_ids))] if topics else []
+    )
+    for answer in resolved:
+        for other in flagged:
+            if other is answer or same_object(other, answer):
+                continue
+            conflict = conflicting([answer, other])
+            if conflict:
+                return SelectionVerdict("missing", f"conflict_flagged_{conflict}")
+    answers = resolved
     texts = [str(entry.answer) for entry in answers]
     if any(_INSTRUCTION_INJECTION.search(text) for text in texts):
         return SelectionVerdict("missing", "answer_needs_review")

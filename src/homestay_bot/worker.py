@@ -329,6 +329,8 @@ class Worker[JobType: WorkerJob]:
         "hostex_read",
         "hostex_event",
         "faq_draft_generate",
+        # 资料核实草稿（Spec 2026-10-08 fix2 §2.6(3)）：结果按代次条件写回，可安全重放。
+        "knowledge_referral_draft",
         "complaint_review_generate",
         "guest_delivery_rewrite",
         "customer_tag_sync",

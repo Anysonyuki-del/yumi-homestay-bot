@@ -32,6 +32,7 @@ from homestay_bot.services.handoff_card import (
     CardStage,
     HandoffCard,
     build_handoff_card,
+    referral_id_from_task,
 )
 from homestay_bot.services.message_service import MessageService
 
@@ -76,14 +77,21 @@ class HumanSessionService:
         *,
         agent_id: int,
         duty_userids: Sequence[str],
-        card_for: Callable[[Conversation], Awaitable[HandoffCard]] | None = None,
+        card_for: Callable[[Conversation, str | None], Awaitable[HandoffCard | None]]
+        | None = None,
+        closed_card_for: Callable[[Conversation], HandoffCard] | None = None,
     ) -> None:
-        """`card_for` 按会话现状重建卡片内容，点击按钮后更新卡片时使用。"""
+        """`card_for(会话, task_id)` 按会话现状重建卡片内容，点击按钮时在动作前取快照。
+
+        资料核实卡片的转交记录缺失、会话不符或已清空时 `card_for` 返回 None；
+        `closed_card_for` 给出不含旧正文的固定卡片（修复 Spec 2026-10-08 fix2 §2.6(2)）。
+        """
         self._session = session
         self._api = api
         self._agent_id = agent_id
         self._duty_userids = set(duty_userids)
         self._card_for = card_for
+        self._closed_card_for = closed_card_for
         self._operations = SQLAlchemyOperationsRepository(session)
 
     async def handle_card_action(self, payload: dict[str, Any]) -> None:
@@ -99,25 +107,41 @@ class HumanSessionService:
         )
         if conversation is None or action not in {ACCEPT_KEY, RELEASE_KEY}:
             return
-        if action == ACCEPT_KEY:
+        task_id = str(payload.get("task_id", "")) or None
+        referral = referral_id_from_task(task_id) is not None
+        response_code = str(payload.get("response_code", ""))
+        # 两阶段（Spec 2026-10-08 fix2 §2.6(2)，V8-R3）：动作前取卡片快照，取数的数据库错误
+        # 照常向上抛，此时还没有调用平台接入；资料核实卡片同时用快照核对转交记录。
+        snapshot: HandoffCard | None = None
+        if self._card_for is not None and (referral or response_code):
+            snapshot = await self._card_for(conversation, task_id)
+        if action == ACCEPT_KEY and referral and snapshot is None:
+            # 转交已清空、记录缺失或会话不符：不执行接入，只显示固定的关闭卡片。
+            stage: CardStage = "closed"
+            note, replace_text = "这条资料核实已失效，未执行接入。", "已失效"
+        elif action == ACCEPT_KEY:
             stage, note, replace_text = await self._accept(conversation, userid)
         else:
+            # 交还始终按当前人工会话与员工权限执行，转交状态不影响。
             stage, note, replace_text = await self._release(conversation)
-        response_code = str(payload.get("response_code", ""))
-        if not response_code or self._card_for is None:
+        if referral and (snapshot is None or action == RELEASE_KEY):
+            snapshot = (
+                self._closed_card_for(conversation) if self._closed_card_for is not None else None
+            )
+        if not response_code or snapshot is None:
             return
-        card = await self._card_for(conversation)
         try:
+            # 显示阶段只用快照纯组卡，不访问数据库；失败只影响显示，不回滚或重做人工动作。
             await self._api.update_template_card(
                 agent_id=self._agent_id,
                 userids=[userid],
                 response_code=response_code,
                 template_card=build_handoff_card(
-                    card,
+                    snapshot,
                     stage=stage,
                     note=note,
                     replace_text=replace_text,
-                    task_id=str(payload.get("task_id", "")) or None,
+                    task_id=task_id,
                 ),
             )
         except Exception as error:

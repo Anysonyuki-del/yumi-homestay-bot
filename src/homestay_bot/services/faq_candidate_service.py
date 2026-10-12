@@ -9,7 +9,8 @@ from homestay_bot.integrations.deepseek_client import AssistantDecision
 
 _WINDOW = timedelta(hours=72)
 _REMINDER_COOLDOWN = timedelta(hours=24)
-_EXCLUDED_PATTERN = re.compile(
+# 房态、价格、订单、旅游等不沉淀为固定资料；知识缺口转交（Spec 2026-10-08 fix2 §2.6）共用。
+FAQ_EXCLUDED_PATTERN = re.compile(
     r"有房|房态|可订|房价|价格|多少钱|订单|退款|取消|改期|付款|"
     r"预订|订房|入住|退房|旅游|景点|活动|演出|展览|"
     r"availability|price|rate|order|refund|cancel|booking|"
@@ -160,7 +161,7 @@ class FrequentFaqService:
             and decision.knowledge_gap
             and not decision.staff_confirmation_required
             and decision.intent not in _EXCLUDED_INTENTS
-            and _EXCLUDED_PATTERN.search(question) is None
+            and FAQ_EXCLUDED_PATTERN.search(question) is None
             and bool((decision.faq_canonical_question or "").strip())
             and bool((decision.faq_category or "").strip())
         )

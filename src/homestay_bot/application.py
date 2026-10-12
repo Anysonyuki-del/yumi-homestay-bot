@@ -31,6 +31,7 @@ from homestay_bot.domain.enums import (
     ComplaintReviewStatus,
     EmployeeRole,
     JobStatus,
+    KnowledgeReferralStatus,
     MessageOrigin,
     RoomOperationalStatus,
 )
@@ -81,6 +82,7 @@ from homestay_bot.repositories.faq_candidates import (
 )
 from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
 from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
+from homestay_bot.repositories.knowledge_referrals import SQLAlchemyKnowledgeReferralRepository
 from homestay_bot.repositories.lifecycle_reminders import (
     SQLAlchemyLifecycleReminderRepository,
 )
@@ -162,13 +164,26 @@ from homestay_bot.services.faq_candidate_context import (
 from homestay_bot.services.faq_candidate_service import FrequentFaqService
 from homestay_bot.services.faq_draft_job import FaqDraftJobService
 from homestay_bot.services.guest_verification import GuestVerificationService
-from homestay_bot.services.handoff_card import TIMEOUT_TEXT, HandoffCard, build_handoff_card
+from homestay_bot.services.handoff_card import (
+    HANDOFF_CARD_JOB_TYPE,
+    REFERRAL_PURPOSE,
+    TIMEOUT_TEXT,
+    HandoffCard,
+    build_handoff_card,
+    closed_referral_card,
+    referral_card,
+    referral_id_from_task,
+)
 from homestay_bot.services.hostex_sync import HostexSyncService
 from homestay_bot.services.human_session import HumanSessionService
 from homestay_bot.services.knowledge_embeddings import (
     KnowledgeEmbeddingSync,
     PendingVector,
     StoredVector,
+)
+from homestay_bot.services.knowledge_referral_service import (
+    KNOWLEDGE_REFERRAL_DRAFT_JOB_TYPE,
+    ReferralDraftJobService,
 )
 from homestay_bot.services.knowledge_service import KnowledgeService, PropertyCard
 from homestay_bot.services.lifecycle_reminders import (
@@ -228,11 +243,11 @@ from homestay_bot.worker import (
 
 logger = logging.getLogger(__name__)
 
-# 转人工卡片：发送前要先调模型整理接手要点，放在模型 worker，不拖慢客人消息的发送。
-HANDOFF_CARD_JOB_TYPE = "wecom_send_handoff_card"
 # 员工点击转人工卡片按钮（接入人工、交还 AI 助手）。
 CARD_ACTION_JOB_TYPE = "wecom_card_action"
 
+# 转人工卡片：发送前要先调模型整理接手要点，放在模型 worker，不拖慢客人消息的发送。
+# 作业类型定义在 handoff_card（会话层登记资料核实卡片也用），这里只引用。
 _MODEL_JOB_TYPES = {"wecom_process_message", "guest_delivery_rewrite", HANDOFF_CARD_JOB_TYPE}
 
 
@@ -365,10 +380,14 @@ async def _guest_reply_is_stale(
             session
         ).native_session_active(int(native_conversation_id)):
             return True
+    boundary = payload.get("source_guest_message_id")
+    if boundary and await repository.source_cleared(str(boundary)):
+        # 来源已被测试数据清空：排队中的回复不再发出，`stale_exempt` 与后续分段都不能绕过
+        # （修复 Spec 2026-10-08 fix2 §2.6(2) 恢复规则）。
+        return True
     if payload.get("stale_exempt"):
         # 紧急安全提示、客诉首响、转人工确认：排队期间来了新消息也必须送达。
         return False
-    boundary = payload.get("source_guest_message_id")
     if not boundary or not open_kfid or not external_userid:
         return False
     conversation_id = await repository.find_conversation_id(
@@ -871,12 +890,54 @@ async def _dispatch_deferred_message(
     message: IncomingMessage,
     *,
     phase: str,
-) -> None:
-    """按任务阶段分发静默合并或最终模型处理。"""
+) -> bool:
+    """按任务阶段分发静默合并或最终模型处理，返回本来源的业务处理是否已终结。
+
+    最终阶段正常返回即终结；合并阶段排出最终作业时未终结，由最终作业负责写收据
+    （修复 Spec 2026-10-08 fix2 §2.6(2)，V8-R1）。
+    """
     if phase == "debounce":
-        await service.process_debounced_message(message)
-        return
+        return await service.process_debounced_message(message)
     await service.process_recorded_message(message)
+    return True
+
+
+async def _fail_exhausted_referral_draft(
+    session: AsyncSession, failed_payload: dict[str, Any]
+) -> None:
+    """草稿作业普通异常重试耗尽（作业已为 FAILED）后写「草稿失败」。
+
+    只把「整理中 + 当前代次」改为草稿失败，不动已整理、已入库、已关闭、已清空或已换代的记录
+    （修复 Spec 2026-10-08 fix2 §2.6(3)，V8-R2）。数据库错误照常传播。
+    """
+    await SQLAlchemyKnowledgeReferralRepository(session).finish_draft(
+        int(failed_payload["referral_id"]),
+        generation=int(failed_payload["generation"]),
+        status=KnowledgeReferralStatus.DRAFT_FAILED,
+    )
+
+
+async def _run_deferred_source(
+    session: AsyncSession,
+    service: ConversationService,
+    message: IncomingMessage,
+    *,
+    phase: str,
+) -> None:
+    """后台合并与最终作业的统一入口：先查来源完成收据与来源是否已清空，再分发。
+
+    任一成立就直接结束：不重新规划、调用助手或登记任务，已登记的出站自行投递。本来源业务
+    终结时写收据，由调用方与全部业务副作用、客人发件箱同一事务提交；快速回执与释放锁规划的
+    中间提交不写（修复 Spec 2026-10-08 fix2 §2.6(2)，V7-R1、V8-R1）。
+    """
+    referrals = SQLAlchemyKnowledgeReferralRepository(session)
+    if await referrals.receipt_exists(message.msgid) or await SQLAlchemyMessageRepository(
+        session
+    ).source_cleared(message.msgid):
+        logger.info("来源已终结或已清空，跳过后台作业：phase=%s", phase)
+        return
+    if await _dispatch_deferred_message(service, message, phase=phase):
+        await referrals.record_receipt(message.msgid, service.created_referral_ids)
 
 
 def _guest_delivery_phase(*, deferred: bool, deferred_phase: str) -> str | None:
@@ -2876,6 +2937,48 @@ class SessionKnowledgeAdminService:
                 employee_id,
             )
 
+    async def list_referrals(self, *, limit: int = 50, offset: int = 0) -> list[Any]:
+        """资料核实列表（Spec 2026-10-08 fix2 §2.6(5)）。"""
+        async with self._factory() as session:
+            return list(await KnowledgeAdminService(session).list_referrals(
+                limit=limit, offset=offset,
+            ))
+
+    async def count_open_referrals(self) -> int:
+        """待处理的资料核实数量。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).count_open_referrals()
+
+    async def referral_detail(self, referral_id: int) -> Any:
+        """资料核实详情。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).referral_detail(referral_id)
+
+    async def start_referral_draft(self, referral_id: int, employee_id: int) -> None:
+        """在独立事务中换代、冻结来源并入队草稿任务。"""
+        async with self._factory() as session:
+            await KnowledgeAdminService(session).start_referral_draft(referral_id, employee_id)
+
+    async def convert_referral(
+        self,
+        referral_id: int,
+        employee_id: int,
+        *,
+        generation: int,
+        reviewed: bool,
+        **fields: Any,
+    ) -> Any:
+        """在独立事务中把已整理的草稿入库。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).convert_referral(
+                referral_id, employee_id, generation=generation, reviewed=reviewed, **fields
+            )
+
+    async def close_referral(self, referral_id: int, employee_id: int) -> None:
+        """在独立事务中关闭为「不入库」。"""
+        async with self._factory() as session:
+            await KnowledgeAdminService(session).close_referral(referral_id, employee_id)
+
 
 class SessionComplaintAdminService:
     """为每次客诉页面操作使用独立事务。"""
@@ -3286,6 +3389,9 @@ async def _run_worker_loop(
                 ) -> None:
                     """为改写或二次发送终态失败登记一次人工补偿任务。"""
                     if getattr(job, "status", None) is not JobStatus.FAILED:
+                        return
+                    if job.job_type == KNOWLEDGE_REFERRAL_DRAFT_JOB_TYPE:
+                        await _fail_exhausted_referral_draft(session, failed_payload)
                         return
                     undelivered = reply_chain_undelivered_payload(job.job_type, failed_payload)
                     if undelivered is not None:
@@ -3714,17 +3820,106 @@ async def _run_hostex_reconcile_loop(
         await asyncio.sleep(next_interval)
 
 
+def _conversation_chat_link(public_base_url: str, conversation: Conversation) -> str:
+    """员工端对话记录链接；转人工与资料核实卡片共用。"""
+    return (
+        f"{public_base_url.rstrip('/')}/employee/customers/{conversation.customer_id}"
+        "?tab=chat#chat-latest"
+    )
+
+
+async def _referral_card_for(
+    session: AsyncSession,
+    conversation: Conversation,
+    referral_id: int,
+    *,
+    public_base_url: str,
+) -> HandoffCard | None:
+    """按转交记录组资料核实卡片；记录缺失、会话不符或已清空时返回 None。
+
+    只读最小字段（原问、房源、状态），不读接手要点、偏好或聊天原文（修复 Spec 2026-10-08
+    fix2 §2.6(2)，V6-R1、V7-R3）。数据库错误照常抛出。
+    """
+    referral = await SQLAlchemyKnowledgeReferralRepository(session).get(referral_id)
+    if (
+        referral is None
+        or referral.conversation_id != conversation.id
+        or referral.status is KnowledgeReferralStatus.CLEARED
+    ):
+        return None
+    room = ""
+    if referral.property_id is not None:
+        profile = await session.get(PropertyProfile, referral.property_id)
+        if profile is not None:
+            room = profile.room_number or profile.title
+    return referral_card(
+        conversation_id=conversation.id,
+        question=referral.question or "",
+        room=room,
+        link=_conversation_chat_link(public_base_url, conversation),
+    )
+
+
+async def _send_referral_card(
+    session: AsyncSession,
+    wecom: Any,
+    payload: dict[str, Any],
+    *,
+    public_base_url: str,
+) -> None:
+    """资料核实卡片：按编号读转交记录，只有待处理才发；跳过要点整理与原文兜底。
+
+    卡片只带记录里的最小内容（Spec 2026-10-08 fix2 §2.6(2)，V6-R1、R8）。
+    """
+    referral = await SQLAlchemyKnowledgeReferralRepository(session).get(
+        int(payload["referral_id"])
+    )
+    if referral is None or referral.status is not KnowledgeReferralStatus.PENDING:
+        # 已整理、已入库、已关闭或已清空：卡片不再有意义，也不能带出旧正文。
+        logger.info("资料核实卡片不再发送：referral_id=%s", payload["referral_id"])
+        return
+    conversation = await session.get(Conversation, referral.conversation_id)
+    if conversation is None:
+        return
+    card = await _referral_card_for(
+        session, conversation, referral.id, public_base_url=public_base_url
+    )
+    if card is None:
+        return
+    try:
+        await wecom.send_internal_template_card(
+            agent_id=int(payload["agent_id"]),
+            employee_userids=list(payload["employee_userids"]),
+            template_card=build_handoff_card(
+                card, stage="pending", task_id=str(payload["task_id"])
+            ),
+        )
+    except httpx.ConnectError as error:
+        raise RetrySafeJobError("企业微信连接尚未建立") from error
+    except WeComApiError as error:
+        if error.error_code == 45009:
+            raise RetrySafeJobError("企业微信明确限流") from error
+        raise
+
+
 async def _handoff_card_for(
     session: AsyncSession,
     conversation: Conversation,
+    task_id: str | None = None,
     *,
     identity_resolver: Any,
     public_base_url: str,
-) -> HandoffCard:
+) -> HandoffCard | None:
     """按会话现状重建转人工卡片：原因取最近一次接管，要点与偏好取当前整理结果。
 
     点击按钮后更新卡片时使用；首次发出的卡片由会话服务带上客人原话和机器人回复。
+    资料核实卡片（task_id 带转交前缀）按转交记录组卡，记录失效时返回 None。
     """
+    referral_id = referral_id_from_task(task_id)
+    if referral_id is not None:
+        return await _referral_card_for(
+            session, conversation, referral_id, public_base_url=public_base_url
+        )
     confirmed = await SQLAlchemyConversationRepository(session).get_confirmed_stay(
         conversation.id,
         today=datetime.now(ZoneInfo("Asia/Shanghai")).date(),
@@ -3748,10 +3943,7 @@ async def _handoff_card_for(
         reason="需要人工跟进："
         + describe_handoff_reason((reason or "manual_request_or_media").rsplit(":", 1)[-1]),
         guest=guest,
-        link=(
-            f"{public_base_url.rstrip('/')}/employee/customers/{conversation.customer_id}"
-            "?tab=chat#chat-latest"
-        ),
+        link=_conversation_chat_link(public_base_url, conversation),
         room=(
             f"{stay.get('room_number') or stay.get('property_title') or '待核实'} · "
             f"{stay.get('check_in_date')} 入住"
@@ -4383,7 +4575,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         deferred: bool = False,
         deferred_phase: str = "final",
     ) -> None:
-        """在独立事务中处理入站消息或执行已提交的最终回复任务。"""
+        """在独立事务中处理入站消息或执行已提交的最终回复任务。
+
+        后台作业经 `_run_deferred_source` 查收据与来源清空，收据与业务副作用同一事务提交。
+        """
         async with factory() as session:
             faq_candidates = SQLAlchemyFaqCandidateRepository(session)
             context_repository = SQLAlchemyContextRepository(session)
@@ -4430,17 +4625,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 complaint_reviews=SQLAlchemyComplaintRepository(session),
                 # 紧急情况后续的固定处置答复取「紧急处置」审核知识，缺失时回退为安全提示。
                 emergency_knowledge=SQLAlchemyKnowledgeRepository(session),
+                knowledge_referrals=SQLAlchemyKnowledgeReferralRepository(session),
                 defer_model=not deferred,
                 # 后台作业同样注入提交边界：软判定规划前后需要提交释放活动锁，规划与主回复
                 # 等待都不持锁（Spec §2.3 V6-R2）；作业仍为 RUNNING，中断后由 recover_stale 重放。
                 commit_boundary=session.commit,
             )
             if deferred:
-                await _dispatch_deferred_message(
-                    service,
-                    message,
-                    phase=deferred_phase,
-                )
+                await _run_deferred_source(session, service, message, phase=deferred_phase)
             else:
                 await service.handle_message(message)
             await session.commit()
@@ -4631,6 +4823,21 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return handle_complaint_review
 
+    def build_referral_draft_handler(
+        session: AsyncSession,
+        bundle: RuntimeClientBundle,
+    ) -> JobHandler:
+        """资料核实草稿：读取冻结的管家消息，按代次条件写回（Spec 2026-10-08 fix2 §2.6(3)）。"""
+
+        async def handle_referral_draft(payload: dict[str, Any]) -> None:
+            """在 worker 事务内整理一次草稿。"""
+            await ReferralDraftJobService(
+                referrals=SQLAlchemyKnowledgeReferralRepository(session),
+                drafter=bundle.faq_drafter,
+            ).handle(payload)
+
+        return handle_referral_draft
+
     def build_hostex_event_handler(
         session: AsyncSession,
         bundle: RuntimeClientBundle,
@@ -4766,9 +4973,13 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             return HumanSessionService(
                 session, bundle.wecom, agent_id=bundle.agent_id,
                 duty_userids=bundle.duty_userids,
-                card_for=lambda conversation: _handoff_card_for(
-                    session, conversation, identity_resolver=bundle.wecom,
+                card_for=lambda conversation, task_id: _handoff_card_for(
+                    session, conversation, task_id, identity_resolver=bundle.wecom,
                     public_base_url=bootstrap.public_base_url,
+                ),
+                closed_card_for=lambda conversation: closed_referral_card(
+                    conversation_id=conversation.id,
+                    link=_conversation_chat_link(bootstrap.public_base_url, conversation),
                 ),
             )
 
@@ -4777,7 +4988,13 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             2026-09-29 用户审查：要点只随每小时维护更新，转人工那一刻常常还没整理，
             员工只看到「客人刚说：转人工」。整理规则与每小时维护完全相同，只是提前触发。
+            资料核实卡片走单独分支，只用转交记录里的最小内容（Spec 2026-10-08 fix2 §2.6(2)）。
             """
+            if payload.get("purpose") == REFERRAL_PURPOSE:
+                await _send_referral_card(
+                    session, bundle.wecom, payload, public_base_url=bootstrap.public_base_url
+                )
+                return
             card = HandoffCard(**payload["card"])
             customer_id = payload.get("customer_id")
             handover: tuple[str, ...] = ()
@@ -4877,6 +5094,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         """为一个已领取job一次性组装全部同revision处理器。"""
         handlers: dict[str, JobHandler] = {
             "faq_draft_generate": build_faq_draft_handler(session, bundle),
+            KNOWLEDGE_REFERRAL_DRAFT_JOB_TYPE: build_referral_draft_handler(session, bundle),
             "complaint_review_generate": build_complaint_review_handler(session, bundle),
             "hostex_event": build_hostex_event_handler(session, bundle),
             "credential_send_part": build_credential_part_handler(session, bundle),

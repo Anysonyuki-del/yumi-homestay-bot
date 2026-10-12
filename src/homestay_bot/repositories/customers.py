@@ -39,6 +39,7 @@ from homestay_bot.domain.models import (
     PropertyProfile,
     StayOrder,
 )
+from homestay_bot.repositories.knowledge_referrals import SQLAlchemyKnowledgeReferralRepository
 from homestay_bot.services.customer_errors import (
     CustomerConflictError,
     CustomerNotFoundError,
@@ -1489,10 +1490,17 @@ class SQLAlchemyCustomerRepository:
             raise CustomerNotFoundError("客户不存在")
         if not await self._is_test_account(customer_id):
             raise CustomerPermissionError("只能清空带「测试专用号」标签的客户")
+        # 锁顺序（修复 Spec 2026-10-08 fix2 §2.6(6)，V9-R1）：客户行之后、改任何消息与转交
+        # 之前，按会话编号升序取与 lock_activity 同款的会话行锁。处理一侧持会话锁期间不再锁
+        # 客户行，因此不会死锁：处理先提交，清空随后清掉它新写的转交与派生内容；清空先提交，
+        # 处理在等待后的来源复核处看到清空标记直接结束。
         conversation_ids = list(
             (
                 await self._session.scalars(
-                    select(Conversation.id).where(Conversation.customer_id == customer_id)
+                    select(Conversation.id)
+                    .where(Conversation.customer_id == customer_id)
+                    .order_by(Conversation.id)
+                    .with_for_update()
                 )
             ).all()
         )
@@ -1522,6 +1530,11 @@ class SQLAlchemyCustomerRepository:
                 Message.conversation_id.in_(conversation_ids),
                 Message.content.is_not(None),
             ).values(content=None, message_metadata={"cleared_by": "test_data_reset"}))
+            # 转交记录清掉正文与草稿、改为已清空并换代；来源完成收据不含正文，保留，旧来源
+            # 重放仍直接结束（Spec §2.6(6)）。
+            counts["knowledge_referrals"] = await SQLAlchemyKnowledgeReferralRepository(
+                self._session
+            ).clear_for_conversations(conversation_ids)
             for conversation in (
                 await self._session.scalars(
                     select(Conversation).where(Conversation.id.in_(conversation_ids))

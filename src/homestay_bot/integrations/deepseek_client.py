@@ -50,6 +50,25 @@ from homestay_bot.services.guest_reply_policy import (
     sanitize_guest_reply,
     unconfirmed_fallback,
 )
+from homestay_bot.services.item_coverage import (
+    EXPLICIT_STAY_DATE_PATTERN,
+    Clause,
+    ClauseNeeds,
+    GapUnit,
+    ReferralCandidate,
+    asks_property_catalog,
+    clause_dates,
+    clause_needs,
+    clause_rooms,
+    clause_target,
+    evidence_covers,
+    intersecting_clauses,
+    missing_nights,
+    relative_calendar_day,
+    split_clauses,
+    static_clause_dates,
+    unit_id_for,
+)
 from homestay_bot.services.knowledge_evidence_policy import (
     CLARIFY_REPLY_EN,
     CLARIFY_REPLY_ZH,
@@ -77,6 +96,7 @@ from homestay_bot.services.reply_plan import (
     ReplyPart,
     compose_reply_parts,
 )
+from homestay_bot.services.sensitive_text import contains_sensitive_text
 from homestay_bot.services.stay_date_range import (
     validate_stay_date_range,
     wuhan_today,
@@ -95,13 +115,8 @@ from homestay_bot.services.turn_plan import (
 logger = logging.getLogger(__name__)
 
 # 问题本身带着的入住日期：独立房态问题与带日期的追问共用。
-_EXPLICIT_STAY_DATE_PATTERN = re.compile(
-    r"今天|今晚|今日|明天|明晚|明日|后天|"
-    r"本周[一二三四五六日天]|这周[一二三四五六日天]|周末|"
-    r"\d{1,2}月\d{1,2}[日号]|\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2}|"
-    r"\b(?:today|tonight|tomorrow)\b",
-    re.IGNORECASE,
-)
+# 住宿日期写法与小句覆盖共用同一个定义（services.item_coverage）。
+_EXPLICIT_STAY_DATE_PATTERN = EXPLICIT_STAY_DATE_PATTERN
 # 「这周末 / 下周末 / this weekend」这类没有具体日期的说法；带具体日期时不走两种住法。
 _WEEKEND_PATTERN = re.compile(r"周末|\bweekend\b", re.IGNORECASE)
 _NEXT_WEEKEND_PATTERN = re.compile(r"下(?:个)?周末|\bnext\s+weekend\b", re.IGNORECASE)
@@ -277,6 +292,11 @@ _PRICE_DATES_REPLY_ZH = "请问您计划哪天入住、住几晚？我帮您查�
 _PRICE_DATES_REPLY_EN = (
     "Which dates would you like to stay? I'll check the reference price for you."
 )
+# 无日期问房态时追问入住日期（修复 Spec D-G10），与房价日期澄清同一出口、同一方式。
+_AVAILABILITY_DATES_REPLY_ZH = "请问您计划哪天入住、住几晚？我帮您查一下房态。"
+_AVAILABILITY_DATES_REPLY_EN = (
+    "Which dates would you like to stay? I'll check availability for you."
+)
 # 无日期问价由系统追问日期时附在系统提示后，避免模型重复追问或自行报价。
 _PRICE_WITHHELD_RULE = (
     "本轮客人问的房价缺少入住日期，系统会单独追问日期：你不要回答房价、不要追问日期，"
@@ -285,6 +305,13 @@ _PRICE_WITHHELD_RULE = (
 _ITEM_ANSWERS_RULE = (
     "信封 other_items 列出的子问题不由审核知识回答。请在 item_answers 中为每项给出一段只回答"
     "该项的简短正文（item_id 与 text），不要在其中写本店事实；本店事实由系统按审核资料单独回答。"
+)
+_GAP_REFERRAL_RULE = (
+    "信封 gap_units 列出了本轮可能缺资料的本店问题（id 与 text）。只有当某项属于民宿常识性"
+    "补充、适合沉淀为固定资料（如房间朝向、设施开放时间）时，才在 gap_referrals 中列出它的"
+    " unit_id，并给出简洁的标准问法 canonical_question 与分类 category；房态、价格、订单、退款、"
+    "预订、实时旅游、紧急情况和只与这位客人有关的个人安排一律不要列出。只能使用 gap_units 里"
+    "的 id，是否真的缺资料由系统判定。"
 )
 _EVIDENCE_SELECTION_RULE = (
     "本轮信封 turn_plan 列出了需要用审核知识回答的本店事实项（item_id 与 question）。"
@@ -365,6 +392,14 @@ class ItemAnswer(BaseModel):
     text: str = Field(max_length=800)
 
 
+class GapReferral(BaseModel):
+    """主调用从信封 gap_units 里选出的、适合沉淀为固定资料的缺口单元（只是候选）。"""
+
+    unit_id: str = Field(max_length=64)
+    canonical_question: str = Field(max_length=300)
+    category: str = Field(default="", max_length=64)
+
+
 class AssistantDecision(BaseModel):
     """约束模型每轮回复、风险标记和员工提醒决定。"""
 
@@ -394,6 +429,31 @@ class AssistantDecision(BaseModel):
     item_answers: list[ItemAnswer] | None = None
     # 本轮已核验计划只由适配器本地填写，模型回传的同名字段在 respond 出口一律覆盖。
     turn_plan: PlanOutcome | None = Field(default=None, exclude=True)
+    # 模型从信封 gap_units 中选出的转交候选；格式异常时逐条丢弃，不否决整轮回复。
+    gap_referrals: list[GapReferral] | None = None
+    # 本轮未覆盖的缺口单元及原因，只由适配器本地填写（修复 Spec §2.1(2)、§2.6(1)）。
+    gap_units: list[GapUnit] = Field(default_factory=list, exclude=True)
+    # 模型选中且本地确认为「资料缺失」的转交候选，只由适配器本地填写（§2.6(1)）。
+    referral_candidates: list[ReferralCandidate] = Field(default_factory=list, exclude=True)
+
+    @field_validator("gap_referrals", mode="before")
+    @classmethod
+    def keep_valid_gap_referrals(cls, value: Any) -> list[GapReferral] | None:
+        """转交选择逐条宽松校验：未知格式、空标准问题与重复编号丢弃，不让整轮失败。"""
+        if not isinstance(value, list):
+            return None
+        kept: list[GapReferral] = []
+        seen: set[str] = set()
+        for item in value:
+            try:
+                referral = GapReferral.model_validate(item)
+            except ValidationError:
+                continue
+            if not referral.canonical_question.strip() or referral.unit_id in seen:
+                continue
+            seen.add(referral.unit_id)
+            kept.append(referral)
+        return kept or None
 
     @field_validator("item_answers", mode="before")
     @classmethod
@@ -436,6 +496,23 @@ class AssistantDecision(BaseModel):
             return FacilityIssue.model_validate(value)
         except ValidationError:
             return None
+
+
+@dataclass(frozen=True)
+class _ItemLayout:
+    """一个本店事实项在原文中的小句、各小句所需事实与目标房源（调用前算出，前后共用）。"""
+
+    item: PlanItem
+    clauses: tuple[Clause, ...]
+    needs: tuple[ClauseNeeds, ...]
+    property_id: int | None
+    room_properties: dict[str, int | None]
+    rooms: tuple[str, ...]
+    date_names: int
+    relative_dates: bool
+    item_dates: tuple[date | None, date | None]
+    static_dates: tuple[tuple[date | None, date | None] | None, ...]
+    split_static: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,6 +926,23 @@ def assistant_decision_schema() -> dict[str, Any]:
                     {"type": "null"},
                 ]
             },
+            "gap_referrals": {
+                "anyOf": [
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "unit_id": {"type": "string"},
+                                "canonical_question": {"type": "string"},
+                                "category": {"type": "string"},
+                            },
+                            "required": ["unit_id", "canonical_question", "category"],
+                        },
+                    },
+                    {"type": "null"},
+                ]
+            },
         },
     }
 
@@ -1133,8 +1227,12 @@ class DeepSeekGuestAssistant:
         selection_dates: tuple[date | None, date | None] = (None, None),
         item_knowledge: dict[int, list[Any]] | None = None,
         other_items: Sequence[PlanItem] = (),
+        fact_layout: dict[int, _ItemLayout] | None = None,
     ) -> AssistantDecision:
         """校验模型 JSON，并执行确定性风险归一化。
+
+        fact_layout 非空表示计划成功且含本店事实项：本店事实一律逐项取证（`_item_evidence_plan`），
+        不再使用整轮证据计划；其余由模型逐项回答的项接在后面（修复 Spec §2.1(2)）。
 
         guest_question 是客人本轮原文（未接上文话题），接管理由与任务判定按它和
         turn_plan 统一计算（Spec §2.5、§2.6）；缺省时用 question_text。
@@ -1153,8 +1251,9 @@ class DeepSeekGuestAssistant:
         """
         raw_decision = json.loads(output_text)
         if isinstance(raw_decision, dict):
-            # 计划只由适配器本地填写：模型回传的同名字段直接丢弃，不能借它影响校验结果。
-            raw_decision.pop("turn_plan", None)
+            # 计划、缺口与转交候选只由适配器本地填写：模型回传的同名字段直接丢弃。
+            for local_field in ("turn_plan", "gap_units", "referral_candidates"):
+                raw_decision.pop(local_field, None)
         decision = AssistantDecision.model_validate(raw_decision)
         # 会话语言由有效客人消息确定，模型回传的语言不能覆盖本地切换规则。
         if language is not None:
@@ -1293,11 +1392,14 @@ class DeepSeekGuestAssistant:
                 }
             )
         normalized = decision.model_copy(update=updates)
-        selection_plan = self._selection_evidence_plan(
-            decision, guest_text, turn_plan, knowledge_evidence, selection_dates, item_knowledge
-        )
-        if selection_plan is not None:
-            evidence_plan = selection_plan
+        item_gaps: list[GapUnit] = []
+        if fact_layout:
+            evidence_plan, item_gaps = self._item_evidence_plan(
+                decision.evidence_selection,
+                fact_layout,
+                item_knowledge,
+                normalized.language,
+            )
         if evidence_plan is not None and self._plan_handles_reply(
             evidence_plan,
             normalized,
@@ -1307,7 +1409,7 @@ class DeepSeekGuestAssistant:
                 evidence_plan,
                 question_text,
             )
-            if other_items:
+            if other_items and not fact_layout:
                 normalized = self._with_item_answers(
                     normalized,
                     other_items,
@@ -1328,6 +1430,23 @@ class DeepSeekGuestAssistant:
                         "faq_category": None,
                     }
                 )
+        if fact_layout:
+            if evidence_plan is None:
+                # 本轮只有工具类本店事实：模型自由正文不作本店事实，正文由出口逐项组合。
+                normalized = normalized.model_copy(update={"reply_parts": []})
+            if other_items:
+                # 逐项模式下本店事实只用审核证据与工具；店外、寒暄等项接上模型的逐项回答。
+                normalized = self._with_item_answers(
+                    normalized,
+                    other_items,
+                    decision.item_answers or [],
+                    grounded_in="\n".join(
+                        item
+                        for item in (self._knowledge_grounding(knowledge_evidence), live_grounding)
+                        if item
+                    ),
+                )
+            normalized = normalized.model_copy(update={"gap_units": item_gaps})
         candidate_allowed = (
             normalized.knowledge_gap
             and not transaction_sensitive
@@ -1374,122 +1493,472 @@ class DeepSeekGuestAssistant:
             return False
         return specific
 
-    def _selection_evidence_plan(
+    async def _fact_layout(
         self,
-        decision: AssistantDecision,
-        guest_text: str,
-        turn_plan: PlanOutcome | None,
-        knowledge: list[Any] | None,
+        plan_items: Sequence[PlanItem],
+        question_text: str,
+        property_id: int | None,
         dates: tuple[date | None, date | None],
-        item_knowledge: dict[int, list[Any]] | None = None,
-    ) -> EvidencePlan | None:
-        """把主调用回传的证据选择逐项核验为证据计划；不可用时返回空，回到现行证据计划。
+        today: date,
+    ) -> dict[int, _ItemLayout]:
+        """为本店事实项算出小句布局、所需事实与目标房源（修复 Spec §2.1(2)、§2.6(1)）。
 
-        结果矩阵（Spec §2.4）：核验通过的项发审核原文；选「无」、漏选、冲突的项回未确认；
-        越界编号或跨越政策边界的项按现行证据计划单独判定。核验、冲突与回退都只用该项
-        自己的合法候选（`item_knowledge`），没有逐项候选时才用整轮候选。
+        取证前固定项日期：检索、调用前后与跨项复用共用，模型等待后不重新解释日期。只切一次
+        句：调用前后、逐项取证、工具覆盖与缺口单元都用同一组小句区间与编号。房号
+        映射一次查完；映射不到的房号记为空，不拿已确认住宿的房间代替。
         """
-        plan = usable_plan(turn_plan, guest_text)
-        if plan is None or plan.plan is None or decision.evidence_selection is None:
-            return None
-        items = [item for item in plan.plan.valid_items if item.kind == "static_fact"]
-        if not items or knowledge is None:
-            return None
-        selections = {item.item_id: item for item in decision.evidence_selection}
-        parts: list[ReplyPart] = []
-        for item in items:
-            target_date, target_end_date = self._item_dates(item, dates)
-            missing = ReplyPart(question=item.question, status="missing", text="")
-            selected = selections.get(item.id)
-            if selected is None:
-                logger.info("证据选择：item=%s reason=not_selected", item.id)
-                parts.append(missing)
+        clauses = split_clauses(question_text)
+        rooms_cache: dict[str, int | None] = {}
+        layout: dict[int, _ItemLayout] = {}
+        for item in plan_items:
+            if item.kind not in _PROPERTY_FACT_KINDS:
                 continue
-            candidates = (item_knowledge or {}).get(item.id, knowledge)
+            spans = tuple(intersecting_clauses(clauses, item.start, len(item.quote)))
+            rooms = clause_rooms(item.quote)
+            item_property = await self._item_property(item, property_id, rooms_cache)
+            for room in rooms:
+                if room not in rooms_cache:
+                    finder = getattr(self._knowledge, "find_property_by_room", None)
+                    rooms_cache[room] = await finder(room) if finder else None
+            date_names = {
+                match.group(0) for match in EXPLICIT_STAY_DATE_PATTERN.finditer(item.quote)
+            }
+            item_dates = self._item_dates(item, dates, today)
+            # 模型选项、取证与最终缺口共用同一布局，拆句后不再提供旧的整项编号。
+            static_dates = tuple(
+                None if any(room != item.target_room for room in clause_rooms(clause.text))
+                else static_clause_dates(
+                    clause.text, item_dates,
+                    (item_dates[0] or today).year, today=today,
+                )
+                for clause in spans
+            )
+            layout[item.id] = _ItemLayout(
+                item=item,
+                clauses=spans,
+                needs=tuple(clause_needs(clause.text) for clause in spans),
+                property_id=item_property,
+                room_properties=rooms_cache,
+                rooms=rooms,
+                date_names=len(date_names),
+                relative_dates=clause_dates(item.quote, today.year).relative,
+                item_dates=item_dates,
+                static_dates=static_dates,
+                split_static=any(bound != item_dates for bound in static_dates),
+            )
+        return layout
+
+    @staticmethod
+    def _gap_reason(reason: str) -> str:
+        """把证据计划或选择核验的原因映射为缺口原因；只有资料缺失可以转交。"""
+        if reason.startswith("conflict"):
+            return "conflict"
+        return {
+            "period_veto": "period_veto",
+            "answer_needs_review": "needs_review",
+            "borrowing_unconfirmed": "needs_review",
+            "reply_exceeds_message_limit": "budget",
+            "reply_budget_exceeded": "budget",
+        }.get(reason, "knowledge_missing")
+
+    @staticmethod
+    def _tag_missing(parts: Sequence[ReplyPart], unit: str) -> list[ReplyPart]:
+        """给缺口分项标上缺口单元编号，供会话层换成转交说明。"""
+        return [
+            part.model_copy(update={"gap_unit": unit}) if part.status == "missing" else part
+            for part in parts
+        ]
+
+    @staticmethod
+    def _gap_unit_offers(layout: dict[int, _ItemLayout]) -> list[dict[str, str]]:
+        """调用前列出可能的缺口单元，供模型在 gap_referrals 中选择（修复 Spec §2.6(1)）。
+
+        日期与房间可整项绑定时提供静态整项，否则只提供已绑定小句；工具小句只提供剩余
+        静态语义。编号与调用后的缺口一致，含凭据的单元不列出。
+        """
+        offers: list[dict[str, str]] = []
+        for entry in sorted(layout.values(), key=lambda value: value.item.start):
+            item = entry.item
+            if item.kind == "static_fact" and not entry.split_static:
+                pieces = [(unit_id_for(item.id, item.start, item.start + len(item.quote)),
+                           item.quote)]
+            else:
+                pieces = [
+                    (
+                        unit_id_for(item.id, clause.start, clause.end),
+                        needs.residue if needs.tool_facts else clause.text,
+                    )
+                    for clause, needs, bound in zip(
+                        entry.clauses, entry.needs, entry.static_dates, strict=True
+                    )
+                    if bound is not None and (not needs.tool_facts or needs.residue)
+                ]
+            for unit_id, text in pieces:
+                if contains_sensitive_text(text):
+                    continue
+                offers.append({"id": unit_id, "text": text[:120]})
+        return offers
+
+    def _static_item_parts(
+        self,
+        question: str,
+        candidates: list[Any],
+        dates: tuple[date | None, date | None],
+        selection: EvidenceSelection | None,
+        language: Language,
+    ) -> tuple[list[ReplyPart], str]:
+        """一个本店事实问题的取证结果：（分项, 缺口原因）；全部作答时原因为空。
+
+        有合法选择时按选择核验；选择缺失、为空、越界或跨越生效边界时，用同一组合法候选跑
+        按对象约束的证据计划，两条路径结论一致（修复 Spec §2.1(2)、§2.3，V2-R3）。
+        """
+        target_date, target_end_date = dates
+        missing = ReplyPart(question=question, status="missing", text="")
+        if selection is not None and selection.answer_ids:
             verdict = verify_selected_evidence(
-                item.question,
-                selected.answer_ids,
-                selected.related_ids,
+                question,
+                selection.answer_ids,
+                selection.related_ids,
                 candidates,
                 target_date=target_date,
                 target_end_date=target_end_date,
             )
-            logger.info("证据选择：item=%s status=%s reason=%s", item.id, verdict.status,
-                        verdict.reason)
+            logger.info("证据选择：status=%s reason=%s", verdict.status, verdict.reason)
             if verdict.status == "grounded":
-                parts.extend(verdict.parts)
-            elif verdict.status == "missing":
-                parts.append(missing)
-            else:
-                fallback = build_evidence_plan(
-                    item.question,
-                    candidates,
-                    supporting_for_topic=self._supporting_knowledge,
-                    is_property_question=True,
-                    target_date=target_date,
-                    target_end_date=target_end_date,
+                return list(verdict.parts), ""
+            if verdict.status == "missing":
+                return [missing], self._gap_reason(verdict.reason)
+        plan = build_evidence_plan(
+            question,
+            candidates,
+            supporting_for_topic=self._supporting_knowledge,
+            is_property_question=True,
+            target_date=target_date,
+            target_end_date=target_end_date,
+            object_scoped=True,
+        )
+        if plan.status == "unclear":
+            text = CLARIFY_REPLY_EN if language is Language.EN else CLARIFY_REPLY_ZH
+            return [ReplyPart(question=question, status="clarification", text=text)], ""
+        parts = list(plan.parts) or ([] if plan.status == "grounded" else [missing])
+        if plan.status == "grounded" and not parts:
+            parts = [
+                ReplyPart(question=question, status="grounded", text=answer)
+                for answer in plan.answers
+            ]
+        reason = "" if plan.status == "grounded" else self._gap_reason(plan.reason)
+        return parts, reason
+
+    def _item_evidence_plan(
+        self,
+        selections: Sequence[EvidenceSelection] | None,
+        layout: dict[int, _ItemLayout],
+        item_knowledge: dict[int, list[Any]] | None,
+        language: Language,
+    ) -> tuple[EvidencePlan | None, list[GapUnit]]:
+        """计划成功时逐项取证，取代整轮证据计划（修复 Spec §2.1(2)，F1、G1）。
+
+        - static_fact 可整项绑定时按项问法取证，否则按已绑定小句原文与日期取证；
+        - stay_query、catalog_query 项只对不需要工具的小句、以及删除锚点后仍有剩余内容的
+          小句取证；房价、房态、目录由工具分项回答，在出口按小句判定覆盖（`_tool_coverage`）；
+        - 房号不符或绝对日期无法绑定到检索范围的小句不用候选，记为范围未绑定；
+        - 候选只取该项自己的合法候选，不借整轮池；得不出答案的项回未确认。
+        返回（逐项证据计划, 缺口单元）；没有任何可取证内容时计划为空。
+        """
+        if not layout:
+            return None, []
+        by_item = {selection.item_id: selection for selection in selections or []}
+        shared = self._shared_grounded(layout, by_item, item_knowledge, language)
+        parts: list[ReplyPart] = []
+        gaps: list[GapUnit] = []
+        for entry in sorted(layout.values(), key=lambda value: value.item.start):
+            item = entry.item
+            candidates = list((item_knowledge or {}).get(item.id, []))
+            selection = by_item.get(item.id)
+            if selection is not None:
+                # 同一轮另一项已核验通过的条目，模型又选它回答本项时，按本项合法候选处理
+                # （用户 2026-10-08 决定，1.70.0 候选门禁 K-安静-C）。只复用全店通用、没有附加
+                # 条件词的条目，正文已在回复里、不引入新事实；房间专属与带条件的条目不跨项。
+                own = {getattr(candidate, "source_id", None) for candidate in candidates}
+                candidates.extend(
+                    shared[source_id][1]
+                    for source_id in dict.fromkeys(selection.answer_ids)
+                    if source_id in shared
+                    and source_id not in own
+                    and shared[source_id][0] != item.id
                 )
-                parts.extend(fallback.parts or (missing,))
+            item_dates = entry.item_dates
+            unbound = [clause for clause, bound in zip(
+                entry.clauses, entry.static_dates, strict=True
+            ) if bound is None]
+            for clause in unbound:
+                unbound_id = unit_id_for(item.id, clause.start, clause.end)
+                parts.append(ReplyPart(
+                    question=clause.text, status="missing", text="", gap_unit=unbound_id
+                ))
+                gaps.append(GapUnit(
+                    unit_id=unbound_id,
+                    item_id=item.id, text=clause.text, reason="scope_unbound",
+                    property_id=entry.property_id,
+                ))
+            if item.kind == "static_fact" and not entry.split_static:
+                item_parts, reason = self._static_item_parts(
+                    item.question, candidates, item_dates, selection, language
+                )
+                item_unit = unit_id_for(item.id, item.start, item.start + len(item.quote))
+                parts.extend(self._tag_missing(item_parts, item_unit))
+                if reason:
+                    gaps.append(GapUnit(
+                        unit_id=item_unit,
+                        item_id=item.id, text=item.quote, reason=reason,  # type: ignore[arg-type]
+                        property_id=entry.property_id,
+                    ))
+                continue
+            for clause, needs, bound in zip(
+                entry.clauses, entry.needs, entry.static_dates, strict=True
+            ):
+                if bound is None or (needs.tool_facts and not needs.residue):
+                    continue
+                item_parts, reason = self._static_item_parts(
+                    needs.residue if needs.tool_facts else clause.text,
+                    candidates, bound, selection if item.kind == "static_fact" else None, language,
+                )
+                clause_unit = unit_id_for(item.id, clause.start, clause.end)
+                parts.extend(self._tag_missing(item_parts, clause_unit))
+                if reason:
+                    gaps.append(GapUnit(
+                        unit_id=clause_unit,
+                        item_id=item.id,
+                        text=needs.residue if needs.tool_facts else clause.text,
+                        reason=reason,  # type: ignore[arg-type]
+                        property_id=entry.property_id,
+                    ))
+        if not parts:
+            return None, gaps
         missing_any = any(part.status == "missing" for part in parts)
-        return EvidencePlan(
-            "insufficient" if missing_any else "grounded",
-            (),
-            tuple(part.text for part in parts if part.status == "grounded"),
-            "selection",
-            tuple(parts),
+        return (
+            EvidencePlan(
+                "insufficient" if missing_any else "grounded",
+                (),
+                tuple(part.text for part in parts if part.status == "grounded"),
+                "items",
+                tuple(parts),
+            ),
+            gaps,
         )
 
+    def _shared_grounded(
+        self,
+        layout: dict[int, _ItemLayout],
+        by_item: dict[int, EvidenceSelection],
+        item_knowledge: dict[int, list[Any]] | None,
+        language: Language,
+    ) -> dict[int, tuple[int, Any]]:
+        """本轮各 static_fact 项只用本项候选核验通过的条目：{编号: (所属项, 条目)}。
+
+        只收全店通用（无房源）、没有附加条件词的条目，供同轮其他项在模型选中时复用；房间
+        专属条目跨项会让 401 的问题用 402 的事实作答（B24-R3），带条件词的条目跨项会被别项
+        原话满足条件（G2），都不复用。
+        """
+        shared: dict[int, tuple[int, Any]] = {}
+        for entry in layout.values():
+            item = entry.item
+            selection = by_item.get(item.id)
+            if item.kind != "static_fact" or selection is None or not selection.answer_ids:
+                continue
+            candidates = list((item_knowledge or {}).get(item.id, []))
+            pieces = (
+                [(clause.text, bound) for clause, bound in zip(
+                    entry.clauses, entry.static_dates, strict=True
+                ) if bound is not None]
+                if entry.split_static else [(item.question, entry.item_dates)]
+            )
+            parts = [part for question, bound in pieces for part in self._static_item_parts(
+                question, candidates, bound, selection, language
+            )[0]]
+            grounded = {
+                evidence.source_id
+                for part in parts
+                if part.status == "grounded"
+                for evidence in part.evidence
+                if evidence.source_kind == "knowledge"
+            }
+            for candidate in candidates:
+                source_id = getattr(candidate, "source_id", None)
+                if (
+                    isinstance(source_id, int)
+                    and str(source_id) in grounded
+                    and getattr(candidate, "scope", None) == "global"
+                    and not getattr(candidate, "conditional", False)
+                ):
+                    shared.setdefault(source_id, (item.id, candidate))
+        return shared
+
+    def _tool_coverage(
+        self,
+        layout: dict[int, _ItemLayout],
+        tool_parts: Sequence[ReplyPart],
+        *,
+        price_clarified: bool,
+        language: Language,
+    ) -> tuple[list[ReplyPart], list[GapUnit]]:
+        """按小句判定工具分项是否覆盖所问的房价、房态与目录，返回（缺口分项, 缺口单元）。
+
+        工具与澄清分项只覆盖它实际回答的那一类事实（修复 Spec §2.1(2)，V3-R1、V4-R1）：
+        - 房价要与小句目标相符的参考价证据，或无日期时的房价日期澄清；
+        - 房态要与小句目标相符的房态证据；没有日期、也没有任何房态证据时追问入住日期（D-G10）；
+        - 目录要房源目录证据（目录小句删除锚点后仍有剩余的部分已在逐项取证里处理，D-G9）；
+        - 工具明确失败或没有返回可用资料时，失败说明已经回答了这一类事实，不重复。
+        正常出口与 `availability_fallback` 出口共用本判定。
+        """
+        evidence = [
+            item for part in tool_parts if part.status == "grounded" for item in part.evidence
+        ]
+        reported = {
+            part.question for part in tool_parts if part.status in {"query_failed", "missing"}
+        }
+        parts: list[ReplyPart] = []
+        gaps: list[GapUnit] = []
+        ask_dates = False
+        year = self._local_date_provider().year
+        for entry in sorted(layout.values(), key=lambda value: value.item.start):
+            item = entry.item
+            if item.kind not in {"stay_query", "catalog_query"}:
+                continue
+            for clause, needs in zip(entry.clauses, entry.needs, strict=True):
+                if not needs.tool_facts:
+                    continue
+                target = clause_target(
+                    clause.text,
+                    item_rooms=entry.rooms,
+                    item_relative_dates=entry.relative_dates,
+                    item_date_names=entry.date_names,
+                    item_check_in=item.check_in_date,
+                    item_check_out=item.check_out_date,
+                    room_properties=entry.room_properties,
+                    item_property=entry.property_id,
+                    year=item.check_in_date.year if item.check_in_date else year,
+                )
+                wanted = [
+                    (kind, tool)
+                    for flag, kind, tool in (
+                        (needs.availability, "availability", "search_availability"),
+                        (needs.price, "reference_price", "search_reference_price"),
+                        (needs.catalog, "property", "list_properties"),
+                    )
+                    if flag
+                ]
+                for kind, tool in wanted:
+                    if tool in reported:
+                        continue
+                    if kind == "reference_price" and price_clarified and target.check_in is None:
+                        continue
+                    if kind == "property":
+                        covered = any(row.source_kind == "property" for row in evidence)
+                    else:
+                        covered = evidence_covers(evidence, kind, target)
+                    if covered:
+                        continue
+                    if (
+                        kind == "availability"
+                        and not target.unbound
+                        and target.check_in is None
+                        and not any(row.source_kind == "availability" for row in evidence)
+                    ):
+                        ask_dates = True
+                        continue
+                    tool_unit = unit_id_for(item.id, clause.start, clause.end)
+                    parts.append(ReplyPart(
+                        question=clause.text,
+                        status="missing",
+                        text=self._uncovered_text(kind, clause.text, language),
+                        gap_unit=tool_unit,
+                    ))
+                    gaps.append(GapUnit(
+                        unit_id=tool_unit,
+                        item_id=item.id, text=clause.text,
+                        reason="scope_unbound" if target.unbound else "tool_uncovered",
+                        property_id=entry.property_id,
+                    ))
+        if ask_dates and not price_clarified:
+            parts.append(ReplyPart(
+                question="房态日期",
+                status="clarification",
+                text=(
+                    _AVAILABILITY_DATES_REPLY_EN if language is Language.EN
+                    else _AVAILABILITY_DATES_REPLY_ZH
+                ),
+            ))
+        return parts, gaps
+
     @staticmethod
+    def _uncovered_text(kind: str, clause: str, language: Language) -> str:
+        """工具没覆盖某个小句的房态、参考价或目录时的固定说明；不猜测，也不承诺。"""
+        label = " ".join(clause.split())[:30]
+        if language is Language.EN:
+            if kind == "property":
+                return "I couldn't load the room list this time, so room types aren't confirmed."
+            fact = "availability" if kind == "availability" else "the reference price"
+            return f'I couldn\'t check {fact} for "{label}" this time, so it isn\'t confirmed.'
+        if kind == "property":
+            return "这次没有查到房源目录，房型暂时无法确认。"
+        fact = "房态" if kind == "availability" else "参考价"
+        return f"「{label}」这次没有查到对应的{fact}，暂时无法确认。"
+
     def _item_dates(
-        item: PlanItem, dates: tuple[date | None, date | None]
+        self, item: PlanItem, dates: tuple[date | None, date | None], today: date,
     ) -> tuple[date | None, date | None]:
-        """计划项自带合法日期时按该项（退房日不含），否则沿用本轮目标日期。"""
+        """保留计划范围供小句核验；无项日期的独立静态单日自行定日，不扩粗住宿范围。"""
         if item.check_in_date is not None and item.check_out_date is not None:
             return item.check_in_date, item.check_out_date - timedelta(days=1)
+        named = clause_dates(item.quote, today.year)
+        if (
+            item.kind == "static_fact" and named.relative and not named.unbindable
+            and not named.check_in and not named.check_out
+            and (point := relative_calendar_day(item.quote, today)) is not None
+        ):
+            return point, point
+        if not named.unbindable and not named.relative:
+            if named.check_in and named.check_out:
+                return named.check_in, named.check_out - timedelta(days=1)
+            if point := named.check_in or named.check_out:
+                return point, point
         return dates
 
     async def _merge_item_knowledge(
         self,
         knowledge: list[Any],
-        plan_items: Sequence[PlanItem],
+        layout: dict[int, _ItemLayout],
         *,
         language: Language,
-        property_id: int | None,
-        dates: tuple[date | None, date | None],
+        question_text: str = "",
     ) -> tuple[list[Any], dict[int, list[Any]]]:
         """按计划的每个本店事实项单独检索，返回（交给模型的合并候选, 各项自己的合法候选）。
 
         合并候选只决定模型能看到什么；每项的证据选择、同组冲突与回退都只能用该项自己的
         合法候选（Codex 审查 B24-R3：共用一个池会让 401 的问题用 402 的审核事实作答）。
-        项的合法候选 = 该项按自己的房源、日期与问法检索到的条目，加上整句检索结果中不属于
-        房间专属、或属于该项房源的条目；点名的房号映射不到已知房源时，不含任何房间专属
-        条目，不拿已确认住宿房间的事实回答点名的另一间房。房号只作检索目标，不认定住宿。
+
+        修复 Spec §2.1(1)（F2、G1、G2）：
+        - 本店事实项（static_fact、catalog_query、stay_query）都单独检索，不再只限 static_fact；
+        - 项的合法候选只取该项自己检到、且模型实际看得到的条目；整句检索结果只进合并
+          信封，不授予任何一项适用资格（此前整句结果直接进每项候选，停车条目的附加条件
+          「晚上」被另一个子问题满足后发出了白天停车费）；
+        - 附加条件词只由该项客人原话摘录满足（D-G2），排除词按本轮完整原文判断（D-G4）；
+        - 点名的房号映射不到已知房源时按无房源检索，不含任何房间专属条目；
+        - 超出逐项检索上限的事实项没有合法候选，交给证据计划回未确认（失败关闭）。
+        房号只作检索目标，不认定住宿。
         """
-        items = [item for item in plan_items if item.kind == "static_fact"]
-        if not items:
+        if not layout:
             return knowledge, {}
         merged = list(knowledge)
         seen = {getattr(entry, "source_id", None) for entry in merged}
         used = sum(len(str(entry.question)) + len(str(entry.answer)) for entry in merged)
-        finder = getattr(self._knowledge, "find_property_by_room", None)
-        rooms: dict[str, int | None] = {}
         item_candidates: dict[int, list[Any]] = {}
-        for index, item in enumerate(items):
-            item_property = property_id
-            if item.target_room:
-                if item.target_room not in rooms:
-                    rooms[item.target_room] = (
-                        await finder(item.target_room) if finder is not None else None
-                    )
-                item_property = rooms[item.target_room]
-            legal = [
-                entry
-                for entry in knowledge
-                if getattr(entry, "scope", None) != "property"
-                or (item_property is not None and entry.property_id == item_property)
-            ]
+        for index, entry in enumerate(layout.values()):
+            item = entry.item
+            legal: list[Any] = []
             if index < _PLAN_RETRIEVAL_ITEMS:
-                target_date, target_end_date = self._item_dates(item, dates)
+                target_date, target_end_date = entry.item_dates
                 found = self._scope_knowledge(
                     item.question,
                     await self._knowledge.retrieve(
@@ -1497,10 +1966,12 @@ class DeepSeekGuestAssistant:
                         item.question,
                         limit=_PLAN_ITEM_KNOWLEDGE_LIMIT,
                         char_budget=_PLAN_ITEM_KNOWLEDGE_CHARS,
-                        property_id=item_property,
+                        property_id=entry.property_id,
                         target_date=target_date,
                         target_end_date=target_end_date,
                         reserved_property_slots=_TARGET_ROOM_RESERVED_SLOTS,
+                        trigger_text=item.quote,
+                        exclude_text=question_text or None,
                     ),
                 )
                 for entry in found:
@@ -1517,6 +1988,90 @@ class DeepSeekGuestAssistant:
                 {getattr(entry, "source_id", id(entry)): entry for entry in legal}.values()
             )
         return merged, item_candidates
+
+    async def _item_property(
+        self, item: PlanItem, property_id: int | None, rooms: dict[str, int | None]
+    ) -> int | None:
+        """计划项的检索房源：点名房号时按房号映射（映射不到为无房源），否则用本轮房源。"""
+        if not item.target_room:
+            return property_id
+        if item.target_room not in rooms:
+            finder = getattr(self._knowledge, "find_property_by_room", None)
+            rooms[item.target_room] = await finder(item.target_room) if finder else None
+        return rooms[item.target_room]
+
+    def _compose_items(
+        self,
+        decision: AssistantDecision,
+        layout: dict[int, _ItemLayout],
+        tool_parts: Sequence[ReplyPart],
+        public_parts: Sequence[ReplyPart],
+        *,
+        price_clarified: bool,
+        language: Language,
+    ) -> AssistantDecision | None:
+        """逐项模式的最终组合：本地分项、工具分项、工具缺口与联网分项（正常出口与回退共用）。
+
+        没有任何分项时返回空，调用方沿用现行出口（例如计划只有店外项、模型直接作答）。
+        """
+        coverage_parts, coverage_gaps = self._tool_coverage(
+            layout, tool_parts, price_clarified=price_clarified, language=language
+        )
+        parts = [*decision.reply_parts, *tool_parts, *coverage_parts, *public_parts]
+        if not parts:
+            return None
+        missing = any(part.status == "missing" for part in parts)
+        return decision.model_copy(
+            update={
+                "reply_parts": parts,
+                "reply_text": compose_reply_parts(parts),
+                "knowledge_gap": missing,
+                "knowledge_gap_topic": decision.knowledge_gap_topic if missing else None,
+                "staff_confirmation_required": False,
+                "staff_confirmation_reason": None,
+                "gap_units": [*decision.gap_units, *coverage_gaps],
+            }
+        )
+
+    @staticmethod
+    def _item_answered_locally(
+        item: PlanItem,
+        layout: dict[int, _ItemLayout],
+        question_text: str,
+        public_clauses: Sequence[str],
+    ) -> bool:
+        """联网分支提前返回前判断：这一项是否已由本地分项或联网分项确定回答。
+
+        - 本店静态事实由逐项取证回答（审核原文或未确认）；
+        - 房价、房态、目录要工具，必须走主调用；
+        - 动作项由会话层按实际登记结果回答；
+        - 其余项只有与它原文区间相交的小句全部有本轮联网分项时才算覆盖，相交小句为空、
+          或无法映射到小句时不算（修复 Spec §2.1(3)，G3）。
+        """
+        if item.kind == "static_fact":
+            return True
+        if item.kind in {"stay_query", "catalog_query"}:
+            entry = layout.get(item.id)
+            return entry is not None and not any(needs.tool_facts for needs in entry.needs)
+        if item.kind in REQUEST_KINDS or item.kind == "request_withdraw":
+            return True
+        spans = intersecting_clauses(split_clauses(question_text), item.start, len(item.quote))
+        live = set(public_clauses)
+        return bool(spans) and all(clause.text in live for clause in spans)
+
+    @staticmethod
+    def _only_tool_clauses(items: Sequence[PlanItem], question_text: str) -> bool:
+        """这些计划项的每个小句是否都只问工具事实（房价、房态、目录），没有剩余内容。"""
+        clauses = split_clauses(question_text)
+        for item in items:
+            spans = intersecting_clauses(clauses, item.start, len(item.quote))
+            if not spans:
+                return False
+            for clause in spans:
+                needs = clause_needs(clause.text)
+                if not needs.tool_facts or needs.residue:
+                    return False
+        return True
 
     @staticmethod
     def _action_only_plan(plan_items: Sequence[PlanItem]) -> bool:
@@ -1634,6 +2189,7 @@ class DeepSeekGuestAssistant:
         live_results: list[dict[str, str]] | None = None,
         static_items: list[dict[str, Any]] | None = None,
         other_items: list[dict[str, Any]] | None = None,
+        gap_units: list[dict[str, str]] | None = None,
     ) -> str:
         """把动态上下文编码成最后一条用户数据，避免污染系统指令。
 
@@ -1686,6 +2242,9 @@ class DeepSeekGuestAssistant:
         if other_items:
             # 静态证据只接管本店事实项；其余项由模型逐项回答，供 item_answers 引用。
             envelope["other_items"] = other_items
+        if gap_units:
+            # 可能的缺口单元：模型只能从中选择适合沉淀的项，是否真缺资料由本地判定。
+            envelope["gap_units"] = gap_units
         return json.dumps(envelope, ensure_ascii=False, default=str)
 
     @classmethod
@@ -2272,22 +2831,10 @@ class DeepSeekGuestAssistant:
     def _should_force_property_catalog(question_text: str) -> bool:
         """问本店有哪些、哪几种房或介绍房间时，必须先读取百居易房源名称。
 
-        按意图归类，而不是只认「介绍」字眼：「你们有哪些房型」曾因不含
-        「介绍/详情/名称」而拿不到工具，只能回尚未确认。房态（还有房吗）和
-        房内设施（房间有空调吗）不属于房型列表，不在此列。
+        识别规则只在 `services.item_coverage.asks_property_catalog` 定义一处，房源目录分项
+        能覆盖哪些小句也按同一规则判断（修复 Spec §2.1(2)，D-G9）。
         """
-        return (
-            re.search(
-                r"房型|户型|房源|房间类型|"
-                r"(?:哪些|哪几种|哪种|什么|几种|几类|多少种)(?:样的)?房|"
-                r"房间?(?:都有|有)(?:哪些|哪几种|几种|什么类型)|"
-                r"介绍.*房|房间.*(?:介绍|详情|名称)|"
-                r"room.*(?:intro|detail|name)|room types?|what rooms|which rooms",
-                question_text,
-                re.IGNORECASE,
-            )
-            is not None
-        )
+        return asks_property_catalog(question_text)
 
     async def _refine_reply(
         self,
@@ -2467,6 +3014,26 @@ class DeepSeekGuestAssistant:
                     for night in nights
                 )
                 condition = f"{title}: {prices}" if english else f"{title}：{prices}"
+                # 行上的入住、退房只是查询范围：上游只返回一晚也会输出整行，逐晚核对所问
+                # 区间，缺价的夜晚写明未查到，不让端点相符冒充整段报价（修复 Spec V6-R3）。
+                absent = missing_nights(
+                    nights,
+                    DeepSeekGuestAssistant._safe_trace_date(
+                        row.get("check_in_date") or arguments.get("check_in_date")
+                    ),
+                    DeepSeekGuestAssistant._safe_trace_date(
+                        row.get("check_out_date") or arguments.get("check_out_date")
+                    ),
+                )
+                if absent:
+                    absent_text = ("; " if english else "、").join(
+                        _guest_date(day.isoformat(), language) for day in absent
+                    )
+                    condition += (
+                        f" (no reference price found for {absent_text})"
+                        if english
+                        else f"（{absent_text}的参考价暂未查到）"
+                    )
                 if row.get("stay_available") is False:
                     condition += (
                         " (unavailable for this stay)" if english else "（这段时间不可订）"
@@ -2593,7 +3160,29 @@ class DeepSeekGuestAssistant:
             if error.plan_outcome is None:
                 error.plan_outcome = plan
             raise
-        return decision.model_copy(update={"turn_plan": plan})
+        return decision.model_copy(
+            update={"turn_plan": plan, "referral_candidates": self._referral_candidates(decision)}
+        )
+
+    @staticmethod
+    def _referral_candidates(decision: AssistantDecision) -> list[ReferralCandidate]:
+        """模型选中、且本地组合后缺口原因确为「资料缺失」的单元（修复 Spec §2.6(1)）。
+
+        模型选中不是缺口证明：本地没有落到未确认、或原因是冲突、期间否决、范围未绑定、工具
+        未覆盖、预算跳过的单元一律不接受；未知编号在这里自然被丢弃。
+        """
+        selected = {item.unit_id: item for item in decision.gap_referrals or []}
+        candidates: list[ReferralCandidate] = []
+        for unit in decision.gap_units:
+            referral = selected.get(unit.unit_id)
+            if referral is None or unit.reason != "knowledge_missing":
+                continue
+            candidates.append(ReferralCandidate(
+                unit=unit,
+                canonical_question=" ".join(referral.canonical_question.split())[:300],
+                category=" ".join(referral.category.split())[:64],
+            ))
+        return candidates
 
     async def _respond_with_plan(
         self,
@@ -2660,22 +3249,33 @@ class DeepSeekGuestAssistant:
                 target_end_date = None
             except ValueError:
                 target_date, target_end_date = local_today, None
+        # 只切一次句：联网分组、剩余问题、问价判断与逐项覆盖都用同一组小句（Spec §2.1(3)）。
+        turn_clauses = [clause.text for clause in split_clauses(question_text)]
         public_clauses = [
-            clause.strip()
-            for clause in re.split(r"[，,。；;！？!?\n]|另外|以及|同时", question_text)
-            if clause.strip()
-            and classify_tourism_query([{"role": "user", "content": clause}]) == "live"
+            clause
+            for clause in turn_clauses
+            if classify_tourism_query([{"role": "user", "content": clause}]) == "live"
         ]
         price_question = "；".join(
-            clause.strip()
-            for clause in re.split(r"[，,。；;！？!?\n]|另外|以及|同时", question_text)
-            if clause.strip() not in public_clauses
+            clause for clause in turn_clauses if clause not in public_clauses
         )
         # 追问接上的话题是服务收费（「Do you have parking?」→「How much is it?」）时，
         # 问的是停车费而不是房价：不追问入住日期，也不强制查参考价（回归 MT-停车EN）。
         service_fee_followup = knowledge_question != question_text and is_static_service_fee(
             knowledge_question
         )
+        if service_fee_followup:
+            # 逐项模式同样遵守这条规则：规划把「How much is it?」判成住宿查询时，按接上的话题
+            # 当本店静态事实取证、检索，不再要求参考价工具（1.70.0 候选门禁 MT-停车EN：逐项
+            # 模式只认规划标签，回了「这次没有查到参考价」）。点名房号或带入住日期的仍是房价。
+            plan_items = tuple(
+                item.model_copy(update={"kind": "static_fact", "question": knowledge_question})
+                if item.kind == "stay_query"
+                and not item.target_room
+                and item.check_in_date is None
+                else item
+                for item in plan_items
+            )
         price_clarification: ReplyPart | None = None
         if not service_fee_followup and self._price_question_needs_dates(
             price_question, messages, request_context
@@ -2689,8 +3289,13 @@ class DeepSeekGuestAssistant:
                 clarify_text = (
                     _PRICE_DATES_REPLY_EN if language is Language.EN else _PRICE_DATES_REPLY_ZH
                 )
-                if plan_items and len(priced) == len(plan_items):
-                    # 计划确认整轮只问无日期房价：直接问住哪天，不调用主模型。
+                if (
+                    plan_items
+                    and len(priced) == len(plan_items)
+                    and self._only_tool_clauses(priced, question_text)
+                ):
+                    # 计划确认整轮只问无日期房价、房态，没有别的内容：直接问住哪天，不调用
+                    # 主模型（修复 Spec D-G10 约束：粗粒度项还含其他本店问题时不提前返回）。
                     return AssistantDecision(
                         reply_text=clarify_text, language=language, intent="price",
                         confidence=1.0,
@@ -2706,8 +3311,18 @@ class DeepSeekGuestAssistant:
                 return result
             return self._append_parts(result, [price_clarification], question_text)
 
+        # 退房日不含；项日期在任何知识等待前固定，检索与后续核验都读同一布局。
+        selection_dates = (
+            target_date or local_today,
+            target_end_date - timedelta(days=1) if target_end_date else None,
+        )
         knowledge_started = monotonic()
         try:
+            fact_layout = (
+                await self._fact_layout(
+                    plan_items, question_text, property_id, selection_dates, local_today,
+                ) if plan_ok is not None else {}
+            )
             knowledge = self._scope_knowledge(
                 knowledge_question,
                 await self._knowledge.retrieve(
@@ -2723,22 +3338,19 @@ class DeepSeekGuestAssistant:
             )
             knowledge, item_knowledge = await self._merge_item_knowledge(
                 knowledge,
-                plan_items,
+                fact_layout,
                 language=language,
-                property_id=property_id,
-                dates=(
-                    target_date,
-                    target_end_date - timedelta(days=1) if target_end_date else None,
-                ),
+                question_text=question_text,
             )
         finally:
             _record_stage(stage_timing_sink, "knowledge", knowledge_started)
+        # 计划成功且含本店事实项时进入逐项模式：本店事实只用该项合法候选与实际工具分项，
+        # 不再使用按整轮知识池构建的证据计划（修复 Spec §2.1(2)，F1、G1）。计划失败或无计划时
+        # 保持现行整句行为（已声明边界）。
         public_parts: list[ReplyPart] = []
         # 联网小句之外客人还问了什么；交给后面的模型只答这部分，联网部分不再重答。
         remaining_question = "；".join(
-            clause.strip()
-            for clause in re.split(r"[，,。；;！？!?\n]|另外|以及|同时", question_text)
-            if clause.strip() and clause.strip() not in public_clauses
+            clause for clause in turn_clauses if clause not in public_clauses
         )
         if public_clauses:
             started = monotonic()
@@ -2811,28 +3423,40 @@ class DeepSeekGuestAssistant:
             decision = AssistantDecision(
                 reply_text="", language=language, intent="tourism", confidence=0.95
             )
-            tourism_evidence = self._static_evidence_plan(
-                knowledge_question,
-                knowledge,
-                messages,
-                target_date=target_date or local_today,
-                target_end_date=(
+            if plan_ok is not None:
+                # 计划成功：本店事实逐项取证，不用整轮证据计划；按小句身份判断每一项是否已被
+                # 联网或本地分项覆盖（修复 Spec §2.1(3)，F3、G3）。
+                item_plan, item_gaps = self._item_evidence_plan(
+                    None, fact_layout, item_knowledge, language
+                )
+                if item_plan is not None:
+                    decision = self._apply_evidence_plan(decision, item_plan, knowledge_question)
+                decision = decision.model_copy(update={"gap_units": item_gaps})
+                remaining_answered = bool(plan_items) and all(
+                    self._item_answered_locally(item, fact_layout, question_text, public_clauses)
+                    for item in plan_items
+                )
+            else:
+                tourism_evidence = self._static_evidence_plan(
+                    knowledge_question,
+                    knowledge,
+                    messages,
+                    target_date=target_date or local_today,
+                    target_end_date=(
                         target_end_date - timedelta(days=1) if target_end_date else None
                     ),
-            )
-            if self._action_only_plan(plan_items):
-                tourism_evidence = None
-            if tourism_evidence is not None and tourism_evidence.handles_reply:
-                decision = self._apply_evidence_plan(
-                    decision, tourism_evidence, knowledge_question
+                )
+                if tourism_evidence is not None and tourism_evidence.handles_reply:
+                    decision = self._apply_evidence_plan(
+                        decision, tourism_evidence, knowledge_question
+                    )
+                # 剩下的小句没有被知识固定答案覆盖时不能提前返回：此前「武汉最近有啥玩的，
+                # 天气咋样」只把天气送去联网，玩法这句既不联网也不进模型，直接丢了
+                # （2026-09-30 测试号）。继续走模型，只让它回答剩下的部分。
+                remaining_answered = not remaining_question or (
+                    tourism_evidence is not None and tourism_evidence.handles_reply
                 )
             parts = [*decision.reply_parts, *public_parts]
-            # 剩下的小句没有被知识固定答案覆盖时不能提前返回：此前「武汉最近有啥玩的，
-            # 天气咋样」只把天气送去联网，玩法这句既不联网也不进模型，直接丢了
-            # （2026-09-30 测试号）。继续走模型，只让它回答剩下的部分。
-            remaining_answered = not remaining_question or (
-                tourism_evidence is not None and tourism_evidence.handles_reply
-            )
             if (
                 remaining_answered
                 and not is_service_request(remaining_question)
@@ -2964,11 +3588,21 @@ class DeepSeekGuestAssistant:
         ]
         # 有本店事实项时，静态证据只接管这些项；同轮的店外、寒暄等项由模型逐项回答后接上
         # （修复 Spec D-F1）。本轮有联网结果时那些项已由联网分项回答，不再另要模型作答。
+        # 逐项模式下本轮回复由证据、工具与联网分项接管：需要模型逐项回答、且未被联网完整
+        # 覆盖的项交给模型在 item_answers 中作答（修复 Spec §2.1(3)，F3）。
         other_items = (
-            [item for item in plan_items if item.kind in _MODEL_ANSWERED_KINDS]
-            if any(item.kind == "static_fact" for item in plan_items) and not public_parts
+            [
+                item
+                for item in plan_items
+                if item.kind in _MODEL_ANSWERED_KINDS
+                and not self._item_answered_locally(
+                    item, fact_layout, question_text, public_clauses
+                )
+            ]
+            if fact_layout
             else []
         )
+        gap_offers = self._gap_unit_offers(fact_layout)
         envelope = self._build_context_envelope(
             question_text=minimized_question,
             knowledge=knowledge,
@@ -2984,9 +3618,12 @@ class DeepSeekGuestAssistant:
             other_items=[
                 {"item_id": item.id, "question": item.question} for item in other_items
             ],
+            gap_units=gap_offers,
         )
         if other_items:
             system_prompt += _ITEM_ANSWERS_RULE
+        if gap_offers:
+            system_prompt += _GAP_REFERRAL_RULE
         if live_results:
             system_prompt += (
                 _LIVE_RESULTS_RULE_EN if language is Language.EN else _LIVE_RESULTS_RULE_ZH
@@ -3050,16 +3687,10 @@ class DeepSeekGuestAssistant:
                 knowledge_question, question_text, plan
             ),
         )
-        if self._action_only_plan(plan_items):
-            # 计划确认本轮只有动作项（服务申请、报修、订房、撤回、报失）：证据计划不接管整轮
-            # 回复，否则会按话题回「尚未确认」覆盖动作回复（修复 Spec §2.4，SR-毛巾、SR-遗失）。
-            # 只收窄到动作项：规划把本店事实问题判成房型推荐或房价时，现行证据计划仍要作答
-            # （候选门禁 rc-1.69.1-1：K-无障碍-D、MT-停车EN 因收得太宽退步）。
+        if plan_ok is not None:
+            # 计划成功时不再用整轮知识池的证据计划（修复 Spec §2.1(2)，G1）：本店事实项逐项
+            # 取证（`fact_layout`），只有动作项的轮次本来也不让证据计划接管（SR-毛巾、SR-遗失）。
             evidence_plan = None
-        selection_dates = (
-            target_date or local_today,
-            target_end_date - timedelta(days=1) if target_end_date else None,
-        )
         tool_parts: list[ReplyPart] = []
         availability_fallback: AssistantDecision | None = None
         model_calls = 1 if public_parts else 0
@@ -3123,7 +3754,21 @@ class DeepSeekGuestAssistant:
                             selection_dates=selection_dates,
                             item_knowledge=item_knowledge,
                             other_items=other_items,
+                            fact_layout=fact_layout,
                         )
+                        if fact_layout:
+                            # 逐项模式：证据分项与逐项回答在前，工具分项、工具缺口与联网分项在后
+                            # （修复 Spec §2.1(2)(3)）。模型自由正文不作本店事实。
+                            composed = self._compose_items(
+                                decision,
+                                fact_layout,
+                                tool_parts,
+                                public_parts,
+                                price_clarified=price_clarification is not None,
+                                language=language,
+                            )
+                            if composed is not None:
+                                return finish(composed)
                         if tool_parts or public_parts:
                             model_parts = list(decision.reply_parts)
                             live_parts = list(public_parts)
@@ -3290,21 +3935,45 @@ class DeepSeekGuestAssistant:
                                 intent="availability_query",
                                 confidence=1.0,
                             )
-                            if evidence_plan is not None and evidence_plan.handles_reply:
-                                availability_fallback = self._apply_evidence_plan(
-                                    availability_fallback, evidence_plan, question_text
+                            if fact_layout:
+                                # 工具成功后主模型失败的回执遵守同一逐项契约：本店事实逐项取证
+                                # （没有模型选择），工具缺口按小句判定，需模型回答的项留空；这个
+                                # 出口没有模型的转交选择，缺口只回未确认（修复 Spec §2.1(2)）。
+                                item_plan, item_gaps = self._item_evidence_plan(
+                                    None, fact_layout, item_knowledge, language
                                 )
-                            completed_parts = [
-                                *availability_fallback.reply_parts,
-                                *tool_parts,
-                                *public_parts,
-                            ]
-                            availability_fallback = availability_fallback.model_copy(
-                                update={
-                                    "reply_parts": completed_parts,
-                                    "reply_text": compose_reply_parts(completed_parts),
-                                }
-                            )
+                                if item_plan is not None:
+                                    availability_fallback = self._apply_evidence_plan(
+                                        availability_fallback, item_plan, question_text
+                                    )
+                                composed = self._compose_items(
+                                    availability_fallback.model_copy(
+                                        update={"gap_units": item_gaps}
+                                    ),
+                                    fact_layout,
+                                    tool_parts,
+                                    public_parts,
+                                    price_clarified=price_clarification is not None,
+                                    language=language,
+                                )
+                                if composed is not None:
+                                    availability_fallback = composed
+                            else:
+                                if evidence_plan is not None and evidence_plan.handles_reply:
+                                    availability_fallback = self._apply_evidence_plan(
+                                        availability_fallback, evidence_plan, question_text
+                                    )
+                                completed_parts = [
+                                    *availability_fallback.reply_parts,
+                                    *tool_parts,
+                                    *public_parts,
+                                ]
+                                availability_fallback = availability_fallback.model_copy(
+                                    update={
+                                        "reply_parts": completed_parts,
+                                        "reply_text": compose_reply_parts(completed_parts),
+                                    }
+                                )
                         active_messages.append(
                             {
                                 "role": "tool",

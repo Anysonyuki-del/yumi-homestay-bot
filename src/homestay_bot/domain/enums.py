@@ -241,6 +241,23 @@ class KnowledgeCandidateDraftStatus(StrEnum):
     FAILED = "failed"
 
 
+class KnowledgeReferralStatus(StrEnum):
+    """知识缺口转交记录的状态（修复 Spec 2026-10-08 fix2 §2.6）。
+
+    待处理、整理中、已整理、没找到答案、草稿失败是开放状态；已入库、已关闭、已清空是终态。
+    只有「整理中」可以写回草稿结果，只有「已整理」可以入库。
+    """
+
+    PENDING = "pending"
+    DRAFTING = "drafting"
+    DRAFTED = "drafted"
+    NO_ANSWER = "no_answer"
+    DRAFT_FAILED = "draft_failed"
+    CONVERTED = "converted"
+    CLOSED = "closed"
+    CLEARED = "cleared"
+
+
 class ComplaintReviewStatus(StrEnum):
     """定义客诉分析、人工编辑和实际投递状态。"""
 

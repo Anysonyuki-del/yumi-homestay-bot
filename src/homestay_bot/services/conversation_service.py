@@ -9,10 +9,13 @@ from time import monotonic
 from typing import Any, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from homestay_bot.domain.enums import (
     BusinessTaskType,
     ConversationMode,
     JobStatus,
+    KnowledgeReferralStatus,
     Language,
     MessageOrigin,
 )
@@ -53,6 +56,7 @@ from homestay_bot.services.emergency_service import (
     emergency_follow_up_reply,
     is_emergency_follow_up,
 )
+from homestay_bot.services.faq_candidate_service import FAQ_EXCLUDED_PATTERN
 from homestay_bot.services.guest_reply_policy import (
     prepare_facility_advice_reply,
     prepare_guest_reply,
@@ -60,7 +64,14 @@ from homestay_bot.services.guest_reply_policy import (
     unconfirmed_fallback,
 )
 from homestay_bot.services.guest_verification import GuestVerificationService
-from homestay_bot.services.handoff_card import HandoffCard
+from homestay_bot.services.handoff_card import (
+    HANDOFF_CARD_JOB_TYPE,
+    REFERRAL_PURPOSE,
+    HandoffCard,
+    referral_task_id,
+)
+from homestay_bot.services.item_coverage import ReferralCandidate
+from homestay_bot.services.knowledge_evidence_policy import object_question_key
 from homestay_bot.services.knowledge_service import (
     PropertyCard,
     detect_property_topics,
@@ -78,6 +89,7 @@ from homestay_bot.services.reply_plan import (
     compose_reply_parts,
     prepare_planned_reply,
 )
+from homestay_bot.services.sensitive_text import contains_sensitive_text, sanitize_referral_text
 from homestay_bot.services.turn_plan import (
     PlanOutcome,
     failed_plan,
@@ -183,7 +195,9 @@ async def resolve_notification_identity(
     客人那一行优先用 CRM 备注（「客人备注：8.14-8.16《春和景明》」），没有备注才用
     企业微信客人名称。1.45.0 自动交还通知自己取名，只显示「微信客服」「微信客户」，
     与转人工通知对不上。`names` 为调用方已缓存的（客服账号名，客人名）。
-    查询失败只记类型并回退默认名，不阻塞通知。
+    只有可安全降级的非数据库故障才兜底为默认名；数据库错误向上传播，由外层事务回滚
+    （修复 Spec 2026-10-08 fix2 §2.6(2)，V9-R2：共享会话出错后继续执行会掩盖故障，卡片
+    按钮在接入前取数失败时必须不调用平台接入）。不在这里回滚共享会话。
     """
     label = ConversationService._employee_notification_label
     customer_service_name, guest_name = names or await load_notification_names(
@@ -199,8 +213,10 @@ async def resolve_notification_identity(
             customer_note = await customer_notification.get_customer_notification_note(
                 conversation.customer_id
             )
+        except SQLAlchemyError:
+            raise
         except Exception as error:
-            # CRM 备注查询失败不应阻塞人工通知，继续使用客人名称兜底。
+            # 非数据库的备注读取故障不阻塞人工通知，继续使用客人名称兜底。
             logger.warning(
                 "客户通知备注读取失败，使用客人名称兜底：error_type=%s",
                 type(error).__name__,
@@ -386,6 +402,9 @@ class ConversationMessageService(Protocol):
         external_message_id: str,
     ) -> bool:
         """判断来源消息后是否出现客人或员工的新活动。"""
+
+    async def source_cleared(self, external_message_id: str) -> bool:
+        """来源消息是否已被测试数据清空。"""
 
 
 class GuestAssistantPort(Protocol):
@@ -667,6 +686,9 @@ class ComplaintClassifierPort(Protocol):
     def classify(self, text: str) -> Any:
         """识别客诉风险。"""
 
+    def classify_all(self, texts: Sequence[str]) -> Any:
+        """按业务优先级合并多个规则候选文本的客诉识别结果。"""
+
     @staticmethod
     def guest_acknowledgement(language: Language = Language.ZH) -> str:
         """返回客诉固定安抚。"""
@@ -684,6 +706,60 @@ class ComplaintReviewPort(Protocol):
         risk_level: str,
     ) -> Any:
         """按来源消息幂等创建客诉记录。"""
+
+
+class KnowledgeReferralPort(Protocol):
+    """知识缺口转交在会话层需要的最小接口（修复 Spec 2026-10-08 fix2 §2.6(2)）。"""
+
+    async def suppressed(
+        self, normalized_question: str, property_id: int | None, *, now: datetime
+    ) -> bool:
+        """同一问题与房源是否在关闭后的抑制期内。"""
+
+    async def recent_in_conversation(
+        self,
+        conversation_id: int,
+        normalized_question: str,
+        property_id: int | None,
+        *,
+        since: datetime,
+    ) -> Any | None:
+        """同一会话、同一问题与房源在冷却期内最近的一条转交。"""
+
+    async def find_by_source(self, source_message_id: str, unit_id: str) -> Any | None:
+        """按来源消息与单元编号查已有记录。"""
+
+    async def create(self, **fields: Any) -> Any:
+        """新建待处理转交。"""
+
+
+# 同一会话同一问题与房源 24 小时内只转交一次（Spec §2.6(2)）。
+_REFERRAL_COOLDOWN = timedelta(hours=24)
+# 客人原话引用的最大字数（Spec §2.6(2)）。关闭为「不入库」后的 30 天抑制（D-G16）由后台
+# 关闭时写入，这里只读。
+_REFERRAL_LABEL_LIMIT = 30
+# 客人可见的转交说明：固定文案，{label} 只引用净化后的客人原话，不含模型文字（D-G14 修订）。
+_REFERRAL_CREATED = {
+    Language.ZH: "「{label}」：资料里还没有确认，已提交管家核实。",
+    Language.EN: "“{label}”: this isn't confirmed in our information yet; "
+    "we've passed it to the host to check.",
+}
+_REFERRAL_WAITING = {
+    Language.ZH: "「{label}」：已提交管家核实，请稍候。",
+    Language.EN: "“{label}”: already passed to the host to check, please wait.",
+}
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_LINK = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+
+
+def referral_label(text: str) -> str:
+    """客人原话引用：先去链接再净化，压成一行、去控制字符、截断到 30 字（Spec §2.6(2)）。"""
+    value = sanitize_referral_text(_LINK.sub("", text))
+    value = " ".join(_CONTROL_CHARACTERS.sub(" ", value).split())
+    value = value.strip("「」“”\"' ，,。.？?！!")
+    if len(value) > _REFERRAL_LABEL_LIMIT:
+        value = value[: _REFERRAL_LABEL_LIMIT - 1] + "…"
+    return value
 
 
 @dataclass
@@ -757,6 +833,7 @@ class ConversationService:
         complaint_service: ComplaintClassifierPort | None = None,
         complaint_reviews: ComplaintReviewPort | None = None,
         emergency_knowledge: EmergencyKnowledgePort | None = None,
+        knowledge_referrals: KnowledgeReferralPort | None = None,
         defer_model: bool = False,
         commit_boundary: Callable[[], Awaitable[None]] | None = None,
         savepoint_factory: Callable[[], AbstractAsyncContextManager[Any]] | None = None,
@@ -785,6 +862,9 @@ class ConversationService:
         self._complaint_service = complaint_service
         self._complaint_reviews = complaint_reviews
         self._emergency_knowledge = emergency_knowledge
+        self._knowledge_referrals = knowledge_referrals
+        # 本次处理新建或复用的转交编号；后台作业提交前写进来源完成收据（Spec §2.6(2)）。
+        self.created_referral_ids: list[int] = []
         self._defer_model = defer_model
         self._commit_boundary = commit_boundary
         self._savepoint_factory = savepoint_factory or nullcontext
@@ -934,15 +1014,19 @@ class ConversationService:
 
         await self._process_model_reply(conversation, message)
 
-    async def process_debounced_message(self, message: IncomingMessage) -> None:
-        """静默窗口结束后合并当前批次，再决定安抚和最终处理。"""
+    async def process_debounced_message(self, message: IncomingMessage) -> bool:
+        """静默窗口结束后合并当前批次，再决定安抚和最终处理。
+
+        返回本来源的业务处理是否已在合并阶段终结：直接客诉、紧急、固定边界回复、因更新消息
+        放弃等都为 True；排出了最终作业为 False，由最终作业写来源完成收据（V8-R1）。
+        """
         conversation = await self._conversations.get_or_create(message)
         await self._conversations.lock_activity(conversation.id)
         if await self._messages.has_newer_conversation_activity(
             conversation.id,
             message.msgid,
         ) or await self._in_native_session(conversation):
-            return
+            return True
         batch = await self._messages.build_guest_batch(
             conversation.id,
             message.msgid,
@@ -951,7 +1035,7 @@ class ConversationService:
             max_characters=2000,
         )
         if not batch.content or batch.message_count < 1:
-            return
+            return True
         merged_message = replace(
             message,
             content=batch.content,
@@ -970,7 +1054,7 @@ class ConversationService:
             await self._answer_possible_danger(conversation, merged_message)
         if emergency.is_emergency:
             await self._escalate_emergency(conversation, merged_message, emergency)
-            return
+            return True
         turn_plan: PlanOutcome | None = None
         classification = self._classify_complaint(rule_contents)
         if classification is not None:
@@ -979,14 +1063,14 @@ class ConversationService:
                 # 且不通知员工（D9）。规划失败时沿用现行规则进入客诉。
                 turn_plan = await self._plan_with_released_lock(conversation, merged_message)
                 if turn_plan is None:
-                    return
+                    return True
             if not agitated_cleared_by_plan(turn_plan, merged_message.content):
                 await self._enter_complaint_mode(
                     conversation,
                     merged_message,
                     classification,
                 )
-                return
+                return True
         handoff_reason = resolve_handoff_reason(merged_message.content, turn_plan)
         if (
             conversation.mode is ConversationMode.HUMAN_ACTIVE
@@ -995,7 +1079,7 @@ class ConversationService:
         ):
             turn_plan = await self._plan_with_released_lock(conversation, merged_message)
             if turn_plan is None:
-                return
+                return True
             handoff_reason = resolve_handoff_reason(merged_message.content, turn_plan)
         if conversation.mode is ConversationMode.HUMAN_ACTIVE and handoff_reason is not None:
             await self._send_guest_reply(
@@ -1010,19 +1094,21 @@ class ConversationService:
                 merged_message,
                 "人工接待会话收到新的高风险消息",
             )
-            return
+            return True
         if any(self._handoff_pattern.search(value) for value in rule_contents):
             await self._escalate_regular(conversation, merged_message)
-            return
+            return True
         if not is_homestay_related(merged_message.content):
             if turn_plan is None:
                 turn_plan = await self._plan_with_released_lock(conversation, merged_message)
                 if turn_plan is None:
-                    return
+                    return True
             if not self._plan_keeps_related(turn_plan, merged_message.content):
                 await self._send_unrelated_reply(conversation)
-                return
-        await self._stage_fast_ack(conversation, merged_message, turn_plan=turn_plan)
+                return True
+        return not await self._stage_fast_ack(
+            conversation, merged_message, turn_plan=turn_plan
+        )
 
     async def process_recorded_message(self, message: IncomingMessage) -> None:
         """处理已完成入站提交的消息，供后台最终回复任务调用。"""
@@ -1228,11 +1314,11 @@ class ConversationService:
         message: IncomingMessage,
         *,
         turn_plan: PlanOutcome | None = None,
-    ) -> None:
-        """按需发送快速安抚并登记最终处理任务，再提交让 worker 立即可见。"""
+    ) -> bool:
+        """按需发送快速安抚并登记最终处理任务，再提交让 worker 立即可见；返回是否已排出。"""
         jobs = self._jobs
         if jobs is None:
-            return
+            return False
         fast_ack_sha256: str | None = None
         sent_ack: GuestReplyReceipt | None = None
         if has_facility_fault_signal(message.content):
@@ -1274,6 +1360,7 @@ class ConversationService:
         )
         if self._commit_boundary is not None:
             await self._commit_boundary()
+        return True
 
     async def _enqueue_debounce(self, message: IncomingMessage) -> None:
         """为普通客人文本登记三秒后的静默检查，不提前生成安抚。"""
@@ -1330,20 +1417,14 @@ class ConversationService:
     def _classify_complaint(self, texts: Sequence[str]) -> Any | None:
         """对全部规则文本做客诉分类，返回应处理的结果；没有客诉时返回空。
 
-        任一文本变体命中退款或平台投诉时优先返回它（保留其风险等级）；只有全部命中都是
-        情绪词时才返回 agitated，交给软判定复核。即时与合并入口共用，避免各自取第一个
-        命中变体，让情绪词遮住被空白拆开的退款（Codex 审查 B24-R2）。
+        按 `ComplaintService.classify_all` 的业务优先级合并全部变体的原因、风险与退款标记
+        （修复 Spec §2.2，F4）；只有全部命中都是情绪词时才返回 agitated，交给软判定复核。
+        即时与合并入口共用。
         """
         if self._complaint_service is None:
             return None
-        complaints = [
-            result
-            for result in (self._complaint_service.classify(text) for text in texts)
-            if result.is_complaint
-        ]
-        if not complaints:
-            return None
-        return next((item for item in complaints if item.reason != "agitated"), complaints[0])
+        result = self._complaint_service.classify_all(texts)
+        return result if result.is_complaint else None
 
     async def _plan_with_released_lock(
         self,
@@ -1368,6 +1449,7 @@ class ConversationService:
         if (
             conversation.mode is not mode
             or await self._in_native_session(conversation)
+            or await self._messages.source_cleared(message.msgid)
             or await self._messages.has_newer_conversation_activity(conversation.id, message.msgid)
         ):
             logger.info("软判定规划结果已过时，丢弃本轮：conversation_id=%s", conversation.id)
@@ -1760,9 +1842,22 @@ class ConversationService:
             # 先切人工模式，员工通知等回复发出后再生成：通知要写明机器人实际回了什么
             # （1.43.0 测试号：通知先于回复生成，写着「尚未回复客人」，4 秒后机器人才回复）。
             await self._switch_to_human(conversation, handoff_reason)
-        prepared_reply = prepare_planned_reply(
-            decision.reply_parts, fallback=decision.reply_text,
-            language=conversation.language, question=message.content, high_risk=high_risk,
+        reply_parts = list(decision.reply_parts)
+        referral_lines: list[str] = []
+        if not high_risk:
+            referred, referral_lines = await self._refer_gaps(
+                conversation, message, decision.referral_candidates, reply_parts, plan
+            )
+            # 被转交的缺口去掉未确认分项，改为在出口过滤之后追加固定说明（防过滤删除）。
+            reply_parts = [part for part in reply_parts if part.gap_unit not in referred]
+        prepared_reply = (
+            prepare_planned_reply(
+                reply_parts, fallback=decision.reply_text,
+                language=conversation.language, question=message.content, high_risk=high_risk,
+            )
+            # 分项全部被转交时不能退回模型整段正文。
+            if reply_parts or not referral_lines
+            else ""
         )
         if action_reply and prepared_reply.strip() == unconfirmed_fallback(conversation.language):
             # 模型正文全是执行承诺、被出口过滤成中性兜底时，本轮回复就是实际动作结果，
@@ -1774,6 +1869,9 @@ class ConversationService:
             prepared_reply = f"{prepared_reply}\n\n{confirmation_reply}"
         if action_reply:
             prepared_reply = f"{prepared_reply}\n\n{action_reply}"
+        if referral_lines:
+            # 与 action_reply 同一位置、同一方式：出口过滤之后追加，文案固定。
+            prepared_reply = prepared_reply + "\n\n" + "\n".join(referral_lines)
         prepared_reply = prepared_reply.lstrip("\n")
         fast_ack_sha256 = str((message.metadata or {}).get("fast_ack_sha256", ""))
         prepared_sha256 = hashlib.sha256(prepared_reply.encode("utf-8")).hexdigest()
@@ -1781,6 +1879,7 @@ class ConversationService:
             not action_reply
             and not confirmation_reply
             and not progress_reply
+            and not referral_lines
             and hashlib.sha256(decision.reply_text.encode("utf-8")).hexdigest() == fast_ack_sha256
         )
         welcome_stay = None if high_risk else (current_stay or resolved)
@@ -1807,7 +1906,116 @@ class ConversationService:
             self._last_guest_reply = prepared_reply
         if handoff_reason:
             await self._notify_employee(conversation, message, f"YuMi 接管：{handoff_reason}")
-        await self._track_frequent_faq(message, decision)
+        if not referral_lines:
+            # 本轮有转交时不再做整轮级高频 FAQ 统计：缺口已走转交闭环（Spec §2.6(2)）。
+            await self._track_frequent_faq(message, decision)
+
+    async def _refer_gaps(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        candidates: Sequence[ReferralCandidate],
+        reply_parts: Sequence[ReplyPart],
+        plan: PlanOutcome | None,
+    ) -> tuple[set[str], list[str]]:
+        """把模型选中、本地确认的资料缺口转交管家核实（修复 Spec 2026-10-08 fix2 §2.6(2)）。
+
+        返回（被转交、需从分项中去掉的单元编号，追加在出口过滤之后的固定说明）。调用方已
+        确认本轮不是高风险或转人工；这里再要求计划成功且风险为 none、会话为机器人模式，
+        单元确实以未确认分项出现（只有实际未覆盖的缺口能转交，不变量 1）。每个单元在保存点
+        内创建记录并登记卡片，失败只回滚该单元，客人仍收到现行未确认。会话活动锁由外层持有，
+        同一会话内的冷却判断与创建串行。
+        """
+        repository = self._knowledge_referrals
+        jobs = self._jobs
+        if (
+            repository is None
+            or jobs is None
+            or not candidates
+            or plan is None
+            or plan_risks(plan) - {"none"}
+            or conversation.mode is not ConversationMode.BOT_ACTIVE
+        ):
+            return set(), []
+        missing_units = {
+            part.gap_unit for part in reply_parts if part.status == "missing" and part.gap_unit
+        }
+        now = datetime.now(UTC)
+        language = conversation.language
+        referred: set[str] = set()
+        lines: list[str] = []
+        for candidate in candidates:
+            unit = candidate.unit
+            if unit.unit_id not in missing_units or unit.unit_id in referred:
+                continue
+            texts = (unit.text, candidate.canonical_question, candidate.category)
+            if any(FAQ_EXCLUDED_PATTERN.search(value) for value in texts[:2]) or any(
+                contains_sensitive_text(value) for value in texts
+            ):
+                continue
+            normalized = (
+                object_question_key(candidate.canonical_question)
+                or object_question_key(unit.text)
+            )[:300]
+            label = referral_label(unit.text)
+            if not normalized or not label:
+                continue
+            template = _REFERRAL_CREATED
+            try:
+                async with self._savepoint_factory():
+                    referral = await repository.find_by_source(message.msgid, unit.unit_id)
+                    if referral is None:
+                        if await repository.suppressed(normalized, unit.property_id, now=now):
+                            continue
+                        recent = await repository.recent_in_conversation(
+                            conversation.id, normalized, unit.property_id,
+                            since=now - _REFERRAL_COOLDOWN,
+                        )
+                        if recent is not None:
+                            # 冷却期内不新建、不发卡片；仍待处理时告诉客人已在核实，
+                            # 已整理或已结束时回现行未确认。
+                            if recent.status not in {
+                                KnowledgeReferralStatus.PENDING,
+                                KnowledgeReferralStatus.DRAFTING,
+                            }:
+                                continue
+                            referred.add(unit.unit_id)
+                            lines.append(_REFERRAL_WAITING[language].format(label=label))
+                            continue
+                        referral = await repository.create(
+                            conversation_id=conversation.id,
+                            source_message_id=message.msgid,
+                            unit_id=unit.unit_id,
+                            plan_item_id=unit.item_id,
+                            question=sanitize_referral_text(unit.text),
+                            canonical_question=candidate.canonical_question,
+                            normalized_question=normalized,
+                            category=candidate.category,
+                            property_id=unit.property_id,
+                            status=KnowledgeReferralStatus.PENDING,
+                        )
+                    # 卡片载荷只有用途、编号与收件人；worker 发送时按编号读记录组卡（V6-R1）。
+                    await jobs.enqueue(
+                        HANDOFF_CARD_JOB_TYPE,
+                        {
+                            "purpose": REFERRAL_PURPOSE,
+                            "referral_id": referral.id,
+                            "agent_id": self._agent_id,
+                            "employee_userids": list(self._duty_employee_userids),
+                            "task_id": referral_task_id(referral.id),
+                        },
+                        dedupe_key=f"referral-card:{referral.id}",
+                    )
+            except Exception as error:
+                logger.warning(
+                    "知识缺口转交失败，回现行未确认：error_type=%s", type(error).__name__
+                )
+                continue
+            referred.add(unit.unit_id)
+            lines.append(template[language].format(label=label))
+            if referral.id not in self.created_referral_ids:
+                self.created_referral_ids.append(referral.id)
+        return referred, lines
 
     @staticmethod
     def _is_facility_issue(
@@ -1831,8 +2039,18 @@ class ConversationService:
         conversation: Conversation,
         message: IncomingMessage,
     ) -> bool:
-        """模型完成后锁定会话并复查活动，锁由外层事务保持到提交。"""
+        """模型完成后锁定会话并复查活动，锁由外层事务保持到提交。
+
+        等待模型期间来源若已被测试数据清空，同样丢弃本轮：不登记转交、卡片、任务、客诉派生
+        或客人出站（修复 Spec 2026-10-08 fix2 §2.6(2)，V9-R1）。判据读数据库当前列值。
+        等待期间管家接入原生人工会话也丢弃（原生接管复核，Spec §2.4(1)）：只看新消息会漏掉
+        不写员工消息的接入。
+        """
         await self._conversations.lock_activity(conversation.id)
+        if await self._messages.source_cleared(message.msgid):
+            return True
+        if await self._in_native_session(conversation):
+            return True
         return await self._messages.has_newer_conversation_activity(
             conversation.id,
             message.msgid,

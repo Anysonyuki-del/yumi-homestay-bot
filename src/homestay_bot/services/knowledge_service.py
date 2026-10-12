@@ -408,6 +408,19 @@ _QUERY_STOP_TOKENS = frozenset(
 )
 
 
+# FAQ 草稿用它标出必须由管理员核实替换的本店事实；正式知识里出现它，等于把
+# 「待确认」原样发给客人。草稿生成与知识写入共用这一个常量。
+ADMIN_CONFIRMATION_PLACEHOLDER = "【待管理员确认】"
+
+
+def validate_knowledge_content(*texts: str | None) -> None:
+    """知识写入前拒绝仍带草稿占位符的问答正文，要求管理员先核实替换。"""
+    if any(ADMIN_CONFIRMATION_PLACEHOLDER in (text or "") for text in texts):
+        raise ValueError(
+            f"问答中仍有「{ADMIN_CONFIRMATION_PLACEHOLDER}」，请核实后替换为确认过的内容再保存"
+        )
+
+
 def validate_knowledge_scope(
     scope: str,
     property_id: int | None,
@@ -508,20 +521,27 @@ def property_card_snippet(card: PropertyCard, language: Language) -> "KnowledgeS
     )
 
 
-def _passes_triggers(entry: object, normalized_query: str) -> bool:
+def _passes_triggers(
+    entry: object, normalized_trigger: str, normalized_exclude: str | None = None
+) -> bool:
     """按条目的附加条件词与排除词判断本轮能否命中（借鉴世界书的次要关键词、排除词）。
 
     排除词出现任一就不命中，比如「停车」条目配「黄鹤楼」，客人问黄鹤楼停车时不用
     本店停车答案；附加条件词非空时问题里至少出现其一才命中。都为空时不限制。
+
+    两类条件可以按不同文本判断（修复 Spec §2.1(1)，D-G2、D-G4）：正向条件只看本项客人
+    原话摘录，别的子问题不能替它补出条件词；排除条件看本轮完整原文，任何位置出现排除词
+    都保守否决。`normalized_exclude` 缺省时与正向条件用同一段文本，旧调用行为不变。
     """
+    exclude_text = normalized_trigger if normalized_exclude is None else normalized_exclude
     excluded = [
         normalize_text(str(word)) for word in (getattr(entry, "trigger_exclude", None) or [])
     ]
-    if any(word and word in normalized_query for word in excluded):
+    if any(word and word in exclude_text for word in excluded):
         return False
     required = [normalize_text(str(word)) for word in (getattr(entry, "trigger_any", None) or [])]
     required = [word for word in required if word]
-    return not required or any(word in normalized_query for word in required)
+    return not required or any(word in normalized_trigger for word in required)
 
 
 class SemanticRankerPort(Protocol):
@@ -553,6 +573,9 @@ class KnowledgeSnippet:
     property_id: int | None = None
     valid_from: date | None = None
     valid_until: date | None = None
+    # 条目是否配置了附加条件词（trigger_any）：带条件的条目只对满足条件的那项客人原话适用，
+    # 不能跨项复用（修复 Spec 2026-10-08 fix2 G2；1.70.0 门禁后的跨项复用规则用到）。
+    conditional: bool = False
 
 
 @dataclass(frozen=True)
@@ -654,8 +677,14 @@ class KnowledgeService:
         target_date: date | None = None,
         target_end_date: date | None = None,
         reserved_property_slots: int = 0,
+        trigger_text: str | None = None,
+        exclude_text: str | None = None,
     ) -> list[KnowledgeSnippet]:
-        """按当前问题返回相关且受字符预算约束的审核知识。"""
+        """按当前问题返回相关且受字符预算约束的审核知识。
+
+        `trigger_text`、`exclude_text` 分别是判断附加条件词、排除词的依据，缺省都等于
+        `query`（见 `retrieve_detailed`）。
+        """
         retrieval = await self.retrieve_detailed(
             language,
             query,
@@ -665,6 +694,8 @@ class KnowledgeService:
             target_date=target_date,
             target_end_date=target_end_date,
             reserved_property_slots=reserved_property_slots,
+            trigger_text=trigger_text,
+            exclude_text=exclude_text,
         )
         return retrieval.snippets
 
@@ -679,8 +710,13 @@ class KnowledgeService:
         target_date: date | None = None,
         target_end_date: date | None = None,
         reserved_property_slots: int = 0,
+        trigger_text: str | None = None,
+        exclude_text: str | None = None,
     ) -> KnowledgeRetrieval:
         """按相关度选取完整问答单元，放不进预算的整条跳过并计数。
+
+        `trigger_text` 是判断附加条件词的依据（逐项检索传该项客人原话摘录），`exclude_text`
+        是判断排除词的依据（逐项检索传本轮完整原文）；缺省都等于 `query`，旧调用不变。
 
         一条审核问答是最小证据单元：截断会切掉答案尾部的收费、时间、否定或
         适用条件，把「需收费」截成「可以」，比不给证据更危险。因此只整条放入，
@@ -714,8 +750,13 @@ class KnowledgeService:
             and (entry.valid_until is None or entry.valid_until >= start)
         ]
         # Spec F5：附加条件词与排除词由员工在后台配置，改了不用发版。
-        normalized_query = normalize_text(query)
-        entries = [entry for entry in entries if _passes_triggers(entry, normalized_query)]
+        normalized_trigger = normalize_text(query if trigger_text is None else trigger_text)
+        normalized_exclude = normalize_text(query if exclude_text is None else exclude_text)
+        entries = [
+            entry
+            for entry in entries
+            if _passes_triggers(entry, normalized_trigger, normalized_exclude)
+        ]
         query_tokens = self._query_tokens(query)
         keyword_ranked = [
             entry
@@ -759,6 +800,7 @@ class KnowledgeService:
                     property_id=entry.property_id,
                     valid_from=entry.valid_from,
                     valid_until=entry.valid_until,
+                    conditional=bool(getattr(entry, "trigger_any", None)),
                 )
             )
             used_chars += item_chars

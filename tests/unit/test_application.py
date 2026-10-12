@@ -1496,6 +1496,9 @@ async def test_queued_guest_reply_is_checked_for_staleness_before_it_goes_out() 
             self.calls.append((open_kfid, external_userid))
             return self.conversation_id
 
+        async def source_cleared(self, external_message_id):
+            return False
+
         async def has_newer_conversation_activity(self, conversation_id, boundary):
             return self.stale
 

@@ -39,6 +39,7 @@ from homestay_bot.domain.enums import (
     JobStatus,
     KnowledgeCandidateDraftStatus,
     KnowledgeCandidateStatus,
+    KnowledgeReferralStatus,
     Language,
     MessageOrigin,
     ReminderStatus,
@@ -772,6 +773,93 @@ class ExternalRequest(Base):
     request_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     business_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class KnowledgeReferral(TimestampMixin, Base):
+    """知识缺口转交管家核实的记录（修复 Spec 2026-10-08 fix2 §2.6(7)）。
+
+    独立于高频 FAQ 候选：候选按标准问题全局去重、只有一份草稿，不同房间的答案会挤进同一
+    草稿槽（Codex 审查 V5-R5）。这里按来源消息与缺口单元各记一条，冷却与抑制按归一化问题
+    加房源判断。正文字段（原问、标准问题、类别、草稿）在测试数据清空时置空，保留编号与终态。
+    """
+
+    __tablename__ = "knowledge_referrals"
+    __table_args__ = (
+        UniqueConstraint("source_message_id", "unit_id", name="uq_referral_source_unit"),
+        CheckConstraint("generation >= 0", name="ck_referral_generation_nonnegative"),
+        Index(
+            "ix_referral_conversation_question",
+            "conversation_id",
+            "normalized_question",
+            "property_id",
+            "created_at",
+        ),
+        Index("ix_referral_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    source_message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    unit_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan_item_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    canonical_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_question: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    property_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[KnowledgeReferralStatus] = mapped_column(
+        Enum(KnowledgeReferralStatus, native_enum=False, length=24),
+        default=KnowledgeReferralStatus.PENDING,
+        nullable=False,
+    )
+    generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source_message_ids: Mapped[list[int]] = mapped_column(JSON, default=list, nullable=False)
+    draft: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    sensitive: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    knowledge_entry_id: Mapped[int | None] = mapped_column(
+        ForeignKey("knowledge_entries.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class KnowledgeReferralSuppression(Base):
+    """管理员关闭为「不入库」后，同一归一化问题与房源 30 天内不再转交（D-G16）。"""
+
+    __tablename__ = "knowledge_referral_suppressions"
+    __table_args__ = (
+        Index("ix_referral_suppression_question", "normalized_question", "property_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    normalized_question: Mapped[str] = mapped_column(String(300), nullable=False)
+    property_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    suppressed_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SourceCompletionReceipt(Base):
+    """来源完成收据：本来源消息的业务处理已终结并提交（修复 Spec 2026-10-08 fix2 §2.6(2)）。
+
+    合并阶段直接终结或最终阶段完成时与全部业务副作用同一事务写入；恢复入口看到收据就直接
+    结束，不重新规划、调用助手或登记任务，已登记的出站自行投递。不含任何正文，测试数据清空
+    时保留；随来源消息删除级联，不进入保留期清理。收据不表示回复已送达。
+    """
+
+    __tablename__ = "source_completion_receipts"
+
+    source_message_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("messages.external_message_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    referral_ids: Mapped[list[int]] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

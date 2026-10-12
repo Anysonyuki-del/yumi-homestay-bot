@@ -444,6 +444,24 @@ class SQLAlchemyMessageRepository:
         )
         return bool(await self._session.scalar(statement))
 
+    async def source_cleared(self, external_message_id: str) -> bool:
+        """来源消息是否已被测试数据清空（正文置空且标记 cleared_by）。
+
+        按数据库当前列值查询，不读会话内缓存的旧对象：模型或规划等待期间被清空时，等待后的
+        复核必须看到清空（修复 Spec 2026-10-08 fix2 §2.6(2)，V9-R1）。来源不存在时视为未清空。
+        """
+        row = (
+            await self._session.execute(
+                select(Message.content, Message.message_metadata).where(
+                    Message.external_message_id == external_message_id
+                )
+            )
+        ).first()
+        if row is None:
+            return False
+        content, metadata = row
+        return content is None and isinstance(metadata, dict) and "cleared_by" in metadata
+
     async def has_newer_servicer_activity(
         self,
         conversation_id: int,

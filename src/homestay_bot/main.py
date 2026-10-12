@@ -11,7 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from homestay_bot.application import application_lifespan
 from homestay_bot.config import BootstrapSettings
 from homestay_bot.domain.errors import OperationRefused
-from homestay_bot.logging import configure_logging_redaction
+from homestay_bot.logging import configure_application_logging
 from homestay_bot.middleware import AdminNoStoreMiddleware
 from homestay_bot.routes.admin import router as admin_router
 from homestay_bot.routes.admin_debug import router as admin_debug_router
@@ -22,6 +22,7 @@ from homestay_bot.routes.employee_auth import router as employee_auth_router
 from homestay_bot.routes.health import router as health_router
 from homestay_bot.routes.hostex_webhook import router as hostex_webhook_router
 from homestay_bot.routes.knowledge import router as knowledge_router
+from homestay_bot.routes.knowledge_referrals import router as knowledge_referrals_router
 from homestay_bot.routes.page_errors import handle_http_exception, handle_operation_refused
 from homestay_bot.routes.private_files import router as private_files_router
 from homestay_bot.routes.properties import router as properties_router
@@ -49,7 +50,7 @@ def _session_configuration() -> tuple[str, bool]:
 
 
 session_secret, session_https_only = _session_configuration()
-configure_logging_redaction()
+configure_application_logging()
 
 app = FastAPI(
     title="武汉民宿客服机器人",
@@ -76,6 +77,7 @@ app.include_router(admin_debug_router)
 app.include_router(runtime_config_router)
 app.include_router(approvals_router)
 app.include_router(knowledge_router)
+app.include_router(knowledge_referrals_router)
 app.include_router(tasks_router)
 app.include_router(private_files_router)
 app.include_router(properties_router)
