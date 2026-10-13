@@ -24,6 +24,7 @@
   "CA-房型",
   "CH-谢谢",
   "E-冰箱",
+  "E-地铁",
   "E-早餐",
   "E-狗",
   "E-退房",
@@ -58,6 +59,7 @@
   "K-发票-D",
   "K-吸烟-D",
   "K-吹风机",
+  "K-周末早餐",
   "K-地址",
   "K-安静-C",
   "K-安静-D",
@@ -130,6 +132,7 @@
   "SC-国庆早餐",
   "SR-垃圾",
   "SR-毛巾",
+  "SR-遗失",
   "T-checkout-EN",
   "T-wifi",
   "T-早餐",
@@ -148,7 +151,6 @@
  "known_failures": {
   "CA-家庭": "0/3 次通过；路由 tool_catalog→unconfirmed，缺 302，出现 尚未确认",
   "CH-猫": "0/3 次通过；路由 unrelated→unconfirmed",
-  "E-地铁": "0/3 次通过；路由 knowledge→unconfirmed，缺 450",
   "EM-打电话": "0/3 次通过；路由 handoff→emergency，出现 110",
   "K-入住-C": "0/3 次通过；缺 ['15:00', '13:00']",
   "K-公区-C": "0/3 次通过；缺 ['21:00', '露台']",
@@ -160,10 +162,10 @@
   "M-儿童早餐": "0/3 次通过；路由 knowledge→unconfirmed，缺 免费，出现 尚未确认",
   "SC-401无上下文": "0/3 次通过；路由 knowledge→unconfirmed，缺 木梯",
   "SC-401有上下文": "0/3 次通过；缺 木梯",
-  "SR-遗失": "0/3 次通过；路由 handoff→unconfirmed，缺 30天",
   "T-吸烟": "0/3 次通过；路由 knowledge→unconfirmed，缺 禁止吸烟",
   "UN-代码": "0/3 次通过；路由 unrelated→model",
-  "UN-股票EN": "0/3 次通过；缺 ['homestay', 'Wuhan', 'stay']，出现 我主要协助"
+  "UN-股票EN": "0/3 次通过；缺 ['homestay', 'Wuhan', 'stay']，出现 我主要协助",
+  "K-周末分日": "1/2 次通过（候选门禁 rc-1.70.1-1）；第2次规划模型未填 target_room，原文房号 9999 与空房号不符，按 1.70.0 起的房号保守规则记 scope_unbound 回未确认。周末分天与来源对应由离线预检证明；用户 2026-10-14 决定留作已知未通过、不阻断发布"
  },
  "removed": {},
  "ratchet_log": [
@@ -261,6 +263,23 @@
     "SR-毛巾"
    ],
    "source": "候选门禁 rc-1.69.1-2 三次全过（审查修复 B24-R1–R6 后；正式标签回复代码与资料一致，部署复用该结果）"
+  },
+  {
+   "version": "1.70.1",
+   "date": "2026-10-14",
+   "added": [
+    "E-地铁",
+    "SR-遗失"
+   ],
+   "source": "候选门禁 rc-1.70.0-7 三次全过（.stage/reply-gate-rc-1.70.0-7.baseline.json）；v1.70.0 回复代码与资料与 rc7 一致，按周末 Spec §2.5 继承（1.70.0 发布审查 RV-3）"
+  },
+  {
+   "version": "1.70.1",
+   "date": "2026-10-14",
+   "added": [
+    "K-周末早餐"
+   ],
+   "source": "候选门禁 rc-1.70.1-1 限定范围三次全过（周末 Spec §2.5 新增必验）"
   }
  ],
  "expectation_changes": [

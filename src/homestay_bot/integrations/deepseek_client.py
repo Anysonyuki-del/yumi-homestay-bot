@@ -65,6 +65,7 @@ from homestay_bot.services.item_coverage import (
     intersecting_clauses,
     missing_nights,
     relative_calendar_day,
+    relative_calendar_weekend,
     split_clauses,
     static_clause_dates,
     unit_id_for,
@@ -76,6 +77,7 @@ from homestay_bot.services.knowledge_evidence_policy import (
     already_clarified,
     build_evidence_plan,
     carry_followup_topic,
+    split_segment_label,
     verify_selected_evidence,
 )
 from homestay_bot.services.knowledge_service import (
@@ -1908,16 +1910,22 @@ class DeepSeekGuestAssistant:
     def _item_dates(
         self, item: PlanItem, dates: tuple[date | None, date | None], today: date,
     ) -> tuple[date | None, date | None]:
-        """保留计划范围供小句核验；无项日期的独立静态单日自行定日，不扩粗住宿范围。"""
+        """保留计划范围供小句核验；无项日期的独立静态单日或周末自行定日，不扩粗住宿范围。
+
+        周末与「本周X」同属日历合同，与小句核验共用 `relative_calendar_weekend`，不另写公式；
+        粗住宿项不在这里取周末，避免把静态残留扩成住宿范围（周末 Spec §2.2）。
+        """
         if item.check_in_date is not None and item.check_out_date is not None:
             return item.check_in_date, item.check_out_date - timedelta(days=1)
         named = clause_dates(item.quote, today.year)
         if (
             item.kind == "static_fact" and named.relative and not named.unbindable
             and not named.check_in and not named.check_out
-            and (point := relative_calendar_day(item.quote, today)) is not None
         ):
-            return point, point
+            if (point := relative_calendar_day(item.quote, today)) is not None:
+                return point, point
+            if (weekend := relative_calendar_weekend(item.quote, today)) is not None:
+                return weekend
         if not named.unbindable and not named.relative:
             if named.check_in and named.check_out:
                 return named.check_in, named.check_out - timedelta(days=1)
@@ -2431,15 +2439,7 @@ class DeepSeekGuestAssistant:
         """
         if plan.parts:
             parts = [
-                part.model_copy(
-                    update={
-                        "text": cls._unconfirmed_reply(part.question, decision.language),
-                        # 索要实际凭证是聊天权限边界，不是缺少民宿知识；其他分项继续回答。
-                        "status": "out_of_scope" if part.question == "门锁凭证" else "missing",
-                    }
-                )
-                if part.status == "missing"
-                else part
+                cls._unconfirmed_part(part, decision.language) if part.status == "missing" else part
                 for part in plan.parts
             ]
             missing = any(part.status == "missing" for part in parts)
@@ -2448,9 +2448,11 @@ class DeepSeekGuestAssistant:
                     "reply_text": compose_reply_parts(parts),
                     "reply_parts": parts,
                     "knowledge_gap": missing,
-                    "knowledge_gap_topic": ",".join(
-                        part.question for part in parts if part.status == "missing"
-                    )
+                    "knowledge_gap_topic": ",".join(dict.fromkeys(
+                        split_segment_label(part.question)[1]
+                        for part in parts
+                        if part.status == "missing"
+                    ))
                     or None,
                 }
             )
@@ -2502,6 +2504,22 @@ class DeepSeekGuestAssistant:
                 "knowledge_gap_topic": "property_information",
                 "staff_confirmation_required": False,
                 "staff_confirmation_reason": None,
+            }
+        )
+
+    @classmethod
+    def _unconfirmed_part(cls, part: ReplyPart, language: Language) -> ReplyPart:
+        """把缺失分项换成未确认正文；分段日期前缀先剥离再判断主题与凭据，最后加回正文。
+
+        日期标注只影响展示：「2026-10-11：门锁凭证」仍是专门拒绝（out_of_scope），不会
+        因为前缀变成可转交的资料缺失（周末 Spec §2.4）。
+        """
+        label, question = split_segment_label(part.question)
+        return part.model_copy(
+            update={
+                "text": label + cls._unconfirmed_reply(question, language),
+                # 索要实际凭证是聊天权限边界，不是缺少民宿知识；其他分项继续回答。
+                "status": "out_of_scope" if question == "门锁凭证" else "missing",
             }
         )
 

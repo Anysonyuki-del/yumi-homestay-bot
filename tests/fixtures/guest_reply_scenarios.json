@@ -1096,6 +1096,42 @@
    "property_id": null,
    "valid_from": null,
    "valid_until": null
+  },
+  {
+   "id": 9901,
+   "category": "早餐",
+   "question_zh": "早餐几点开始？",
+   "answer_zh": "早餐8:30开始。",
+   "question_en": "What time does breakfast start?",
+   "answer_en": "Breakfast starts at 8:30.",
+   "keywords": [
+    "早餐",
+    "早饭",
+    "早餐时间",
+    "breakfast"
+   ],
+   "scope": "property",
+   "property_id": 9999,
+   "valid_from": "2026-09-26",
+   "valid_until": "2026-09-26"
+  },
+  {
+   "id": 9902,
+   "category": "早餐",
+   "question_zh": "早餐几点开始？",
+   "answer_zh": "早餐9:00开始。",
+   "question_en": "What time does breakfast start?",
+   "answer_en": "Breakfast starts at 9:00.",
+   "keywords": [
+    "早餐",
+    "早饭",
+    "早餐时间",
+    "breakfast"
+   ],
+   "scope": "property",
+   "property_id": 9999,
+   "valid_from": "2026-09-27",
+   "valid_until": "2026-09-27"
   }
  ],
  "knowledge_notes": {
@@ -5707,6 +5743,55 @@
     ],
     "handoff": false,
     "notes": "1.40.0：对应不上房间的渠道参考价（orphan_listings，77 元）必须被执行器丢弃。"
+   }
+  },
+  {
+   "id": "K-周末早餐",
+   "category": "knowledge_direct",
+   "messages": [
+    {
+     "role": "user",
+     "content": "这周末早餐几点开始？"
+    }
+   ],
+   "expect": {
+    "route": "knowledge",
+    "must_include": [
+     "7:30"
+    ],
+    "handoff": false,
+    "notes": "周末 Spec §2.5（1.70.1 RV-1）：今日 2026-09-25，周末绑定 9月26日至27日；9011 无期限，应直接作答，不能回未确认。",
+    "source_ids": [
+     9011
+    ],
+    "knowledge_gap": false
+   }
+  },
+  {
+   "id": "K-周末分日",
+   "category": "knowledge_direct",
+   "messages": [
+    {
+     "role": "user",
+     "content": "9999房间这周末早餐几点开始？"
+    }
+   ],
+   "expect": {
+    "route": "knowledge",
+    "must_include": [
+     "2026-09-26：早餐8:30开始",
+     "2026-09-27：早餐9:00开始"
+    ],
+    "must_not_include": [
+     "7:30"
+    ],
+    "handoff": false,
+    "notes": "周末 Spec §2.5：虚构房源 9999 只在知识资料里，9901 仅 9月26日、9902 仅 9月27日有效。日期与对应时刻整句匹配，防互换；7:30 是全店平时早餐，只在本场景禁止，不进全局禁词。来源归属由离线断言核对，judge 不读 source_ids。",
+    "source_ids": [
+     9901,
+     9902
+    ],
+    "knowledge_gap": false
    }
   }
  ],

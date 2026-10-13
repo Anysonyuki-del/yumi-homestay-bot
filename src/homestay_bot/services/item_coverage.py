@@ -114,6 +114,16 @@ _RELATIVE_DATE = re.compile(
     r"\d+(?:st|nd|rd|th))\s+day|day\s+\d+)(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+# 「周末」前的限定词：空、这、这个、本表示本周，下、下个表示下周；「上」「下下」等不支持，
+# 一并捕获后拒绝，不能只截出后面的「周末」。
+_WEEKEND = re.compile(r"(?P<qualifier>下下个?|上上?个?|下个?|这个?|本)?周末")
+_WEEKEND_OFFSETS = {"": 0, "这": 0, "这个": 0, "本": 0, "下": 7, "下个": 7}
+# 限定词之前若紧挨着没被消费的时间修饰（「下周的」「上一个」「下个月」「第二个」「节假日」），
+# 说明客人问的不是本周或下周末；拒绝，不能退化成裸「周末」按本周作答（实施复审 I71-R1）。
+_WEEKEND_FOREIGN_PREFIX = re.compile(
+    r"(?:[上下前后这那本该]|[一二三四五六七八九十两几\d]|个|周|星期|礼拜|月|年|号|日|天|底|初|旬|节|假期?)"
+    r"的?\s*$"
+)
 # 日历相对词和住宿序数日的锚点不同；这里只解析不依赖入住上下文的确定单日。
 _CALENDAR_DAY_OFFSETS = {
     "今天": 0, "今晚": 0, "今日": 0, "today": 0, "tonight": 0,
@@ -251,7 +261,12 @@ def static_clause_dates(
     if named.relative:
         point = relative_calendar_day(text, today) if today is not None else None
         if point is None:
-            # shortcut: 住宿序数日和周末等范围未解析；有可靠锚点的新契约再扩展，不能猜入住日。
+            # 周末是唯一支持的日历范围（周末 Spec §2.2）：必须完整落在项目标内才绑定，
+            # 只相交一天不算，避免拿住宿区间里的周六资料回答整个周末。
+            weekend = relative_calendar_weekend(text, today) if today is not None else None
+            if weekend and start and start <= weekend[0] and weekend[1] <= (end or start):
+                return weekend
+            # shortcut: 住宿序数日等范围未解析；有可靠锚点的新契约再扩展，不能猜入住日。
             return None
     if point is not None:
         return (point, point) if start and start <= point <= (end or start) else None
@@ -271,6 +286,36 @@ def relative_calendar_day(text: str, today: date) -> date | None:
             offset = "一二三四五六日".index(weekday[1].replace("天", "日")) - today.weekday()
         points.add(today + timedelta(days=offset))
     return next(iter(points)) if len(points) == 1 else None
+
+
+def relative_calendar_weekend(text: str, today: date) -> tuple[date, date] | None:
+    """解析中文日历周末，返回含首尾的自然日范围（周末 Spec §2.1）。
+
+    - 本周从周一起算：「周末／这周末／这个周末／本周末」取本周六至周日；今天是周日时只取今天
+      （D-W2：已过去的周六不再核）；
+    - 「下周末／下个周末」始终是下周六至周日，不在裁剪后的本周末上再加 7 天；
+    - 同一句出现绝对日期、其他相对日期或序数日、本周与下周两种周末，「上周末」「下下周末」
+      这类未支持的限定，或「下周的周末」「上一个周末」这类限定词前另有时间修饰时拒绝，
+      不截出其中的「周末」字样当作本周末。
+    """
+    if _ABSOLUTE_DATE.search(text):
+        return None
+    if any(match[0] != "周末" for match in _RELATIVE_DATE.finditer(text)):
+        return None
+    offsets: set[int] = set()
+    for match in _WEEKEND.finditer(text):
+        qualifier = match["qualifier"] or ""
+        if qualifier not in _WEEKEND_OFFSETS or _WEEKEND_FOREIGN_PREFIX.search(
+            text, 0, match.start()
+        ):
+            return None
+        offsets.add(_WEEKEND_OFFSETS[qualifier])
+    if len(offsets) != 1:
+        return None
+    saturday = today + timedelta(days=5 - today.weekday())
+    if offsets == {7}:
+        return saturday + timedelta(days=7), saturday + timedelta(days=8)
+    return max(saturday, today), saturday + timedelta(days=1)
 
 
 @dataclass(frozen=True)

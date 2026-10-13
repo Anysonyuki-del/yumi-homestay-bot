@@ -514,3 +514,67 @@ async def test_failed_enqueue_rolls_back_draft_claim(factory, monkeypatch):
     assert record.status is KnowledgeReferralStatus.PENDING and record.generation == 0
     assert not record.source_message_ids and record.draft is None
     assert not await referrals._jobs(factory, "knowledge_referral_draft")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["unlimited", "sunday_missing", "sunday_conflict"])
+async def test_weekend_static_answer_and_referral_survive_final_outbox(factory, case):
+    """真实检索到事务发件箱：周末按天取证；只有纯缺资料可转交，冲突段阻断整个原文单元。"""
+    text = "这周末早餐几点开始"
+    plan = plan_for(text, ("static_fact", text, {}))
+    rows = {
+        "unlimited": [(None, "7:30")],
+        "sunday_missing": [(10, "8:30")],
+        "sunday_conflict": [(10, "8:30"), (11, "9:30"), (11, "10:30")],
+    }[case]
+    async with factory() as session:
+        for index, (day, time) in enumerate(rows):
+            valid = {} if day is None else {
+                "valid_from": date(2026, 10, day), "valid_until": date(2026, 10, day),
+            }
+            session.add(KnowledgeEntry(
+                id=6100 + index, category="早餐", scope="global", is_enabled=True,
+                question_zh="早餐几点开始？", answer_zh=f"早餐{time}开始。",
+                question_en="When is breakfast?", answer_en=f"Breakfast starts at {time}.",
+                keywords=["早餐"], **valid,
+            ))
+        await session.commit()
+        assistant, completions = _assistant([], KnowledgeService(
+            SQLAlchemyKnowledgeRepository(session)
+        ))
+
+        async def choose(**kwargs):
+            """模型选中第一条资料，并申请转交信封里开放的早餐缺口；是否转交由本地核验决定。"""
+            completions.requests.append(kwargs)
+            envelope = json.loads(kwargs["messages"][-1]["content"])
+            offered = [u for u in envelope.get("gap_units", []) if "早餐" in u["text"]]
+            content = _decision(
+                evidence_selection=[{"item_id": 1, "answer_ids": [6100]}],
+                gap_referrals=[{
+                    "unit_id": unit["id"], "canonical_question": "早餐几点开始",
+                    "category": "早餐",
+                } for unit in offered],
+            )
+            message = SimpleNamespace(content=content, tool_calls=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+        completions.create = choose
+
+        async def respond(**kwargs):
+            """固定已核验计划而保留真实助手到事务发件箱的行为。"""
+            kwargs["turn_plan"] = plan
+            return await assistant.respond(**kwargs)
+
+        _, message = await referrals._seed(factory, content=text)
+        await referrals._run_final(factory, SimpleNamespace(respond=respond), message)
+    [reply] = await referrals._jobs(factory, "wecom_send_text")
+    body = reply.payload["content"]
+    expected = int(case == "sunday_missing")
+    assert len(await referrals._referrals(factory)) == expected
+    assert len(await referrals._jobs(factory, HANDOFF_CARD_JOB_TYPE)) == expected
+    assert ("已提交管家核实" in body) is bool(expected)
+    if case == "unlimited":
+        assert "早餐7:30开始" in body
+    else:
+        assert "2026-10-10：早餐8:30开始。" in body
+        assert "9:30" not in body and "10:30" not in body

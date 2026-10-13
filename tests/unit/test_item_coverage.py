@@ -18,6 +18,7 @@ from homestay_bot.services.item_coverage import (
     evidence_covers,
     intersecting_clauses,
     missing_nights,
+    relative_calendar_weekend,
     split_clauses,
     static_clause_dates,
 )
@@ -283,3 +284,78 @@ def test_room_numbers_exclude_units(text: str, rooms: tuple[str, ...]) -> None:
     from homestay_bot.services.item_coverage import clause_rooms
 
     assert clause_rooms(text) == rooms
+
+
+@pytest.mark.parametrize("today,this_weekend,next_weekend", [
+    (date(2026, 10, 5), (date(2026, 10, 10), date(2026, 10, 11)), (17, 18)),
+    (date(2026, 10, 7), (date(2026, 10, 10), date(2026, 10, 11)), (17, 18)),
+    (date(2026, 10, 9), (date(2026, 10, 10), date(2026, 10, 11)), (17, 18)),
+    (date(2026, 10, 10), (date(2026, 10, 10), date(2026, 10, 11)), (17, 18)),
+    (date(2026, 10, 11), (date(2026, 10, 11), date(2026, 10, 11)), (17, 18)),
+])
+def test_weekend_is_this_saturday_to_sunday_and_next_weekend_adds_a_week(
+    today, this_weekend, next_weekend
+):
+    """周一起算本周六至周日；周日只核今天，下周末仍是完整的下周六至周日（W-R1）。"""
+    for text in ["周末早餐几点", "这周末早餐几点", "这个周末早餐几点", "本周末早餐几点"]:
+        assert relative_calendar_weekend(text, today) == this_weekend
+    for text in ["下周末早餐几点", "下个周末早餐几点"]:
+        assert relative_calendar_weekend(text, today) == (
+            date(2026, 10, next_weekend[0]), date(2026, 10, next_weekend[1])
+        )
+
+
+@pytest.mark.parametrize("today,this_weekend,next_weekend", [
+    (date(2026, 10, 31), (date(2026, 10, 31), date(2026, 11, 1)),
+     (date(2026, 11, 7), date(2026, 11, 8))),
+    (date(2026, 12, 31), (date(2027, 1, 2), date(2027, 1, 3)),
+     (date(2027, 1, 9), date(2027, 1, 10))),
+])
+def test_weekend_crosses_month_and_year(today, this_weekend, next_weekend):
+    """跨月、跨年按自然日推算。"""
+    assert relative_calendar_weekend("周末早餐几点", today) == this_weekend
+    assert relative_calendar_weekend("下周末早餐几点", today) == next_weekend
+
+
+@pytest.mark.parametrize("text", [
+    "上周末早餐几点", "上个周末早餐几点", "下下周末早餐几点", "下下个周末早餐几点",
+    "周末和下周末早餐几点", "明天和周末早餐几点", "周末这周日早餐几点",
+    "10月10日周末早餐几点", "第二天周末早餐几点", "早餐几点",
+    "下周的周末早餐几点", "上一个周末早餐几点", "下周周末早餐几点", "下个月周末早餐几点",
+    "第二个周末早餐几点", "9999房间下周的周末早餐几点",
+])
+def test_weekend_rejects_unsupported_or_mixed_dates(text):
+    """未支持的限定、混用其他日期或两种周末时拒绝，不截出「周末」当作本周末。"""
+    assert relative_calendar_weekend(text, date(2026, 10, 7)) is None
+
+
+def test_static_weekend_binds_only_when_fully_inside_the_item_target():
+    """周末完整落在项目标内才绑定；只相交一天或超出范围时不借住宿区间。"""
+    today = date(2026, 10, 7)
+    sat, sun = date(2026, 10, 10), date(2026, 10, 11)
+    assert static_clause_dates("周末早餐几点", (sat, sun), 2026, today=today) == (sat, sun)
+    assert static_clause_dates(
+        "周末早餐几点", (date(2026, 10, 9), date(2026, 10, 12)), 2026, today=today
+    ) == (sat, sun)
+    assert static_clause_dates("周末早餐几点", (sat, sat), 2026, today=today) is None
+    assert static_clause_dates(
+        "周末早餐几点", (date(2026, 10, 7), date(2026, 10, 8)), 2026, today=today
+    ) is None
+    assert static_clause_dates("周末早餐几点", (sat, sun), 2026) is None
+
+
+@pytest.mark.parametrize("text", [
+    "9999房间这周末早餐几点", "你们周末也有早餐吗", "每逢周末有早餐吗", "你们的周末早餐几点",
+])
+def test_weekend_keeps_aliases_after_ordinary_words(text):
+    """普通文字前置不影响合法周末；只有未消费的时间修饰才拒绝（I71-R1 控制）。"""
+    assert relative_calendar_weekend(text, date(2026, 10, 7)) == (
+        date(2026, 10, 10), date(2026, 10, 11)
+    )
+
+
+def test_foreign_weekend_qualifier_stays_unbound_in_static_clause():
+    """「下周的周末」不能截成本周末借用项目标；小句保持未绑定。"""
+    sat, sun = date(2026, 10, 10), date(2026, 10, 11)
+    for text in ["下周的周末早餐几点", "上一个周末早餐几点"]:
+        assert static_clause_dates(text, (sat, sun), 2026, today=date(2026, 10, 7)) is None

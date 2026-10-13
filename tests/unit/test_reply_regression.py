@@ -429,3 +429,87 @@ def test_runner_passes_the_scenario_confirmed_stay(monkeypatch) -> None:
     )
     assert seen[0].confirmed_stay == stay
     assert seen[1] is None
+
+
+def _fixture() -> dict:
+    """门禁共用的虚构资料与场景。"""
+    return json.loads(
+        (Path(__file__).parents[1] / "fixtures/guest_reply_scenarios.json").read_text()
+    )
+
+
+async def _weekend_fixture_reply(question: str, answer_ids: list[int]):
+    """用门禁资料、真实检索与房号映射跑完整离线回复链；只有主模型是合成响应。"""
+    from homestay_bot.services.knowledge_service import KnowledgeService
+    from tests.plan_helpers import plan_for
+    from tests.unit.test_reply_fix2_items import _assistant, _decision, _respond, _Tools
+
+    fixture = _fixture()
+    entries = [
+        rr._Entry(**{key: entry[key] for key in rr._Entry.__dataclass_fields__ if key in entry})
+        for entry in fixture["knowledge"]
+    ]
+    tools = _Tools({})
+    assistant, _ = _assistant(
+        [_decision(evidence_selection=[{"item_id": 1, "answer_ids": answer_ids}])],
+        KnowledgeService(rr._MemoryKnowledge(entries)), tools,
+    )
+    assistant._local_date_provider = lambda: date.fromisoformat(fixture["today"])
+    room = "9999" if question.startswith("9999") else None
+    plan = plan_for(question, ("static_fact", question, {"target_room": room} if room else {}))
+    return await _respond(assistant, question, plan), tools
+
+
+@pytest.mark.asyncio
+async def test_weekend_split_scenario_preflight_binds_sources_to_days():
+    """K-周末分日离线预检：9999 只在资料里也能定位；逐段来源、日期与时刻一一对应。"""
+    decision, tools = await _weekend_fixture_reply("9999房间这周末早餐几点开始？", [9901])
+    assert tools.calls == []
+    assert not decision.gap_units and not decision.knowledge_gap
+    by_source = {
+        evidence.source_id: (evidence.target_date, evidence.target_end_date, part.text)
+        for part in decision.reply_parts
+        for evidence in part.evidence
+    }
+    assert by_source == {
+        "9901": (date(2026, 9, 26), date(2026, 9, 26), "2026-09-26：早餐8:30开始。"),
+        "9902": (date(2026, 9, 27), date(2026, 9, 27), "2026-09-27：早餐9:00开始。"),
+    }
+    scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-周末分日")
+    assert rr.judge(scenario, {"route": "knowledge", "final": decision.reply_text})["ok"]
+
+
+@pytest.mark.asyncio
+async def test_weekend_scenario_preflight_answers_unlimited_breakfast():
+    """K-周末早餐离线预检：无期限 9011 直接作答，不出现缺口。"""
+    decision, tools = await _weekend_fixture_reply("这周末早餐几点开始？", [9011])
+    assert tools.calls == [] and not decision.gap_units
+    assert {e.source_id for part in decision.reply_parts for e in part.evidence} == {"9011"}
+    scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-周末早餐")
+    assert rr.judge(scenario, {"route": "knowledge", "final": decision.reply_text})["ok"]
+
+
+@pytest.mark.parametrize("final", [
+    "2026-09-26：早餐9:00开始。\n2026-09-27：早餐8:30开始。",
+    "2026-09-25：早餐8:30开始。\n2026-09-27：早餐9:00开始。",
+    "2026-09-26：早餐8:30开始。\n2026-09-27：早餐9:00开始。\n平时早餐7:30开始。",
+    "",
+])
+def test_weekend_split_scenario_rejects_swapped_wrong_or_contaminated_answers(final):
+    """时刻互换、错日期、夹带平时 7:30 与空正文都判失败（A10）。"""
+    scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-周末分日")
+    assert not rr.judge(scenario, {"route": "knowledge", "final": final})["ok"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question", ["9999房间下周的周末早餐几点开始？", "9999房间上一个周末早餐几点开始？"]
+)
+async def test_weekend_fixture_rejects_foreign_qualifier(question):
+    """门禁资料下，未支持的周末限定不拿本周 9901/9902 作答（I71-R1 真实检索控制）。"""
+    decision, tools = await _weekend_fixture_reply(question, [9901, 9902])
+    sources = {e.source_id for part in decision.reply_parts for e in part.evidence}
+    assert not sources & {"9901", "9902"}
+    assert "8:30" not in decision.reply_text and "9:00" not in decision.reply_text
+    assert tools.calls == []
+    assert all(gap.reason != "knowledge_missing" for gap in decision.gap_units)

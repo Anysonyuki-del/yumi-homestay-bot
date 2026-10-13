@@ -666,6 +666,7 @@ def build_evidence_plan(
         if end_on and target_date <= end_on < end:
             boundaries.add(end_on + timedelta(days=1))
     ordered = sorted(boundaries)
+    segmented = len(ordered) > 2
     plans = []
     all_parts = []
     for start, stop in zip(ordered, ordered[1:], strict=False):
@@ -686,34 +687,118 @@ def build_evidence_plan(
             object_scoped=object_scoped,
         )
         plans.append(plan)
-        for part in plan.parts:
-            text = part.text
-            if len(ordered) > 2 and text:
-                text = f"{start.isoformat()} — {(stop - timedelta(days=1)).isoformat()}：{text}"
-            all_parts.append(
-                part.model_copy(
-                    update={
-                        "text": text,
-                        "evidence": tuple(
-                            evidence.model_copy(
-                                update={
-                                    "target_date": start,
-                                    "target_end_date": stop - timedelta(days=1),
-                                }
-                            )
-                            for evidence in part.evidence
-                        ),
-                    }
+        last = stop - timedelta(days=1)
+        label = segment_date_label(start, last) if segmented else ""
+        period_parts = list(plan.parts)
+        if segmented and plan.status == "insufficient" and not period_parts:
+            # 复核或预算阻断的段没有分项：用原问题补一个缺失分项，最终正文仍能说明哪天未确认。
+            period_parts = [ReplyPart(question=question_text, status="missing", text="")]
+        for part in period_parts:
+            update: dict[str, Any] = {
+                "evidence": tuple(
+                    evidence.model_copy(update={"target_date": start, "target_end_date": last})
+                    for evidence in part.evidence
                 )
-            )
+            }
+            if label and part.text:
+                update["text"] = label + part.text
+            if label and part.status == "missing":
+                # 缺失分项正文由回复层按主题生成，日期前缀先放在问题上，回复层剥离后再加回正文。
+                update["question"] = label + part.question
+            all_parts.append(part.model_copy(update=update))
     first = plans[0]
+    answers = tuple(part.text for part in all_parts if part.status == "grounded")
+    budget = ""
+    if segmented and answers:
+        # 各段单独都在预算内，拼起来仍可能超限；超限时关闭整个合并答案，不截断条件。
+        if not fits_guest_reply_parts(compose_static_reply(list(answers))):
+            budget = "reply_exceeds_message_limit"
+        elif len(answers) > 1 and sum(len(item) for item in answers) > STATIC_REPLY_MAX_CHARS:
+            budget = "reply_budget_exceeded"
+    if budget:
+        all_parts = [
+            part.model_copy(update={
+                "status": "missing",
+                "text": "",
+                "question": _segment_label_of(part) + part.question,
+                # 未发出的答案不能再挂来源，否则诊断页会显示一个没用上的事实来源。
+                "evidence": (),
+            })
+            if part.status == "grounded" else part
+            for part in all_parts
+        ]
+        answers = ()
+    insufficient = budget or any(plan.status == "insufficient" for plan in plans)
     return EvidencePlan(
-        "insufficient" if any(plan.status == "insufficient" for plan in plans) else first.status,
+        "insufficient" if insufficient else first.status,
         first.topics,
-        tuple(part.text for part in all_parts if part.status == "grounded"),
-        first.reason,
+        answers,
+        _combined_reason(plans, budget),
         tuple(all_parts),
     )
+
+
+# 分段阻断原因的代表优先级（周末 Spec §2.3）：只决定记录哪一个原因，不降低其他阻断效力。
+_BLOCKING_RANKS = (
+    ("answer_needs_review", "borrowing_unconfirmed"),
+    ("conflict",),
+    ("period_veto",),
+    ("reply_exceeds_message_limit", "reply_budget_exceeded"),
+)
+
+
+def _blocking_rank(reason: str) -> int | None:
+    """返回阻断原因的优先级（越小越优先）；普通缺失或成功原因返回空。"""
+    for rank, names in enumerate(_BLOCKING_RANKS):
+        # 冲突原因带后缀（conflict_fee 等），按前缀归类。
+        if reason in names or (names == ("conflict",) and reason.startswith("conflict")):
+            return rank
+    return None
+
+
+def _combined_reason(plans: Sequence[EvidencePlan], budget: str) -> str:
+    """汇总所有分段的原因，不让第一段的成功或普通缺失遮住后面段的冲突、复核与预算阻断。
+
+    有阻断时按优先级取代表原因，同级取日期最早的段；没有阻断时取第一个不足段的原因；
+    全部可答才保留第一段的成功原因。
+    """
+    reasons = [plan.reason for plan in plans] + ([budget] if budget else [])
+    blocking = [
+        (rank, index, reason)
+        for index, reason in enumerate(reasons)
+        if (rank := _blocking_rank(reason)) is not None
+    ]
+    if blocking:
+        return min(blocking)[2]
+    insufficient = next((plan.reason for plan in plans if plan.status == "insufficient"), None)
+    return insufficient or plans[0].reason
+
+
+def segment_date_label(start: date, end: date) -> str:
+    """分段日期前缀（D-W6）：单日写 `YYYY-MM-DD：`，多日写 `YYYY-MM-DD — YYYY-MM-DD：`。
+
+    年份完整、不分语言，中英文回复共用；日期只来自本地冻结的段边界。
+    """
+    if start == end:
+        return f"{start.isoformat()}："
+    return f"{start.isoformat()} — {end.isoformat()}："
+
+
+_SEGMENT_LABEL = re.compile(r"^\d{4}-\d{2}-\d{2}(?: — \d{4}-\d{2}-\d{2})?：")
+
+
+def split_segment_label(text: str) -> tuple[str, str]:
+    """拆出 `segment_date_label` 生成的前缀，返回（前缀, 其余）；没有前缀时前缀为空。
+
+    回复层先按其余部分做主题与凭据判断，再把前缀加回正文，日期标注不改变安全状态。
+    """
+    match = _SEGMENT_LABEL.match(text)
+    return (match[0], text[match.end():]) if match else ("", text)
+
+
+def _segment_label_of(part: ReplyPart) -> str:
+    """取已答分项正文上的日期前缀，用于把它改成缺失分项时保留日期。"""
+    return split_segment_label(part.text)[0]
 
 
 def _build_evidence_plan_for_period(

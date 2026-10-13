@@ -649,3 +649,123 @@ async def test_ordinary_stay_time_keeps_conditions_without_borrowing_special_tim
     assert decision.knowledge_gap is not grounded
     if grounded:
         assert decision.reply_text == answer
+
+
+def _segmented_plan(question, entries, start, end, *, object_scoped=True):
+    """按生效边界分段跑真实证据计划；检索、选择均不参与。"""
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+    from homestay_bot.services.knowledge_evidence_policy import build_evidence_plan
+
+    return build_evidence_plan(
+        question,
+        entries,
+        is_property_question=True,
+        supporting_for_topic=DeepSeekGuestAssistant._supporting_knowledge,
+        target_date=start,
+        target_end_date=end,
+        object_scoped=object_scoped,
+    )
+
+
+def _dated(source_id, answer, day=None, *, question="早餐几点开始？"):
+    """早餐条目；给出 day 时只在当天有效。"""
+    from datetime import date
+
+    valid = {} if day is None else {"valid_from": date(2026, 10, day), "valid_until": date(
+        2026, 10, day
+    )}
+    return KnowledgeSnippet(source_id, "早餐", question, answer, scope="global", **valid)
+
+
+@pytest.mark.parametrize("order", ["conflict_last", "conflict_first"])
+def test_later_segment_conflict_is_not_masked_by_earlier_answer(order):
+    """周六可答、周日冲突时整项原因是冲突，不能被第一段遮成可转交的资料缺失（W-R2）。"""
+    from datetime import date
+
+    sat, sun = (10, 11) if order == "conflict_last" else (11, 10)
+    entries = [
+        _dated(1, "早餐7:30开始。", sat),
+        _dated(2, "早餐9:30开始。", sun),
+        _dated(3, "早餐10:30开始。", sun),
+    ]
+    plan = _segmented_plan("早餐几点开始？", entries, date(2026, 10, 10), date(2026, 10, 11))
+    assert plan.status == "insufficient"
+    assert plan.reason.startswith("conflict")
+    assert [part.status for part in plan.parts].count("grounded") == 1
+
+
+def test_missing_segment_keeps_its_date_and_plain_gap_reason():
+    """只缺一天资料：已答日保留，缺失分项带当天日期，原因仍是普通缺失。"""
+    from datetime import date
+
+    plan = _segmented_plan(
+        "早餐几点开始？", [_dated(1, "早餐7:30开始。", 10)], date(2026, 10, 10), date(2026, 10, 11)
+    )
+    assert plan.reason == "partial"
+    assert [(part.status, part.text) for part in plan.parts if part.status == "grounded"] == [
+        ("grounded", "2026-10-10：早餐7:30开始。")
+    ]
+    missing = [part for part in plan.parts if part.status == "missing"]
+    assert [part.question for part in missing] == ["2026-10-11：早餐时间"]
+
+
+def test_segment_label_is_iso_single_day_or_range_for_any_language():
+    """单日写 YYYY-MM-DD：，多日保持范围；英文跨年同一写法，年份完整（D-W6）。"""
+    from datetime import date
+
+    plan = _segmented_plan(
+        "What time is breakfast?",
+        [
+            KnowledgeSnippet(1, "早餐", "What time is breakfast?", "Breakfast starts at 7:30.",
+                             scope="global"),
+            KnowledgeSnippet(2, "早餐", "What time is breakfast?", "Breakfast starts at 8:30.",
+                             scope="global", valid_from=date(2027, 1, 1),
+                             valid_until=date(2027, 1, 1)),
+        ],
+        date(2026, 12, 30),
+        date(2027, 1, 2),
+    )
+    assert [part.text for part in plan.parts] == [
+        "2026-12-30 — 2026-12-31：Breakfast starts at 7:30.",
+        "2027-01-01：Breakfast starts at 8:30.",
+        "2027-01-02：Breakfast starts at 7:30.",
+    ]
+    assert plan.status == "grounded"
+
+
+def test_merged_segments_over_budget_close_the_whole_answer():
+    """各段单独在预算内、合并超限时关闭整个合并答案，带日期改成缺失，不截断也不可转交。"""
+    from datetime import date
+
+    long_sat = _dated(1, "早餐7:30开始。" + "另有若干供应条件。" * 60, 10)
+    long_sun = _dated(2, "早餐9:00开始。" + "另有若干供应条件。" * 60, 11)
+    plan = _segmented_plan("早餐几点开始？", [long_sat, long_sun], date(2026, 10, 10),
+                           date(2026, 10, 11))
+    assert plan.status == "insufficient"
+    assert plan.reason == "reply_budget_exceeded"
+    assert plan.answers == ()
+    assert [part.status for part in plan.parts] == ["missing", "missing"]
+    assert [part.question[:11] for part in plan.parts] == ["2026-10-10：", "2026-10-11："]
+    assert all(not part.evidence for part in plan.parts)
+
+
+@pytest.mark.parametrize(
+    "reasons,expected",
+    [
+        (["covered", "partial"], "partial"),
+        (["partial", "conflict_fee"], "conflict_fee"),
+        (["period_veto", "conflict"], "conflict"),
+        (["reply_budget_exceeded", "period_veto"], "period_veto"),
+        (["conflict", "answer_needs_review"], "answer_needs_review"),
+        (["covered", "covered"], "covered"),
+    ],
+)
+def test_blocking_reason_wins_by_priority_over_date_order(reasons, expected):
+    """复核 > 冲突 > 期间否决 > 预算；无阻断时取第一个不足段的原因。"""
+    from homestay_bot.services.knowledge_evidence_policy import EvidencePlan, _combined_reason
+
+    plans = [
+        EvidencePlan("grounded" if reason == "covered" else "insufficient", (), (), reason)
+        for reason in reasons
+    ]
+    assert _combined_reason(plans, "") == expected

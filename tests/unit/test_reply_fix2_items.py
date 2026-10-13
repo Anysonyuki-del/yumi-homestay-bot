@@ -28,6 +28,7 @@ from homestay_bot.services.knowledge_service import (
     _passes_triggers,
     normalize_text,
 )
+from homestay_bot.services.reply_plan import ReplyPart
 from tests.plan_helpers import PLAN_TODAY, plan_for
 
 UNCONFIRMED = "尚未确认"
@@ -795,3 +796,133 @@ async def test_retrieval_marks_entries_with_trigger_conditions() -> None:
     )
     flags = {snippet.source_id: snippet.conditional for snippet in found}
     assert flags == {1: False, 2: True}
+
+
+BREAKFAST = _snippet(9701, "早餐几点开始？", "早餐7:30开始。", category="早餐")
+
+
+def _weekend_breakfast(source_id: int, answer: str, day: int) -> KnowledgeSnippet:
+    """只在 2026-10-{day} 当天有效的早餐条目。"""
+    return _snippet(
+        source_id, "早餐几点开始？", answer, category="早餐",
+        valid_from=date(2026, 10, day), valid_until=date(2026, 10, day),
+    )
+
+
+async def _weekend_reply(text: str, entries, fallback: bool, answer_ids=(9701,)):
+    """周末静态问答：正常出口或「先查房、再回退」出口，模型选择相同。"""
+    knowledge = _Knowledge(entries)
+    selection = [{"item_id": 2 if fallback else 1, "answer_ids": list(answer_ids)}]
+    if fallback:
+        first = "10月7日入住10月9日退房有房吗"
+        args = {"check_in_date": "2026-10-07", "check_out_date": "2026-10-09"}
+        items = [("stay_query", first, args), ("static_fact", text, {})]
+        text = first + "，" + text
+        assistant, _ = _assistant(
+            [_tool_message("search_availability", args), "invalid"], knowledge,
+            _Tools({"search_availability": [_availability_row(1401, *args.values())]}),
+        )
+    else:
+        items = [("static_fact", text, {})]
+        assistant, _ = _assistant([_decision(evidence_selection=selection)], knowledge)
+    return await _respond(assistant, text, plan_for(text, *items)), knowledge
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_weekend_static_question_uses_unlimited_policy(fallback):
+    """无期限资料下「这周末早餐几点」直接作答，检索目标是本周六至周日（RV-1）。"""
+    decision, knowledge = await _weekend_reply("这周末早餐几点开始", [BREAKFAST], fallback)
+    assert "早餐7:30开始" in decision.reply_text
+    assert not decision.gap_units
+    _, params = knowledge.calls[-1]
+    assert (params["target_date"], params["target_end_date"]) == (
+        date(2026, 10, 10), date(2026, 10, 11)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_weekend_same_object_exception_is_answered_per_day(fallback):
+    """同一问法的周六例外按天分段，日期与时刻对应，不混用（D-W6 单日写法）。"""
+    entries = [BREAKFAST, _weekend_breakfast(9702, "早餐9:30开始。", 10)]
+    decision, _ = await _weekend_reply("这周末早餐几点开始", entries, fallback)
+    assert "2026-10-10：早餐9:30开始。" in decision.reply_text
+    assert "2026-10-11：早餐7:30开始。" in decision.reply_text
+    assert not decision.gap_units
+    by_day = {
+        evidence.target_date: (evidence.source_id, part.text)
+        for part in decision.reply_parts
+        for evidence in part.evidence
+    }
+    assert by_day[date(2026, 10, 10)][0] == "9702" and "9:30" in by_day[date(2026, 10, 10)][1]
+    assert by_day[date(2026, 10, 11)][0] == "9701" and "7:30" in by_day[date(2026, 10, 11)][1]
+
+
+@pytest.mark.asyncio
+async def test_weekend_missing_day_is_dated_and_referable():
+    """周六有资料、周日没有：周六照答，周日带日期说明未确认，缺口仍可转交。"""
+    entries = [_weekend_breakfast(9703, "早餐8:30开始。", 10)]
+    decision, _ = await _weekend_reply("这周末早餐几点开始", entries, False, (9703,))
+    assert "2026-10-10：早餐8:30开始。" in decision.reply_text
+    assert "2026-10-11：当前审核资料尚未确认早餐信息" in decision.reply_text
+    assert [gap.reason for gap in decision.gap_units] == ["knowledge_missing"]
+    assert decision.knowledge_gap_topic == "早餐时间"
+
+
+@pytest.mark.asyncio
+async def test_weekend_conflict_on_one_day_is_not_referable():
+    """周六正常、周日资料冲突：缺口原因是冲突，不能当资料缺失转交（W-R2）。"""
+    entries = [
+        _weekend_breakfast(9704, "早餐7:30开始。", 10),
+        _weekend_breakfast(9705, "早餐9:30开始。", 11),
+        _weekend_breakfast(9706, "早餐10:30开始。", 11),
+    ]
+    decision, _ = await _weekend_reply("这周末早餐几点开始", entries, False, (9704,))
+    assert "2026-10-10：早餐7:30开始。" in decision.reply_text
+    assert [gap.reason for gap in decision.gap_units] == ["conflict"]
+
+
+@pytest.mark.asyncio
+async def test_weekend_outside_coarse_stay_stays_unbound():
+    """粗住宿项范围外的周末残留不借住宿日期，也不扩大检索；不作答、不转交。"""
+    text = "10月7日入住10月9日退房有房吗，周末早餐几点开始"
+    args = {"check_in_date": "2026-10-07", "check_out_date": "2026-10-09"}
+    knowledge = _Knowledge([BREAKFAST])
+    assistant, _ = _assistant(
+        [_tool_message("search_availability", args), _decision()], knowledge,
+        _Tools({"search_availability": [_availability_row(1401, *args.values())]}),
+    )
+    decision = await _respond(assistant, text, plan_for(text, ("stay_query", text, args)))
+    assert "7:30" not in decision.reply_text
+    assert [gap.reason for gap in decision.gap_units] == ["scope_unbound"]
+
+
+def test_dated_door_credential_part_is_still_refused_not_referred():
+    """带日期前缀的门锁凭证缺口仍是专门拒绝（out_of_scope），日期只加在正文前。"""
+    part = ReplyPart(question="2026-10-11：门锁凭证", status="missing", text="")
+    refused = DeepSeekGuestAssistant._unconfirmed_part(part, Language.ZH)
+    assert refused.status == "out_of_scope"
+    assert refused.text.startswith("2026-10-11：聊天里不能提供或转发门锁密码")
+    english = DeepSeekGuestAssistant._unconfirmed_part(
+        ReplyPart(question="2026-10-11：早餐时间", status="missing", text=""), Language.EN
+    )
+    assert english.status == "missing"
+    assert english.text.startswith("2026-10-11：Our reviewed information hasn't confirmed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("text", ["下周的周末早餐几点开始", "上一个周末早餐几点开始"])
+async def test_foreign_weekend_qualifier_never_answers_this_weekend(text, fallback):
+    """未支持的周末限定不按本周作答：只在本周有效的资料零来源、零转交（I71-R1）。"""
+    entries = [
+        _weekend_breakfast(9707, "早餐8:30开始。", 10),
+        _weekend_breakfast(9708, "早餐9:00开始。", 11),
+    ]
+    decision, _ = await _weekend_reply(text, entries, fallback, (9707, 9708))
+    assert "8:30" not in decision.reply_text and "9:00" not in decision.reply_text
+    assert not [
+        e for part in decision.reply_parts for e in part.evidence if e.source_kind == "knowledge"
+    ]
+    assert all(gap.reason != "knowledge_missing" for gap in decision.gap_units)
