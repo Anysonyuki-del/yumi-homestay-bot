@@ -213,7 +213,7 @@ README.md[SV5T]: F:规定逐版本发布记录的审计内容、更正与敏感�
 1.69.0.md[SV5S]: F:记录1.69.0回复泛用化第二至四批的改动依据、文件符号、本地与PostgreSQL验证、候选门禁四轮修正、部署门禁与独立核对证据及剩余已知失败。 | R:code:docs/specs/2026-10-06_reply-generalization-spec.md,code:CHANGELOG.md,code:docs/reviews/2026-10-07_claude-to-codex-reply-generalization-batches2-4-implementation-handoff.md | A:改动及依据；本地验证；候选真实模型门禁表；发布与部署证据；仍未通过的已知场景 | S:候选标签rc-1.69.0-1～4只在本机；部署脚本只接受--skip-reply-gate参数，故v1.69.0另跑了全量门禁；未做测试号真实收发。
 1.69.1.md[SV5S]: F:记录1.69.1修复Codex审查B24-R1–R6的文件符号、改前失败证明、PostgreSQL专项、候选门禁与余额不足事件、部署与独立核对及测试号真实收发验收。 | R:code:docs/specs/2026-10-07_reply-generalization-b24-fix-spec.md,code:CHANGELOG.md,code:docs/reviews/2026-10-07_claude-to-codex-reply-generalization-b24-fix-handoff.md | A:改动及依据表；本地验证；候选真实模型门禁；发布与部署证据；测试号验收表 | S:生产日志只有uvicorn访问日志，应用INFO日志(轮次规划、主链耗时)不输出，规划成败只能从行为推断；验收任务968待管理员取消。
 1.70.0.md[SV5S]: F:记录1.70.0修复、七轮门禁、正式发布与独立现场验收，追加周末及序数日保守回复的影响更正。 | R:code:CHANGELOG.md,code:docs/releases/1.70.1.md | A:本地证据；rc1至rc7；正式发布；备份与容器；登录验收；RV-2影响更正 | S:rc7非154场全过；标签2ff0079不随补录移动；503为既有回调降级，真实收件未验。1.70.1关联为在途修复，不能当已部署。
-1.70.1.md[SV5T]: F:记录1.70.1周末静态日期与分段保护的改动、验证、I71-R1修复、真实模型门禁及正式发布部署现场核对。 | R:code:docs/specs/2026-10-13_weekend-static-date-spec.md,code:docs/reviews/2026-10-14_claude-to-codex-weekend-static-date-i71-fix-handoff.md | A:改动表；本地与全量证据时序；I71-R1；rc-1.70.1-1/2门禁；c6b4e17发布、CI、备份与三态核对；未做与回滚 | S:K-周末分日因规划漏填房号1/2通过，用户决定留作已知未通过；部署复用rc-1.70.1-2全量门禁。登录页面未核对，健康仍Hostex回调降级。
+1.70.1.md[SV5S]: F:记录1.70.1周末静态日期与分段保护的改动、验证、I71-R1修复、真实模型门禁、正式发布部署及登录页面核对。 | R:code:docs/specs/2026-10-13_weekend-static-date-spec.md,code:docs/reviews/2026-10-14_claude-to-codex-weekend-static-date-i71-fix-handoff.md | A:改动表；本地与全量证据时序；I71-R1；rc-1.70.1-1/2门禁；c6b4e17发布、CI、备份与三态核对；登录页面补录 | S:K-周末分日因规划漏填房号1/2通过，用户决定留作已知未通过；部署复用rc-1.70.1-2全量门禁。健康降级仅因Hostex回调从未收到，测试号收发未做。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-09-08-evidence/===
 pytest-output.txt[TQ3S]: F:保存离线回归原始输出、真实外部契约跳过原因与依赖及SQLite清理警告 | R:- | A:1406passed,15skipped,6warnings | S:历史结果含真实外部契约跳过，不能充当当前验收。
@@ -642,7 +642,7 @@ reply_regression.py[TQ8L]: F:提供部署前真实模型回复回归CLI，用虚
 
 ===/Volumes/02/obsidian/tasks/===
 lessons.md[SQ6T]: F:收集尚未归并的发布验收、证据边界与客服泛化防回归教训，供后续确认并归入开发手册 | R:code:YuMi民宿AI开发经验与防回归手册.md | A:- | S:只收已有代码或测试依据的新教训；长期有效后归并唯一对应章节并删除本处正文，历史由Git保留
-todo.md[SW5L]: F:跟踪已发布1.70.1周末日期的实施、门禁与发布结果，并保留已发布1.70.0及fix2/fix3历史。 | R:code:docs/releases/1.70.1.md,code:docs/specs/2026-10-13_weekend-static-date-spec.md | A:本地实施；I71-R1；真实模型门禁；发布部署；AOCI | S:顶部优先历史；勾选仅记录状态。登录页面核对未做，不以健康接口替代。
+todo.md[SW5L]: F:跟踪已发布1.70.1周末日期的实施、门禁与发布结果，并保留已发布1.70.0及fix2/fix3历史。 | R:code:docs/releases/1.70.1.md,code:docs/specs/2026-10-13_weekend-static-date-spec.md | A:本地实施；I71-R1；真实模型门禁；发布部署与登录核对；AOCI | S:顶部优先历史；勾选仅记录状态。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-10-08-fix2-implementation-review-evidence/===
 coverage_probe.py[TB5S]: F:用成对问法离线复现ISO年份误作房号、房价词污染早餐与静态小句日期错用，并经过真实会话及事务发件箱输出最终正文。 | R:code:tests/unit/test_reply_fix2_items.py,code:tests/integration/test_knowledge_referrals.py | A:main；answer；show；PYTHONPATH=src:.:tests:tests/integration | S:退出0证明缺陷；日期用真实SQLite检索，模型及工具均合成；final入队不证明平台受理或收件。
