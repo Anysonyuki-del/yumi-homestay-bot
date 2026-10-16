@@ -4,7 +4,23 @@ from datetime import UTC, datetime
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+from homestay_bot.services.item_coverage import (
+    RoomResolution,
+    resolve_rooms,
+    room_identity,
+    room_mentions,
+)
 from homestay_bot.services.reply_plan import ReplyEvidence, ReplyPart, prepare_planned_reply
+
+
+def _rooms(question: str, rows: list[dict]) -> RoomResolution:
+    """按工具行的房源标题建身份快照（与生产 room_number 为空时的标题兜底一致）再解析问题。"""
+    identities = [
+        identity
+        for row in rows
+        if (identity := room_identity(row["property_id"], None, row["property_title"]))
+    ]
+    return resolve_rooms(room_mentions(question), identities, None)
 
 
 def test_prices_follow_requested_room_and_available_cheapest() -> None:
@@ -20,12 +36,14 @@ def test_prices_follow_requested_room_and_available_cheapest() -> None:
         for number, price, available in [(201, 100, False), (202, 299, True), (302, 688, True)]
     ]
     parts = DeepSeekGuestAssistant._tool_reply_parts(
-        "search_reference_price", {}, rows, Language.ZH, "fake", "那302多少钱？"
+        "search_reference_price", {}, rows, Language.ZH, "fake", "那302多少钱？",
+        _rooms("那302多少钱？", rows),
     )
     assert len(parts) == 1 and parts[0].evidence[0].property_id == 302
     assert parts[0].evidence[0].source_id == "fake:2"
     parts = DeepSeekGuestAssistant._tool_reply_parts(
-        "search_reference_price", {}, rows, Language.ZH, "fake", "今晚最便宜多少钱？"
+        "search_reference_price", {}, rows, Language.ZH, "fake", "今晚最便宜多少钱？",
+        _rooms("今晚最便宜多少钱？", rows),
     )
     assert len(parts) == 1 and parts[0].evidence[0].property_id == 202
 
@@ -81,7 +99,7 @@ def test_cheapest_cannot_compare_partial_stay_price() -> None:
     ]
     parts = DeepSeekGuestAssistant._tool_reply_parts(
         "search_reference_price", {"check_in_date": "2026-09-26", "check_out_date": "2026-09-28"},
-        rows, Language.ZH, "partial", "最便宜的多少钱？",
+        rows, Language.ZH, "partial", "最便宜的多少钱？", _rooms("最便宜的多少钱？", rows),
     )
     assert parts[0].evidence[0].property_id == 202
     assert "最低价" in parts[-1].text and parts[-1].status == "missing"
@@ -188,7 +206,8 @@ def test_price_list_is_one_part_with_the_disclaimer_once() -> None:
     """
     rows = _price_rows(["《春和景明》", "《古家》2栋1803", "收藏家套房"])
     parts = DeepSeekGuestAssistant._tool_reply_parts(
-        "search_reference_price", {}, rows, Language.ZH, "price", "明晚201多少钱"
+        "search_reference_price", {}, rows, Language.ZH, "price", "明晚201多少钱",
+        _rooms("明晚201多少钱", rows),
     )
     assert len(parts) == 1 and parts[0].status == "grounded"
     text = parts[0].text
@@ -203,12 +222,14 @@ def test_room_number_with_hao_selects_room_and_money_is_not_a_room() -> None:
     """「1803号房」按房号选中该房；「预算1000元」里的数字不是房号，不提示没找到。"""
     rows = _price_rows(["《春和景明》", "《古家》2栋1803"])
     parts = DeepSeekGuestAssistant._tool_reply_parts(
-        "search_reference_price", {}, rows, Language.ZH, "price", "1803号房明晚多少钱"
+        "search_reference_price", {}, rows, Language.ZH, "price", "1803号房明晚多少钱",
+        _rooms("1803号房明晚多少钱", rows),
     )
     assert [e.property_id for e in parts[0].evidence] == [1]
     assert "没有找到" not in parts[0].text
     parts = DeepSeekGuestAssistant._tool_reply_parts(
-        "search_reference_price", {}, rows, Language.ZH, "price", "预算1000元，明晚有什么房"
+        "search_reference_price", {}, rows, Language.ZH, "price", "预算1000元，明晚有什么房",
+        _rooms("预算1000元，明晚有什么房", rows),
     )
     assert "没有找到" not in parts[0].text
 

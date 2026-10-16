@@ -483,10 +483,10 @@ class PropertyCardRepository(Protocol):
 
 @runtime_checkable
 class PropertyRoomRepository(Protocol):
-    """可选：按客人点名的房号找到本地房源编号。没实现时房号不参与检索。"""
+    """可选：列出启用房源的房号资料，供本轮房号身份快照解析。没实现时房号对不上任何房源。"""
 
-    async def find_property_by_room(self, room: str) -> int | None:
-        """返回启用房源的编号；房号不存在时返回空。"""
+    async def list_room_profiles(self) -> list[tuple[int, str | None, str]]:
+        """返回启用房源的（编号, room_number, 标题）。"""
 
 
 # 房源卡片以负的房源编号作为来源编号，与知识条目编号区分，便于审计时认出是卡片。
@@ -817,14 +817,20 @@ class KnowledgeService:
             matched=matched,
         )
 
-    async def find_property_by_room(self, room: str) -> int | None:
-        """把客人点名的房号映射为本地房源编号；仓储不支持或读取失败时返回空。"""
+    async def room_profiles(self) -> list[tuple[int, str | None, str]] | None:
+        """启用房源的（编号, room_number, 标题）；仓储不支持或读取失败时返回空值并记录告警。
+
+        空值与「成功读到空表」不同：点名的房号按无法核对处理，静态问题保守回未确认、不转交，
+        也不对客人断言房间不存在（实施审查 IRI-R4）。
+        """
         if not isinstance(self._repository, PropertyRoomRepository):
             return None
         try:
-            return await self._repository.find_property_by_room(room)
+            return await self._repository.list_room_profiles()
         except Exception as error:
-            logger.warning("房号映射失败，本轮不按房号检索：error_type=%s", type(error).__name__)
+            logger.warning(
+                "房号资料读取失败，本轮房号无法核对：error_type=%s", type(error).__name__
+            )
             return None
 
     async def _property_card_snippet(

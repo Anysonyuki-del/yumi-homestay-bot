@@ -1228,16 +1228,19 @@ class SessionKnowledgeRepository:
                 parking_instructions=room.parking_instructions,
             )
 
-    async def find_property_by_room(self, room: str) -> int | None:
-        """按房号读取启用房源编号（轮次计划的 target_room 只作检索目标），返回前关闭会话。"""
+    async def list_room_profiles(self) -> list[tuple[int, str | None, str]]:
+        """读取启用房源的（编号, room_number, 标题），供房号身份快照解析；返回前关闭会话。
+
+        不在这里按房号精确匹配：room_number 可能带楼栋（「2栋2303」），客人常只写号码，
+        匹配规则统一在 `item_coverage.resolve_rooms`（房号身份 Spec §2.1）。
+        """
         async with self._factory() as session:
-            found: int | None = await session.scalar(
-                select(PropertyProfile.id)
-                .where(PropertyProfile.room_number == room, PropertyProfile.is_active.is_(True))
+            rows = await session.execute(
+                select(PropertyProfile.id, PropertyProfile.room_number, PropertyProfile.title)
+                .where(PropertyProfile.is_active.is_(True))
                 .order_by(PropertyProfile.id)
-                .limit(1)
             )
-            return found
+            return [(row[0], row[1], row[2] or "") for row in rows]
 
 
 class SessionKnowledgeVectorStore:

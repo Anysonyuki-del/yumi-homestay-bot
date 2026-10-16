@@ -79,9 +79,9 @@ class _Knowledge:
         self.calls.append((query, kwargs))
         return list(self.entries)
 
-    async def find_property_by_room(self, room: str) -> int | None:
-        """按房号映射房源。"""
-        return self.rooms.get(room)
+    async def room_profiles(self) -> list[tuple[int, str | None, str]]:
+        """按房号映射表给出房源资料，解析规则与生产相同。"""
+        return [(property_id, room, "") for room, property_id in self.rooms.items()]
 
 
 class _Tourism:

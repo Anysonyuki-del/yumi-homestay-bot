@@ -301,21 +301,23 @@ class _Entry:
 class _MemoryKnowledge:
     """只读内存知识仓储。"""
 
-    def __init__(self, entries: list[_Entry]) -> None:
-        """保存条目。"""
+    def __init__(
+        self, entries: list[_Entry], profiles: list[dict[str, Any]] | None = None
+    ) -> None:
+        """保存条目与夹具房源身份表（形态同生产 property_profiles）。"""
         self._entries = entries
+        self._profiles = profiles or []
 
     async def list_active(self) -> list[Any]:
         """返回全部虚构条目。"""
         return list(self._entries)
 
-    async def find_property_by_room(self, room: str) -> int | None:
-        """资料里房源编号就是房号：有该房专属条目时返回编号，与线上按房号查房源同一入口。"""
-        if not room.isdigit():
-            return None
-        return next(
-            (int(room) for entry in self._entries if entry.property_id == int(room)), None
-        )
+    async def list_room_profiles(self) -> list[tuple[int, str | None, str]]:
+        """夹具房源身份表：与生产同一入口、同一解析规则，房号匹配不在替身里另写。"""
+        return [
+            (int(item["id"]), item.get("room_number"), str(item.get("title") or ""))
+            for item in self._profiles
+        ]
 
 
 class FakeHostexClient:
@@ -606,7 +608,9 @@ class _Runner:
                 model=self._snapshot.deepseek_model,
                 status_setter=lambda _status: None,
             ),
-            knowledge=KnowledgeService(_MemoryKnowledge(self._entries)),
+            knowledge=KnowledgeService(
+                _MemoryKnowledge(self._entries, self._fixture.get("property_profiles"))
+            ),
             model=self._snapshot.deepseek_model,
             safety_hmac_key=b"reply-regression",
             tool_executor=tools,

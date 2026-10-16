@@ -221,15 +221,22 @@ def _evidence(kind: str, property_id: int, start: date, end: date) -> ReplyEvide
     )
 
 
-def _target(clause: str, **overrides) -> ClauseTarget:
-    """按一个目标为 401、10 月 10–11 日的计划项求小句目标。"""
+def _target(clause: str, item_text: str = "401", **overrides) -> ClauseTarget:
+    """按一个目标为 401、10 月 10–11 日的计划项求小句目标；房号按身份表 401/402 解析。"""
+    from homestay_bot.services.item_coverage import (
+        RoomIdentity,
+        resolve_rooms,
+        room_mentions,
+    )
+
+    identities = [RoomIdentity(1401, None, "401"), RoomIdentity(1402, None, "402")]
     arguments = {
-        "item_rooms": ("401",),
+        "clause_room": resolve_rooms(room_mentions(clause), identities, None),
+        "item_room": resolve_rooms(room_mentions(item_text), identities, None),
         "item_relative_dates": False,
         "item_date_names": 1,
         "item_check_in": date(2026, 10, 10),
         "item_check_out": date(2026, 10, 11),
-        "room_properties": {"401": 1401, "402": 1402},
         "item_property": 1401,
         "year": 2026,
     }
@@ -241,7 +248,7 @@ def test_other_named_room_or_date_is_not_covered_by_the_item_target() -> None:
     """小句点名的另一间房、另一个入住日不能继承计划项目标（Codex 审查 V4-R1）。"""
     rows = [_evidence("availability", 1401, date(2026, 10, 10), date(2026, 10, 11))]
     assert evidence_covers(rows, "availability", _target("10月10日401有房吗"))
-    two_rooms = _target("402有房吗", item_rooms=("401", "402"))
+    two_rooms = _target("402有房吗", item_text="401和402")
     assert not evidence_covers(rows, "availability", two_rooms)
     assert not evidence_covers(rows, "availability", _target("10月11日401有房吗"))
     pair = [_evidence("availability", 1401, date(2026, 10, 10), date(2026, 10, 12))]

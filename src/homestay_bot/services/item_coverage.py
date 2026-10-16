@@ -29,7 +29,7 @@ CLAUSE_SPLIT = re.compile(r"[，,。；;！？!?\n]|另外|以及|同时")
 EXPLICIT_STAY_DATE_PATTERN = re.compile(
     r"今天|今晚|今日|明天|明晚|明日|后天|"
     r"本周[一二三四五六日天]|这周[一二三四五六日天]|周末|"
-    r"\d{1,2}月\d{1,2}[日号]|\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2}|"
+    r"\d{1,2}月\d{1,2}[日号]|(?<!\d)\d{1,2}/\d{1,2}(?!\d)|\d{4}-\d{2}-\d{2}|"
     r"\b(?:today|tonight|tomorrow)\b",
     re.IGNORECASE,
 )
@@ -98,7 +98,8 @@ _ROOM_NUMBER = re.compile(
 _ABSOLUTE_DATE = re.compile(
     r"(?:(?P<year>\d{4})-(?P<ym>\d{2})-(?P<yd>\d{2}))"
     r"|(?:(?P<month>\d{1,2})月(?P<day>\d{1,2})[日号])"
-    r"|(?:(?P<sm>\d{1,2})/(?P<sd>\d{1,2}))"
+    # 斜杠日期必须有完整数字边界：「302/401」里的「02/40」不是日期（实施复审 IRI-F5）。
+    r"|(?:(?<!\d)(?P<sm>\d{1,2})/(?P<sd>\d{1,2})(?!\d))"
 )
 # 区间尾部可以简写为「5日」「5号」，按区间开头的月份补全。
 _RANGE_TAIL = re.compile(r"\s*(?:到|至|~|～|-|—)\s*(?P<day>\d{1,2})[日号]")
@@ -123,6 +124,28 @@ _WEEKEND_OFFSETS = {"": 0, "这": 0, "这个": 0, "本": 0, "下": 7, "下个": 
 _WEEKEND_FOREIGN_PREFIX = re.compile(
     r"(?:[上下前后这那本该]|[一二三四五六七八九十两几\d]|个|周|星期|礼拜|月|年|号|日|天|底|初|旬|节|假期?)"
     r"的?\s*$"
+)
+# 房号写法：可选楼栋（「2栋」「2号楼」「2-」）+ 3–4 位号码 + 可选「号房 / 房间 / 室」后缀。
+# 号码的单位排除与 `_ROOM_NUMBER` 一致；楼栋只认 1–2 位，避免把电话号段当楼栋。
+_ROOM_MENTION = re.compile(
+    r"(?<![\dA-Za-z])"
+    r"(?:(?P<building>\d{1,2})\s*(?:栋|幢|座|号楼)\s*|(?P<dash>\d{1,2})\s*[-－]\s*)?"
+    r"(?P<number>\d{3,4})"
+    r"(?!\d|[A-Za-z]|\s*(?:元|块|年|月|日|晚|人|点|分|%|米|度|伏|瓦|毫|千|万|平|岁|斤|小时|秒))"
+    r"(?:\s*(?:号房间?|房间?|室))?"
+)
+# 剩余里只有这些订房意图词与连接词时视为没有剩余（见 `clause_residue`）。
+_BOOKING_NOISE = re.compile(r"(?:预订|预定|订房|订|一间|间|和|与|跟|及|或者?)+")
+# 「302和9999」这类并列房号整段删除，连接词不留作剩余问题。
+_ROOM_ANY = re.sub(r"\(\?P<\w+>", "(?:", _ROOM_MENTION.pattern)
+_ROOM_GROUP = re.compile(
+    rf"{_ROOM_ANY}(?:\s*(?:和|与|跟|及|或者?|还有|、|/|,|，)\s*{_ROOM_ANY})*"
+)
+# 订单号、尾号、手机、密码等标识语境后的数字不是房号（RI-R4）；只排除明确写法，
+# 裸号仍按房号处理，恰好撞上真实房号时会选中该房源，是已知上限。
+_IDENTIFIER_CONTEXT = re.compile(
+    r"(?:订单号?|订单尾号|尾号|单号|手机号?|电话|号码|密码|验证码|编号|身份证号?|卡号)"
+    r"\s*(?:是|为|:|：)?\s*$"
 )
 # 日历相对词和住宿序数日的锚点不同；这里只解析不依赖入住上下文的确定单日。
 _CALENDAR_DAY_OFFSETS = {
@@ -241,9 +264,149 @@ def clause_dates(text: str, year: int) -> StayDates:
 
 
 def clause_rooms(text: str) -> tuple[str, ...]:
-    """排除日期区间后识别真实房号，避免 ISO 年份参与范围核对。"""
-    text = _RANGE_TAIL.sub(" ", _ABSOLUTE_DATE.sub(" ", text))
-    return tuple(dict.fromkeys(_ROOM_NUMBER.findall(text)))
+    """原文点名的房号号码（不含楼栋），排除日期与订单号等标识；供只需号码的调用方使用。"""
+    return tuple(dict.fromkeys(mention.number for mention in room_mentions(text)))
+
+
+@dataclass(frozen=True)
+class RoomMention:
+    """原文里的一处房号写法：楼栋（可空）、号码与原文区间（房号身份 Spec §2.1）。"""
+
+    building: str | None
+    number: str
+    start: int
+    end: int
+    text: str
+
+
+def _mask_dates(text: str) -> str:
+    """把日期与区间尾巴替换成等长空白：不让日期数字当房号，也不改变其余字符的位置。"""
+    for pattern in (_ABSOLUTE_DATE, _RANGE_TAIL):
+        text = pattern.sub(lambda match: " " * len(match[0]), text)
+    return text
+
+
+def room_mentions(text: str) -> tuple[RoomMention, ...]:
+    """识别「2303」「2303房间」「2栋2303」「2号楼2303」「2-2303」等房号写法。
+
+    号码排除规则与 `_ROOM_NUMBER` 相同（金额、人数、晚数等单位数字不算）；紧跟在订单号、
+    尾号、手机、密码等标识语境后的数字不算房号（RI-R4）。区间覆盖楼栋与「房间」后缀，
+    供剩余语义整段删除。
+    """
+    masked = _mask_dates(text)
+    mentions: list[RoomMention] = []
+    for match in _ROOM_MENTION.finditer(masked):
+        if _IDENTIFIER_CONTEXT.search(masked, 0, match.start()):
+            continue
+        mentions.append(RoomMention(
+            match["building"] or match["dash"], match["number"], match.start(), match.end(),
+            text[match.start():match.end()].strip(),
+        ))
+    return tuple(mentions)
+
+
+@dataclass(frozen=True)
+class RoomIdentity:
+    """一个启用房源的房号身份：楼栋（可空）与号码。"""
+
+    property_id: int
+    building: str | None
+    number: str
+
+
+def room_identity(property_id: int, room_number: str | None, title: str) -> RoomIdentity | None:
+    """房源身份以管理员维护的 room_number 为准；为空时取标题里唯一的房号写法兜底（D-R1）。
+
+    标题兜底依赖百居易命名：标题改成另一个号码时身份随之改变，可能错配，这是已知上限；
+    标题里没有或有多个房号写法时没有身份，不猜。
+    """
+    for source in (room_number or "", "" if (room_number or "").strip() else title):
+        found = room_mentions(source)
+        if len(found) == 1:
+            return RoomIdentity(property_id, found[0].building, found[0].number)
+    return None
+
+
+RoomStatus = Literal["none", "resolved", "multiple", "ambiguous", "unknown", "unavailable"]
+
+
+@dataclass(frozen=True)
+class RoomResolution:
+    """一段原文的房号解析结果（房号身份 Spec §2.2、实施审查 IRI-R2/R4）。
+
+    状态与写法顺序无关：
+    - none：没有点名房号；resolved：唯一房源；multiple：多个房源且都已确定；
+    - ambiguous：至少一处同号多房源无法消歧；unknown：至少一处对不上任何房源；
+    - unavailable：本轮房源资料读取失败，无法核对（不是「房间不存在」）。
+    `property_ids` 是全部已确定房源加各歧义候选（按出现顺序去重），`unresolved` 是全部
+    对不上或无法核对的原文写法；工具行按前者筛选，对后者单独说明。
+    """
+
+    status: RoomStatus
+    property_ids: tuple[int, ...] = ()
+    unresolved: tuple[str, ...] = ()
+
+    @property
+    def property_id(self) -> int | None:
+        """唯一确定的房源；其他状态为空。"""
+        return self.property_ids[0] if self.status == "resolved" else None
+
+    @property
+    def certain(self) -> bool:
+        """没有点名房号，或点名的房号全部确定（静态取证只在此时才能作答）。"""
+        return self.status in {"none", "resolved", "multiple"}
+
+
+def _match_mention(
+    mention: RoomMention, identities: Sequence[RoomIdentity], preferred: int | None
+) -> tuple[int, ...]:
+    """号码相等的候选；客人写了楼栋时身份楼栋必须相同（未知楼栋不能证明相同，IRI-R1）。
+
+    本轮房源只在满足全部显式约束的候选里消歧。
+    """
+    candidates = tuple(dict.fromkeys(
+        identity.property_id
+        for identity in identities
+        if identity.number == mention.number
+        and (mention.building is None or identity.building == mention.building)
+    ))
+    if len(candidates) > 1 and preferred is not None and preferred in candidates:
+        return (preferred,)
+    return candidates
+
+
+def resolve_rooms(
+    mentions: Sequence[RoomMention],
+    identities: Sequence[RoomIdentity] | None,
+    preferred: int | None,
+) -> RoomResolution:
+    """把房号写法解析为房源；保留全部已确定房源、歧义候选与无法确定的写法。
+
+    `identities` 为空值表示本轮房源资料读取失败：点名的房号一律无法核对，不当作不存在。
+    """
+    if not mentions:
+        return RoomResolution("none")
+    if identities is None:
+        return RoomResolution("unavailable", (), tuple(m.text for m in mentions))
+    resolved: list[int] = []
+    candidates_seen: list[int] = []
+    unknown: list[str] = []
+    ambiguous = False
+    for mention in mentions:
+        candidates = _match_mention(mention, identities, preferred)
+        if len(candidates) == 1:
+            resolved.append(candidates[0])
+        elif candidates:
+            ambiguous = True
+            candidates_seen.extend(candidates)
+        else:
+            unknown.append(mention.text)
+    ids = tuple(dict.fromkeys([*resolved, *candidates_seen]))
+    if ambiguous:
+        return RoomResolution("ambiguous", ids, tuple(unknown))
+    if unknown:
+        return RoomResolution("unknown", ids, tuple(unknown))
+    return RoomResolution("resolved" if len(ids) == 1 else "multiple", ids)
 
 
 def static_clause_dates(
@@ -356,7 +519,9 @@ def clause_residue(text: str, *, price: bool, availability: bool, catalog: bool)
         value = value[: match.start()] + " " + value[stop:]
     value = _RELATIVE_DATE.sub(" ", value)
     value = _NIGHTS_PATTERN.sub(" ", value)
-    value = _ROOM_NUMBER.sub(" ", value)
+    # 房号写法整段删除（含楼栋与「房间」后缀），不能只删数字留下「2栋」被当成新问题（RI-R2）；
+    # 标识语境里的号码同样删掉，它们不是要回答的内容。
+    value = _ROOM_GROUP.sub(" ", value)
     anchors: list[str] = []
     if availability:
         anchors.extend(AVAILABILITY_ANCHORS)
@@ -369,7 +534,11 @@ def clause_residue(text: str, *, price: bool, availability: bool, catalog: bool)
     value = _strip(value, _ROOM_NOUNS)
     value = _FORM_WORDS_EN.sub(" ", value)
     value = _strip(value, _FORM_WORDS_ZH)
-    return _NOISE.sub("", value)
+    value = _NOISE.sub("", value)
+    # 只剩订房意图词与连接词（「我想订102」剩「订」、「今晚和明晚」剩「和」）时没有要回答的
+    # 资料问题：不能当成静态问题取证或开放资料缺口，否则模型会先介绍房间而不去查房态
+    # （1.70.2 候选 all 门禁 AV-102）。「怎么预订」「预订要交定金吗」仍有实际内容，不受影响。
+    return "" if _BOOKING_NOISE.fullmatch(value) else value
 
 
 def clause_needs(text: str) -> ClauseNeeds:
@@ -398,30 +567,35 @@ class ClauseTarget:
 def clause_target(
     clause: str,
     *,
-    item_rooms: Sequence[str],
+    clause_room: RoomResolution,
+    item_room: RoomResolution,
     item_relative_dates: bool,
     item_date_names: int,
     item_check_in: date | None,
     item_check_out: date | None,
-    room_properties: dict[str, int | None],
     item_property: int | None,
     year: int,
 ) -> ClauseTarget:
     """按小句自己点名的房号与日期确定目标，没点名时才继承计划项已核验的目标（V4-R1）。
 
-    继承条件：该项原文只有一个房号（或没有），日期写法只有一种，且没有无法比较的相对日期
-    与之并存；否则无法证明继承关系，记为未绑定。映射不到的房号没有证据，同样不算覆盖。
+    房号读本轮身份快照（房号身份 Spec §2.2）：小句点名的房间按解析出的房源核对，歧义时
+    各候选都要有证据；对不上任何房源时没有证据可覆盖。小句没点名房号时，本项点名多个
+    房间就无法证明继承关系，记为未绑定；日期写法只有一种、没有无法比较的相对日期并存时
+    才继承本项日期。
     """
-    rooms = clause_rooms(clause)
     dates = clause_dates(clause, year)
     if dates.unbindable:
         return ClauseTarget((), None, None, True)
-    if rooms:
-        properties = tuple(room_properties.get(room) for room in rooms)
-    elif len(set(item_rooms)) > 1:
+    properties: tuple[int | None, ...]
+    if clause_room.status != "none":
+        # 对不上或无法核对的房号没有证据可覆盖，用空房源占位使该类事实记为未覆盖。
+        properties = clause_room.property_ids + ((None,) if clause_room.unresolved else ())
+    elif item_room.status == "multiple":
         return ClauseTarget((), None, None, True)
     else:
-        properties = (item_property,) if item_property is not None or item_rooms else ()
+        properties = (
+            (item_property,) if item_property is not None or item_room.status != "none" else ()
+        )
     if dates.check_in is not None or dates.check_out is not None:
         return ClauseTarget(properties, dates.check_in, dates.check_out, False)
     if dates.relative:

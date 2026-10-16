@@ -438,8 +438,13 @@ def _fixture() -> dict:
     )
 
 
-async def _weekend_fixture_reply(question: str, answer_ids: list[int]):
-    """用门禁资料、真实检索与房号映射跑完整离线回复链；只有主模型是合成响应。"""
+async def _weekend_fixture_reply(
+    question: str, answer_ids: list[int], *, planned_room: bool = True
+):
+    """用门禁资料、真实检索与房号映射跑完整离线回复链；只有主模型是合成响应。
+
+    `planned_room=False` 时合成规划强制漏填房号，证明原文房号的补齐分支（房号身份 Spec）。
+    """
     from homestay_bot.services.knowledge_service import KnowledgeService
     from tests.plan_helpers import plan_for
     from tests.unit.test_reply_fix2_items import _assistant, _decision, _respond, _Tools
@@ -452,10 +457,10 @@ async def _weekend_fixture_reply(question: str, answer_ids: list[int]):
     tools = _Tools({})
     assistant, _ = _assistant(
         [_decision(evidence_selection=[{"item_id": 1, "answer_ids": answer_ids}])],
-        KnowledgeService(rr._MemoryKnowledge(entries)), tools,
+        KnowledgeService(rr._MemoryKnowledge(entries, fixture["property_profiles"])), tools,
     )
     assistant._local_date_provider = lambda: date.fromisoformat(fixture["today"])
-    room = "9999" if question.startswith("9999") else None
+    room = "9999" if question.startswith("9999") and planned_room else None
     plan = plan_for(question, ("static_fact", question, {"target_room": room} if room else {}))
     return await _respond(assistant, question, plan), tools
 
@@ -513,3 +518,36 @@ async def test_weekend_fixture_rejects_foreign_qualifier(question):
     assert "8:30" not in decision.reply_text and "9:00" not in decision.reply_text
     assert tools.calls == []
     assert all(gap.reason != "knowledge_missing" for gap in decision.gap_units)
+
+
+@pytest.mark.asyncio
+async def test_weekend_split_scenario_survives_planner_omitting_room():
+    """K-周末分日门禁失败的起因：规划漏填 9999 时，原文房号照常生效，两天都按资料作答。"""
+    decision, _ = await _weekend_fixture_reply(
+        "9999房间这周末早餐几点开始？", [9901], planned_room=False
+    )
+    scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-周末分日")
+    assert rr.judge(scenario, {"route": "knowledge", "final": decision.reply_text})["ok"]
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+async def test_building_room_scenario_preflight():
+    """K-带栋房号离线预检：「2栋1803」靠标题兜底定位 9802，不混入 1栋（9801）资料。"""
+    decision, _ = await _weekend_fixture_reply("2栋1803房间有浴缸吗？", [9904])
+    sources = {e.source_id for part in decision.reply_parts for e in part.evidence}
+    assert sources == {"9904"}
+    scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-带栋房号")
+    assert rr.judge(scenario, {"route": "knowledge", "final": decision.reply_text})["ok"]
+
+
+@pytest.mark.asyncio
+async def test_same_number_scenario_preflight_is_conservative():
+    """K-同号异栋离线预检：没有本轮房源时不任选一栋作答，缺口不可转交。"""
+    decision, _ = await _weekend_fixture_reply("1803房间有浴缸吗？", [9903, 9904])
+    sources = {e.source_id for part in decision.reply_parts for e in part.evidence}
+    assert not sources & {"9903", "9904"}
+    assert [gap.reason for gap in decision.gap_units] == ["scope_unbound"]
+    scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-同号异栋")
+    record = {"route": "unconfirmed", "final": decision.reply_text}
+    assert rr.judge(scenario, record)["ok"]

@@ -1132,6 +1132,40 @@
    "property_id": 9999,
    "valid_from": "2026-09-27",
    "valid_until": "2026-09-27"
+  },
+  {
+   "id": 9903,
+   "category": "卫浴",
+   "question_zh": "房间有浴缸吗？",
+   "answer_zh": "1栋1803只有淋浴，没有浴缸。",
+   "question_en": "Does the room have a bathtub?",
+   "answer_en": "See Chinese answer.",
+   "keywords": [
+    "浴缸",
+    "泡澡",
+    "bathtub"
+   ],
+   "scope": "property",
+   "property_id": 9801,
+   "valid_from": null,
+   "valid_until": null
+  },
+  {
+   "id": 9904,
+   "category": "卫浴",
+   "question_zh": "房间有浴缸吗？",
+   "answer_zh": "2栋1803有独立浴缸。",
+   "question_en": "Does the room have a bathtub?",
+   "answer_en": "See Chinese answer.",
+   "keywords": [
+    "浴缸",
+    "泡澡",
+    "bathtub"
+   ],
+   "scope": "property",
+   "property_id": 9802,
+   "valid_from": null,
+   "valid_until": null
   }
  ],
  "knowledge_notes": {
@@ -5793,7 +5827,106 @@
     ],
     "knowledge_gap": false
    }
+  },
+  {
+   "id": "K-带栋房号",
+   "category": "knowledge_direct",
+   "messages": [
+    {
+     "role": "user",
+     "content": "2栋1803房间有浴缸吗？"
+    }
+   ],
+   "expect": {
+    "route": "knowledge",
+    "must_include": [
+     "独立浴缸"
+    ],
+    "must_not_include": [
+     "只有淋浴"
+    ],
+    "handoff": false,
+    "notes": "房号身份 Spec §2.4：带楼栋写法解析到 9802（标题兜底）；同号的 1栋1803（9801）资料不能混入。",
+    "source_ids": [
+     9904
+    ],
+    "knowledge_gap": false
+   }
+  },
+  {
+   "id": "K-同号异栋",
+   "category": "knowledge_direct",
+   "messages": [
+    {
+     "role": "user",
+     "content": "1803房间有浴缸吗？"
+    }
+   ],
+   "expect": {
+    "route": "knowledge",
+    "knowledge_gap": true,
+    "must_not_include": [
+     "独立浴缸",
+     "只有淋浴",
+     "已提交管家核实"
+    ],
+    "handoff": false,
+    "notes": "房号身份 Spec §2.3 D-R2：同号两栋且没有本轮房源时无法确定是哪间，保守回未确认、不转交，不能任选一栋作答。"
+   }
   }
  ],
- "_expectation_changes": "2026-09-26（1.40.0）：PI-折扣 禁用片段由「五折」改为只拦答应折扣的说法；PI-内部、PI-提示词 期望路由改为允许普通模型路径作答，禁止泄露内部信息的禁令不变。见基线文件 expectation_changes。"
+ "_expectation_changes": "2026-09-26（1.40.0）：PI-折扣 禁用片段由「五折」改为只拦答应折扣的说法；PI-内部、PI-提示词 期望路由改为允许普通模型路径作答，禁止泄露内部信息的禁令不变。见基线文件 expectation_changes。",
+ "property_profiles": [
+  {
+   "id": 101,
+   "room_number": null,
+   "title": "芸栖·101 庭院大床房"
+  },
+  {
+   "id": 102,
+   "room_number": null,
+   "title": "芸栖·102 庭院双床房"
+  },
+  {
+   "id": 201,
+   "room_number": null,
+   "title": "芸栖·201 城景大床房"
+  },
+  {
+   "id": 202,
+   "room_number": null,
+   "title": "芸栖·202 城景双床房"
+  },
+  {
+   "id": 301,
+   "room_number": null,
+   "title": "芸栖·301 浴缸大床房"
+  },
+  {
+   "id": 302,
+   "room_number": null,
+   "title": "芸栖·302 家庭套房"
+  },
+  {
+   "id": 401,
+   "room_number": null,
+   "title": "芸栖·401 顶层阁楼"
+  },
+  {
+   "id": 9999,
+   "room_number": "9999",
+   "title": "虚构测试房9999"
+  },
+  {
+   "id": 9801,
+   "room_number": "1栋1803",
+   "title": "虚构测试楼·1栋1803"
+  },
+  {
+   "id": 9802,
+   "room_number": null,
+   "title": "虚构测试楼·2栋1803"
+  }
+ ],
+ "property_profiles_notes": "与生产 property_profiles 同形态：101–401 只有百居易标题（room_number 为空，走标题兜底）；9999 供 K-周末分日；9801/9802 同号异栋，9801 用带楼栋的 room_number，9802 靠标题。房号匹配统一走 item_coverage.resolve_rooms（房号身份 Spec §2.4）。"
 }

@@ -65,9 +65,9 @@ class _Knowledge:
             if entry.scope != "property" or entry.property_id == property_id
         ]
 
-    async def find_property_by_room(self, room: str) -> int | None:
-        """按房号映射房源，映射不到返回空。"""
-        return self.rooms.get(room)
+    async def room_profiles(self) -> list[tuple[int, str | None, str]]:
+        """按房号映射表给出房源资料（room_number 即映射键），解析规则与生产相同。"""
+        return [(property_id, room, "") for room, property_id in self.rooms.items()]
 
 
 def _decision(**fields: Any) -> str:

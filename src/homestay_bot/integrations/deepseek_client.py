@@ -56,16 +56,20 @@ from homestay_bot.services.item_coverage import (
     ClauseNeeds,
     GapUnit,
     ReferralCandidate,
+    RoomIdentity,
+    RoomResolution,
     asks_property_catalog,
     clause_dates,
     clause_needs,
-    clause_rooms,
     clause_target,
     evidence_covers,
     intersecting_clauses,
     missing_nights,
     relative_calendar_day,
     relative_calendar_weekend,
+    resolve_rooms,
+    room_identity,
+    room_mentions,
     split_clauses,
     static_clause_dates,
     unit_id_for,
@@ -123,7 +127,8 @@ _EXPLICIT_STAY_DATE_PATTERN = EXPLICIT_STAY_DATE_PATTERN
 _WEEKEND_PATTERN = re.compile(r"周末|\bweekend\b", re.IGNORECASE)
 _NEXT_WEEKEND_PATTERN = re.compile(r"下(?:个)?周末|\bnext\s+weekend\b", re.IGNORECASE)
 _CONCRETE_DATE_PATTERN = re.compile(
-    r"\d{1,2}月\d{1,2}[日号]|\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2}|周[一二三四五六日天]|"
+    # 斜杠日期要完整数字边界，「302/401」不是具体日期（IRI-F5）。
+    r"\d{1,2}月\d{1,2}[日号]|(?<!\d)\d{1,2}/\d{1,2}(?!\d)|\d{4}-\d{2}-\d{2}|周[一二三四五六日天]|"
     r"星期[一二三四五六日天]|今天|今晚|明天|明晚|后天|\b(?:today|tonight|tomorrow)\b",
     re.IGNORECASE,
 )
@@ -508,13 +513,20 @@ class _ItemLayout:
     clauses: tuple[Clause, ...]
     needs: tuple[ClauseNeeds, ...]
     property_id: int | None
-    room_properties: dict[str, int | None]
-    rooms: tuple[str, ...]
+    item_room: RoomResolution
+    clause_rooms: tuple[RoomResolution, ...]
+    delegated: tuple[bool, ...]
+    coverage_texts: tuple[str, ...]
+    orphans: tuple[bool, ...]
     date_names: int
     relative_dates: bool
     item_dates: tuple[date | None, date | None]
     static_dates: tuple[tuple[date | None, date | None] | None, ...]
     split_static: bool
+
+
+# 没有点名房号：工具行不按房间筛选。
+_NO_ROOM = RoomResolution("none")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1502,46 +1514,58 @@ class DeepSeekGuestAssistant:
         property_id: int | None,
         dates: tuple[date | None, date | None],
         today: date,
+        identities: Sequence[RoomIdentity] | None,
     ) -> dict[int, _ItemLayout]:
         """为本店事实项算出小句布局、所需事实与目标房源（修复 Spec §2.1(2)、§2.6(1)）。
 
         取证前固定项日期：检索、调用前后与跨项复用共用，模型等待后不重新解释日期。只切一次
-        句：调用前后、逐项取证、工具覆盖与缺口单元都用同一组小句区间与编号。房号
-        映射一次查完；映射不到的房号记为空，不拿已确认住宿的房间代替。
+        句：调用前后、逐项取证、工具覆盖与缺口单元都用同一组小句区间与编号。房号按本轮
+        身份快照解析一次，按房源编号比较；无法确定的房号不拿已确认住宿的房间代替。
         """
         clauses = split_clauses(question_text)
-        rooms_cache: dict[str, int | None] = {}
         layout: dict[int, _ItemLayout] = {}
         for item in plan_items:
             if item.kind not in _PROPERTY_FACT_KINDS:
                 continue
             spans = tuple(intersecting_clauses(clauses, item.start, len(item.quote)))
-            rooms = clause_rooms(item.quote)
-            item_property = await self._item_property(item, property_id, rooms_cache)
-            for room in rooms:
-                if room not in rooms_cache:
-                    finder = getattr(self._knowledge, "find_property_by_room", None)
-                    rooms_cache[room] = await finder(room) if finder else None
+            item_room = self._item_room(item, question_text, identities, property_id)
+            item_property = (
+                property_id if item_room.status == "none" else item_room.property_id
+            )
+            needs = tuple(clause_needs(clause.text) for clause in spans)
+            clause_room, delegated, coverage_texts, orphans = self._clause_rooms(
+                question_text, spans, needs, identities, property_id, today, item.check_in_date
+            )
             date_names = {
                 match.group(0) for match in EXPLICIT_STAY_DATE_PATTERN.finditer(item.quote)
             }
             item_dates = self._item_dates(item, dates, today)
             # 模型选项、取证与最终缺口共用同一布局，拆句后不再提供旧的整项编号。
+            # 小句点名的房间必须就是本项检索的房源；本项房号无法确定时，没写房号的小句也不能
+            # 借会话房源作答（房号身份 Spec §2.2）。
             static_dates = tuple(
-                None if any(room != item.target_room for room in clause_rooms(clause.text))
-                else static_clause_dates(
+                static_clause_dates(
                     clause.text, item_dates,
                     (item_dates[0] or today).year, today=today,
                 )
-                for clause in spans
+                if item_room.status in {"none", "resolved"}
+                and (
+                    room.status == "none"
+                    or (room.status == "resolved" and room.property_id == item_property)
+                )
+                else None
+                for clause, room in zip(spans, clause_room, strict=True)
             )
             layout[item.id] = _ItemLayout(
                 item=item,
                 clauses=spans,
-                needs=tuple(clause_needs(clause.text) for clause in spans),
+                needs=needs,
                 property_id=item_property,
-                room_properties=rooms_cache,
-                rooms=rooms,
+                item_room=item_room,
+                clause_rooms=clause_room,
+                delegated=delegated,
+                coverage_texts=coverage_texts,
+                orphans=orphans,
                 date_names=len(date_names),
                 relative_dates=clause_dates(item.quote, today.year).relative,
                 item_dates=item_dates,
@@ -1590,10 +1614,12 @@ class DeepSeekGuestAssistant:
                         unit_id_for(item.id, clause.start, clause.end),
                         needs.residue if needs.tool_facts else clause.text,
                     )
-                    for clause, needs, bound in zip(
-                        entry.clauses, entry.needs, entry.static_dates, strict=True
+                    for clause, needs, bound, handed, orphan in zip(
+                        entry.clauses, entry.needs, entry.static_dates, entry.delegated,
+                        entry.orphans, strict=True,
                     )
-                    if bound is not None and (not needs.tool_facts or needs.residue)
+                    if bound is not None and not handed
+                    and DeepSeekGuestAssistant._asks_static(item, needs, orphan)
                 ]
             for unit_id, text in pieces:
                 if contains_sensitive_text(text):
@@ -1690,9 +1716,13 @@ class DeepSeekGuestAssistant:
                     and shared[source_id][0] != item.id
                 )
             item_dates = entry.item_dates
-            unbound = [clause for clause, bound in zip(
-                entry.clauses, entry.static_dates, strict=True
-            ) if bound is None]
+            # 没有剩余内容、只靠工具回答的小句由工具覆盖判定负责，不再补一段静态未确认（E2 与
+            # 实施审查同类问题）。逗号切开的纯房号片段只有在 `_clause_rooms` 已把它的房号并入
+            # 相邻工具问法的覆盖目标时才豁免（IRI-C1/F6）；带剩余内容的小句照常保留。
+            unbound = [clause for clause, needs, bound, handed, orphan in zip(
+                entry.clauses, entry.needs, entry.static_dates, entry.delegated, entry.orphans,
+                strict=True,
+            ) if bound is None and not handed and self._asks_static(item, needs, orphan)]
             for clause in unbound:
                 unbound_id = unit_id_for(item.id, clause.start, clause.end)
                 parts.append(ReplyPart(
@@ -1716,10 +1746,12 @@ class DeepSeekGuestAssistant:
                         property_id=entry.property_id,
                     ))
                 continue
-            for clause, needs, bound in zip(
-                entry.clauses, entry.needs, entry.static_dates, strict=True
+            for clause, needs, bound, handed, orphan in zip(
+                entry.clauses, entry.needs, entry.static_dates, entry.delegated, entry.orphans,
+                strict=True,
             ):
-                if bound is None or (needs.tool_facts and not needs.residue):
+                # 已交给工具覆盖的纯房号片段不再当成静态问题取证（IRI-C3）。
+                if bound is None or handed or not self._asks_static(item, needs, orphan):
                     continue
                 item_parts, reason = self._static_item_parts(
                     needs.residue if needs.tool_facts else clause.text,
@@ -1827,17 +1859,19 @@ class DeepSeekGuestAssistant:
             item = entry.item
             if item.kind not in {"stay_query", "catalog_query"}:
                 continue
-            for clause, needs in zip(entry.clauses, entry.needs, strict=True):
+            for clause, needs, room, shown in zip(
+                entry.clauses, entry.needs, entry.clause_rooms, entry.coverage_texts, strict=True
+            ):
                 if not needs.tool_facts:
                     continue
                 target = clause_target(
                     clause.text,
-                    item_rooms=entry.rooms,
+                    clause_room=room,
+                    item_room=entry.item_room,
                     item_relative_dates=entry.relative_dates,
                     item_date_names=entry.date_names,
                     item_check_in=item.check_in_date,
                     item_check_out=item.check_out_date,
-                    room_properties=entry.room_properties,
                     item_property=entry.property_id,
                     year=item.check_in_date.year if item.check_in_date else year,
                 )
@@ -1873,12 +1907,13 @@ class DeepSeekGuestAssistant:
                     parts.append(ReplyPart(
                         question=clause.text,
                         status="missing",
-                        text=self._uncovered_text(kind, clause.text, language),
+                        # 枚举组引用整组原文，不只写已查到的那一句（IRI-F6 展示）。
+                        text=self._uncovered_text(kind, shown, language),
                         gap_unit=tool_unit,
                     ))
                     gaps.append(GapUnit(
                         unit_id=tool_unit,
-                        item_id=item.id, text=clause.text,
+                        item_id=item.id, text=shown,
                         reason="scope_unbound" if target.unbound else "tool_uncovered",
                         property_id=entry.property_id,
                     ))
@@ -1997,16 +2032,140 @@ class DeepSeekGuestAssistant:
             )
         return merged, item_candidates
 
-    async def _item_property(
-        self, item: PlanItem, property_id: int | None, rooms: dict[str, int | None]
-    ) -> int | None:
-        """计划项的检索房源：点名房号时按房号映射（映射不到为无房源），否则用本轮房源。"""
-        if not item.target_room:
-            return property_id
-        if item.target_room not in rooms:
-            finder = getattr(self._knowledge, "find_property_by_room", None)
-            rooms[item.target_room] = await finder(item.target_room) if finder else None
-        return rooms[item.target_room]
+    @staticmethod
+    def _asks_static(item: PlanItem, needs: ClauseNeeds, orphan: bool = False) -> bool:
+        """这个小句有没有要用审核资料回答的内容。
+
+        问工具事实的小句只看删除锚点后的剩余；住宿、目录项里没有工具锚点的小句也只看剩余，
+        「我想订102」「今晚和明晚两晚」这类只有订房意图或日期的小句不是资料问题，不能开放
+        资料缺口或补未确认（1.70.2 候选 all 门禁 AV-102）。静态事实项的小句照常取证；没能交给
+        工具覆盖的房号片段（`orphan`）保留保守提示，不能静默丢掉（F7）。
+        """
+        if orphan:
+            return True
+        if needs.tool_facts or item.kind != "static_fact":
+            return bool(needs.residue)
+        return True
+
+    @staticmethod
+    def _clause_rooms(
+        question_text: str,
+        spans: Sequence[Clause],
+        needs: Sequence[ClauseNeeds],
+        identities: Sequence[RoomIdentity] | None,
+        property_id: int | None,
+        today: date,
+        item_check_in: date | None,
+    ) -> tuple[tuple[RoomResolution, ...], tuple[bool, ...], tuple[str, ...], tuple[bool, ...]]:
+        """逐小句解析房号，并把逗号切开的纯房号片段并入紧随其后的工具问法（IRI-C1/F6/F7）。
+
+        「明天302，401还有房吗」被切成「明天302」「401还有房吗」：前一段只有房号（及日期），
+        自己不问任何事。它与紧随其后的房态、房价问法构成一组：那句问法的覆盖目标包含整组
+        房号，未覆盖说明引用整组原文（指出缺的可能是任一间，不只说已查到的那间）；前一段
+        标记为已交给工具覆盖，静态取证、缺口开放与未确认都不再处理它。
+
+        只有能证明整组问的是同一天时才并入（F7）：片段没写日期；或片段的日期能按冻结的
+        本轮今日解析成单日，并与接收问法的入住日相同（接收问法没写日期时取本项入住日）。
+        「第二天」等无锚点相对日期、明确日期、日期不同、后面不是工具问法时都不并入，保留
+        原有的保守处理。返回（各小句房号, 是否已交接, 各小句覆盖说明用的原文, 是否为没能
+        交接、须保留保守提示的房号片段）。后面没有工具问法的房号片段（「我想订102，今晚和
+        明晚两晚」）两者都不是：它只是订房意图，不开放资料缺口。
+        """
+        rooms = [resolve_rooms(room_mentions(c.text), identities, property_id) for c in spans]
+        delegated = [False] * len(spans)
+        orphans = [False] * len(spans)
+        texts = [clause.text for clause in spans]
+
+        def own_day(text: str) -> tuple[bool, date | None]:
+            """（是否写了日期, 能确定的入住日）；写了却无法确定单日时第二项为空。"""
+            named = clause_dates(text, today.year)
+            if named.unbindable:
+                return True, None
+            if named.check_in or named.check_out:
+                return True, named.check_in
+            if named.relative:
+                return True, relative_calendar_day(text, today)
+            return False, None
+
+        pending: list[tuple[int, date | None]] = []
+        for index, (clause, need) in enumerate(zip(spans, needs, strict=True)):
+            dated, day = own_day(clause.text)
+            if not need.tool_facts and not need.residue and room_mentions(clause.text):
+                named = clause_dates(clause.text, today.year)
+                if dated and (day is None or named.check_in or named.check_out):
+                    # 带明确日期或无法解释日期的房号片段不并入，保留保守提示（F7）。
+                    orphans[index] = True
+                    pending = []
+                    continue
+                pending.append((index, day if dated else None))
+                continue
+            if need.tool_facts and pending:
+                target_day = day if dated else item_check_in
+                if not all(fragment_day is None or fragment_day == target_day
+                           for _, fragment_day in pending):
+                    # 有接收问法却证明不了同一天：这些片段既没交给工具，也不能静默丢掉。
+                    for position, _ in pending:
+                        orphans[position] = True
+                else:
+                    members = [position for position, _ in pending]
+                    mentions = [
+                        mention
+                        for position in [*members, index]
+                        for mention in room_mentions(spans[position].text)
+                    ]
+                    rooms[index] = resolve_rooms(mentions, identities, property_id)
+                    texts[index] = question_text[spans[members[0]].start:clause.end]
+                    for position in members:
+                        delegated[position] = True
+            pending = []
+        return tuple(rooms), tuple(delegated), tuple(texts), tuple(orphans)
+
+    @staticmethod
+    def _item_room(
+        item: PlanItem,
+        question_text: str,
+        identities: Sequence[RoomIdentity] | None,
+        property_id: int | None,
+    ) -> RoomResolution:
+        """计划项的房号：原文优先，规划字段只作提示（房号身份 Spec §2.2，D-R4）。
+
+        - 本项原文点名了房号，按原文解析；原文点名多个房间时，规划房号恰是其中之一才取它，
+          否则这些小句无法确定房源；
+        - 本项原文没有房号时，规划房号必须与全文某处房号写法的号码完全相等（不按子串），
+          才按那处写法（含楼栋）解析并继承；否则忽略，退回会话房源。
+        规划漏填房号时，原文唯一的房号照常生效，不再因字符串不等而拒答。
+        """
+        own = resolve_rooms(room_mentions(item.quote), identities, property_id)
+        hinted = (
+            resolve_rooms(
+                [m for m in room_mentions(question_text) if m.number == item.target_room],
+                identities,
+                property_id,
+            )
+            if item.target_room
+            else RoomResolution("none")
+        )
+        if own.status == "multiple" and hinted.property_id in own.property_ids:
+            return hinted
+        if own.status != "none":
+            return own
+        return hinted
+
+    async def _room_identities(self) -> list[RoomIdentity] | None:
+        """本轮房源身份快照：启用房源的房号身份，读取一次供全部消费方共用。
+
+        返回空值表示无法读取（知识服务不支持或读取失败），点名的房号按「无法核对」处理，
+        不当作房间不存在（IRI-R4）。
+        """
+        reader = getattr(self._knowledge, "room_profiles", None)
+        profiles = await reader() if reader else None
+        if profiles is None:
+            return None
+        return [
+            identity
+            for property_id, room_number, title in profiles
+            if (identity := room_identity(property_id, room_number, title)) is not None
+        ]
 
     def _compose_items(
         self,
@@ -2931,17 +3090,24 @@ class DeepSeekGuestAssistant:
         language: Language,
         source_id: str,
         question: str = "",
+        rooms: RoomResolution = _NO_ROOM,
     ) -> list[ReplyPart]:
-        """逐行绑定工具来源，只表达该行实际提供的房间、日期、状态或参考价。"""
+        """逐行绑定工具来源，只表达该行实际提供的房间、日期、状态或参考价。
+
+        客人点名房间时按本轮房号身份快照的房源编号筛选工具行（房号身份 Spec §2.2，RI-R1）：
+        同号不同栋只列所问那一栋；同号且无法消歧时列出各候选（每行带房名）。不再按标题
+        数字自行匹配，楼栋与房源身份由快照统一判断。最便宜仅比较明确可住且有逐夜价的房间。
+        """
         rows = result if isinstance(result, list) else []
-        # 工具可以返回完整目录，但客人指定房号时只输出该房；数字须来自房源标题，
-        # 不把数据库主键、报价或日期当作房号。最便宜仅比较明确可住且有逐夜价的房间。
         incomplete_price = False
-        selected = [row for row in rows if isinstance(row, dict) and any(
-            re.search(rf"(?<!\d){re.escape(number)}(?!\d|\s*元)", question)
-            for number in re.findall(r"(?<!\d)\d{3,4}(?!\d)", str(row.get("property_title", "")))
-        )]
-        if selected:
+        wanted = set(rooms.property_ids)
+        selected = [
+            row for row in rows
+            if isinstance(row, dict) and row.get("property_id", row.get("id")) in wanted
+        ]
+        if wanted:
+            # 有明确目标（已确定房源或歧义候选）时只表达这些房源；工具没返回它们就留空，由
+            # 覆盖判定报未查到，不把其他房间当成所问房间的结果，也不进全店最低价（IRI-R3）。
             rows = selected
         elif name == "search_reference_price" and re.search(
             r"最便宜|最低价|cheapest|lowest\s+price", question, re.I
@@ -3077,9 +3243,7 @@ class DeepSeekGuestAssistant:
             )
         parts: list[ReplyPart] = []
         if lines:
-            header = DeepSeekGuestAssistant._unmatched_room_header(
-                name, question, bool(selected), language
-            )
+            header = DeepSeekGuestAssistant._unmatched_room_header(name, rooms, language)
             if name == "list_properties":
                 # 房源目录只有房名，一行写完即可。
                 lines = [
@@ -3335,10 +3499,14 @@ class DeepSeekGuestAssistant:
             target_end_date - timedelta(days=1) if target_end_date else None,
         )
         knowledge_started = monotonic()
+        # 本轮房号身份快照只读一次：静态取证、工具行筛选、覆盖判定与各出口共用（房号身份 Spec）。
+        room_identities = await self._room_identities()
+        turn_rooms = resolve_rooms(room_mentions(question_text), room_identities, property_id)
         try:
             fact_layout = (
                 await self._fact_layout(
                     plan_items, question_text, property_id, selection_dates, local_today,
+                    room_identities,
                 ) if plan_ok is not None else {}
             )
             knowledge = self._scope_knowledge(
@@ -3927,14 +4095,14 @@ class DeepSeekGuestAssistant:
                             tool_parts.extend(
                                 self._tool_reply_parts(
                                     call.function.name, arguments, result, language, call.id,
-                                    question_text
+                                    question_text, turn_rooms,
                                 )
                             )
                         else:
                             # 两种住法各成一组，前面说明是哪种住法；模型也拿到两组结果。
                             tool_parts.extend(self._weekend_reply_parts(
                                 call.function.name, option_arguments, option_results,
-                                language, call.id, question_text,
+                                language, call.id, question_text, turn_rooms,
                             ))
                             result = [
                                 {
@@ -4085,6 +4253,7 @@ class DeepSeekGuestAssistant:
         language: Language,
         source_id: str,
         question: str,
+        rooms: RoomResolution = _NO_ROOM,
     ) -> list[ReplyPart]:
         """两种周末住法分别成组：先写「方案一：周五入住、周日退房」，再写该方案的结果。"""
         english = language is Language.EN
@@ -4109,6 +4278,7 @@ class DeepSeekGuestAssistant:
             label_en, label_zh = labels[index]
             option_parts = DeepSeekGuestAssistant._tool_reply_parts(
                 name, option, option_result, language, f"{source_id}:{index}", question,
+                rooms,
             )
             # 方案名紧贴在该方案结果上方，不单独空一行；只改排版，证据不变。
             first = option_parts[0]
@@ -4157,27 +4327,34 @@ class DeepSeekGuestAssistant:
         return lines
 
     @staticmethod
-    def _unmatched_room_header(
-        name: str, question: str, matched: bool, language: Language
-    ) -> str:
-        """客人问了具体房号、但没有房间标题含这个号时，先说明没找到再列全部房间。
+    def _unmatched_room_header(name: str, rooms: RoomResolution, language: Language) -> str:
+        """逐个说明对不上或无法核对的房号（D-R3、IRI-R2/R4）。
 
-        房号只认 3–4 位数字，排除金额、年份、日期、人数这类数字（「500元」「2026年」）。
+        对不上任何房源时说「没有找到」；本轮房源资料读取失败时只说暂时无法核对，不断言房间
+        不存在。没有任何已确定目标时才接「以下是全部房间」，否则只列所问房源。房间存在、
+        只是工具没返回它时不在这里说明，由覆盖判定另报未查到。
         """
-        if matched or name not in {"search_reference_price", "search_availability"}:
+        if not rooms.unresolved or name not in {"search_reference_price", "search_availability"}:
             return ""
-        # 不排除「号」：「201号房」是在问房间，日期里的「3号」只有一两位数字。
-        numbers = re.findall(
-            r"(?<!\d)\d{3,4}(?!\d|\s*(?:元|块|年|月|日|晚|人|点|分|%))", question
+        english = language is Language.EN
+        joined = (", " if english else "、").join(
+            room if english else f"「{room}」" for room in rooms.unresolved
         )
-        if not numbers:
-            return ""
-        room = numbers[0]
-        return (
-            f"No room numbered {room} was found. Here are all rooms:"
-            if language is Language.EN
-            else f"没有找到「{room}」这个房间，以下是全部房间："
-        )
+        if rooms.status == "unavailable":
+            lead = (
+                f"We couldn't verify room {joined} right now."
+                if english
+                else f"暂时无法核对{joined}对应的房间。"
+            )
+        else:
+            lead = (
+                f"No room numbered {joined} was found."
+                if english
+                else f"没有找到{joined}这个房间。"
+            )
+        if rooms.property_ids:
+            return lead
+        return f"{lead} Here are all rooms:" if english else f"{lead[:-1]}，以下是全部房间："
 
     @staticmethod
     def _safe_trace_date(value: object) -> date | None:
