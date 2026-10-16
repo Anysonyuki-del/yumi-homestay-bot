@@ -561,7 +561,7 @@ def test_fragment_with_explicit_date_is_not_merged():
         date(2026, 10, 7), date(2026, 10, 8),
     )
     assert delegated == (False, False)
-    assert orphans == (True, False), "没能并入的片段要保留保守提示"
+    assert orphans == ("target", None), "没并入的片段仍是工具目标，按证据核对"
 
 
 # ── 实施复审 IRI-F7、F6 展示、C3 回归 ─────────────────────────────────────────
@@ -654,3 +654,171 @@ def test_booking_request_offers_no_knowledge_gap(fields):
         [RoomIdentity(1102, None, "102")],
     ))
     assert Assistant._gap_unit_offers(layout) == []
+
+
+# ── 发布复审 R172-1 回归：未接管的房号片段不能静默丢掉 ─────────────────────────
+
+ROOMS_3 = {str(n): n for n in (302, 401, 501)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("tool,ask", [("search_availability", "还有房吗"),
+                                      ("search_reference_price", "多少钱")])
+async def test_trailing_room_follow_up_keeps_a_gap(tool, ask, fallback):
+    """「明天401还有房吗，302呢」工具只返回 401：302 必须有保守缺口（E172-1）。"""
+    assistant, _ = _assistant(
+        [_tool_message(tool, ARGS), "invalid" if fallback else _decision()],
+        _Knowledge([], ROOMS_3), _Tools({tool: _rows(tool, (401,))}),
+    )
+    text = f"明天401{ask}，302呢"
+    decision = await _respond(assistant, text, plan_for(text, ("stay_query", text, dict(ARGS))))
+    assert ("302呢", "tool_uncovered") in [(g.text, g.reason) for g in decision.gap_units]
+    assert all(g.reason != "knowledge_missing" for g in decision.gap_units)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("middle", ["第二天401", "10月9日401"])
+async def test_interrupted_enumeration_keeps_earlier_fragments(middle, fallback):
+    """「明天302，第二天401，501还有房吗」：302 与 401 都留下缺口，不强行同日合并（E172-2）。"""
+    assistant, _ = _assistant(
+        [_tool_message("search_availability", ARGS), "invalid" if fallback else _decision()],
+        _Knowledge([], ROOMS_3),
+        _Tools({"search_availability": _rows("search_availability", (501,))}),
+    )
+    text = f"明天302，{middle}，501还有房吗"
+    decision = await _respond(assistant, text, plan_for(text, ("stay_query", text, dict(ARGS))))
+    gaps = {g.text: g.reason for g in decision.gap_units}
+    assert gaps.get("明天302") == "tool_uncovered"
+    # 「第二天」无锚点、「10月9日」与入住日 10 月 8 日不同：都证明不了日期，记未绑定。
+    assert gaps.get(middle) == "scope_unbound"
+    assert "knowledge_missing" not in gaps.values()
+
+
+def test_booking_intent_fragment_is_still_not_an_orphan():
+    """「我想订102，今晚和明晚两晚」：不并入，作为工具目标交给覆盖判定，不开放资料缺口（AV-102）。"""
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant as Assistant
+    from homestay_bot.services.item_coverage import split_clauses
+
+    text = "我想订102，今晚和明晚两晚"
+    spans = split_clauses(text)
+    _, delegated, _, orphans = Assistant._clause_rooms(
+        text, spans, [clause_needs(c.text) for c in spans],
+        [RoomIdentity(1102, None, "102")], None, date(2026, 10, 7), None,
+    )
+    assert delegated == (False, False) and orphans == ("target", None)
+
+
+
+# ── R172-F1/F2 回归：房号片段是工具目标，不进静态取证 ───────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("verb", ["订", "住", "要"])
+async def test_room_request_synonyms_have_no_fake_gap(verb, fallback):
+    """「我想订/住/要302，今晚和明晚两晚」房态完整返回：无资料缺口、无多余未确认（R172-F1）。"""
+    stay = {"check_in_date": "2026-10-07", "check_out_date": "2026-10-09"}
+    row = {"property_id": 302, "property_title": "302房间", "stay_available": True, **stay}
+    assistant, _ = _assistant(
+        [_tool_message("search_availability", stay), "invalid" if fallback else _decision()],
+        _Knowledge([], ROOMS_3), _Tools({"search_availability": [row]}),
+    )
+    text = f"我想{verb}302，今晚和明晚两晚"
+    decision = await _respond(assistant, text, plan_for(text, ("stay_query", text, stay)))
+    assert "尚未确认" not in decision.reply_text
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("hint", [None, "401", "302"])
+async def test_planner_room_hint_cannot_turn_follow_up_into_referral(hint, fallback):
+    """规划房号缺失、填 401 或填 302：「302呢」的缺口性质一致、不可转交；
+    模型主动选中它的编号也不能生成转交候选（R172-F2）。"""
+    fields = {**ARGS, **({"target_room": hint} if hint else {})}
+    text = "明天401还有房吗，302呢"
+    plan = plan_for(text, ("stay_query", text, fields))
+    knowledge = _Knowledge([], ROOMS_3)
+    probe, _ = _assistant([_decision()], knowledge)
+    layout = await probe._fact_layout(
+        plan.plan.items, text, None, (None, None), date(2026, 10, 7),
+        [RoomIdentity(n, None, str(n)) for n in (302, 401, 501)],
+    )
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant as Assistant
+
+    assert Assistant._gap_unit_offers(layout) == []
+    referral = [{"unit_id": "1:10-14", "canonical_question": "302房间介绍", "category": "房间设施"}]
+    assistant, _ = _assistant(
+        [_tool_message("search_availability", ARGS),
+         "invalid" if fallback else _decision(gap_referrals=referral)],
+        knowledge, _Tools({"search_availability": _rows("search_availability", (401,))}),
+    )
+    decision = await _respond(assistant, text, plan)
+    assert [(g.text, g.reason) for g in decision.gap_units] == [("302呢", "tool_uncovered")]
+    assert not decision.referral_candidates
+
+
+@pytest.mark.asyncio
+async def test_follow_up_covered_by_tool_has_no_notice():
+    """「302呢」工具也返回了 302：有证据就不提示（R172 实际证据维度）。"""
+    assistant, _ = _assistant(
+        [_tool_message("search_availability", ARGS), _decision()],
+        _Knowledge([], ROOMS_3),
+        _Tools({"search_availability": _rows("search_availability", (401, 302))}),
+    )
+    text = "明天401还有房吗，302呢"
+    decision = await _respond(assistant, text, plan_for(text, ("stay_query", text, dict(ARGS))))
+    assert set(_evidence_ids(decision)) == {401, 302}
+    assert not decision.gap_units and "尚未确认" not in decision.reply_text
+
+
+# ── R172-G1/G2 回归：证据只取消它真正覆盖的目标 ─────────────────────────────────
+
+STAY_8_9 = {"check_in_date": "2026-10-08", "check_out_date": "2026-10-09"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("tool,ask", [("search_availability", "还有房吗"),
+                                      ("search_reference_price", "多少钱")])
+@pytest.mark.parametrize("fragment,covered", [
+    ("10月8日至10日302", False), ("10月8日至9日302", True), ("10月9日退房302", False),
+])
+async def test_fragment_range_needs_both_endpoints(fragment, covered, tool, ask, fallback):
+    """片段写了区间时入住、退房两端都要与规划一致；只写退房日证明不了（R172-G1）。"""
+    rows = [dict(row, **STAY_8_9) for row in _rows(tool, (302, 401))]
+    assistant, _ = _assistant(
+        [_tool_message(tool, STAY_8_9), "invalid" if fallback else _decision()],
+        _Knowledge([], ROOMS_3), _Tools({tool: rows}),
+    )
+    text = f"{fragment}，401{ask}"
+    decision = await _respond(assistant, text, plan_for(text, ("stay_query", text, STAY_8_9)))
+    gaps = [(g.text, g.reason) for g in decision.gap_units]
+    assert gaps == ([] if covered else [(fragment, "scope_unbound")])
+    assert all(reason != "knowledge_missing" for _, reason in gaps)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("text,rows,missing", [
+    ("401有什么房型，302呢", (401,), "302呢"),
+    ("401有什么房型，9999呢", (401,), "9999呢"),
+    ("401有什么房型，302呢", (401, 302), None),
+    ("有什么房型", (401,), None),
+])
+async def test_catalog_named_room_needs_its_own_row(text, rows, missing, fallback):
+    """目录点名房间时逐个房源核对，别的房间的行不能替它作答；全店目录不变（R172-G2）。"""
+    catalog = [{"id": n, "title": f"{n}房间"} for n in rows]
+    assistant, _ = _assistant(
+        [_tool_message("list_properties", {}), "invalid" if fallback else _decision()],
+        _Knowledge([], {"302": 302, "401": 401}), _Tools({"list_properties": catalog}),
+    )
+    decision = await _respond(assistant, text, plan_for(text, ("catalog_query", text, {})))
+    gaps = [(g.text, g.reason) for g in decision.gap_units]
+    if missing is None:
+        assert gaps == []
+    else:
+        assert gaps == [(missing, "tool_uncovered")]
+        assert f"「{missing}」这次没有查到对应的房源资料" in decision.reply_text
+    assert not decision.referral_candidates
