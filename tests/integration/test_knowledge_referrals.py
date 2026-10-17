@@ -833,3 +833,59 @@ async def test_quoted_credential_tail_is_rejected_by_admin_conversion(factory, f
         await session.rollback()
         assert await session.scalar(select(func.count()).select_from(KnowledgeEntry)) == 0
     assert (await _referrals(factory))[0].status is KnowledgeReferralStatus.DRAFTED
+
+
+# ---- 1.70.4 房号省略追问：真实适配器结果经会话层落库（房号追问 Spec §2.5，R174 §7-4） ----
+
+
+async def _follow_up_decision(text: str, plan, referral_unit: str | None):
+    """真实 `DeepSeekGuestAssistant` 跑一次（合成规划与主模型），模型可主动选中缺口编号。"""
+    from tests.unit.test_reply_fix2_items import _assistant, _Knowledge, _respond, _snippet
+    from tests.unit.test_reply_fix2_items import _decision as _model_decision
+
+    breakfast = _snippet(8401, "早餐几点开始？", "401早餐8:00开始。", category="早餐",
+                         scope="property", property_id=401)
+    referral = (
+        [{"unit_id": referral_unit, "canonical_question": "302早餐几点", "category": "早餐"}]
+        if referral_unit else None
+    )
+    assistant, _ = _assistant(
+        [_model_decision(gap_referrals=referral)],
+        _Knowledge([breakfast], {"302": 302, "401": 401}),
+    )
+    return await _respond(assistant, text, plan)
+
+
+@pytest.mark.asyncio
+async def test_inherited_follow_up_referral_stores_dated_question_and_room(factory) -> None:
+    """继承成功、302 真缺资料：保存的问法带日期、房源是 302、单元编号是「302呢」的原文区间。"""
+    text = "明天401早餐几点，302呢"
+    plan = plan_for(text, ("static_fact", text))
+    probe = await _follow_up_decision(text, plan, None)
+    [gap] = probe.gap_units
+    decision = await _follow_up_decision(text, plan, gap.unit_id)
+    _, message = await _seed(factory, content=text)
+    async with factory() as session:
+        session.add(PropertyProfile(id=302, room_number="302", title="合成302"))
+        await session.commit()
+    await _run_final(factory, _Assistant(decision), message)
+    [referral] = await _referrals(factory)
+    assert (referral.question, referral.property_id, referral.unit_id) == (
+        "2026-10-08：302早餐几点", 302, "1:10-14"
+    )
+    assert len(await _jobs(factory, HANDOFF_CARD_JOB_TYPE)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,unit", [
+    ("302呢", "1:0-4"),
+    ("401早餐几点\n302呢", "1:8-12"),
+])
+async def test_unbound_follow_up_never_creates_referral(factory, text, unit) -> None:
+    """D 类（无父句、跨行）模型主动选中编号也不建转交、不发卡。"""
+    decision = await _follow_up_decision(text, plan_for(text, ("static_fact", text)), unit)
+    assert ("302呢", "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+    _, message = await _seed(factory, content=text)
+    await _run_final(factory, _Assistant(decision), message)
+    assert await _referrals(factory) == []
+    assert await _jobs(factory, HANDOFF_CARD_JOB_TYPE) == []

@@ -464,12 +464,16 @@ async def test_listed_rooms_only_cite_asked_rooms_without_extra_unconfirmed(text
 
 @pytest.mark.asyncio
 async def test_independent_questions_after_a_room_are_kept():
-    """「302有房吗，401有浴缸吗」：第二句是另一间房的静态问题，仍按未绑定保留（IRI-C1）。"""
+    """「302有房吗，401有浴缸吗」：第二句是另一间房的独立静态问题，必须保留（IRI-C1）。
+
+    1.70.4 起同项点名多个房间时按自己的房间单独取证（房号省略追问 Spec D-T2）：401 确实
+    没有浴缸资料，记为 401 的资料缺失，可按现有核实流程转交（D-T5），不再只是未绑定。
+    """
     decision = await _availability(
         "明天302有房吗，401有浴缸吗", _Knowledge([], SLASH_ROOMS), SLASH_ROWS
     )
-    assert [gap.text for gap in decision.gap_units if gap.reason == "scope_unbound"] == [
-        "401有浴缸吗"
+    assert [(gap.text, gap.reason, gap.property_id) for gap in decision.gap_units] == [
+        ("401有浴缸吗", "knowledge_missing", 401)
     ]
 
 
@@ -822,3 +826,626 @@ async def test_catalog_named_room_needs_its_own_row(text, rows, missing, fallbac
         assert gaps == [(missing, "tool_uncovered")]
         assert f"「{missing}」这次没有查到对应的房源资料" in decision.reply_text
     assert not decision.referral_candidates
+
+
+# ── 1.70.4 句内房号省略追问承接（房号追问 Spec v4.1 §2.6）─────────────────────
+
+from homestay_bot.services.item_coverage import is_room_follow_up  # noqa: E402
+
+FU_ROOMS = {"302": 302, "401": 401, "501": 501, "1栋1803": 1803, "2栋1803": 2803}
+FU_ENTRIES = [
+    _snippet(8401, "早餐几点开始？", "401早餐8:00开始。", category="早餐",
+             scope="property", property_id=401),
+    _snippet(8302, "早餐几点开始？", "302早餐9:00开始。", category="早餐",
+             scope="property", property_id=302),
+    _snippet(8501, "早餐几点开始？", "501早餐7:30开始。", category="早餐",
+             scope="property", property_id=501),
+]
+FU_TEXT = "401早餐几点，302呢"
+FU_DATED = "明天401早餐几点，302呢"
+DATE_ASK = "入住"
+
+
+async def _follow_up(text, plan, *, fallback=False, tool=None, entries=FU_ENTRIES,
+                     knowledge=None, decision=None, rows=None):
+    """静态追问的真实助手链路：可注入主模型硬调用工具，再走正常或协议回退出口。"""
+    responses = [_tool_message(tool, ARGS)] if tool else []
+    responses.append("invalid" if fallback else (decision or _decision()))
+    tools = _Tools({name: rows if rows is not None else _rows(name, (302, 401))
+                    for name in ("search_availability", "search_reference_price",
+                                 "list_properties")})
+    assistant, _ = _assistant(responses, knowledge or _Knowledge(list(entries), FU_ROOMS), tools)
+    return await _respond(assistant, text, plan)
+
+
+def _gaps(decision):
+    """缺口的（原文、原因、房源）三元组。"""
+    return [(g.text, g.reason, g.property_id) for g in decision.gap_units]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("302呢", True), ("那302呢", True), ("那么302呢", True), ("302的呢", True),
+    ("302也是吗", True), ("302也一样吗", True), ("302也这样吗", True),
+    ("那2栋302房间呢", True), ("302呢？", True),
+    ("我想订302", False), ("我想住302", False), ("我要302", False), ("302", False),
+    ("302怎么样", False), ("10月10日302呢", False), ("明天302呢", False),
+    ("第二天302呢", False), ("13月40日302呢", False), ("早餐呢", False),
+])
+def test_follow_up_shape_is_a_closed_set_without_dates(text, expected):
+    """省略句式是有限集合；任何日期写法（含无法绑定的）都让它退回现有流程（§2.1、C4-1）。"""
+    assert is_room_follow_up(text) is expected
+
+
+FU_PLANS = {
+    "P1": lambda t: plan_for(t, ("static_fact", "401早餐几点", {"target_room": "401"}),
+                             ("static_fact", "302呢",
+                              {"target_room": "302", "question": "302早餐几点开始？"})),
+    "P2": lambda t: plan_for(t, ("static_fact", "401早餐几点", {"target_room": "401"}),
+                             ("static_fact", "302呢", {"target_room": "302"})),
+    "P3": lambda t: plan_for(t, ("static_fact", t, {"target_room": "401"})),
+    "P4": lambda t: plan_for(t, ("static_fact", t, {})),
+    "P5": lambda t: plan_for(t, ("stay_query", t, {"target_room": "401"})),
+    "catalog": lambda t: plan_for(t, ("catalog_query", t, {})),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", list(FU_PLANS))
+async def test_follow_up_inherits_static_topic_under_every_plan(name):
+    """「401早餐几点，302呢」无论规划拆分、合并还是误标为住宿或目录：两间各答自己的早餐，
+    按原文顺序，不追问入住日期、不留缺口（P1 至 P5）。"""
+    decision = await _follow_up(FU_TEXT, FU_PLANS[name](FU_TEXT))
+    text = decision.reply_text
+    assert "8:00" in text and "9:00" in text and "7:30" not in text
+    assert text.index("8:00") < text.index("9:00")
+    assert not decision.gap_units and DATE_ASK not in text
+    assert _sources(decision) == {"8401", "8302"} or _sources(decision) == {8401, 8302}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [None, "search_availability", "search_reference_price"])
+async def test_dated_stay_label_with_forced_tool_still_answers_breakfast(tool):
+    """P6「明天401早餐几点，302呢」规划误标为带日期的住宿项，主模型还硬调用工具：日期不证明
+    住宿意图（D-T3），这一项不开放工具，硬调用被拒后重试，最终只有两间早餐（§2.7）。"""
+    plan = plan_for(FU_DATED, ("stay_query", FU_DATED, {"target_room": "401", **ARGS}))
+    decision = await _follow_up(FU_DATED, plan, tool=tool)
+    text = decision.reply_text
+    assert "8:00" in text and "9:00" in text
+    assert "可订" not in text and "200" not in text and not decision.gap_units
+
+
+@pytest.mark.asyncio
+async def test_unopened_tool_then_invalid_output_is_existing_unavailable_path():
+    """对照：主模型调用了未开放的工具、随后输出不合法时整轮不可用，这是既有协议行为，
+    不带房号追问的纯静态问题同样如此，不是本功能引入的。
+
+    「工具后协议回退」只在本轮真的开放并执行了工具时存在；纯静态单元不开放工具（§2.7），
+    所以本节只有带真实工具需求的用例才覆盖回退出口。
+    """
+    from homestay_bot.integrations.deepseek_client import AssistantUnavailableError
+
+    for text in (FU_DATED, "明天早餐几点"):
+        plan = plan_for(text, ("static_fact", text, {}))
+        with pytest.raises(AssistantUnavailableError):
+            await _follow_up(text, plan, fallback=True, tool="search_availability")
+
+
+@pytest.mark.asyncio
+async def test_chained_follow_up_uses_previous_normalized_question():
+    """连续追问「401早餐几点，302呢，501呢」：501 承接 302 已规范化的早餐问法。"""
+    text = "401早餐几点，302呢，501呢"
+    decision = await _follow_up(text, plan_for(text, ("static_fact", text, {})))
+    reply = decision.reply_text
+    assert reply.index("8:00") < reply.index("9:00") < reply.index("7:30")
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+async def test_wrong_room_selection_is_intersected_with_unit_candidates():
+    """同项两间房答案不同，模型故意把 401 的条目选给整项：302 只能用自己的候选（T-R4）。"""
+    selection = [{"item_id": 1, "answer_ids": [8401], "related_ids": []}]
+    decision = await _follow_up(
+        FU_TEXT, FU_PLANS["P4"](FU_TEXT),
+        decision=_decision(evidence_selection=selection),
+    )
+    assert "9:00" in decision.reply_text and decision.reply_text.count("8:00") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("swap", [False, True])
+async def test_overlapping_items_are_owned_by_text_position_not_array_order(swap):
+    """整句项与「302呢」项重叠：归属按起点、覆盖长度和编号决定，与数组顺序无关。"""
+    items = [("static_fact", FU_TEXT, {"target_room": "401"}),
+             ("static_fact", "302呢", {"target_room": "302"})]
+    plan = plan_for(FU_TEXT, *(reversed(items) if swap else items))
+    decision = await _follow_up(FU_TEXT, plan)
+    assert decision.reply_text.count("8:00") == 1 and decision.reply_text.count("9:00") == 1
+    assert not decision.gap_units and "尚未确认" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_each_group_keeps_its_own_dates():
+    """两组不同日期的追问各按本组日期取证：302 只在 10 月 8 日有资料，501 只在 10 月 10 日有。"""
+    entries = [
+        _snippet(8402, "早餐几点开始？", "401早餐8:00开始。", category="早餐",
+                 scope="property", property_id=401),
+        _snippet(8303, "早餐几点开始？", "302早餐9:00开始。", category="早餐",
+                 scope="property", property_id=302,
+                 valid_from=date(2026, 10, 8), valid_until=date(2026, 10, 8)),
+        _snippet(8502, "早餐几点开始？", "501早餐7:30开始。", category="早餐",
+                 scope="property", property_id=501,
+                 valid_from=date(2026, 10, 10), valid_until=date(2026, 10, 10)),
+    ]
+    text = "10月8日401早餐几点，302呢；10月10日401早餐几点，501呢"
+    first, second = text.split("；")
+    plan = plan_for(text, ("static_fact", first, dict(ARGS)), ("static_fact", second, {
+        "check_in_date": "2026-10-10", "check_out_date": "2026-10-11"}))
+    decision = await _follow_up(text, plan, entries=entries)
+    assert "9:00" in decision.reply_text and "7:30" in decision.reply_text
+    assert not [g for g in decision.gap_units if g.property_id in (302, 501)]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_cannot_borrow_parent_date_for_a_different_day():
+    """302 只在 10 月 10 日有资料，父句问的是 10 月 8 日：追问不能借别的日子确认。"""
+    entries = [FU_ENTRIES[0], _snippet(
+        8304, "早餐几点开始？", "302早餐9:00开始。", category="早餐", scope="property",
+        property_id=302, valid_from=date(2026, 10, 10), valid_until=date(2026, 10, 10))]
+    text = "10月8日401早餐几点，302呢"
+    decision = await _follow_up(text, plan_for(text, ("static_fact", text, dict(ARGS))),
+                                entries=entries)
+    assert "9:00" not in decision.reply_text
+    assert [(g.reason, g.property_id) for g in decision.gap_units] == [
+        ("knowledge_missing", 302)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["static_fact", "stay_query", "catalog_query"])
+@pytest.mark.parametrize("text,fragment", [
+    ("401早餐几点，999呢", "999呢"),
+    ("302呢", "302呢"),
+    ("401早餐几点\n302呢", "302呢"),
+    ("401早餐几点，1803呢", "1803呢"),
+    ("帮我开张发票，302呢", "302呢"),
+])
+async def test_unbound_follow_up_is_scope_unbound_without_date_ask(text, fragment, kind):
+    """D 类（V3-R1）：没有父句、隔着换行、未知或歧义房号、父句是动作请求，三种规划写法与两个
+    出口都只记 scope_unbound，不追问入住日期、不展示工具结果、不生成转交候选。"""
+    if text.startswith("帮我"):
+        # 动作请求在真实规划里是服务事项；被误标成静态事实时本地无法区分，属已知上限。
+        plan, item_id = plan_for(text, ("service_request", "帮我开张发票"), (kind, fragment)), 2
+    else:
+        plan, item_id = plan_for(text, (kind, text, {})), 1
+    unit = f"{item_id}:{text.index(fragment)}-{text.index(fragment) + len(fragment)}"
+    referral = [{"unit_id": unit, "canonical_question": "302早餐几点", "category": "早餐"}]
+    decision = await _follow_up(text, plan,
+                                decision=_decision(gap_referrals=referral))
+    assert (fragment, "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+    assert "9:00" not in decision.reply_text and "可订" not in decision.reply_text
+    assert DATE_ASK not in decision.reply_text and not decision.referral_candidates
+
+
+@pytest.mark.asyncio
+async def test_follow_up_with_profile_read_failure_is_unbound():
+    """房源资料读取失败时追问无法绑定房源：只记 scope_unbound，不按全店资料作答。"""
+    from homestay_bot.services.knowledge_service import KnowledgeService
+
+    decision = await _follow_up(FU_TEXT, FU_PLANS["P4"](FU_TEXT),
+                                knowledge=KnowledgeService(_BrokenProfiles()))
+    assert ("302呢", "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+    assert DATE_ASK not in decision.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("booking", ["我想订302", "我想住302", "我要302"])
+async def test_booking_after_static_question_keeps_existing_stay_flow(booking):
+    """A 类对照：「401早餐几点，我想订302」不被吞成早餐问题，302 仍走既有住宿流程。"""
+    text = f"401早餐几点，{booking}"
+    plan = plan_for(text, ("static_fact", "401早餐几点", {"target_room": "401"}),
+                    ("stay_query", booking, {"target_room": "302"}))
+    decision = await _follow_up(text, plan)
+    assert "8:00" in decision.reply_text and "9:00" not in decision.reply_text
+    assert not [g for g in decision.gap_units if g.reason == "knowledge_missing"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail", ["302也是吗", "302也一样吗", "302也这样吗", "那302的呢"])
+async def test_other_follow_up_shapes_bind_the_same_topic(tail):
+    """「302也是吗」等写法的剩余不为空，但与「302呢」得到同一话题和房源（C4-1）。"""
+    text = f"401早餐几点，{tail}"
+    decision = await _follow_up(text, plan_for(text, ("static_fact", text, {})))
+    assert "8:00" in decision.reply_text and "9:00" in decision.reply_text
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+async def test_inherited_missing_knowledge_is_referred_with_dated_question():
+    """成功继承、302 真缺资料：可转交（D-T5），卡片问法是带日期的规范问题而不是「302呢」。"""
+    plan = plan_for(FU_DATED, ("static_fact", FU_DATED, {}))
+    first = await _follow_up(FU_DATED, plan, entries=[FU_ENTRIES[0]])
+    [gap] = first.gap_units
+    assert (gap.reason, gap.property_id) == ("knowledge_missing", 302)
+    assert gap.text == "2026-10-08：302早餐几点"
+    referral = [{"unit_id": gap.unit_id, "canonical_question": "302早餐几点开始",
+                 "category": "早餐"}]
+    decision = await _follow_up(FU_DATED, plan, entries=[FU_ENTRIES[0]],
+                                decision=_decision(gap_referrals=referral))
+    assert [c.unit.text for c in decision.referral_candidates] == [gap.text]
+
+
+@pytest.mark.asyncio
+async def test_unit_retrieval_over_budget_is_not_referable():
+    """四个计划项已用完检索预算：再承接的追问记 budget，不可转交，也不被静默吞掉。"""
+    text = "401早餐几点，302呢，停车收费吗，wifi密码多少，几点退房"
+    plan = plan_for(text, ("static_fact", "401早餐几点，302呢", {}),
+                    ("static_fact", "停车收费吗", {}), ("static_fact", "wifi密码多少", {}),
+                    ("static_fact", "几点退房", {}))
+    decision = await _follow_up(text, plan)
+    assert ("302呢", "budget") in [(g.text, g.reason) for g in decision.gap_units] or any(
+        g.reason == "budget" and "302" in g.text for g in decision.gap_units
+    )
+    assert not decision.referral_candidates
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_whole_store_tool_need_is_not_narrowed_by_static_follow_up(fallback):
+    """「明天还有房吗，302早餐几点，401呢」：全店房态照常展示，302、401 只答早餐（V3-R2）。"""
+    text = "明天还有房吗，302早餐几点，401呢"
+    plan = plan_for(text, ("stay_query", text, dict(ARGS)))
+    decision = await _follow_up(text, plan, fallback=fallback, tool="search_availability",
+                                rows=_rows("search_availability", (302, 401, 9999)))
+    reply = decision.reply_text
+    assert "9999测试房" in reply and "9:00" in reply and "8:00" in reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_named_tool_target_ignores_static_follow_up_rooms(fallback):
+    """「明天401还有房吗，302早餐几点，501呢」：工具只按 401 筛选，302 与 501 的房态行不展示。"""
+    text = "明天401还有房吗，302早餐几点，501呢"
+    plan = plan_for(text, ("stay_query", text, dict(ARGS)))
+    decision = await _follow_up(text, plan, fallback=fallback, tool="search_availability",
+                                rows=_rows("search_availability", (302, 401, 501)))
+    reply = decision.reply_text
+    assert "401测试房" in reply and "302测试房" not in reply and "501测试房" not in reply
+    assert "9:00" in reply and "7:30" in reply
+
+
+# ── 1.70.4 实施复审 R174-1 至 R174-4 回归 ─────────────────────────────────────
+
+PARK_302 = _snippet(8312, "停车怎么收费？", "302停车每天20元。", category="停车",
+                    scope="property", property_id=302)
+PARK_401 = _snippet(8412, "停车怎么收费？", "401停车免费。", category="停车",
+                    scope="property", property_id=401)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("layout", ["missing_middle", "missing_middle_swapped", "newline"])
+async def test_unplanned_middle_clause_blocks_inheritance(layout):
+    """规划漏掉中间的停车问题时，「302呢」不能跨过它借更早的早餐话题（R174-1）。换行同理。
+    邻接在调用前的共享布局里冻结，正常与回退出口读同一份；纯静态计划没有工具后回退出口。"""
+    text = ("401早餐几点\n停车怎么收费，302呢" if layout == "newline"
+            else "401早餐几点，停车怎么收费，302呢")
+    items = [("static_fact", "401早餐几点", {"target_room": "401"}),
+             ("static_fact", "302呢", {"target_room": "302"})]
+    if layout == "missing_middle_swapped":
+        items.reverse()
+    if layout == "newline":
+        items = [items[0], ("static_fact", "停车怎么收费", {})]
+    decision = await _follow_up(text, plan_for(text, *items),
+                                entries=[*FU_ENTRIES, PARK_302])
+    assert "9:00" not in decision.reply_text
+    if layout != "newline":
+        assert ("302呢", "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("swap", [False, True])
+async def test_fully_planned_middle_clause_is_the_parent(swap):
+    """中间的停车问题有计划项时，「302呢」承接停车而不是早餐（Spec §3.1）。"""
+    text = "401早餐几点，停车怎么收费，302呢"
+    items = [("static_fact", "401早餐几点", {"target_room": "401"}),
+             ("static_fact", "停车怎么收费，302呢", {})]
+    plan = plan_for(text, *(reversed(items) if swap else items))
+    decision = await _follow_up(text, plan, entries=[*FU_ENTRIES, PARK_302])
+    assert "302停车每天20元" in decision.reply_text and "9:00" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("child", ["static_fact", "stay_query", "catalog_query"])
+@pytest.mark.parametrize("returned,covered", [((401, 302, 501), True), ((401,), False)])
+async def test_tool_parent_makes_follow_up_a_tool_target_under_any_child_label(
+    child, returned, covered, fallback
+):
+    """「明天401还有房吗，302呢」拆成两项、子项标成哪种类型都是 B：查到 302 就展示，
+    没查到说明未查到且不可转交；不再因子项是 static_fact 落成 D（R174-2a）。"""
+    text = "明天401还有房吗，302呢"
+    plan = plan_for(text, ("stay_query", "明天401还有房吗", {"target_room": "401", **ARGS}),
+                    (child, "302呢", {"target_room": "302", **ARGS}))
+    referral = [{"unit_id": "2:10-14", "canonical_question": "302房态", "category": "房态"}]
+    decision = await _follow_up(text, plan, fallback=fallback, tool="search_availability",
+                                rows=_rows("search_availability", returned),
+                                decision=_decision(gap_referrals=referral))
+    reply = decision.reply_text
+    assert "401测试房" in reply and "501测试房" not in reply
+    assert ("302测试房" in reply) is covered
+    assert [g.reason for g in decision.gap_units] == ([] if covered else ["tool_uncovered"])
+    assert not decision.referral_candidates and "9:00" not in reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("split", [False, True])
+async def test_static_follow_up_is_not_taken_by_a_later_tool_question(split, fallback):
+    """「401早餐几点，302呢，明天501还有房吗」：302 承接早餐，不被并入后面的查房（R174-2b）。"""
+    text = "401早餐几点，302呢，明天501还有房吗"
+    items = ([("static_fact", "401早餐几点，302呢", {}),
+              ("stay_query", "明天501还有房吗", {"target_room": "501", **ARGS})] if split
+             else [("stay_query", text, {"target_room": "401", **ARGS})])
+    decision = await _follow_up(text, plan_for(text, *items), fallback=fallback,
+                                tool="search_availability",
+                                rows=_rows("search_availability", (401, 302, 501)))
+    reply = decision.reply_text
+    assert "8:00" in reply and "9:00" in reply and "501测试房" in reply
+    assert "302测试房" not in reply and "401测试房" not in reply and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_real_room_enumeration_before_tool_question_is_kept(fallback):
+    """对照：真正的枚举「明天302，401还有房吗」不是省略句式，仍并入后面的查房（R172）。"""
+    text = "明天302，401还有房吗"
+    decision = await _follow_up(text, plan_for(text, ("stay_query", text, dict(ARGS))),
+                                fallback=fallback, tool="search_availability",
+                                rows=_rows("search_availability", (401,)))
+    assert "401测试房" in decision.reply_text
+    assert [g.reason for g in decision.gap_units] == ["tool_uncovered"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_own_room_static_clauses_do_not_join_tool_rows(fallback):
+    """「明天501还有房吗，401早餐几点，302早餐几点」：房态只展示 501（R174-3）。"""
+    text = "明天501还有房吗，401早餐几点，302早餐几点"
+    decision = await _follow_up(text, plan_for(text, ("stay_query", text, {
+        "target_room": "501", **ARGS})), fallback=fallback, tool="search_availability",
+        rows=_rows("search_availability", (401, 302, 501)))
+    reply = decision.reply_text
+    assert "501测试房" in reply and "401测试房" not in reply and "302测试房" not in reply
+    assert "8:00" in reply and "9:00" in reply and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_real_tool_need_with_empty_result_keeps_static_answers(fallback):
+    """有真实查房需求但工具返回空：照常说明没查到，静态追问照常作答，不展示别的房间。"""
+    text = "明天401还有房吗，302早餐几点，501呢"
+    decision = await _follow_up(text, plan_for(text, ("stay_query", text, dict(ARGS))),
+                                fallback=fallback, tool="search_availability", rows=[])
+    reply = decision.reply_text
+    assert "9:00" in reply and "7:30" in reply and "测试房" not in reply
+    assert all(g.reason != "knowledge_missing" for g in decision.gap_units)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_catalog_parent_follow_up_is_checked_per_room(fallback):
+    """目录父句「有什么房型，302呢」：302 是目录目标，不走静态取证、不问入住日期、不转交。
+
+    目录结果按 302 筛选为空时回「未返回可用资料」，这是 1.70.3 的既有行为，本版不改。
+    """
+    text = "有什么房型，302呢"
+    rows = [{"id": 401, "title": "401房间"}]  # 目录行格式
+    decision = await _follow_up(text, plan_for(text, ("catalog_query", text, {})),
+                                fallback=fallback, tool="list_properties", rows=rows)
+    assert "9:00" not in decision.reply_text and DATE_ASK not in decision.reply_text
+    assert all(g.reason != "knowledge_missing" for g in decision.gap_units)
+    assert not decision.referral_candidates
+
+
+@pytest.mark.asyncio
+async def test_parent_conflict_does_not_block_follow_up():
+    """父句 401 的两条早餐资料互相矛盾时回未确认；302 仍按自己的资料作答（§2.5）。"""
+    conflict = _snippet(8403, "早餐几点开始？", "401早餐8:30开始。", category="早餐",
+                        scope="property", property_id=401)
+    decision = await _follow_up(FU_TEXT, FU_PLANS["P4"](FU_TEXT),
+                                entries=[*FU_ENTRIES, conflict])
+    assert "9:00" in decision.reply_text
+    assert "8:00" not in decision.reply_text and "8:30" not in decision.reply_text
+    assert [(g.reason, g.property_id) for g in decision.gap_units] == [("conflict", 401)]
+
+
+def _record(entry_id, property_id, answer, *, trigger_any=None, trigger_exclude=None):
+    """真实知识服务读取的仓储记录：302 的停车资料，可带附加条件词与排除词。"""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        id=entry_id, category="停车", scope="property", property_id=property_id,
+        valid_from=None, valid_until=None, question_zh="停车怎么收费？", answer_zh=answer,
+        question_en="parking", answer_en="parking", keywords=["停车"],
+        trigger_any=trigger_any, trigger_exclude=trigger_exclude,
+    )
+
+
+class _ConditionalRepository:
+    """真实 `KnowledgeService` 用的内存仓储：302 白天、夜间两条停车资料和一条排除电动车的资料。"""
+
+    def __init__(self, records):
+        self.records = records
+
+    async def list_active(self):
+        return list(self.records)
+
+    async def list_room_profiles(self):
+        return [(pid, str(pid), f"{pid}测试房") for pid in (302, 401, 501)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,night", [
+    ("晚上401停车怎么收费，302呢", True),
+    ("晚上几点关门，401停车怎么收费，302呢", False),
+])
+async def test_follow_up_trigger_comes_from_its_parent_only(text, night):
+    """附加条件词只取父问题原文（§2.3）：父句写了「晚上」才用夜间资料，别的问题里的「晚上」
+    不能借给追问。真实检索服务，只替换仓储。
+
+    「401晚上」会被房号识别当成「住几晚」的写法而不算房号（既有限制），所以用「晚上401」。
+    """
+    from homestay_bot.services.knowledge_service import KnowledgeService
+
+    records = [
+        _record(2, 302, "302晚上停车免费。", trigger_any=["晚上"]),
+        _record(3, 401, "401停车每小时5元。"),
+    ]
+    first = text.rsplit("，", 1)[0]
+    items = ([("static_fact", first, {}), ("static_fact", "302呢", {})] if night else
+             [("static_fact", "晚上几点关门", {}), ("static_fact", "401停车怎么收费，302呢", {})])
+    decision = await _follow_up(text, plan_for(text, *items),
+                                knowledge=KnowledgeService(_ConditionalRepository(records)))
+    assert ("302晚上停车免费" in decision.reply_text) is night
+
+
+@pytest.mark.asyncio
+async def test_follow_up_exclusion_uses_whole_turn_text():
+    """排除词按本轮全文判断：全文提到电动车时，排除电动车的 302 资料不能给追问作答。"""
+    from homestay_bot.services.knowledge_service import KnowledgeService
+
+    records = [
+        _record(1, 302, "302停车每天20元。", trigger_exclude=["电动车"]),
+        _record(3, 401, "401停车每小时5元。"),
+    ]
+    text = "我开电动车，401停车怎么收费，302呢"
+    plan = plan_for(text, ("static_fact", "我开电动车，401停车怎么收费，302呢", {}))
+    decision = await _follow_up(text, plan,
+                                knowledge=KnowledgeService(_ConditionalRepository(records)))
+    assert "302停车每天20元" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_budget_skipped_unit_is_budget_not_missing_and_not_referable():
+    """真实检索：合并信封放不下 501 的资料时记 budget，模型选中编号也不能转交（R174-4）。"""
+    from homestay_bot.integrations.deepseek_client import GapReferral
+    from homestay_bot.services.knowledge_service import KnowledgeService
+    from homestay_bot.tools.reply_regression import _Entry, _MemoryKnowledge
+
+    entries = [_Entry(9000, "早餐", "早餐几点开始？", "早餐说明" + "甲" * 11650,
+                      "Breakfast", "Details", scope="global")]
+    entries += [_Entry(pid, "早餐", "早餐几点开始？", f"{pid}早餐9:00开始。" + "乙" * 2700,
+                       "Breakfast", "Details", scope="property", property_id=pid)
+                for pid in (401, 302, 501)]
+    knowledge = KnowledgeService(_MemoryKnowledge(
+        entries, [{"id": pid, "room_number": str(pid), "title": ""} for pid in (401, 302, 501)]
+    ))
+    text = "401早餐几点，302呢，501呢"
+    assistant, _ = _assistant([_decision()], knowledge)
+    decision = await _respond(assistant, text,
+                              plan_for(text, ("static_fact", text, {"target_room": "401"})))
+    [gap] = [g for g in decision.gap_units if g.property_id == 501]
+    assert gap.reason == "budget"
+    selected = decision.model_copy(update={"gap_referrals": [GapReferral(
+        unit_id=gap.unit_id, canonical_question="501早餐几点", category="早餐")]})
+    assert assistant._referral_candidates(selected) == []
+
+
+@pytest.mark.asyncio
+async def test_single_retrieval_budget_skip_is_budget():
+    """单次检索预算放不下（单条超过 3000 字）同样记 budget；真实空库对照记 knowledge_missing。"""
+    from homestay_bot.services.knowledge_service import KnowledgeService
+    from homestay_bot.tools.reply_regression import _Entry, _MemoryKnowledge
+
+    profiles = [{"id": pid, "room_number": str(pid), "title": ""} for pid in (401, 302)]
+    base = [_Entry(401, "早餐", "早餐几点开始？", "401早餐8:00开始。", "Breakfast", "Details",
+                   scope="property", property_id=401)]
+    huge = _Entry(302, "早餐", "早餐几点开始？", "302早餐9:00开始。" + "乙" * 3100,
+                  "Breakfast", "Details", scope="property", property_id=302)
+    reasons = []
+    for entries in ([*base, huge], base):
+        assistant, _ = _assistant([_decision()],
+                                  KnowledgeService(_MemoryKnowledge(entries, profiles)))
+        decision = await _respond(assistant, FU_TEXT, FU_PLANS["P4"](FU_TEXT))
+        reasons.append([g.reason for g in decision.gap_units if g.property_id == 302])
+    assert reasons == [["budget"], ["knowledge_missing"]]
+
+
+EXTRA_BED = [
+    _snippet(8421, "可以加床吗？", "401可以加床，每晚100元。", category="加床",
+             scope="property", property_id=401),
+    _snippet(8321, "可以加床吗？", "302不能加床。", category="加床",
+             scope="property", property_id=302),
+    _snippet(8422, "能延迟退房吗？", "401可以延迟退房，需提前确认。", category="退房",
+             scope="property", property_id=401),
+    _snippet(8322, "能延迟退房吗？", "302可以延迟退房，需提前确认。", category="退房",
+             scope="property", property_id=302),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent,answer", [
+    ("401可以加床吗", "302不能加床"), ("401能延迟退房吗", "302可以延迟退房"),
+])
+async def test_policy_inquiry_parent_is_inherited(parent, answer):
+    """政策咨询「401可以加床吗，302呢」：词面像服务请求也照常承接，302 按自己资料作答（F174-1）。"""
+    text = f"{parent}，302呢"
+    decision = await _follow_up(text, plan_for(text, ("static_fact", text, {})),
+                                entries=EXTRA_BED)
+    assert answer in decision.reply_text and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["401可以加床吗，302呢", "麻烦送两瓶水，302呢"])
+async def test_action_like_parent_follow_up_missing_is_not_referred(text):
+    """父句词面像动作（政策咨询或被误标成静态的请求）、302 真缺资料：只回未确认，模型选中
+    编号也不转交，避免误标的动作变成资料核实卡片（F174-1 的保守范围）。"""
+    fragment = "302呢"
+    unit = f"1:{text.index(fragment)}-{text.index(fragment) + len(fragment)}"
+    referral = [{"unit_id": unit, "canonical_question": "302加床", "category": "加床"}]
+    decision = await _follow_up(text, plan_for(text, ("static_fact", text, {})),
+                                entries=EXTRA_BED[:1],
+                                decision=_decision(gap_referrals=referral))
+    assert [g.reason for g in decision.gap_units if g.unit_id == unit] == ["scope_unbound"]
+    assert unit not in [c.unit.unit_id for c in decision.referral_candidates]
+
+
+@pytest.mark.asyncio
+async def test_planned_service_request_parent_still_blocks():
+    """对照：规划把「麻烦送两瓶水」正确标为服务事项时，它是非事实项，「302呢」不承接（D）。"""
+    text = "麻烦送两瓶水，302呢"
+    plan = plan_for(text, ("service_request", "麻烦送两瓶水"), ("static_fact", "302呢"))
+    decision = await _follow_up(text, plan, entries=EXTRA_BED)
+    assert ("302呢", "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_each_tool_result_is_filtered_by_its_own_fact_targets(fallback):
+    """401 只问房态、302 只问价：房态只列 401、参考价只列 302，不交叉展示（F174-2）。"""
+    text = "明天401有房吗，明天302多少钱，501早餐几点，401呢"
+    plan = plan_for(text, ("stay_query", "明天401有房吗", {"target_room": "401", **ARGS}),
+                    ("stay_query", "明天302多少钱", {"target_room": "302", **ARGS}),
+                    ("static_fact", "501早餐几点，401呢", {}))
+    rows = {"search_availability": _rows("search_availability", (401, 302, 501)),
+            "search_reference_price": _rows("search_reference_price", (401, 302, 501))}
+    responses = [_tool_message("search_availability", ARGS),
+                 _tool_message("search_reference_price", ARGS),
+                 "invalid" if fallback else _decision()]
+    assistant, _ = _assistant(responses, _Knowledge(list(FU_ENTRIES), FU_ROOMS), _Tools(rows))
+    decision = await _respond(assistant, text, plan)
+    reply = decision.reply_text
+    assert "7:30" in reply and "8:00" in reply
+    assert "可订：401测试房" in reply and "302测试房：" in reply
+    assert "可订：401测试房、302测试房" not in reply and "401测试房：10月8日" not in reply
+    assert "501测试房" not in reply and not decision.gap_units
+
+
+@pytest.mark.asyncio
+async def test_parent_period_veto_does_not_block_follow_up():
+    """父句 401 被特殊时期资料否决（period_veto）时回未确认；302 仍按自己的资料作答（§2.5）。"""
+    veto = _snippet(8404, "二楼早餐厅几点开放？", "401二楼早餐厅国庆期间10:00开放。",
+                    category="早餐", scope="property", property_id=401,
+                    valid_from=date(2026, 10, 1), valid_until=date(2026, 10, 7))
+    decision = await _follow_up(FU_TEXT, FU_PLANS["P4"](FU_TEXT), entries=[*FU_ENTRIES, veto])
+    assert "9:00" in decision.reply_text and "8:00" not in decision.reply_text
+    assert [(g.reason, g.property_id) for g in decision.gap_units] == [("period_veto", 401)]

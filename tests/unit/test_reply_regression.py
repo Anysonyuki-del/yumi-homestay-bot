@@ -551,3 +551,29 @@ async def test_same_number_scenario_preflight_is_conservative():
     scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-同号异栋")
     record = {"route": "unconfirmed", "final": decision.reply_text}
     assert rr.judge(scenario, record)["ok"]
+
+
+@pytest.mark.asyncio
+async def test_room_follow_up_scenario_preflight():
+    """K-房号追问离线预检：「7702呢」承接浴缸话题，两间各用自己的资料，不追问入住日期。"""
+    decision, tools = await _weekend_fixture_reply("7701有浴缸吗？7702呢", [9905, 9906])
+    sources = {e.source_id for part in decision.reply_parts for e in part.evidence}
+    assert sources == {"9905", "9906"} and not decision.gap_units and not tools.calls
+    scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-房号追问")
+    assert rr.judge(scenario, {"route": "knowledge", "final": decision.reply_text})["ok"]
+
+
+@pytest.mark.parametrize("final,ok", [
+    ("7701有独立浴缸。\n\n7702只有淋浴，没有浴缸。", True),
+    ("7702只有淋浴；7701有独立浴缸。", True),
+    ("7701：只有淋浴。7702：有独立浴缸。", False),
+    ("一间有独立浴缸，另一间只有淋浴。", False),
+    ("7701有独立浴缸。", False),
+    ("7701有独立浴缸，也只有淋浴。7702只有淋浴。", False),
+    ("7701有独立浴缸。7702只有淋浴。请告诉我入住日期。", False),
+])
+def test_room_follow_up_judge_binds_rooms_to_answers(final, ok):
+    """K-房号追问判据核对「房号＋对应答案」：互换、无房号、漏一间、夹带对方答案都不通过
+    （实施复审 R174-5）。来源归属由离线预检核对，judge 不读 source_ids。"""
+    scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-房号追问")
+    assert rr.judge(scenario, {"route": "knowledge", "final": final})["ok"] is ok

@@ -88,7 +88,7 @@ def judge(
     record: dict[str, Any],
     global_forbidden: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """判定一次运行：路由符合、必含片段全部命中、禁用片段与正则一个都不出现。
+    """判定一次运行：路由符合、必含片段与必含正则全部命中、禁用片段与正则一个都不出现。
 
     必含片段的某一项可以是同义说法列表，命中其一即可；「知识」「稳定旅游」允许由
     普通模型路径作答。场景本身期望知识缺口（`expect.knowledge_gap`）时，回「尚未确认」
@@ -103,6 +103,13 @@ def judge(
         if not any(
             normalize(option) in final for option in (item if isinstance(item, list) else [item])
         )
+    ]
+    # 必须命中的正则：用于「房号＋对应答案」这类成对关系，单独的必含片段只能证明两个
+    # 答案都出现，证明不了它们分别对应哪间房（房号追问 Spec §2.6，实施复审 R174-5）。
+    missing += [
+        f"re:{pattern}"
+        for pattern in expect.get("must_match") or []
+        if not re.search(pattern, record.get("final") or "")
     ]
     forbidden = [
         item

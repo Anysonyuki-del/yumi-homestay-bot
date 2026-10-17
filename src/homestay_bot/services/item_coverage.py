@@ -305,6 +305,46 @@ def room_mentions(text: str) -> tuple[RoomMention, ...]:
     return tuple(mentions)
 
 
+# 句内房号省略追问的有限句式（房号省略追问 Spec §2.1）：「302呢」「302的呢」「302也是吗」等。
+# 只核原文结构，房号能否解析、有没有父句、是否同一行都在调用方的绑定步骤里判断。
+_FOLLOW_UP = re.compile(
+    rf"(?:那么?)?\s*(?:{_ROOM_ANY})\s*(?:的)?\s*(?:呢|也是吗|也一样吗|也这样吗)"
+)
+_OUTER_PUNCTUATION = re.compile(r"^[\s，,。.？?！!；;：:、]+|[\s，,。.？?！!；;：:、]+$")
+
+
+def is_room_follow_up(text: str) -> bool:
+    """小句是否是「只换了房号」的省略追问句式（房号省略追问 Spec §2.1）。
+
+    先查日期：出现绝对、相对、序数或无法绑定的日期写法就不是（日期信号不能删掉后再匹配，
+    V2-R2）；再只去掉空白和外层标点，完整匹配有限句式。这不是订房动词表：「我想订302」
+    「302」不带省略句尾，不匹配。不以剩余语义为空作前置条件（C4-1）。
+    """
+    named = clause_dates(text, 2000)
+    if named.unbindable or named.relative or named.check_in or named.check_out:
+        return False
+    if EXPLICIT_STAY_DATE_PATTERN.search(text):
+        return False
+    core = _OUTER_PUNCTUATION.sub("", text)
+    return bool(_FOLLOW_UP.fullmatch(core)) and bool(room_mentions(core))
+
+
+def strip_room_mentions(text: str) -> str:
+    """去掉问法里的房号写法、日期写法和外层标点，供省略追问继承父问题的话题。
+
+    日期由单元单独冻结并写进分段日期标签（房号追问 Spec §2.3、§2.5），留在话题里会出现
+    「302明天早餐几点」这种对管家有歧义的问法；周末限定词随「周末」一起删掉。
+    """
+    spans = room_mentions(text)
+    for mention in reversed(spans):
+        text = text[:mention.start] + text[mention.end:]
+    for match in reversed(list(_ABSOLUTE_DATE.finditer(text))):
+        tail = _RANGE_TAIL.match(text, match.end())
+        text = text[:match.start()] + text[tail.end() if tail else match.end():]
+    text = _RELATIVE_DATE.sub("", _WEEKEND.sub("", text))
+    return _OUTER_PUNCTUATION.sub("", text)
+
+
 @dataclass(frozen=True)
 class RoomIdentity:
     """一个启用房源的房号身份：楼栋（可空）与号码。"""

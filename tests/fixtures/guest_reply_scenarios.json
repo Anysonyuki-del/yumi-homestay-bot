@@ -1166,6 +1166,40 @@
    "property_id": 9802,
    "valid_from": null,
    "valid_until": null
+  },
+  {
+   "id": 9905,
+   "category": "卫浴",
+   "question_zh": "房间有浴缸吗？",
+   "answer_zh": "7701有独立浴缸。",
+   "question_en": "Does the room have a bathtub?",
+   "answer_en": "See Chinese answer.",
+   "keywords": [
+    "浴缸",
+    "泡澡",
+    "bathtub"
+   ],
+   "scope": "property",
+   "property_id": 9701,
+   "valid_from": null,
+   "valid_until": null
+  },
+  {
+   "id": 9906,
+   "category": "卫浴",
+   "question_zh": "房间有浴缸吗？",
+   "answer_zh": "7702只有淋浴，没有浴缸。",
+   "question_en": "Does the room have a bathtub?",
+   "answer_en": "See Chinese answer.",
+   "keywords": [
+    "浴缸",
+    "泡澡",
+    "bathtub"
+   ],
+   "scope": "property",
+   "property_id": 9702,
+   "valid_from": null,
+   "valid_until": null
   }
  ],
  "knowledge_notes": {
@@ -5873,6 +5907,41 @@
     "handoff": false,
     "notes": "房号身份 Spec §2.3 D-R2：同号两栋且没有本轮房源时无法确定是哪间，保守回未确认、不转交，不能任选一栋作答。"
    }
+  },
+  {
+   "id": "K-房号追问",
+   "category": "knowledge_direct",
+   "messages": [
+    {
+     "role": "user",
+     "content": "7701有浴缸吗？7702呢"
+    }
+   ],
+   "expect": {
+    "route": "knowledge",
+    "must_include": [
+     "独立浴缸",
+     "只有淋浴"
+    ],
+    "must_not_include": [
+     "入住日期"
+    ],
+    "handoff": false,
+    "notes": "房号追问 Spec §2.6：「7702呢」承接同一行前一句的浴缸话题，按 7702 自己的资料作答。判据：必含正则要求 7701 之后、7702 之前出现独立浴缸，7702 之后、7701 之前出现只有淋浴；禁用正则排除房号后先出现对方答案（互换或夹带）；两间都要答到，不能误当住宿追问入住日期。最初用早餐：房间专属时刻与全店早餐 9011（7:30至9:30）矛盾，模型把 9011 标为相关时按既有收费、钟点冲突规则回未确认（rc-1.70.4-1 门禁诊断，资料设计问题，与承接无关）；改为不含钟点与价格、与 K-带栋房号 同一模式的卫浴话题。source_ids 只供离线预检核对来源（test_reply_regression.test_room_follow_up_scenario_preflight），judge 不读。",
+    "source_ids": [
+     9905,
+     9906
+    ],
+    "knowledge_gap": false,
+    "must_match": [
+     "7701(?:(?!7702)[\\s\\S])*?独立浴缸",
+     "7702(?:(?!7701)[\\s\\S])*?只有淋浴"
+    ],
+    "must_not_match": [
+     "7701(?:(?!7702)[\\s\\S])*?只有淋浴",
+     "7702(?:(?!7701)[\\s\\S])*?独立浴缸"
+    ]
+   }
   }
  ],
  "_expectation_changes": "2026-09-26（1.40.0）：PI-折扣 禁用片段由「五折」改为只拦答应折扣的说法；PI-内部、PI-提示词 期望路由改为允许普通模型路径作答，禁止泄露内部信息的禁令不变。见基线文件 expectation_changes。",
@@ -5926,7 +5995,17 @@
    "id": 9802,
    "room_number": null,
    "title": "虚构测试楼·2栋1803"
+  },
+  {
+   "id": 9701,
+   "room_number": "7701",
+   "title": "虚构测试房7701"
+  },
+  {
+   "id": 9702,
+   "room_number": "7702",
+   "title": "虚构测试房7702"
   }
  ],
- "property_profiles_notes": "与生产 property_profiles 同形态：101–401 只有百居易标题（room_number 为空，走标题兜底）；9999 供 K-周末分日；9801/9802 同号异栋，9801 用带楼栋的 room_number，9802 靠标题。房号匹配统一走 item_coverage.resolve_rooms（房号身份 Spec §2.4）。"
+ "property_profiles_notes": "与生产 property_profiles 同形态：101–401 只有百居易标题（room_number 为空，走标题兜底）；9999 供 K-周末分日；9801/9802 同号异栋，9801 用带楼栋的 room_number，9802 靠标题。房号匹配统一走 item_coverage.resolve_rooms（房号身份 Spec §2.4）。 9701/9702（room_number 7701、7702）各有一条专属卫浴资料（9905、9906），供 K-房号追问（房号追问 Spec §2.6）。"
 }
