@@ -215,8 +215,8 @@ README.md[SV5T]: F:规定逐版本发布记录的审计内容、更正与敏感�
 1.70.0.md[SV5S]: F:记录1.70.0修复、七轮门禁、正式发布与独立现场验收，追加周末及序数日保守回复的影响更正。 | R:code:CHANGELOG.md,code:docs/releases/1.70.1.md | A:本地证据；rc1至rc7；正式发布；备份与容器；登录验收；RV-2影响更正 | S:rc7非154场全过；标签2ff0079不随补录移动；503为既有回调降级，真实收件未验。1.70.1关联为在途修复，不能当已部署。
 1.70.1.md[SV5S]: F:记录1.70.1周末静态日期与分段保护的改动、验证、I71-R1修复、真实模型门禁、发布部署、登录核对及测试号真实收发。 | R:code:docs/specs/2026-10-13_weekend-static-date-spec.md,code:docs/reviews/2026-10-14_claude-to-codex-weekend-static-date-i71-fix-handoff.md | A:改动表；证据时序；I71-R1；rc-1.70.1-1/2门禁；c6b4e17发布与三态核对；登录页面与测试号收发补录 | S:K-周末分日因规划漏填房号1/2通过，用户决定留作已知未通过。生产无早餐资料，分天作答与转交成功路径未经真实收发验证；健康降级仅因Hostex回调从未收到。
 1.70.2.md[SV5M]: F:记录房号身份实施、IRI补修、门禁及AV-102修复、正式发布与收件，并追加失败归因更正。 | R:code:docs/specs/2026-10-15_room-identity-resolution-spec.md,code:docs/releases/1.70.3.md | A:分轮修复；候选门禁；正式发布；三态核对；真实收件；归因更正 | S:末节撤回确定波动归因；缺原始规划不能定根因。停车收件通过，异栋并列未生产实测。
-1.70.3.md[SV5T]: F:记录房号片段工具覆盖修复、门禁与正式部署证据，区分服务端测试号结果及待确认收件，追加静态省略边界。 | R:code:docs/specs/2026-10-15_room-identity-resolution-spec.md,code:docs/specs/2026-10-17_room-follow-up-topic-spec.md | A:改动与验证；候选all；421ec77发布；三态核对；服务端结果；归因更正 | S:客户端收件未闭合；固定规划对照不能定位门禁波动根因，静态误标仅为离线反例。
-1.70.4.md[SV6S]: F:记录1.70.4房号省略追问的改动、三轮复审修复、候选门禁、正式提交部署与现场核对及未完成验收。 | R:code:docs/specs/2026-10-17_room-follow-up-topic-spec.md,code:docs/reviews/2026-10-18_claude-to-codex-1.70.4-release-handoff.md | A:改动清单；复审修复；门禁表；部署核对；未覆盖 | S:后节数字取代前节；门禁场景从早餐改卫浴，因夹具与全店早餐钟点矛盾；收发与诊断页待做，不能视为真实验收通过。
+1.70.3.md[SV5T]: F:记录房号片段工具覆盖修复、门禁与正式部署证据，区分服务端测试号结果与客户端收件，追加静态省略边界及收件补记。 | R:code:docs/specs/2026-10-15_room-identity-resolution-spec.md,code:docs/releases/1.70.4.md | A:改动与验证；候选all；421ec77发布；三态核对；归因更正；收件补记 | S:原测试消息客户端收件始终未单独确认；同类问法的端到端收件由1.70.4证明，不能倒推1.70.3原消息已收。
+1.70.4.md[SV6S]: F:记录1.70.4房号省略追问的改动、三轮复审修复、候选门禁、部署核对、诊断页与测试号真实收发及发布复审更正。 | R:code:docs/specs/2026-10-17_room-follow-up-topic-spec.md,code:docs/specs/2026-10-18_tool-target-binding-spec.md,code:docs/reviews/2026-10-18_codex-to-claude-1.70.4-release-review.md | A:改动清单；复审修复；门禁表；部署核对；归因更正；收发验收 | S:后节取代前节；已上线仍有RV174-1/2两项P2；门禁波动只倾向既有不稳，6次对照无逐次原始记录；卫浴换题不代表早餐冲突已解。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-09-08-evidence/===
 pytest-output.txt[TQ3S]: F:保存离线回归原始输出、真实外部契约跳过原因与依赖及SQLite清理警告 | R:- | A:1406passed,15skipped,6warnings | S:历史结果含真实外部契约跳过，不能充当当前验收。
@@ -341,6 +341,7 @@ README.md[SQ5T]: F:说明评审报告及复现证据入库的原因、目录与�
 2026-10-17_codex-to-claude-1.70.4-review-fix-review.md[SQ5S]: F:复审R174补修并建议本版延期静态回退，分析人工接管代价，交接政策误拦和工具目标串用两项P2。 | R:code:docs/reviews/2026-10-17-room-follow-up-implementation-evidence/review_fix_probe.py,code:docs/reviews/2026-10-17_claude-to-codex-1.70.4-review-fix-handoff.md | A:349项独立回归；I174-4影响与A/B；F174-1/2；修复验收；摘要绑定 | S:A仅为范围建议未代用户选择；反例合成且未改业务，未验真实模型、生产或收件。
 2026-10-17_claude-to-codex-1.70.4-review-fix2-handoff.md[SV5T]: F:交接F174-1政策咨询误拦与F174-2工具类型串用的修复、新增验收及I174-4取A。 | R:code:src/homestay_bot/integrations/deepseek_client.py,code:docs/specs/2026-10-17_room-follow-up-topic-spec.md | A:动作判据改不可转交；按工具类型分目标；验收；I174-4 | S:按类型分目标只在存在静态单元时生效，无单元轮次仍沿用整轮目标。
 2026-10-18_claude-to-codex-1.70.4-release-handoff.md[SV6T]: F:交接1.70.4发布证据、最终行为、发布阶段未审改动、已知上限与未完成验收，供Codex审查。 | R:code:docs/releases/1.70.4.md,code:docs/specs/2026-10-17_room-follow-up-topic-spec.md | A:证据总表；最终行为；未审改动；上限；待办 | S:门禁换话题、无单元检索边界修复和退步对照均未经Codex审查；F-堵了与SR-遗失按旧版对照判为既有波动。
+2026-10-18_codex-to-claude-1.70.4-release-review.md[SQ5S]: F:复审1.70.4发布与F174补修，交接跨日期串用和全店遗漏两项P2、共享修复验收及门禁归因建议。 | R:code:docs/reviews/2026-10-17-room-follow-up-implementation-evidence/release_review_probe.py,code:docs/releases/1.70.4.md | A:RV174-1/2；424项回归；CI与候选一致性；换题和波动分析；修复顺序 | S:两个P2为合成控制，非已证新增回归或线上事故；6次对照原始结果未定位，真实模型生产收件未复验，不授权修复发布。
 
 ===/Volumes/02/obsidian/docs/specs/===
 2026-09-09_room-calendar-visual-optimization-spec.md[SU6M]: F:制定连续房间日历的精确计划端点、最少轨道分配、共用日期坐标、客户入口与响应式可访问性规格及验收。 | R:code:docs/specs/2026-09-10_room-card-redesign.md,code:src/homestay_bot/services/admin_operations_service.py | A:15时/12时区间几何；半开区间最少轨道；V01至V16；原生滚动与链接 | S:后续房卡方案改为每住宿独立显示轨道并取消横滚，不可混用旧视觉要求；12至15时间隙是计划周转，不证明实际退房、准备完成或可售。
@@ -398,6 +399,7 @@ README.md[SQ5T]: F:说明评审报告及复现证据入库的原因、目录与�
 2026-10-13_weekend-static-date-spec.md[SA6S]: F:制定1.70.1静态周末日期v4方案，统一冻结范围、分段阻断与预算、ISO日期展示和新增场景验收，并记实施期修订。 | R:code:docs/reviews/2026-10-14_codex-to-claude-weekend-static-date-spec-v4-review.md,code:docs/releases/1.70.1.md | A:W1至W7；共享日期与阻断；D-W6单日ISO；预检及来源配对；三次验收与all；A1至A10；实施期修订 | S:不同对象保留整项否决，任段阻断禁原单元转交。§2.5任一次失败禁发布，仅K-周末分日经用户2026-10-14决定例外。
 2026-10-15_room-identity-resolution-spec.md[SA5M]: F:规定房号原文优先、身份快照、静态绑定与工具筛选，追加枚举同日交接、片段职责及区间和目录覆盖契约。 | R:code:src/homestay_bot/services/item_coverage.py,code:src/homestay_bot/integrations/deepseek_client.py | A:身份快照与R1至R10；D-R1至R5；门禁；IRI修订；AV-102与片段职责；§13端点和目录 | S:§13完整区间两端须匹配，仅退房端点保守未绑定；目录按房源不比住宿日期，文档不代验收。
 2026-10-17_room-follow-up-topic-spec.md[SA5M]: F:规定房号省略追问的原文结构、A至D职责绑定、日期条件与候选隔离、工具三态，并追加实施补充、I174-4决定与门禁话题调整。 | R:code:src/homestay_bot/integrations/deepseek_client.py,code:src/homestay_bot/services/item_coverage.py,code:tests/fixtures/guest_reply_scenarios.json | A:两步判定；冻结单元；预算与转交；工具消费；实施补充；I174-4与门禁 | S:首部待确认状态已被§6取代；纯静态硬调用后的静态回退本版延期而非完成；房间专属与全店资料钟点冲突时的优先级未定。
+2026-10-18_tool-target-binding-spec.md[SA6S]: F:规定工具结果按需求的工具类型、住宿区间与全店或点名范围逐次匹配展示，修复RV174-1日期串用与RV174-2全店收窄。 | R:code:src/homestay_bot/integrations/deepseek_client.py,code:docs/specs/2026-10-17_room-follow-up-topic-spec.md | A:现状证据；需求清单；逐次匹配；覆盖同一依据；回归门禁；决策D1至D5 | S:v1待确认未编码；仅在存在静态单元时生效，无区间需求视为匹配任意日期，模型改日期则不展示。
 
 ===/Volumes/02/obsidian/docs/specs/assets/===
 2026-09-16_room-timeline-mobile-proto.html[SU4M]: F:以三个手机宽度静态原型对比旧分段日历与日期条、迷你占用轨和订单卡提案，展示稀疏和跨窗重叠场景。 | R:code:docs/specs/2026-09-16_room-timeline-mobile-redesign-spec.md | A:自包含HTML/CSS；A旧样式/B提案/C密集场景 | S:日期、几何与状态硬编码，链接均为井号；不能当真实房态、动态倒计时或客户导航验收。
@@ -668,7 +670,7 @@ reply_regression.py[TQ8L]: F:以虚构业务资料运行真实模型回复回归
 
 ===/Volumes/02/obsidian/tasks/===
 lessons.md[SQ6T]: F:收集尚未归并的发布验收、证据边界与客服泛化防回归教训，供后续确认并归入开发手册 | R:code:YuMi民宿AI开发经验与防回归手册.md | A:- | S:只收已有代码或测试依据的新教训；长期有效后归并唯一对应章节并删除本处正文，历史由Git保留
-todo.md[SW5L]: F:跟踪1.70.3房号片段覆盖的修复、门禁及正式部署，分列测试号服务端核对与待确认客户端收件，保留历史任务。 | R:code:docs/releases/1.70.3.md,code:docs/specs/2026-10-15_room-identity-resolution-spec.md | A:修复与复审；版本记录；all门禁；提交CI部署；服务端核对；客户端待办 | S:服务端与部署已勾选，客户端实际收件仍未勾选；历史授权不授本轮外部操作。
+todo.md[SW5L]: F:跟踪待确认的1.70.5工具目标补修与观察项，记录1.70.4、1.70.3发布及验收勾选状态，保留历史任务。 | R:code:docs/specs/2026-10-18_tool-target-binding-spec.md,code:docs/releases/1.70.4.md | A:1.70.5待开始；1.70.4已发布；1.70.3收件补记；历史任务 | S:1.70.5未获开始不得编码；1.70.3原消息收件未单独确认，只由1.70.4同类问法证明。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-10-08-fix2-implementation-review-evidence/===
 coverage_probe.py[TB5S]: F:用成对问法离线复现ISO年份误作房号、房价词污染早餐与静态小句日期错用，并经过真实会话及事务发件箱输出最终正文。 | R:code:tests/unit/test_reply_fix2_items.py,code:tests/integration/test_knowledge_referrals.py | A:main；answer；show；PYTHONPATH=src:.:tests:tests/integration | S:退出0证明缺陷；日期用真实SQLite检索，模型及工具均合成；final入队不证明平台受理或收件。
@@ -697,3 +699,5 @@ f6_fix_dates_probe.py[TB5T]: F:离线复现枚举交接丢失相对日期、缺�
 ===/Volumes/02/obsidian/docs/reviews/2026-10-17-room-follow-up-implementation-evidence/===
 probe.py[TB5S]: F:离线复现1.70.4跨漏项借话题、工具职责竞争、静态房源混入房态、预算误转交候选和门禁错配放行。 | R:code:src/homestay_bot/integrations/deepseek_client.py,code:src/homestay_bot/services/knowledge_service.py | A:main；answer；show；PYTHONPATH=src:.:tests | S:退出0证明反例；计划模型工具合成，预算用真实检索加内存仓储；转交仅验候选，未写库或外发。
 review_fix_probe.py[TB5T]: F:离线复现新增动作守卫误伤加床退房政策，以及房态与参考价共用目标造成交叉展示。 | R:code:src/homestay_bot/integrations/deepseek_client.py,code:src/homestay_bot/services/answer_policy.py | A:policy_probe；mixed_tools_probe；main | S:退出0证明反例；模型工具资料合成，临时关闭守卫仅为进程对照且恢复；不证明线上发生率。
+release_review_probe.py[TB5S]: F:离线复现1.70.4不同日期工具目标串用、全店需求被点名收窄，并验证空小句项级检索修复入口。 | R:code:src/homestay_bot/integrations/deepseek_client.py,code:tests/unit/test_reply_fix2_items.py | A:main；DatedTools.execute；PYTHONPATH=src:.:tests | S:退出0证明六个缺陷控制成立及一个正向控制通过；工具日期逐次绑定入参，模型工具均合成，不证明生产或修复验收。
+gate_control_repeat.py[TQ3T]: F:在API容器临时目录用门禁运行器把指定场景各重复N次，只输出判定次数与路由，供版本间波动对照。 | R:code:src/homestay_bot/tools/reply_regression.py | A:main | S:读当前目录fixture.json，调用真实模型；只打印汇总，不保存逐次记录。

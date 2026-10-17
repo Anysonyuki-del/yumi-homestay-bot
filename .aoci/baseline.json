@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-10-17T16:14:05Z",
+  "updated_at": "2026-10-17T17:19:04Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "0656283d06b7a7bb4c5c6837b7c92439f7a2281af62fb3b15fe324b7519a33c5",
-      "size": 305047,
-      "normalized_sha256": "0656283d06b7a7bb4c5c6837b7c92439f7a2281af62fb3b15fe324b7519a33c5"
+      "sha256": "e049bbb0137ca471ce373d47fea00de0871dfad3d38bfeb014a4229fdfbc7492",
+      "size": 307025,
+      "normalized_sha256": "e049bbb0137ca471ce373d47fea00de0871dfad3d38bfeb014a4229fdfbc7492"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1172,15 +1172,15 @@
     },
     "docs/releases/1.70.3.md": {
       "role": "index",
-      "sha256": "16911cce34f41ff120029037370a3332f70596530fdabc2649368b87c7a2800b",
-      "size": 8098,
-      "normalized_sha256": "16911cce34f41ff120029037370a3332f70596530fdabc2649368b87c7a2800b"
+      "sha256": "4c57657c622b7e0717c62f5b3eada929086ca80cb55ab9154a9f10aae0f45341",
+      "size": 8583,
+      "normalized_sha256": "4c57657c622b7e0717c62f5b3eada929086ca80cb55ab9154a9f10aae0f45341"
     },
     "docs/releases/1.70.4.md": {
       "role": "index",
-      "sha256": "fb1b807b9ff834184add9986f6565357632f1c01945f2fd8161fa4c28a1471d1",
-      "size": 11131,
-      "normalized_sha256": "fb1b807b9ff834184add9986f6565357632f1c01945f2fd8161fa4c28a1471d1"
+      "sha256": "932e7f638d529c643f06e828ca2b67af09049ef4fa2f445ff10415fc89fc38f9",
+      "size": 15644,
+      "normalized_sha256": "932e7f638d529c643f06e828ca2b67af09049ef4fa2f445ff10415fc89fc38f9"
     },
     "docs/releases/README.md": {
       "role": "index",
@@ -1872,11 +1872,23 @@
       "size": 6575,
       "normalized_sha256": "8aa198b9072c7ff44d1478178be690913241e61dbc9f1361c8e9c3edba8e17d7"
     },
+    "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/gate_control_repeat.py": {
+      "role": "index",
+      "sha256": "f4ca16123a9ada2699655256a044c6caf63d9231fd374c998c2060acbf663a74",
+      "size": 757,
+      "normalized_sha256": "f4ca16123a9ada2699655256a044c6caf63d9231fd374c998c2060acbf663a74"
+    },
     "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/probe.py": {
       "role": "index",
       "sha256": "d0825ac2e057b39f9c3a7c3ff87ef37e7ccf9b278826da41f2334cf68729c27b",
       "size": 6558,
       "normalized_sha256": "d0825ac2e057b39f9c3a7c3ff87ef37e7ccf9b278826da41f2334cf68729c27b"
+    },
+    "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/release_review_probe.py": {
+      "role": "index",
+      "sha256": "ab4388fb436404a74c6256e0f1c130f14b6a2e23e08cbf3e6b2d7ee70299c48e",
+      "size": 4384,
+      "normalized_sha256": "ab4388fb436404a74c6256e0f1c130f14b6a2e23e08cbf3e6b2d7ee70299c48e"
     },
     "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/review_fix_probe.py": {
       "role": "index",
@@ -1997,6 +2009,12 @@
       "sha256": "e3dfecb5a31f0a48ddb8580ea6355ae619a60b59d3fc0628046cf029e9e9ee8b",
       "size": 6336,
       "normalized_sha256": "e3dfecb5a31f0a48ddb8580ea6355ae619a60b59d3fc0628046cf029e9e9ee8b"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.4-release-review.md": {
+      "role": "index",
+      "sha256": "48e1ab9995335c9964cf4c3f90cd578dbbdf7d74f1eb472b283cd0424f3b1e0c",
+      "size": 14676,
+      "normalized_sha256": "48e1ab9995335c9964cf4c3f90cd578dbbdf7d74f1eb472b283cd0424f3b1e0c"
     },
     "docs/reviews/README.md": {
       "role": "index",
@@ -2333,6 +2351,12 @@
       "sha256": "e97f30054b8090896cf53b566dd5d3aeb6d356b84f64a0e3582e73cb0ca7e8d5",
       "size": 24475,
       "normalized_sha256": "e97f30054b8090896cf53b566dd5d3aeb6d356b84f64a0e3582e73cb0ca7e8d5"
+    },
+    "docs/specs/2026-10-18_tool-target-binding-spec.md": {
+      "role": "index",
+      "sha256": "9314d1553546e41c640547000474803d6e51602b6ecb38a927067224b8792e8f",
+      "size": 8544,
+      "normalized_sha256": "9314d1553546e41c640547000474803d6e51602b6ecb38a927067224b8792e8f"
     },
     "docs/specs/assets/2026-09-16_room-timeline-mobile-proto.html": {
       "role": "index",
@@ -3712,9 +3736,9 @@
     },
     "tasks/todo.md": {
       "role": "index",
-      "sha256": "4a588e30bdacadb652659e4e0a915a3551e480ca7066b95903c1899e5987c62f",
-      "size": 123820,
-      "normalized_sha256": "4a588e30bdacadb652659e4e0a915a3551e480ca7066b95903c1899e5987c62f"
+      "sha256": "8e55b030274365cf848d5e4bac07a5e96d61f77b240e11de99405bb0f3093c24",
+      "size": 124956,
+      "normalized_sha256": "8e55b030274365cf848d5e4bac07a5e96d61f77b240e11de99405bb0f3093c24"
     },
     "tests/__init__.py": {
       "role": "observe",
