@@ -545,6 +545,29 @@ class _StaticUnit:
     tool_flags: tuple[bool, bool, bool] = (False, False, False)
     # 只用于 C：父句词面像动作或订房请求时为假。照常取证作答，但真缺资料不转交（F174-1）。
     referable: bool = True
+    # 只用于 B：父工具问法的（计划项编号, 小句序号）。工具目标按父句已证明的日期与周末方案
+    # 冻结（V2-R1），`dates` 只在找不到父句检查时兜底。
+    parent: tuple[int, int] | None = None
+
+
+# 一条工具检查：（小句序号, 小句, (房态, 参考价, 目录), 目标, 说明原文, 允许的周末住法）。
+_ToolCheck = tuple[int, Clause, tuple[bool, bool, bool], ClauseTarget, str,
+                   tuple[tuple[date, date], ...]]
+
+
+@dataclass(frozen=True)
+class _ToolNeed:
+    """一条工具需求（工具目标 Spec v2 §5.2）：与覆盖判定同一份目标，加展示用的房号解析。
+
+    - `target`：`_layout_tool_checks` 给出的 `ClauseTarget`；unbound 的需求不授权展示；
+    - `rooms`：展示筛选用的房号解析；status 为 none 表示全店（没点房号、也没继承到房源），
+      不能与「没有需求」混用；
+    - `options`：裸「周末」需求允许的两种住法；为空时只认目标自己的日期。
+    """
+
+    target: ClauseTarget
+    rooms: RoomResolution
+    options: tuple[tuple[date, date], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -563,6 +586,7 @@ class _Previous:
     trigger: str = ""
     flags: tuple[bool, bool, bool] = (False, False, False)
     referable: bool = True
+    index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -587,6 +611,11 @@ class _ItemLayout:
     # 为真，工具开放、筛选与组合都按此收口（房号省略追问 Spec §2.7）。
     units: dict[int, _StaticUnit] = field(default_factory=dict)
     tool_free: bool = False
+    # 有静态单元时，只按非单元小句的房号解析出的「工具用项房源」及其唯一房源。静态单元点名
+    # 的房间不能决定工具问法的目标（R174-3）：「明天还有房吗，302早餐几点，401呢」里的
+    # 「明天还有房吗」是全店需求，不能因整项点了 302、401 被判为无法绑定（工具目标 Spec v2）。
+    tool_room: RoomResolution | None = None
+    tool_property: int | None = None
 
 
 # 没有点名房号：工具行不按房间筛选。
@@ -1587,7 +1616,6 @@ class DeepSeekGuestAssistant:
         身份快照解析一次，按房源编号比较；无法确定的房号不拿已确认住宿的房间代替。
         """
         clauses = split_clauses(question_text)
-        led = self._static_led_follow_ups(clauses, question_text)
         layout: dict[int, _ItemLayout] = {}
         for item in plan_items:
             if item.kind not in _PROPERTY_FACT_KINDS:
@@ -1600,7 +1628,7 @@ class DeepSeekGuestAssistant:
             needs = tuple(clause_needs(clause.text) for clause in spans)
             clause_room, delegated, coverage_texts, orphans = self._clause_rooms(
                 question_text, spans, needs, identities, property_id, today,
-                item.check_in_date, item.check_out_date, led,
+                item.check_in_date, item.check_out_date,
             )
             date_names = {
                 match.group(0) for match in EXPLICIT_STAY_DATE_PATTERN.finditer(item.quote)
@@ -1638,7 +1666,19 @@ class DeepSeekGuestAssistant:
                 static_dates=static_dates,
                 split_static=any(bound != item_dates for bound in static_dates),
             )
-        return self._bind_units(layout, plan_items, clauses, question_text, today)
+        bound = self._bind_units(layout, plan_items, clauses, question_text, today)
+        for item_id, entry in bound.items():
+            if entry.units:
+                mentions = [
+                    mention for index, clause in enumerate(entry.clauses)
+                    if index not in entry.units for mention in room_mentions(clause.text)
+                ]
+                room = resolve_rooms(mentions, identities, property_id)
+                bound[item_id] = replace(
+                    entry, tool_room=room,
+                    tool_property=property_id if room.status == "none" else room.property_id,
+                )
+        return bound
 
     @staticmethod
     def _gap_reason(reason: str) -> str:
@@ -1936,30 +1976,67 @@ class DeepSeekGuestAssistant:
         parts: list[ReplyPart] = []
         gaps: list[GapUnit] = []
         ask_dates = False
-        year = self._local_date_provider().year
+        all_checks = self._layout_tool_checks(layout, self._local_date_provider())
         for entry in sorted(layout.values(), key=lambda value: value.item.start):
+            checks = [check[1:] for check in all_checks.get(entry.item.id, [])]
+            if self._check_tool_targets(entry.item, checks, evidence, reported, price_clarified,
+                                        entry.property_id, language, parts, gaps):
+                ask_dates = True
+        if ask_dates and not price_clarified:
+            parts.append(ReplyPart(
+                question="房态日期",
+                status="clarification",
+                text=(
+                    _AVAILABILITY_DATES_REPLY_EN if language is Language.EN
+                    else _AVAILABILITY_DATES_REPLY_ZH
+                ),
+            ))
+        return parts, gaps
+
+    @staticmethod
+    def _layout_tool_checks(
+        layout: dict[int, _ItemLayout], today: date
+    ) -> dict[int, list[_ToolCheck]]:
+        """各计划项要用工具核对的检查（`_ToolCheck`），覆盖判定与工具结果展示共用。
+
+        工具目标 Spec v2 §5.2（R175-1/R175-2、V2-R1）：目标里的日期端点以小句自己写明的为准，
+        允许继承时才用规划日期；房源包括从同项唯一房源继承的。裸「周末」小句冻结两种住法。
+        - 住宿、目录项：带工具锚点的小句按自己的锚点；房号片段（`orphans`）自己没有锚点，按
+          本项其他小句的需要核对，一个锚点都没有时住宿项核房态、目录项核房源列表；
+        - B 类单元（接在工具问法后的省略追问）第二遍处理：按父工具问法的事实类型、父句已证明
+          的日期端点与周末住法核对，房源用追问自己的；子项标签不能把工具承接改成静态失败
+          （R174-2）。找不到父句检查时才退回冻结的父项规划日期。
+        """
+        checks: dict[int, list[_ToolCheck]] = {}
+        by_clause: dict[tuple[int, int], _ToolCheck] = {}
+        year = today.year
+
+        def options_for(
+            text: str, target: ClauseTarget, item_quote: str
+        ) -> tuple[tuple[date, date], ...]:
+            """小句（或继承整项日期的小句所在的整项）是裸「周末」写法、目标没写日期或落在其中
+            一种住法上时，允许两种住法。
+
+            小句自己没写任何日期时，它的日期来自整项：「这周末401有房吗，501多少钱」里的「501
+            多少钱」问的同样是这个周末，两种住法都要认，否则周六那种住法的结果会被筛掉。
+            """
+            if target.unbound:
+                return ()
+            named = clause_dates(text, year)
+            own_date = named.check_in or named.check_out or named.relative or named.unbindable
+            options = weekend_stay_options(text if own_date else item_quote, today)
+            if len(options) >= 2 and (
+                target.check_in is None or target.check_in in {start for start, _ in options}
+            ):
+                return tuple(options)
+            return ()
+
+        for entry in layout.values():
             item = entry.item
-            # 静态事实项里接在工具问法后的省略追问（B 类单元）：沿用父问法的事实类型和住宿
-            # 日期，按追问自己的房源核对；子项标签不能把工具承接改成静态失败（R174-2）。
-            checks: list[tuple[Clause, tuple[bool, bool, bool], ClauseTarget, str]] = [
-                (
-                    entry.clauses[index], unit.tool_flags,
-                    ClauseTarget(
-                        entry.clause_rooms[index].property_ids
-                        + ((None,) if entry.clause_rooms[index].unresolved else ()),
-                        unit.dates[0], unit.dates[1], False,
-                    ),
-                    entry.clauses[index].text,
-                )
-                for index, unit in sorted(entry.units.items()) if unit.kind == "B"
-            ]
+            found: list[_ToolCheck] = []
+            checks[item.id] = found
             if item.kind not in {"stay_query", "catalog_query"}:
-                if self._check_tool_targets(item, checks, evidence, reported, price_clarified,
-                                            entry.property_id, language, parts, gaps):
-                    ask_dates = True
                 continue
-            # 本项要的工具事实：房号片段（`orphans`）自己没有锚点，按本项其他小句的需要核对；
-            # 一个锚点都没有时，住宿项核房态、目录项核房源列表。
             item_needs = [needs for needs in entry.needs if needs.tool_facts]
             item_flags = (
                 any(n.availability for n in item_needs) or (
@@ -1970,11 +2047,11 @@ class DeepSeekGuestAssistant:
                     not item_needs and item.kind == "catalog_query"
                 ),
             )
-            for clause, needs, room, shown, orphan in zip(
+            for index, (clause, needs, room, shown, orphan) in enumerate(zip(
                 entry.clauses, entry.needs, entry.clause_rooms, entry.coverage_texts,
                 entry.orphans, strict=True,
-            ):
-                if not needs.tool_facts and orphan is None:
+            )):
+                if index in entry.units or (not needs.tool_facts and orphan is None):
                     continue
                 flags = (
                     (needs.availability, needs.price, needs.catalog) if needs.tool_facts
@@ -1993,33 +2070,50 @@ class DeepSeekGuestAssistant:
                 target = fragment_target if orphan is not None else clause_target(
                     clause.text,
                     clause_room=room,
-                    item_room=entry.item_room,
+                    item_room=entry.tool_room or entry.item_room,
                     item_relative_dates=entry.relative_dates,
                     item_date_names=entry.date_names,
                     item_check_in=item.check_in_date,
                     item_check_out=item.check_out_date,
-                    item_property=entry.property_id,
+                    item_property=entry.tool_property if entry.tool_room else entry.property_id,
                     year=item.check_in_date.year if item.check_in_date else year,
                 )
-                checks.append((clause, flags, target, shown))
-            if self._check_tool_targets(item, checks, evidence, reported, price_clarified,
-                                        entry.property_id, language, parts, gaps):
-                ask_dates = True
-        if ask_dates and not price_clarified:
-            parts.append(ReplyPart(
-                question="房态日期",
-                status="clarification",
-                text=(
-                    _AVAILABILITY_DATES_REPLY_EN if language is Language.EN
-                    else _AVAILABILITY_DATES_REPLY_ZH
-                ),
-            ))
-        return parts, gaps
+                # 同项里接在工具问法后的省略追问已在 `_bind_units` 冻结为 B，由下面第二遍按父句
+                # 处理（F175-4）；这里只剩不是省略句式的房号片段（「我想住302」），按 1.70.3 的
+                # 整项规则用本项事实类型与规划日期。
+                options = options_for(clause.text, target, item.quote)
+                check = (index, clause, flags, target, shown, options)
+                found.append(check)
+                by_clause[(item.id, index)] = check
+        for entry in sorted(layout.values(), key=lambda value: value.item.start):
+            for index, unit in sorted(entry.units.items()):
+                if unit.kind != "B":
+                    continue
+                room = entry.clause_rooms[index]
+                ids = room.property_ids + ((None,) if room.unresolved else ())
+                parent = by_clause.get(unit.parent) if unit.parent else None
+                if parent is not None:
+                    parent_target, parent_options = parent[3], parent[5]
+                    target = ClauseTarget(
+                        ids, parent_target.check_in, parent_target.check_out,
+                        parent_target.unbound,
+                    )
+                    options = parent_options
+                else:
+                    target = ClauseTarget(ids, unit.dates[0], unit.dates[1], False)
+                    options = ()
+                clause = entry.clauses[index]
+                check = (index, clause, unit.tool_flags, target, clause.text, options)
+                checks[entry.item.id].append(check)
+                # 连续 B 追问（「302呢，501呢」）的父句仍是最初的工具问法，不需要再登记。
+        return checks
 
     def _check_tool_targets(
         self,
         item: PlanItem,
-        checks: Sequence[tuple[Clause, tuple[bool, bool, bool], ClauseTarget, str]],
+        checks: Sequence[tuple[
+            Clause, tuple[bool, bool, bool], ClauseTarget, str, tuple[tuple[date, date], ...]
+        ]],
         evidence: Sequence[Any],
         reported: set[str],
         price_clarified: bool,
@@ -2033,7 +2127,7 @@ class DeepSeekGuestAssistant:
         住宿、目录项的小句与静态项里的 B 类追问共用这一套判定；返回是否需要追问入住日期。
         """
         ask_dates = False
-        for clause, flags, target, shown in checks:
+        for clause, flags, target, shown, options in checks:
             wanted = [
                 (kind, tool)
                 for flag, (kind, tool) in zip(flags, (
@@ -2060,7 +2154,19 @@ class DeepSeekGuestAssistant:
                         ) if target.property_ids else bool(catalog_rows)
                     )
                 else:
-                    covered = evidence_covers(evidence, kind, target)
+                    # 裸周末需求：实际查过的每种住法都要覆盖（V2-R1），一种都没查到时按目标本身
+                    # 核对；不能第一种住法有这个房间就认为第二种也答到了。
+                    shown_options = [
+                        option for option in options
+                        if any(row.source_kind == kind and row.target_date == option[0]
+                               for row in evidence)
+                    ]
+                    covered = all(
+                        evidence_covers(evidence, kind, replace(
+                            target, check_in=option[0], check_out=option[1]
+                        ))
+                        for option in shown_options
+                    ) if shown_options else evidence_covers(evidence, kind, target)
                 if covered:
                     continue
                 if (
@@ -2321,74 +2427,125 @@ class DeepSeekGuestAssistant:
         plan_items: Sequence[PlanItem],
         identities: Sequence[RoomIdentity] | None,
         property_id: int | None,
-        turn_rooms: RoomResolution,
-    ) -> dict[str, RoomResolution | None] | None:
-        """各类工具结果的筛选目标，按工具类型分别区分三种状态（房号省略追问 Spec §2.7）。
+        today: date,
+    ) -> dict[str, list[_ToolNeed]] | None:
+        """各类工具的需求清单（工具目标 Spec v2 §5.2）。
 
-        返回空值表示沿用整轮房号解析（本轮没有任何静态单元，不扩大改动面）。否则按房态、
-        参考价、目录三类事实分别计算，避免只问房态的房间出现在参考价里、反之亦然（F174-2）：
-        - 这类事实没有任何需求：该工具的目标为空值，分项不展示、不算覆盖；空集合绝不当作全店；
-        - 有需求但都没点名房间：解析结果为 none，沿用全店或上下文目标语义，静态单元点名的
-          房间不会把它收窄；
-        - 有点名：只按需要这类事实的部分点名的房间筛选，空筛选不扩大。
-        需要某类事实的部分：带这类锚点的小句；未交接的房号片段与项里没有锚点时的其余小句，
-        按本项的事实类型（与 `_tool_coverage` 同一口径）；B 类追问按父问法的事实类型；订房
-        请求项的摘录要房态，问价时也要参考价。
+        返回空值表示沿用整轮房号解析（本轮没有任何单元，不扩大改动面，D-2）；这里的单元既包括
+        静态单元（C、own、D、elsewhere），也包括 B 工具追问。否则需求
+        直接取覆盖判定同一份检查（`_layout_tool_checks`），展示与缺口核对不会各算各的
+        （R175-1 日期以小句为准、R175-2 承接房号不当全店）。另有两类：
+        - 住宿、目录项一个工具锚点、房号片段都没有（又不是纯静态项）时，整项按本项房源与规划
+          日期作一条展示需求，避免结果被静默丢弃；
+        - 订房请求项不在布局里：摘录房号加本项规划日期，要房态，问价时也要参考价。
+        裸「周末」需求冻结两种住法（`weekend_stay_options`），查询侧逐个住法消费（R175-3）。
         """
         if not any(entry.units for entry in layout.values()):
             return None
         names = ("search_availability", "search_reference_price", "list_properties")
-        texts: dict[str, list[str]] = {name: [] for name in names}
+        needs: dict[str, list[_ToolNeed]] = {name: [] for name in names}
 
-        def add(text: str, flags: Sequence[bool]) -> None:
-            """按（房态, 参考价, 目录）标记把原文计入对应工具的需求。"""
+        def add(flags: Sequence[bool], target: ClauseTarget, rooms: RoomResolution,
+                options: tuple[tuple[date, date], ...]) -> None:
+            """按（房态, 参考价, 目录）把一条需求计入对应工具；全店与继承房源在此区分。"""
+            if rooms.status == "none" and any(pid is not None for pid in target.property_ids):
+                ids = tuple(dict.fromkeys(pid for pid in target.property_ids if pid is not None))
+                rooms = RoomResolution("resolved" if len(ids) == 1 else "multiple", ids)
             for name, flag in zip(names, flags, strict=True):
                 if flag:
-                    texts[name].append(text)
+                    needs[name].append(_ToolNeed(target, rooms, options))
+
+        def weekend(text: str, target: ClauseTarget) -> tuple[tuple[date, date], ...]:
+            """不在布局里的需求（订房请求、整项兜底）也认裸「周末」的两种住法。"""
+            options = weekend_stay_options(text, today)
+            return tuple(options) if len(options) >= 2 and (
+                target.check_in is None or target.check_in in {start for start, _ in options}
+            ) else ()
+
+        all_checks = DeepSeekGuestAssistant._layout_tool_checks(layout, today)
 
         for item in plan_items:
             entry = layout.get(item.id)
             if entry is None:
                 if item.kind == "booking_request":
-                    add(item.quote, (True, asks_room_price(item.quote), False))
+                    rooms = resolve_rooms(room_mentions(item.quote), identities, property_id)
+                    target = ClauseTarget(
+                        rooms.property_ids, item.check_in_date, item.check_out_date, False,
+                    )
+                    add((True, asks_room_price(item.quote), False), target, rooms,
+                        weekend(item.quote, target))
                 continue
-            # B 类追问是父工具问法的目标，与它在哪种计划项里无关（R174-2）。
-            for index, unit in sorted(entry.units.items()):
-                if unit.kind == "B":
-                    add(entry.clauses[index].text, unit.tool_flags)
-            if entry.tool_free:
-                continue
-            anchored = [needs for needs in entry.needs if needs.tool_facts]
-            item_flags = (
-                any(n.availability for n in anchored)
-                or (not anchored and item.kind == "stay_query"),
-                any(n.price for n in anchored),
-                any(n.catalog for n in anchored)
-                or (not anchored and item.kind == "catalog_query"),
-            )
-            found = False
-            for index, (clause, needs, orphan) in enumerate(
-                zip(entry.clauses, entry.needs, entry.orphans, strict=True)
+            checks = all_checks.get(item.id, [])
+            for index, _clause, flags, target, _shown, options in checks:
+                add(flags, target, entry.clause_rooms[index], options)
+            if (
+                not checks and not entry.tool_free
+                and item.kind in {"stay_query", "catalog_query"}
             ):
-                if index in entry.units:
-                    continue
-                if needs.tool_facts:
-                    add(clause.text, (needs.availability, needs.price, needs.catalog))
-                    found = True
-                elif orphan is not None:
-                    add(clause.text, item_flags)
-                    found = True
-            if not found and item.kind in {"stay_query", "catalog_query"}:
-                for index, clause in enumerate(entry.clauses):
-                    if index not in entry.units:
-                        add(clause.text, item_flags)
-        return {
-            name: resolve_rooms(
-                [mention for text in wanted for mention in room_mentions(text)],
-                identities, property_id,
-            ) if wanted else None
-            for name, wanted in texts.items()
-        }
+                owner = entry.tool_property if entry.tool_room else entry.property_id
+                target = ClauseTarget((owner,) if owner else (), item.check_in_date,
+                                      item.check_out_date, False)
+                add((item.kind == "stay_query", False, item.kind == "catalog_query"), target,
+                    entry.tool_room or entry.item_room, weekend(item.quote, target))
+        return needs
+
+    @staticmethod
+    def _tool_rooms_for(
+        needs: dict[str, list[_ToolNeed]] | None,
+        name: str,
+        arguments: dict[str, Any],
+        turn_rooms: RoomResolution,
+    ) -> RoomResolution | None:
+        """一次实际查询（周末展开后逐个住法）的筛选目标（工具目标 Spec v2 §5.3）。
+
+        - 没有按需求重算（无静态单元）或不是房态、参考价、目录工具：沿用整轮房号解析；
+        - 跳过 unbound 需求；目录不比日期；需求没有日期也不是周末时视为匹配任何日期（D-1）；
+          否则入住日相等、需求有退房日时退房日也相等（与覆盖「只写入住日」同一合同），裸
+          周末需求两种住法都认；
+        - 匹配到全店需求时按全店展示；都是点名时合并各需求的房号解析后严格筛选，状态取最保守；
+          一条都没匹配上时不展示、不算覆盖，由覆盖判定报缺口。
+        """
+        if needs is None or name not in needs:
+            return turn_rooms
+        check_in = DeepSeekGuestAssistant._safe_trace_date(arguments.get("check_in_date"))
+        check_out = DeepSeekGuestAssistant._safe_trace_date(arguments.get("check_out_date"))
+
+        def matches(need: _ToolNeed) -> bool:
+            """这条需求是否问的就是本次查询的住宿方案。"""
+            target = need.target
+            if target.unbound:
+                return False
+            if name == "list_properties":
+                return True
+            if target.check_in is None and target.check_out is None and not need.options:
+                return True
+            # 每个已给出的端点都要相等，与覆盖判定 `evidence_covers` 同一合同；只写退房日的
+            # 目标也核对退房日，不能当成任意日期（V2-R2）。
+            allowed = [
+                *([(target.check_in, target.check_out)]
+                  if target.check_in is not None or target.check_out is not None else []),
+                *need.options,
+            ]
+            return any(
+                (start is None or start == check_in) and (end is None or end == check_out)
+                for start, end in allowed
+            )
+
+        matched = [need for need in needs[name] if matches(need)]
+        if not matched:
+            return None
+        if any(need.rooms.status == "none" for need in matched):
+            return RoomResolution("none")
+        ids = tuple(dict.fromkeys(pid for need in matched for pid in need.rooms.property_ids))
+        unresolved = tuple(dict.fromkeys(
+            text for need in matched for text in need.rooms.unresolved
+        ))
+        statuses = {need.rooms.status for need in matched}
+        status = next(
+            (worst for worst in ("unavailable", "ambiguous", "unknown") if worst in statuses),
+            "resolved" if len(ids) == 1 else "multiple",
+        )
+        return RoomResolution(status, ids, unresolved)
 
     @classmethod
     def _bind_units(
@@ -2407,8 +2564,9 @@ class DeepSeekGuestAssistant:
         D 类（无父句、跨行、父句是动作或订房、房号对不上或歧义、日期未绑定）。
         - 相邻按冻结全文的真实小句判断（R174-1）：规划没覆盖的小句同样占位并阻断，计划合法
           不等于覆盖完整，不能在计划列表里跳过中间的原文去借更早的话题；
-        - B 类只看原文父句，不看子项标签（R174-2）：住宿、目录项里沿用 1.70.3 的房号片段覆盖；
-          静态事实项里冻结 B 单元，由工具覆盖按父问法的事实类型与住宿日期核对；
+        - B 类只看原文父句，不看子项标签和剩余文字（R174-2、F175-4）：合法工具父句后的结构
+          追问统一冻结 B 单元（同项、跨项、静态项一致），由工具覆盖按父句的事实类型、已证明的
+          日期端点与周末住法核对；
         - 只继承问题，不继承父答案或候选（§2.5）：规范问法是父问题去掉房号与日期后接上追问
           房号，日期取父问题已证明的日期，附加条件只取父问题已绑定的原文；
         - 同一原文区间只归一个计划项：起点更早、覆盖更短、编号更小（§2.4），与数组顺序无关；
@@ -2456,13 +2614,18 @@ class DeepSeekGuestAssistant:
             ):
                 mention = room_mentions(clause.text)[0].text
                 if parent is not None and parent.role == "tool":
-                    # 同一住宿、目录项里的追问沿用 1.70.3 的房号片段覆盖（事实类型取本项）；
-                    # 跨计划项或在静态项里时冻结 B 单元，按父问法的事实类型核对，不看子项标签。
-                    if item.kind == "static_fact" or parent.item_id != item.id:
-                        units.setdefault(item.id, {})[index] = _StaticUnit(
-                            "B", clause.text, None, parent.dates or (None, None), "",
-                            clause.text, parent.flags,
-                        )
+                    # 接在工具问法后的省略追问一律冻结 B 单元（同项、跨项、静态项一致），按父问法
+                    # 的事实类型、日期与周末住法核对，房源用追问自己的；不看子项标签，也不看追问
+                    # 剩余文字是否为空——「302也是吗」剩「也是」，同样是工具追问（F175-4）。
+                    units.setdefault(item.id, {})[index] = _StaticUnit(
+                        "B", clause.text, None, parent.dates or (None, None), "",
+                        clause.text, parent.flags,
+                        parent=(
+                            (parent.item_id, parent.index)
+                            if parent.item_id is not None and parent.index is not None
+                            else None
+                        ),
+                    )
                     previous = replace(parent, end=end)
                     continue
                 if (
@@ -2489,7 +2652,7 @@ class DeepSeekGuestAssistant:
             if needs.tool_facts:
                 previous = _Previous(
                     end, "tool", item.id, dates=(item.check_in_date, item.check_out_date),
-                    flags=(needs.availability, needs.price, needs.catalog),
+                    flags=(needs.availability, needs.price, needs.catalog), index=index,
                 )
                 continue
             if not needs.residue:
@@ -2554,31 +2717,6 @@ class DeepSeekGuestAssistant:
         return is_service_request(text) or is_booking_action_request(text)
 
     @staticmethod
-    def _static_led_follow_ups(
-        clauses: Sequence[Clause], question_text: str
-    ) -> frozenset[tuple[int, int]]:
-        """原文里紧跟静态问题（或已承接静态话题的追问）、同一行的省略追问区间。
-
-        在旧的工具枚举交接之前确定，让省略承接先于「房号片段并入后面的工具问法」生效
-        （R174-2）。这里只用原文结构判断，最终类别仍由 `_bind_units` 按计划归属确定；真正的
-        工具枚举（「明天302，401还有房吗」）不是省略句式，不受影响。
-        """
-        led: set[tuple[int, int]] = set()
-        static = False
-        previous_end: int | None = None
-        for clause in clauses:
-            adjacent = previous_end is not None and "\n" not in question_text[
-                previous_end:clause.start
-            ]
-            if adjacent and static and is_room_follow_up(clause.text):
-                led.add((clause.start, clause.end))
-            else:
-                needs = clause_needs(clause.text)
-                static = bool(needs.residue) and not needs.tool_facts
-            previous_end = clause.end
-        return frozenset(led)
-
-    @staticmethod
     def _asks_static(item: PlanItem, needs: ClauseNeeds) -> bool:
         """这个小句有没有要用审核资料回答的内容。
 
@@ -2602,7 +2740,6 @@ class DeepSeekGuestAssistant:
         today: date,
         item_check_in: date | None,
         item_check_out: date | None = None,
-        led: frozenset[tuple[int, int]] = frozenset(),
     ) -> tuple[
         tuple[RoomResolution, ...], tuple[bool, ...], tuple[str, ...], tuple[str | None, ...]
     ]:
@@ -2659,9 +2796,12 @@ class DeepSeekGuestAssistant:
         pending: list[tuple[int, date | None]] = []
         for index, (clause, need) in enumerate(zip(spans, needs, strict=True)):
             dated, day = own_day(clause.text)
-            if (clause.start, clause.end) in led:
-                # 紧跟静态问题的省略追问先归静态承接（`_bind_units`），不并入后面的工具问法，
-                # 否则「401早餐几点，302呢，明天501还有房吗」里的 302 会被查房抢走（R174-2）。
+            if is_room_follow_up(clause.text):
+                # 结构上属于省略追问的片段（「302呢」）一律不参与向后枚举，交给 `_bind_units`
+                # 判定：有合法父句就承接（工具父句为 B、静态父句为 C），句首、跨行、被动作或漏项
+                # 阻断时为未绑定（D）。否则它会被后面的工具问法抢走、被擅自改成后一句的日期和
+                # 事实类型（R174-2 静态父句、F175-2 工具父句、F175-3 无有效父句）。前置裸房号枚举
+                # 「明天302，401还有房吗」不是省略句式，仍向后合并。
                 pending = []
                 continue
             if not need.tool_facts and not need.residue and room_mentions(clause.text):
@@ -4385,13 +4525,13 @@ class DeepSeekGuestAssistant:
         gap_offers = self._gap_unit_offers(fact_layout)
         # 工具结果的筛选目标（房号省略追问 Spec §2.7）：本轮有省略追问单元时按真正需要工具的
         # 部分重算，空值表示本轮没有任何工具需求，工具分项不展示、不算覆盖。
-        tool_targets = self._tool_targets(
-            fact_layout, plan_items, room_identities, property_id, turn_rooms
+        tool_needs = self._tool_targets(
+            fact_layout, plan_items, room_identities, property_id, local_today
         )
 
-        def tool_rooms_for(name: str) -> RoomResolution | None:
-            """某个工具结果的筛选目标；没有按类型重算时沿用整轮房号解析。"""
-            return turn_rooms if tool_targets is None else tool_targets.get(name, turn_rooms)
+        def tool_rooms_for(name: str, arguments: dict[str, Any]) -> RoomResolution | None:
+            """某次实际查询的筛选目标；没有按需求重算时沿用整轮房号解析。"""
+            return self._tool_rooms_for(tool_needs, name, arguments, turn_rooms)
 
         envelope = self._build_context_envelope(
             question_text=minimized_question,
@@ -4661,7 +4801,10 @@ class DeepSeekGuestAssistant:
                                         **trace_dates,
                                     )
                                 )
-                            if tool_rooms_for(call.function.name) is not None:
+                            if any(
+                                tool_rooms_for(call.function.name, option) is not None
+                                for option in option_arguments
+                            ):
                                 tool_parts.append(
                                     ReplyPart(
                                         question=call.function.name,
@@ -4700,7 +4843,8 @@ class DeepSeekGuestAssistant:
                             tool_parts.extend(
                                 self._tool_reply_parts(
                                     call.function.name, arguments, result, language, call.id,
-                                    question_text, tool_rooms_for(call.function.name),
+                                    question_text,
+                                    tool_rooms_for(call.function.name, option_arguments[0]),
                                 )
                             )
                         else:
@@ -4708,7 +4852,10 @@ class DeepSeekGuestAssistant:
                             tool_parts.extend(self._weekend_reply_parts(
                                 call.function.name, option_arguments, option_results,
                                 language, call.id, question_text,
-                                tool_rooms_for(call.function.name),
+                                option_rooms=[
+                                    tool_rooms_for(call.function.name, option)
+                                    for option in option_arguments
+                                ],
                             ))
                             result = [
                                 {
@@ -4720,7 +4867,10 @@ class DeepSeekGuestAssistant:
                                     option_arguments, option_results, strict=True
                                 )
                             ]
-                        if tool_parts:
+                        # 按需求筛选后（`tool_needs` 非空）工具结果可能整份不对应任何需求而被
+                        # 丢弃，工具本身仍执行成功：照常构造回执，静态答案保留，所问事实由覆盖
+                        # 判定报未查到；否则后续协议失败会让整轮不可用（工具目标 Spec §2.2）。
+                        if tool_parts or tool_needs is not None:
                             availability_fallback = AssistantDecision(
                                 reply_text="",
                                 language=language,
@@ -4860,10 +5010,19 @@ class DeepSeekGuestAssistant:
         source_id: str,
         question: str,
         rooms: RoomResolution | None = _NO_ROOM,
+        *,
+        option_rooms: Sequence[RoomResolution | None] | None = None,
     ) -> list[ReplyPart]:
-        """两种周末住法分别成组：先写「方案一：周五入住、周日退房」，再写该方案的结果。"""
-        if rooms is None:
-            # 本轮没有任何工具需求（房号省略追问 Spec §2.7），不展示住法分组。
+        """两种周末住法分别成组：先写「方案一：周五入住、周日退房」，再写该方案的结果。
+
+        `option_rooms` 给出每种住法各自的筛选目标（工具目标 Spec v2 §5.4）；某种住法没有
+        对应需求（目标为空值）时跳过该组，两种都没有时不展示住法分组。
+        """
+        targets = list(option_rooms) if option_rooms is not None else [rooms] * len(
+            option_arguments
+        )
+        if all(target is None for target in targets):
+            # 本轮没有任何对应的工具需求（房号省略追问 Spec §2.7），不展示住法分组。
             return []
         english = language is Language.EN
         labels = (
@@ -4881,14 +5040,18 @@ class DeepSeekGuestAssistant:
                 else "「周末」有两种住法，都帮您查了，您看哪种合适："
             ),
         )]
-        for index, (option, option_result) in enumerate(
-            zip(option_arguments, option_results, strict=True)
+        for index, (option, option_result, target) in enumerate(
+            zip(option_arguments, option_results, targets, strict=True)
         ):
+            if target is None:
+                continue
             label_en, label_zh = labels[index]
             option_parts = DeepSeekGuestAssistant._tool_reply_parts(
                 name, option, option_result, language, f"{source_id}:{index}", question,
-                rooms,
+                target,
             )
+            if not option_parts:
+                continue
             # 方案名紧贴在该方案结果上方，不单独空一行；只改排版，证据不变。
             first = option_parts[0]
             option_parts[0] = first.model_copy(

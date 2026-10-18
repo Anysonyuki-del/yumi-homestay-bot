@@ -1449,3 +1449,759 @@ async def test_parent_period_veto_does_not_block_follow_up():
     decision = await _follow_up(FU_TEXT, FU_PLANS["P4"](FU_TEXT), entries=[*FU_ENTRIES, veto])
     assert "9:00" in decision.reply_text and "8:00" not in decision.reply_text
     assert [(g.reason, g.property_id) for g in decision.gap_units] == [("period_veto", 401)]
+
+
+# ── 1.70.5 工具结果按需求绑定日期与范围（工具目标 Spec 2026-10-18，RV174-1、RV174-2）──
+
+LATER = {"check_in_date": "2026-10-10", "check_out_date": "2026-10-11"}
+
+
+class _DatedTools:
+    """每次调用都返回 401、302、501 三间，行日期与本次参数一致（接口不按房号过滤的形状）。"""
+
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, name, arguments):
+        """按本次参数生成行；参考价带当晚价格。"""
+        self.calls.append((name, dict(arguments)))
+        rows = _rows(name, (401, 302, 501))
+        for row in rows:
+            row.update(arguments)
+            if name == "search_reference_price":
+                row["nightly_reference_prices"] = [
+                    {"date": arguments["check_in_date"], "price": 200}
+                ]
+        return rows
+
+
+async def _dated_turn(text, items, calls, *, fallback=False):
+    """按给定计划与工具调用跑一轮，静态资料用 FU_ENTRIES。"""
+    responses = [_tool_message(name, args) for name, args in calls]
+    responses.append("invalid" if fallback else _decision())
+    assistant, _ = _assistant(responses, _Knowledge(list(FU_ENTRIES), FU_ROOMS), _DatedTools())
+    return await _respond(assistant, text, plan_for(text, *items))
+
+
+def _block(reply, label):
+    """取某个住宿区间标题之后、下一个空行之前的那段房态。"""
+    start = reply.index(label)
+    end = reply.find("\n\n", start)
+    return reply[start:] if end < 0 else reply[start:end]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_same_tool_different_dates_keep_their_own_rooms(fallback):
+    """RV174-1：10月8日问 401、10月10日问 302，两个日期各自只展示本日期点名的房间。"""
+    text = "10月8日401有房吗，10月10日302有房吗，501早餐几点，401呢"
+    decision = await _dated_turn(text, [
+        ("stay_query", "10月8日401有房吗", {"target_room": "401", **ARGS}),
+        ("stay_query", "10月10日302有房吗", {"target_room": "302", **LATER}),
+        ("static_fact", "501早餐几点，401呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS), ("search_availability", LATER)], fallback=fallback)
+    reply = decision.reply_text
+    assert _block(reply, "10月8日入住").endswith("可订：401测试房")
+    assert _block(reply, "10月10日入住").endswith("可订：302测试房")
+    assert "501测试房" not in reply and "7:30" in reply and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_reference_prices_do_not_cross_dates(fallback):
+    """RV174-1 参考价：不出现 302 的 10月8日价格和 401 的 10月10日价格。"""
+    text = "10月8日401多少钱，10月10日302多少钱，501早餐几点，401呢"
+    decision = await _dated_turn(text, [
+        ("stay_query", "10月8日401多少钱", {"target_room": "401", **ARGS}),
+        ("stay_query", "10月10日302多少钱", {"target_room": "302", **LATER}),
+        ("static_fact", "501早餐几点，401呢", {"target_room": "501"}),
+    ], [("search_reference_price", ARGS), ("search_reference_price", LATER)],
+        fallback=fallback)
+    reply = decision.reply_text
+    assert "401测试房：10月8日 200元" in reply and "302测试房：10月10日 200元" in reply
+    assert "302测试房：10月8日" not in reply and "401测试房：10月10日" not in reply
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_whole_store_need_is_not_narrowed_by_a_named_need(fallback):
+    """RV174-2：同日「明天还有房吗」与「明天302有房吗」并存，全店结果照常展示三间。"""
+    text = "明天还有房吗，明天302有房吗，501早餐几点，401呢"
+    decision = await _dated_turn(text, [
+        ("stay_query", "明天还有房吗", dict(ARGS)),
+        ("stay_query", "明天302有房吗", {"target_room": "302", **ARGS}),
+        ("static_fact", "501早餐几点，401呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS)], fallback=fallback)
+    assert "可订：401测试房、302测试房、501测试房" in decision.reply_text
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_whole_store_on_one_date_does_not_open_another_date(fallback):
+    """全店只在 10月8日：10月10日的结果仍只展示点名的 302，全店范围不跨日期放开。"""
+    text = "10月8日还有房吗，10月10日302有房吗，501早餐几点，401呢"
+    decision = await _dated_turn(text, [
+        ("stay_query", "10月8日还有房吗", dict(ARGS)),
+        ("stay_query", "10月10日302有房吗", {"target_room": "302", **LATER}),
+        ("static_fact", "501早餐几点，401呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS), ("search_availability", LATER)], fallback=fallback)
+    reply = decision.reply_text
+    assert _block(reply, "10月8日入住").endswith("可订：401测试房、302测试房、501测试房")
+    assert _block(reply, "10月10日入住").endswith("可订：302测试房")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_call_on_an_unasked_date_is_not_shown(fallback):
+    """模型查了计划外的日期：结果不展示，所问日期没有证据时按覆盖判定报未查到。"""
+    text = "10月8日401有房吗，501早餐几点，302呢"
+    decision = await _dated_turn(text, [
+        ("stay_query", "10月8日401有房吗", {"target_room": "401", **ARGS}),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", LATER)], fallback=fallback)
+    reply = decision.reply_text
+    assert "10月10日入住" not in reply and "测试房" not in reply
+    assert "7:30" in reply and "9:00" in reply
+    assert [g.reason for g in decision.gap_units] == ["tool_uncovered"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_need_without_planned_dates_matches_the_call(fallback):
+    """D-1：规划没给住宿日期时，需求视为匹配本次调用的日期，401 的结果照常展示。"""
+    text = "401有房吗，501早餐几点，302呢"
+    decision = await _dated_turn(text, [
+        ("stay_query", "401有房吗", {"target_room": "401"}),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS)], fallback=fallback)
+    assert "可订：401测试房" in decision.reply_text
+    assert "302测试房" not in decision.reply_text and "501测试房" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+async def test_catalog_need_is_not_filtered_by_stay_dates():
+    """目录需求不带住宿区间：同轮有带日期的查房时，全店目录照常展示，不按日期过滤。"""
+    text = "有什么房型，501早餐几点，302呢"
+    rows = [{"id": n, "title": f"{n}房间"} for n in (401, 302, 501)]
+    assistant, _ = _assistant(
+        [_tool_message("list_properties", {}), _decision()],
+        _Knowledge(list(FU_ENTRIES), FU_ROOMS), _Tools({"list_properties": rows}),
+    )
+    decision = await _respond(assistant, text, plan_for(
+        text, ("catalog_query", "有什么房型", dict(ARGS)),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ))
+    assert all(f"{n}房间" in decision.reply_text for n in (401, 302, 501))
+
+
+# ── 1.70.5 工具目标 Spec v2：展示与覆盖共用目标（R175-1 至 R175-3）────────────────
+
+FRIDAY = {"check_in_date": "2026-10-09", "check_out_date": "2026-10-11"}
+SATURDAY = {"check_in_date": "2026-10-10", "check_out_date": "2026-10-12"}
+
+
+class _FullNightTools(_DatedTools):
+    """参考价覆盖住宿区间的每一晚，避免替身自身缺晚造成假缺口。"""
+
+    async def execute(self, name, arguments):
+        rows = await super().execute(name, arguments)
+        if name == "search_reference_price":
+            start = date.fromisoformat(arguments["check_in_date"])
+            end = date.fromisoformat(arguments["check_out_date"])
+            nights = [
+                {"date": date.fromordinal(start.toordinal() + i).isoformat(), "price": 200}
+                for i in range((end - start).days)
+            ]
+            for row in rows:
+                row["nightly_reference_prices"] = nights
+        return rows
+
+
+class _PriceDown(_FullNightTools):
+    """参考价查询失败，房态正常。"""
+
+    async def execute(self, name, arguments):
+        if name == "search_reference_price":
+            raise RuntimeError("synthetic_price_failure")
+        return await super().execute(name, arguments)
+
+
+async def _v2_turn(text, items, calls, *, fallback=False, tools=None):
+    """经核验计划跑一轮；工具默认按参数返回三房、参考价覆盖每晚。"""
+    plan = plan_for(text, *items)
+    assert plan.ok
+    responses = [_tool_message(name, args) for name, args in calls]
+    responses.append("invalid" if fallback else _decision())
+    assistant, _ = _assistant(
+        responses, _Knowledge(list(FU_ENTRIES), FU_ROOMS), tools or _FullNightTools()
+    )
+    return await _respond(assistant, text, plan)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("tool,ask", [("search_availability", "有房吗"),
+                                      ("search_reference_price", "多少钱")])
+async def test_two_dates_in_one_item_use_each_clause_date(tool, ask, fallback):
+    """R175-1：两个日期放在同一项（规划 10/8）时，10/10 的结果按小句日期展示，不丢、不串。"""
+    quote = f"10月8日401{ask}，10月10日302{ask}"
+    decision = await _v2_turn(quote + "，501早餐几点，401呢", [
+        ("stay_query", quote, dict(ARGS)),
+        ("static_fact", "501早餐几点，401呢", {"target_room": "501"}),
+    ], [(tool, ARGS), (tool, LATER)], fallback=fallback)
+    reply = decision.reply_text
+    if tool == "search_availability":
+        assert _block(reply, "10月8日入住").endswith("可订：401测试房")
+        assert _block(reply, "10月10日入住").endswith("可订：302测试房")
+    else:
+        assert "401测试房：10月8日" in reply and "302测试房：10月10日" in reply
+        assert "302测试房：10月8日" not in reply and "401测试房：10月10日" not in reply
+    assert "501测试房" not in reply and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_quote_date_wins_over_a_different_planned_date(fallback):
+    """R175-1：原文写 10月8日、规划误填 10/10，模型按 10/8 查到 401：按原文日期照常展示。"""
+    decision = await _v2_turn("10月8日401有房吗，501早餐几点，302呢", [
+        ("stay_query", "10月8日401有房吗", {"target_room": "401", **LATER}),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS)], fallback=fallback)
+    assert _block(decision.reply_text, "10月8日入住").endswith("可订：401测试房")
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_follow_up_without_room_inherits_the_items_room(fallback):
+    """R175-2：「明天401有房吗，能订吗」里的「能订吗」继承 401，不当成全店。"""
+    decision = await _v2_turn("明天401有房吗，能订吗，501早餐几点，302呢", [
+        ("stay_query", "明天401有房吗，能订吗", {"target_room": "401", **ARGS}),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS)], fallback=fallback)
+    reply = decision.reply_text
+    assert "可订：401测试房" in reply and "302测试房" not in reply and "501测试房" not in reply
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_enumeration_handoff_keeps_its_rooms(fallback):
+    """枚举交接「明天302，401还有房吗」与同项静态 501：房态列 302、401，不列 501。"""
+    text = "明天302，401还有房吗，501早餐几点"
+    decision = await _v2_turn(text, [("stay_query", text, dict(ARGS))],
+                              [("search_availability", ARGS)], fallback=fallback)
+    reply = decision.reply_text
+    assert "可订：302测试房、401测试房" in reply or "可订：401测试房、302测试房" in reply
+    assert "501测试房" not in reply and "7:30" in reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("planned", [FRIDAY, SATURDAY])
+@pytest.mark.parametrize("called", [FRIDAY, SATURDAY])
+async def test_weekend_both_options_shown_whatever_each_side_chose(planned, called, fallback):
+    """R175-3：规划与主模型各选周五或周六入住，两种住法都查到时都展示，不报缺口。"""
+    decision = await _v2_turn("这周末401有房吗，501早餐几点，302呢", [
+        ("stay_query", "这周末401有房吗", {"target_room": "401", **planned}),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", called)], fallback=fallback)
+    reply = decision.reply_text
+    assert "方案一" in reply and "方案二" in reply
+    assert "302测试房" not in reply and "501测试房" not in reply and not decision.gap_units
+
+
+@pytest.mark.asyncio
+async def test_explicit_date_does_not_expand_to_weekend_options():
+    """明确写了 10月9日 时不触发裸周末展开，只展示这一次查询。"""
+    decision = await _v2_turn("10月9日401有房吗，501早餐几点，302呢", [
+        ("stay_query", "10月9日401有房吗", {"target_room": "401", **FRIDAY}),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", FRIDAY)])
+    assert "方案二" not in decision.reply_text and "可订：401测试房" in decision.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_one_tool_fails_the_other_still_filtered(fallback):
+    """参考价失败、房态成功：房态只列 401，参考价如实说明没有确认，不扩大范围。
+
+    正常出口写「暂未成功」；工具后回退的回执在第一次成功查询后构造，后一次失败按覆盖判定
+    报「没有查到」，这是既有行为（与 v1.70.4 相同）。
+    """
+    decision = await _v2_turn("明天401有房吗，明天302多少钱，501早餐几点，401呢", [
+        ("stay_query", "明天401有房吗", {"target_room": "401", **ARGS}),
+        ("stay_query", "明天302多少钱", {"target_room": "302", **ARGS}),
+        ("static_fact", "501早餐几点，401呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS), ("search_reference_price", ARGS)],
+        fallback=fallback, tools=_PriceDown())
+    reply = decision.reply_text
+    assert "可订：401测试房" in reply and "302测试房" not in reply
+    assert ("没有查到对应的参考价" if fallback else "暂未成功") in reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_later_filtered_call_does_not_drop_an_earlier_result(fallback):
+    """两次成功查询，后一次（计划外日期）被全部筛掉，前一次的 401 结果照常保留。"""
+    decision = await _v2_turn("10月8日401有房吗，501早餐几点，302呢", [
+        ("stay_query", "10月8日401有房吗", {"target_room": "401", **ARGS}),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS), ("search_availability", LATER)], fallback=fallback)
+    reply = decision.reply_text
+    assert "可订：401测试房" in reply and "10月10日入住" not in reply
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_unknown_room_need_reports_not_found(fallback):
+    """对不上的房号 999：沿用房号身份 Spec 的既有合同，先说明没有找到再列全部房间，
+    覆盖判定报未查到（与 v1.70.4 相同）；静态追问提到的 302、501 不会让列表被收窄。"""
+    decision = await _v2_turn("明天999有房吗，501早餐几点，302呢", [
+        ("stay_query", "明天999有房吗", dict(ARGS)),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", ARGS)], fallback=fallback)
+    reply = decision.reply_text
+    assert "没有找到「999」这个房间，以下是全部房间" in reply
+    assert "可订：401测试房、302测试房、501测试房" in reply
+    assert [(g.text, g.reason) for g in decision.gap_units] == [("明天999有房吗", "tool_uncovered")]
+
+
+# ── 1.70.5 v2 复审 V2-R1、V2-R2：B 追问继承父句日期与周末方案，单端点按端点核对 ───────
+
+class _SaturdayMissing302(_FullNightTools):
+    """周六入住那种住法不返回 302，其余照常。"""
+
+    async def execute(self, name, arguments):
+        rows = await super().execute(name, arguments)
+        if arguments.get("check_in_date") == SATURDAY["check_in_date"]:
+            rows = [row for row in rows if row["property_id"] != 302]
+        return rows
+
+
+def _b_items(parent, planned, child_kind="static_fact"):
+    """父查房项、单独的「302呢」子项（B）与静态早餐项。"""
+    return [("stay_query", parent, {"target_room": "401", **planned}),
+            (child_kind, "302呢", {}),
+            ("static_fact", "501早餐几点，401呢", {"target_room": "501"})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("child_kind", ["static_fact", "stay_query"])
+async def test_b_follow_up_uses_parent_quote_date_not_plan(child_kind, fallback):
+    """V2-R1：父句原文写 10月8日、规划误填 10/10，工具按 10/8 返回：401、302 都展示。"""
+    parent = "10月8日401有房吗"
+    decision = await _v2_turn(parent + "，302呢，501早餐几点，401呢",
+                              _b_items(parent, LATER, child_kind),
+                              [("search_availability", ARGS)], fallback=fallback)
+    assert "可订：401测试房、302测试房" in decision.reply_text
+    assert "501测试房" not in decision.reply_text and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_b_follow_up_gets_both_weekend_options(fallback):
+    """V2-R1：「这周末401有房吗，302呢」规划周五、调用周六：两种住法里 302 都展示。"""
+    parent = "这周末401有房吗"
+    decision = await _v2_turn(parent + "，302呢，501早餐几点，401呢",
+                              _b_items(parent, FRIDAY),
+                              [("search_availability", SATURDAY)], fallback=fallback)
+    first, second = decision.reply_text.split("方案二")
+    assert "302测试房" in first and "302测试房" in second
+    assert "501测试房" not in decision.reply_text and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_b_follow_up_missing_in_second_weekend_option_is_reported(fallback):
+    """第二种住法没返回 302：该住法不列 302，并报 302 未查到，不能因第一种有就算答到。"""
+    parent = "这周末401有房吗"
+    decision = await _v2_turn(parent + "，302呢，501早餐几点，401呢",
+                              _b_items(parent, FRIDAY),
+                              [("search_availability", FRIDAY)], fallback=fallback,
+                              tools=_SaturdayMissing302())
+    first, second = decision.reply_text.split("方案二")
+    assert "302测试房" in first and "302测试房" not in second.split("\n\n")[0]
+    assert [(g.text, g.reason) for g in decision.gap_units] == [("302呢", "tool_uncovered")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_chained_b_follow_ups_inherit_the_same_parent_date(fallback):
+    """连续 B 追问「302呢，501呢」都按父句原文日期核对。"""
+    text = "10月8日401有房吗，302呢，501呢"
+    decision = await _v2_turn(text, [
+        ("stay_query", "10月8日401有房吗", {"target_room": "401", **LATER}),
+        ("static_fact", "302呢，501呢", {}),
+    ], [("search_availability", ARGS)], fallback=fallback)
+    assert "可订：401测试房、302测试房、501测试房" in decision.reply_text
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("called,shown", [
+    (ARGS, False),
+    ({"check_in_date": "2026-10-08", "check_out_date": "2026-10-11"}, True),
+])
+async def test_checkout_only_target_matches_its_checkout(called, shown, fallback):
+    """V2-R2：只写了 10月11日退房：查成 10/8–10/9 时不展示，按既有 D-G10 请客人补入住日期；
+    查 10/8–10/11 才展示。另一段静态 scope_unbound 与日期筛选无关，不在此断言。"""
+    decision = await _v2_turn("401在10月11日退房有房吗，501早餐几点，302呢", [
+        ("stay_query", "401在10月11日退房有房吗", {"target_room": "401", **called}),
+        ("static_fact", "501早餐几点，302呢", {"target_room": "501"}),
+    ], [("search_availability", called)], fallback=fallback)
+    assert ("可订：401测试房" in decision.reply_text) is shown
+    assert ("请问您计划哪天入住" in decision.reply_text) is (not shown)
+    assert not [g for g in decision.gap_units if g.reason == "tool_uncovered"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_same_item_fragment_uses_preceding_tool_clause_date(fallback):
+    """V2-R1 同项版本：「10月8日401有房吗，302呢」同一项、规划误填 10/10：302 按父句 10/8 展示。"""
+    text = "10月8日401有房吗，302呢，501早餐几点"
+    decision = await _v2_turn(text, [("stay_query", text, {"target_room": "401", **LATER})],
+                              [("search_availability", ARGS)], fallback=fallback)
+    assert "可订：401测试房、302测试房" in decision.reply_text
+    assert "501测试房" not in decision.reply_text and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("called", [FRIDAY, SATURDAY])
+async def test_same_item_fragment_gets_both_weekend_options(called, fallback):
+    """V2-R1 同项版本：「这周末401有房吗，302呢」同一项：两种住法里 302 都展示。"""
+    text = "这周末401有房吗，302呢，501早餐几点"
+    decision = await _v2_turn(text, [("stay_query", text, {"target_room": "401", **FRIDAY})],
+                              [("search_availability", called)], fallback=fallback)
+    first, second = decision.reply_text.split("方案二")
+    assert "302测试房" in first and "302测试房" in second and not decision.gap_units
+
+
+# ── 1.70.5 F175-1：同项省略追问只继承父工具问法的事实类型 ─────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("same_item", [False, True])
+@pytest.mark.parametrize("first_ask,second_ask,first_tool,second_tool", [
+    ("有房吗", "多少钱", "search_availability", "search_reference_price"),
+    ("多少钱", "有房吗", "search_reference_price", "search_availability"),
+])
+async def test_follow_up_needs_only_its_parents_fact(first_ask, second_ask, first_tool,
+                                                     second_tool, same_item, fallback):
+    """F175-1：「10月8日401有房吗，10月10日501多少钱，302呢」同项或拆项：302 只问父句的事实，
+    父句另一类事实不额外要求 302，不出多余的「没有查到」。"""
+    first, second = f"10月8日401{first_ask}", f"10月10日501{second_ask}"
+    parent = f"{first}，{second}，302呢"
+    items = ([("stay_query", parent, dict(ARGS))] if same_item else
+             [("stay_query", first, dict(ARGS)), ("stay_query", second, dict(LATER)),
+              ("static_fact", "302呢", {})])
+    items.append(("static_fact", "401早餐几点，501呢", {}))
+    decision = await _v2_turn(parent + "，401早餐几点，501呢", items,
+                              [(first_tool, ARGS), (second_tool, LATER)], fallback=fallback)
+    assert not decision.gap_units and "没有查到" not in decision.reply_text
+    if second_tool == "search_reference_price":
+        assert "302测试房：10月10日" in decision.reply_text
+    else:
+        later_block = _block(decision.reply_text, "10月10日入住")
+        assert "302测试房" in later_block and "501测试房" in later_block
+        assert "401测试房" not in later_block
+    # 302 不出现在父句以外的那类结果里。
+    if first_tool == "search_availability":
+        assert _block(decision.reply_text, "10月8日入住").endswith("可订：401测试房")
+    else:
+        assert "302测试房：10月8日" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_follow_up_not_shown_in_a_non_parent_fact_query(fallback):
+    """父句只问房态；模型另外查了同日参考价：302 不因虚假需求出现在参考价里。"""
+    text = "10月8日401有房吗，302呢，501早餐几点"
+    decision = await _v2_turn(text, [("stay_query", text, {"target_room": "401", **ARGS})],
+                              [("search_availability", ARGS), ("search_reference_price", ARGS)],
+                              fallback=fallback)
+    assert "可订：401测试房、302测试房" in decision.reply_text
+    assert "302测试房：10月8日" not in decision.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_mixed_facts_with_weekend_follow_up(fallback):
+    """混合事实加周末：「这周末401有房吗，501多少钱，302呢」同项，302 只按参考价、两种住法核对。"""
+    text = "这周末401有房吗，501多少钱，302呢，401早餐几点"
+    decision = await _v2_turn(text, [("stay_query", text, dict(FRIDAY))],
+                              [("search_availability", FRIDAY),
+                               ("search_reference_price", SATURDAY)], fallback=fallback)
+    reply = decision.reply_text
+    prices = reply[reply.index("以上为参考价") - 400:]
+    assert prices.count("302测试房：") == 2 and prices.count("501测试房：") == 2
+    assert "可订：401测试房、302测试房" not in reply and "可订：302测试房" not in reply
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_non_follow_up_fragment_keeps_item_rule(fallback):
+    """不是省略句式的片段（「我想住302」）不当成追问，仍按 1.70.3 的整项规则用规划日期：
+    规划 10/10、父句原文 10/8 时，302 不继承父句的 10/8，按 10/10 核对并报未查到。"""
+    text = "10月8日401有房吗，我想住302，501早餐几点"
+    decision = await _v2_turn(text, [("stay_query", text, {"target_room": "401", **LATER})],
+                              [("search_availability", ARGS)], fallback=fallback)
+    assert _block(decision.reply_text, "10月8日入住").endswith("可订：401测试房")
+    assert [(g.text, g.reason) for g in decision.gap_units] == [("我想住302", "tool_uncovered")]
+
+
+# ── 1.70.5 F175-2：工具父句后的省略追问不被后面的工具问法抢走 ────────────────────
+
+def _price_rooms(reply, day):
+    """参考价里某个日期出现的房间编号集合。"""
+    return {n for n in (401, 302, 501) if f"{n}测试房：{day}" in reply}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("same_item", [False, True])
+@pytest.mark.parametrize("first_ask,second_ask,first_tool,second_tool", [
+    ("有房吗", "多少钱", "search_availability", "search_reference_price"),
+    ("多少钱", "有房吗", "search_reference_price", "search_availability"),
+])
+async def test_follow_up_is_not_taken_by_a_later_tool_question_of_another_kind(
+    first_ask, second_ask, first_tool, second_tool, same_item, fallback
+):
+    """F175-2：「10月8日401有房吗，302呢，10月10日501多少钱，…」302 只在前句的事实与日期里出现。"""
+    first, second = f"10月8日401{first_ask}", f"10月10日501{second_ask}"
+    quote = f"{first}，302呢，{second}"
+    items = ([("stay_query", quote, dict(ARGS))] if same_item else
+             [("stay_query", first, dict(ARGS)), ("static_fact", "302呢", {}),
+              ("stay_query", second, dict(LATER))])
+    items.append(("static_fact", "401早餐几点，501呢", {}))
+    decision = await _v2_turn(quote + "，401早餐几点，501呢", items,
+                              [(first_tool, ARGS), (second_tool, LATER)], fallback=fallback)
+    reply = decision.reply_text
+    assert "7:30" in reply  # 「501呢」的静态承接：本轮确实存在静态单元
+    if first_tool == "search_availability":
+        assert _block(reply, "10月8日入住").endswith("可订：401测试房、302测试房")
+        assert _price_rooms(reply, "10月10日") == {501}
+    else:
+        assert _price_rooms(reply, "10月8日") == {401, 302}
+        assert _block(reply, "10月10日入住").endswith("可订：501测试房")
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_follow_up_keeps_its_parent_fact_on_the_same_day(fallback):
+    """同日不同工具：「明天401有房吗，302呢，明天501多少钱」302 只在房态里，不进参考价。"""
+    quote = "明天401有房吗，302呢，明天501多少钱"
+    decision = await _v2_turn(quote + "，401早餐几点，501呢", [
+        ("stay_query", quote, dict(ARGS)), ("static_fact", "401早餐几点，501呢", {}),
+    ], [("search_availability", ARGS), ("search_reference_price", ARGS)], fallback=fallback)
+    reply = decision.reply_text
+    assert "可订：401测试房、302测试房" in reply and _price_rooms(reply, "10月8日") == {501}
+    assert "7:30" in reply and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_chained_follow_ups_stay_with_the_first_parent(fallback):
+    """连续追问「302呢，501呢」都归前句的 10月8日房态，不被后面的 10月10日查房抢走。"""
+    quote = "10月8日401有房吗，302呢，501呢，10月10日401有房吗"
+    decision = await _v2_turn(quote + "，401早餐几点，302呢", [
+        ("stay_query", quote, dict(ARGS)), ("static_fact", "401早餐几点，302呢", {}),
+    ], [("search_availability", ARGS), ("search_availability", LATER)], fallback=fallback)
+    reply = decision.reply_text
+    assert _block(reply, "10月8日入住").endswith("可订：401测试房、302测试房、501测试房")
+    assert _block(reply, "10月10日入住").endswith("可订：401测试房")
+    assert "9:00" in reply and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_weekend_parent_follow_up_not_taken_by_a_later_price_question(fallback):
+    """周末父句后接参考价问法：302 在两种住法的房态里，不进 501 的参考价。"""
+    quote = "这周末401有房吗，302呢，501多少钱"
+    decision = await _v2_turn(quote + "，401早餐几点，501呢", [
+        ("stay_query", quote, dict(FRIDAY)), ("static_fact", "401早餐几点，501呢", {}),
+    ], [("search_availability", FRIDAY), ("search_reference_price", FRIDAY)],
+        fallback=fallback)
+    reply = decision.reply_text
+    stays = [block for block in reply.split("\n\n") if "可订：" in block]
+    assert len(stays) == 2 and all(b.endswith("可订：401测试房、302测试房") for b in stays)
+    assert "302测试房：" not in reply and reply.count("501测试房：") == 2
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_follow_up_after_a_line_break_in_the_same_item_is_not_inherited(fallback):
+    """同一计划项内换行后的「302呢」不承接（`_bind_units` 按全文换行冻结 D）：只答 401。"""
+    text = "10月8日401有房吗\n302呢，501早餐几点"
+    decision = await _v2_turn(text, [
+        ("stay_query", "10月8日401有房吗\n302呢", dict(ARGS)),
+        ("static_fact", "501早餐几点", {"target_room": "501"}),
+    ], [("search_availability", ARGS)], fallback=fallback)
+    assert "可订：401测试房" in decision.reply_text and "302测试房" not in decision.reply_text
+    assert ("302呢", "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+
+
+# ── 1.70.5 F175-3：没有有效父句的省略追问也不参与向后枚举 ────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("same_item", [False, True])
+@pytest.mark.parametrize("head", ["10月8日401有房吗\n", ""])
+async def test_unbound_follow_up_is_not_taken_by_a_later_tool_question(head, same_item,
+                                                                      fallback):
+    """F175-3：跨行或句首的「302呢」后面接「10月10日501有房吗」：同项、拆项都只答 501，
+    302 记 scope_unbound，不被擅自改成后一句的日期，也不转交。"""
+    quote = f"{head}302呢，10月10日501有房吗"
+    if same_item:
+        items = [("stay_query", quote, dict(LATER))]
+    else:
+        items = ([("stay_query", head.strip(), dict(ARGS))] if head else []) + [
+            ("static_fact", "302呢", {}), ("stay_query", "10月10日501有房吗", dict(LATER))]
+    items.append(("static_fact", "401早餐几点，501呢", {}))
+    calls = ([("search_availability", ARGS)] if head else []) + [("search_availability", LATER)]
+    decision = await _v2_turn(quote + "，401早餐几点，501呢", items, calls, fallback=fallback)
+    reply = decision.reply_text
+    assert "7:30" in reply  # 本轮存在静态单元
+    assert _block(reply, "10月10日入住").endswith("可订：501测试房")
+    if head:
+        assert _block(reply, "10月8日入住").endswith("可订：401测试房")
+    assert ("302呢", "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+    assert not decision.referral_candidates
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_action_blocked_follow_up_is_not_taken_by_a_later_tool_question(fallback):
+    """父句是服务事项（非事实项占位阻断）：「302呢」不承接，也不被后面的查房问法并走。"""
+    text = "麻烦送两瓶水，302呢，10月10日501有房吗，401早餐几点，501呢"
+    decision = await _v2_turn(text, [
+        ("service_request", "麻烦送两瓶水", {}),
+        ("stay_query", "302呢，10月10日501有房吗", dict(LATER)),
+        ("static_fact", "401早餐几点，501呢", {}),
+    ], [("search_availability", LATER)], fallback=fallback)
+    assert _block(decision.reply_text, "10月10日入住").endswith("可订：501测试房")
+    assert ("302呢", "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_leading_follow_up_is_not_an_enumeration(fallback):
+    """句首「302呢，401还有房吗」与裸房号枚举「302，401还有房吗」成对：前者不并入，后者并入。"""
+    for text, merged in [("302呢，明天401还有房吗，501早餐几点", False),
+                         ("302，明天401还有房吗，501早餐几点", True)]:
+        decision = await _v2_turn(text, [("stay_query", text, dict(ARGS))],
+                                  [("search_availability", ARGS)], fallback=fallback)
+        reply = decision.reply_text
+        assert ("302测试房" in reply) is merged and "可订：" in reply and "7:30" in reply
+        assert (("302呢", "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]
+                ) is (not merged)
+
+
+# ── 1.70.5 F175-4：已支持的非空剩余追问句式同样是工具追问 ─────────────────────────
+
+FOLLOW_UP_TAILS = ["302呢", "302也是吗", "302也一样吗", "302也这样吗"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("same_item", [False, True])
+@pytest.mark.parametrize("tail", FOLLOW_UP_TAILS)
+async def test_every_supported_tail_inherits_the_tool_parent(tail, same_item, fallback):
+    """F175-4：「10月8日401有房吗，302也是吗，10月10日501多少钱」四种已支持句尾，同项与拆项一致：
+    302 在 10/8 房态里，不进 10/10 的参考价，不出静态未确认。"""
+    first, second = "10月8日401有房吗", "10月10日501多少钱"
+    quote = f"{first}，{tail}，{second}"
+    items = ([("stay_query", quote, dict(ARGS))] if same_item else
+             [("stay_query", first, dict(ARGS)), ("static_fact", tail, {}),
+              ("stay_query", second, dict(LATER))])
+    items.append(("static_fact", "401早餐几点，501呢", {}))
+    decision = await _v2_turn(quote + "，401早餐几点，501呢", items,
+                              [("search_availability", ARGS),
+                               ("search_reference_price", LATER)], fallback=fallback)
+    reply = decision.reply_text
+    assert "7:30" in reply
+    assert _block(reply, "10月8日入住").endswith("可订：401测试房、302测试房")
+    assert _price_rooms(reply, "10月10日") == {501}
+    assert not decision.gap_units and "尚未确认" not in reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("tail", FOLLOW_UP_TAILS)
+async def test_every_supported_tail_after_a_price_parent(tail, fallback):
+    """父句问参考价：四种句尾的 302 都只在参考价里，不要求房态。"""
+    quote = f"明天401多少钱，{tail}"
+    decision = await _v2_turn(quote + "，501早餐几点", [("stay_query", quote, dict(ARGS))],
+                              [("search_reference_price", ARGS)], fallback=fallback)
+    reply = decision.reply_text
+    assert _price_rooms(reply, "10月8日") == {401, 302} and "可订：" not in reply
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail", FOLLOW_UP_TAILS)
+async def test_every_supported_tail_after_a_catalog_parent(tail):
+    """父句问目录：四种句尾的 302 按目录逐房核对；目录有 302 时不报缺口，也不走静态取证。"""
+    quote = f"401有什么房型，{tail}"
+    rows = [{"id": n, "title": f"{n}房间"} for n in (401, 302, 501)]
+    assistant, _ = _assistant(
+        [_tool_message("list_properties", {}), _decision()],
+        _Knowledge(list(FU_ENTRIES), FU_ROOMS), _Tools({"list_properties": rows}),
+    )
+    decision = await _respond(assistant, quote + "，501早餐几点",
+                              plan_for(quote + "，501早餐几点", ("catalog_query", quote, {})))
+    assert "302房间" in decision.reply_text and "尚未确认" not in decision.reply_text
+    assert not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_supported_tails_chain_and_keep_the_parent_quote_date(fallback):
+    """「也是吗」「也一样吗」连续追问，规划误填 10/10：都按父句原文 10/8 核对。"""
+    quote = "10月8日401有房吗，302也是吗，501也一样吗"
+    decision = await _v2_turn(quote + "，401早餐几点，302呢",
+                              [("stay_query", quote, dict(LATER)),
+                               ("static_fact", "401早餐几点，302呢", {})],
+                              [("search_availability", ARGS)], fallback=fallback)
+    assert _block(decision.reply_text, "10月8日入住").endswith(
+        "可订：401测试房、302测试房、501测试房"
+    )
+    assert "9:00" in decision.reply_text and not decision.gap_units
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_supported_tail_missing_in_second_weekend_option(fallback):
+    """周末父句后接「302也一样吗」：第二种住法缺 302 时该住法不列 302，并报 302 未查到。"""
+    quote = "这周末401有房吗，302也一样吗"
+    decision = await _v2_turn(quote + "，501早餐几点", [("stay_query", quote, dict(FRIDAY))],
+                              [("search_availability", FRIDAY)], fallback=fallback,
+                              tools=_SaturdayMissing302())
+    first, second = decision.reply_text.split("方案二")
+    assert "302测试房" in first and "302测试房" not in second.split("\n\n")[0]
+    assert [(g.text, g.reason) for g in decision.gap_units] == [
+        ("302也一样吗", "tool_uncovered")
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("tail", FOLLOW_UP_TAILS[1:])
+async def test_leading_supported_tail_is_unbound(tail, fallback):
+    """句首的「302也是吗」等没有父句：记 scope_unbound，不并入后面的查房问法。"""
+    quote = f"{tail}，10月10日501有房吗"
+    decision = await _v2_turn(quote + "，401早餐几点，501呢",
+                              [("stay_query", quote, dict(LATER)),
+                               ("static_fact", "401早餐几点，501呢", {})],
+                              [("search_availability", LATER)], fallback=fallback)
+    assert _block(decision.reply_text, "10月10日入住").endswith("可订：501测试房")
+    assert (tail, "scope_unbound") in [(g.text, g.reason) for g in decision.gap_units]

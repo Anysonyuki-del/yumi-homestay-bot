@@ -1200,6 +1200,38 @@
    "property_id": 9702,
    "valid_from": null,
    "valid_until": null
+  },
+  {
+   "id": 9907,
+   "category": "早餐",
+   "question_zh": "早餐几点开始？",
+   "answer_zh": "7701早餐8:15开始。",
+   "question_en": "What time does breakfast start?",
+   "answer_en": "See Chinese answer.",
+   "keywords": [
+    "早餐",
+    "breakfast"
+   ],
+   "scope": "property",
+   "property_id": 9701,
+   "valid_from": null,
+   "valid_until": null
+  },
+  {
+   "id": 9908,
+   "category": "早餐",
+   "question_zh": "早餐几点开始？",
+   "answer_zh": "7702早餐9:45开始。",
+   "question_en": "What time does breakfast start?",
+   "answer_en": "See Chinese answer.",
+   "keywords": [
+    "早餐",
+    "breakfast"
+   ],
+   "scope": "property",
+   "property_id": 9702,
+   "valid_from": null,
+   "valid_until": null
   }
  ],
  "knowledge_notes": {
@@ -5942,6 +5974,41 @@
      "7702(?:(?!7701)[\\s\\S])*?独立浴缸"
     ]
    }
+  },
+  {
+   "id": "K-房号追问-早餐冲突",
+   "category": "knowledge_direct",
+   "messages": [
+    {
+     "role": "user",
+     "content": "7701早餐几点开始？7702呢"
+    }
+   ],
+   "expect": {
+    "route": "knowledge",
+    "must_include": [
+     "8:15",
+     "9:45"
+    ],
+    "must_match": [
+     "7701(?:(?!7702)[\\s\\S])*?8[:：]15",
+     "7702(?:(?!7701)[\\s\\S])*?9[:：]45"
+    ],
+    "must_not_match": [
+     "7701(?:(?!7702)[\\s\\S])*?9[:：]45",
+     "7702(?:(?!7701)[\\s\\S])*?8[:：]15"
+    ],
+    "must_not_include": [
+     "入住日期"
+    ],
+    "handoff": false,
+    "notes": "诊断场景（工具目标 Spec 2026-10-18 D-3）：房间专属早餐（8:15、9:45）与全店早餐 9011（7:30至9:30）钟点不一致。rc-1.70.4-1 实测模型把 9011 标为相关，按既有收费、钟点冲突规则两间都回未确认。「房间专属资料与全店资料钟点不一致时以谁为准」的规则未定，本场景追踪该规则，先列已知未通过；承接本身由 K-房号追问（卫浴）覆盖。",
+    "source_ids": [
+     9907,
+     9908
+    ],
+    "knowledge_gap": false
+   }
   }
  ],
  "_expectation_changes": "2026-09-26（1.40.0）：PI-折扣 禁用片段由「五折」改为只拦答应折扣的说法；PI-内部、PI-提示词 期望路由改为允许普通模型路径作答，禁止泄露内部信息的禁令不变。见基线文件 expectation_changes。",
@@ -6007,5 +6074,5 @@
    "title": "虚构测试房7702"
   }
  ],
- "property_profiles_notes": "与生产 property_profiles 同形态：101–401 只有百居易标题（room_number 为空，走标题兜底）；9999 供 K-周末分日；9801/9802 同号异栋，9801 用带楼栋的 room_number，9802 靠标题。房号匹配统一走 item_coverage.resolve_rooms（房号身份 Spec §2.4）。 9701/9702（room_number 7701、7702）各有一条专属卫浴资料（9905、9906），供 K-房号追问（房号追问 Spec §2.6）。"
+ "property_profiles_notes": "与生产 property_profiles 同形态：101–401 只有百居易标题（room_number 为空，走标题兜底）；9999 供 K-周末分日；9801/9802 同号异栋，9801 用带楼栋的 room_number，9802 靠标题。房号匹配统一走 item_coverage.resolve_rooms（房号身份 Spec §2.4）。 9701/9702（room_number 7701、7702）各有一条专属卫浴资料（9905、9906），供 K-房号追问（房号追问 Spec §2.6）。 9907、9908 是 9701、9702 的专属早餐，供诊断场景 K-房号追问-早餐冲突。"
 }
