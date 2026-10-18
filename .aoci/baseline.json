@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-10-18T14:20:40Z",
+  "updated_at": "2026-10-18T14:48:51Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "12e08761c76f0f6f5533c5d7d51bcf2ddf4a5893f61961e579baa055a21e8a85",
-      "size": 315443,
-      "normalized_sha256": "12e08761c76f0f6f5533c5d7d51bcf2ddf4a5893f61961e579baa055a21e8a85"
+      "sha256": "a8f2e862901a9a49dd912cf6ba91f19a817b2ca35d7a60d5dc52a6acdefe040e",
+      "size": 316548,
+      "normalized_sha256": "a8f2e862901a9a49dd912cf6ba91f19a817b2ca35d7a60d5dc52a6acdefe040e"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -2052,6 +2052,12 @@
       "size": 6336,
       "normalized_sha256": "e3dfecb5a31f0a48ddb8580ea6355ae619a60b59d3fc0628046cf029e9e9ee8b"
     },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.4-to-1.70.5-handoff.md": {
+      "role": "index",
+      "sha256": "6dbd1ceb3cfcf8d4c890163710f36c014ea75bc65b6533a4ad532193e9497590",
+      "size": 12177,
+      "normalized_sha256": "6dbd1ceb3cfcf8d4c890163710f36c014ea75bc65b6533a4ad532193e9497590"
+    },
     "docs/reviews/2026-10-18_claude-to-codex-1.70.5-f175-2-handoff.md": {
       "role": "index",
       "sha256": "d5635e1fe7b7d9cd941784cbd79995e6ec02245e9ddc0b2f3c46ea6dda95c78e",
@@ -2099,6 +2105,12 @@
       "sha256": "48e1ab9995335c9964cf4c3f90cd578dbbdf7d74f1eb472b283cd0424f3b1e0c",
       "size": 14676,
       "normalized_sha256": "48e1ab9995335c9964cf4c3f90cd578dbbdf7d74f1eb472b283cd0424f3b1e0c"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.4-to-1.70.5-handoff-review.md": {
+      "role": "index",
+      "sha256": "a7fdb9219f77af3635dd5e9c709bd455e91e96c408ba8c312a472e925a36f446",
+      "size": 7426,
+      "normalized_sha256": "a7fdb9219f77af3635dd5e9c709bd455e91e96c408ba8c312a472e925a36f446"
     },
     "docs/reviews/2026-10-18_codex-to-claude-1.70.5-f175-2-review.md": {
       "role": "index",
