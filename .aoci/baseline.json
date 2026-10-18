@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-10-17T17:19:04Z",
+  "updated_at": "2026-10-18T14:13:18Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -71,9 +71,9 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "298c38412c83d55992080d849a699d3a59e817962f395cb40b3308b0085348c3",
-      "size": 186269,
-      "normalized_sha256": "298c38412c83d55992080d849a699d3a59e817962f395cb40b3308b0085348c3"
+      "sha256": "5cb46e757dee54d7de51563d12b442f5b867513e730e592883948bbc9080bca4",
+      "size": 188010,
+      "normalized_sha256": "5cb46e757dee54d7de51563d12b442f5b867513e730e592883948bbc9080bca4"
     },
     "DESIGN.md": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "e049bbb0137ca471ce373d47fea00de0871dfad3d38bfeb014a4229fdfbc7492",
-      "size": 307025,
-      "normalized_sha256": "e049bbb0137ca471ce373d47fea00de0871dfad3d38bfeb014a4229fdfbc7492"
+      "sha256": "46906f268faa6ffe210c6b148fc3294e77b4bf19d92fca258b195f73335f88a5",
+      "size": 315464,
+      "normalized_sha256": "46906f268faa6ffe210c6b148fc3294e77b4bf19d92fca258b195f73335f88a5"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1182,6 +1182,12 @@
       "size": 15644,
       "normalized_sha256": "932e7f638d529c643f06e828ca2b67af09049ef4fa2f445ff10415fc89fc38f9"
     },
+    "docs/releases/1.70.5.md": {
+      "role": "index",
+      "sha256": "7a71b1472d53a2896cf6e1da9ee572f8766b1a213f9da9cdf3660cffc4bf44cc",
+      "size": 17362,
+      "normalized_sha256": "7a71b1472d53a2896cf6e1da9ee572f8766b1a213f9da9cdf3660cffc4bf44cc"
+    },
     "docs/releases/README.md": {
       "role": "index",
       "sha256": "9ef6fc75da08b16a08d6b5da21b4e55bc035de31d54c1280d3f4e418acd9e7a9",
@@ -1872,11 +1878,29 @@
       "size": 6575,
       "normalized_sha256": "8aa198b9072c7ff44d1478178be690913241e61dbc9f1361c8e9c3edba8e17d7"
     },
+    "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/f175_2_review_probe.py": {
+      "role": "index",
+      "sha256": "b017a1408eee0a72229a02cb8c8a6588ab480f694df2f217985625876ead9568",
+      "size": 2170,
+      "normalized_sha256": "b017a1408eee0a72229a02cb8c8a6588ab480f694df2f217985625876ead9568"
+    },
+    "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/f175_3_review_probe.py": {
+      "role": "index",
+      "sha256": "2f5b3f6328b4bf820a0f3a00752dd44d2c777ab18b2b64be43e1e0d960369683",
+      "size": 2392,
+      "normalized_sha256": "2f5b3f6328b4bf820a0f3a00752dd44d2c777ab18b2b64be43e1e0d960369683"
+    },
+    "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/f175_review_probe.py": {
+      "role": "index",
+      "sha256": "c077e498da8f96f5ce76e96933a100cac4b7d96d20dfbf0d30cbf25485b27632",
+      "size": 2388,
+      "normalized_sha256": "c077e498da8f96f5ce76e96933a100cac4b7d96d20dfbf0d30cbf25485b27632"
+    },
     "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/gate_control_repeat.py": {
       "role": "index",
-      "sha256": "f4ca16123a9ada2699655256a044c6caf63d9231fd374c998c2060acbf663a74",
-      "size": 757,
-      "normalized_sha256": "f4ca16123a9ada2699655256a044c6caf63d9231fd374c998c2060acbf663a74"
+      "sha256": "e69361456ef0f9929810edaf6777184afc3f5ff7993a9043f21a9733ed428d38",
+      "size": 1027,
+      "normalized_sha256": "e69361456ef0f9929810edaf6777184afc3f5ff7993a9043f21a9733ed428d38"
     },
     "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/probe.py": {
       "role": "index",
@@ -1895,6 +1919,24 @@
       "sha256": "65863c9e793ebada85a1316952e1f318064eb8f4007273b82cd64112dae1e200",
       "size": 3669,
       "normalized_sha256": "65863c9e793ebada85a1316952e1f318064eb8f4007273b82cd64112dae1e200"
+    },
+    "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/tool_target_review_probe.py": {
+      "role": "index",
+      "sha256": "89f8cf6fc0e7a8ee17aa9fa6693b5883628b1e4a911d916923c4c8e177ee8259",
+      "size": 5926,
+      "normalized_sha256": "89f8cf6fc0e7a8ee17aa9fa6693b5883628b1e4a911d916923c4c8e177ee8259"
+    },
+    "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/tool_target_v2_fix_review_probe.py": {
+      "role": "index",
+      "sha256": "e1500dbc679d6ec13f0801d19f091136b278e0a49242cf1347f556c4f50d7a08",
+      "size": 2123,
+      "normalized_sha256": "e1500dbc679d6ec13f0801d19f091136b278e0a49242cf1347f556c4f50d7a08"
+    },
+    "docs/reviews/2026-10-17-room-follow-up-implementation-evidence/tool_target_v2_review_probe.py": {
+      "role": "index",
+      "sha256": "4239abc096c87d49c0da0684e2da9497d6d07bf84ebcb40846523d060fe800f4",
+      "size": 3088,
+      "normalized_sha256": "4239abc096c87d49c0da0684e2da9497d6d07bf84ebcb40846523d060fe800f4"
     },
     "docs/reviews/2026-10-17_claude-to-codex-1.70.1-to-1.70.3-handoff.md": {
       "role": "index",
@@ -2010,11 +2052,95 @@
       "size": 6336,
       "normalized_sha256": "e3dfecb5a31f0a48ddb8580ea6355ae619a60b59d3fc0628046cf029e9e9ee8b"
     },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.5-f175-2-handoff.md": {
+      "role": "index",
+      "sha256": "d5635e1fe7b7d9cd941784cbd79995e6ec02245e9ddc0b2f3c46ea6dda95c78e",
+      "size": 2531,
+      "normalized_sha256": "d5635e1fe7b7d9cd941784cbd79995e6ec02245e9ddc0b2f3c46ea6dda95c78e"
+    },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.5-f175-3-handoff.md": {
+      "role": "index",
+      "sha256": "51bd6e9241e563bc87a3a4168debebb9d47a05b7967623ceb182f0187cb60d79",
+      "size": 2143,
+      "normalized_sha256": "51bd6e9241e563bc87a3a4168debebb9d47a05b7967623ceb182f0187cb60d79"
+    },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.5-f175-4-handoff.md": {
+      "role": "index",
+      "sha256": "0b6aecb711520a6f9202074483cdf356881568a821b5269b64fe1bd770dbd9ef",
+      "size": 2907,
+      "normalized_sha256": "0b6aecb711520a6f9202074483cdf356881568a821b5269b64fe1bd770dbd9ef"
+    },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.5-f175-handoff.md": {
+      "role": "index",
+      "sha256": "f1965e5849023188484f54f97aaa4fa52ff0b10c5f3e50fd484b74868d1c5c46",
+      "size": 2959,
+      "normalized_sha256": "f1965e5849023188484f54f97aaa4fa52ff0b10c5f3e50fd484b74868d1c5c46"
+    },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.5-tool-target-handoff.md": {
+      "role": "index",
+      "sha256": "2b9cb41b83543c58f19e0e90a76866355f06c6d72e94a17d8c9433ab65091927",
+      "size": 4306,
+      "normalized_sha256": "2b9cb41b83543c58f19e0e90a76866355f06c6d72e94a17d8c9433ab65091927"
+    },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.5-v2-fix-handoff.md": {
+      "role": "index",
+      "sha256": "3205752605961ecabbfc42c1be2b7e925c9f09f8fca0fefbd61a9500cdc83a19",
+      "size": 4316,
+      "normalized_sha256": "3205752605961ecabbfc42c1be2b7e925c9f09f8fca0fefbd61a9500cdc83a19"
+    },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.5-v2-handoff.md": {
+      "role": "index",
+      "sha256": "47c735a3350401e33e6307307fb985885a1a67d9343a3f61ef0151dcb7759339",
+      "size": 5405,
+      "normalized_sha256": "47c735a3350401e33e6307307fb985885a1a67d9343a3f61ef0151dcb7759339"
+    },
     "docs/reviews/2026-10-18_codex-to-claude-1.70.4-release-review.md": {
       "role": "index",
       "sha256": "48e1ab9995335c9964cf4c3f90cd578dbbdf7d74f1eb472b283cd0424f3b1e0c",
       "size": 14676,
       "normalized_sha256": "48e1ab9995335c9964cf4c3f90cd578dbbdf7d74f1eb472b283cd0424f3b1e0c"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.5-f175-2-review.md": {
+      "role": "index",
+      "sha256": "190fd51ef7d3ad8fe29d9f8fcf8dddbe990bfa22b5db4796e42b1ceed70710a9",
+      "size": 6417,
+      "normalized_sha256": "190fd51ef7d3ad8fe29d9f8fcf8dddbe990bfa22b5db4796e42b1ceed70710a9"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.5-f175-3-review.md": {
+      "role": "index",
+      "sha256": "1c6a81704409ef1c4b1e4c27073666ed0f207526808814ce104772c870008b5b",
+      "size": 6617,
+      "normalized_sha256": "1c6a81704409ef1c4b1e4c27073666ed0f207526808814ce104772c870008b5b"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.5-f175-4-review.md": {
+      "role": "index",
+      "sha256": "c0225dd49f4522eacb3ff2e64261c0cacf2fc797bd8ce0f772760f3927b5c973",
+      "size": 6446,
+      "normalized_sha256": "c0225dd49f4522eacb3ff2e64261c0cacf2fc797bd8ce0f772760f3927b5c973"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.5-f175-review.md": {
+      "role": "index",
+      "sha256": "44319328b7f890670e20c5bce02a72b49413f43cc664428ba8375e1504099d84",
+      "size": 7582,
+      "normalized_sha256": "44319328b7f890670e20c5bce02a72b49413f43cc664428ba8375e1504099d84"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.5-tool-target-review.md": {
+      "role": "index",
+      "sha256": "ca743bf3812737e4f3777ee61ab3959b4c62aef969dfb214c96887a56858a58f",
+      "size": 11922,
+      "normalized_sha256": "ca743bf3812737e4f3777ee61ab3959b4c62aef969dfb214c96887a56858a58f"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.5-v2-fix-review.md": {
+      "role": "index",
+      "sha256": "8b19f87ad6b1cc59f113e43b17ad8da72e03360c0bfeedd178a73c2530a3f45b",
+      "size": 7005,
+      "normalized_sha256": "8b19f87ad6b1cc59f113e43b17ad8da72e03360c0bfeedd178a73c2530a3f45b"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.5-v2-review.md": {
+      "role": "index",
+      "sha256": "2724a308e429da855f297aae43d19eb02ef839f51f3bfd160b4b4a0ab5423701",
+      "size": 8461,
+      "normalized_sha256": "2724a308e429da855f297aae43d19eb02ef839f51f3bfd160b4b4a0ab5423701"
     },
     "docs/reviews/README.md": {
       "role": "index",
@@ -2354,9 +2480,9 @@
     },
     "docs/specs/2026-10-18_tool-target-binding-spec.md": {
       "role": "index",
-      "sha256": "9314d1553546e41c640547000474803d6e51602b6ecb38a927067224b8792e8f",
-      "size": 8544,
-      "normalized_sha256": "9314d1553546e41c640547000474803d6e51602b6ecb38a927067224b8792e8f"
+      "sha256": "691e74a418431797a174326c2ec9ee1e50889f20c06b97afba83cff81bb0cf83",
+      "size": 24062,
+      "normalized_sha256": "691e74a418431797a174326c2ec9ee1e50889f20c06b97afba83cff81bb0cf83"
     },
     "docs/specs/assets/2026-09-16_room-timeline-mobile-proto.html": {
       "role": "index",
@@ -2644,9 +2770,9 @@
     },
     "pyproject.toml": {
       "role": "index",
-      "sha256": "e8f7e4f513a22dce705b820abc2ce4dd50f634a2051b23bd7e969de9aeb2b5b6",
+      "sha256": "1d9814ec21514214360ba17f8ee69ffd7f583cc25970737addad3bf30da05846",
       "size": 1284,
-      "normalized_sha256": "e8f7e4f513a22dce705b820abc2ce4dd50f634a2051b23bd7e969de9aeb2b5b6"
+      "normalized_sha256": "1d9814ec21514214360ba17f8ee69ffd7f583cc25970737addad3bf30da05846"
     },
     "requirements.lock": {
       "role": "index",
@@ -2746,9 +2872,9 @@
     },
     "src/homestay_bot/integrations/deepseek_client.py": {
       "role": "index",
-      "sha256": "ced0ce6e6bff8eb02ea64a7166545b3eb0998c0d17e79faed9cab23c500b869d",
-      "size": 247556,
-      "normalized_sha256": "ced0ce6e6bff8eb02ea64a7166545b3eb0998c0d17e79faed9cab23c500b869d"
+      "sha256": "e6f194319ef53b9810cf3b9cf9740595306b6d3ae4220ec71264226dc89166d8",
+      "size": 257545,
+      "normalized_sha256": "e6f194319ef53b9810cf3b9cf9740595306b6d3ae4220ec71264226dc89166d8"
     },
     "src/homestay_bot/integrations/deepseek_complaint.py": {
       "role": "index",
@@ -3736,9 +3862,9 @@
     },
     "tasks/todo.md": {
       "role": "index",
-      "sha256": "8e55b030274365cf848d5e4bac07a5e96d61f77b240e11de99405bb0f3093c24",
-      "size": 124956,
-      "normalized_sha256": "8e55b030274365cf848d5e4bac07a5e96d61f77b240e11de99405bb0f3093c24"
+      "sha256": "133fca12431d5d77f4e3a0f0be7ae0564071d27f8d9b91fdf0997b57f63c2981",
+      "size": 126078,
+      "normalized_sha256": "133fca12431d5d77f4e3a0f0be7ae0564071d27f8d9b91fdf0997b57f63c2981"
     },
     "tests/__init__.py": {
       "role": "observe",
@@ -4648,9 +4774,9 @@
     },
     "tests/unit/test_room_identity.py": {
       "role": "observe",
-      "sha256": "0fb2526660a3d7cb80efecf888bf33e50a431780aa9f08a09335a582c864eb78",
-      "size": 75772,
-      "normalized_sha256": "0fb2526660a3d7cb80efecf888bf33e50a431780aa9f08a09335a582c864eb78"
+      "sha256": "5cf62d1baf1a8c37bbcc01306518b26081cba63c15c8dba168e52b2b067322b2",
+      "size": 117996,
+      "normalized_sha256": "5cf62d1baf1a8c37bbcc01306518b26081cba63c15c8dba168e52b2b067322b2"
     },
     "tests/unit/test_room_primary_status.py": {
       "role": "observe",
