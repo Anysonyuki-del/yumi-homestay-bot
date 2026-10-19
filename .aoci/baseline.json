@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-10-18T14:48:51Z",
+  "updated_at": "2026-10-19T02:06:14Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -71,9 +71,9 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "5cb46e757dee54d7de51563d12b442f5b867513e730e592883948bbc9080bca4",
-      "size": 188010,
-      "normalized_sha256": "5cb46e757dee54d7de51563d12b442f5b867513e730e592883948bbc9080bca4"
+      "sha256": "08c66aa0788e537f9902c1e95a3a684e7d82ce98e3858b2dfbec7023174ae42b",
+      "size": 189436,
+      "normalized_sha256": "08c66aa0788e537f9902c1e95a3a684e7d82ce98e3858b2dfbec7023174ae42b"
     },
     "DESIGN.md": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "a8f2e862901a9a49dd912cf6ba91f19a817b2ca35d7a60d5dc52a6acdefe040e",
-      "size": 316548,
-      "normalized_sha256": "a8f2e862901a9a49dd912cf6ba91f19a817b2ca35d7a60d5dc52a6acdefe040e"
+      "sha256": "be1a65875d87d7801bfb3184c1f749215728a01f44ea5ed241e8e3e54c1dd1ca",
+      "size": 325528,
+      "normalized_sha256": "be1a65875d87d7801bfb3184c1f749215728a01f44ea5ed241e8e3e54c1dd1ca"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1188,6 +1188,12 @@
       "size": 17443,
       "normalized_sha256": "26a92961f2efc9876296821858f1b5b459107646d1deb9ab93839d3c6a182229"
     },
+    "docs/releases/1.70.6.md": {
+      "role": "index",
+      "sha256": "feaa2976fde23ab2ee78000bda71407d8ceab1d1e097a110bcc1b69eb09efae8",
+      "size": 8172,
+      "normalized_sha256": "feaa2976fde23ab2ee78000bda71407d8ceab1d1e097a110bcc1b69eb09efae8"
+    },
     "docs/releases/README.md": {
       "role": "index",
       "sha256": "9ef6fc75da08b16a08d6b5da21b4e55bc035de31d54c1280d3f4e418acd9e7a9",
@@ -2046,6 +2052,60 @@
       "size": 8641,
       "normalized_sha256": "45076153a4e0171b02138bbb50467efba1f2eade4457e81480c824b57c87aa29"
     },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/ab_same_window_results.txt": {
+      "role": "index",
+      "sha256": "4ba69e98091e112140242a1df03c13ebc09ca865adc3091406726ffc8278b3b0",
+      "size": 3303,
+      "normalized_sha256": "4ba69e98091e112140242a1df03c13ebc09ca865adc3091406726ffc8278b3b0"
+    },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/codex_f176_fix_review_probe.py": {
+      "role": "index",
+      "sha256": "95135aecd99a337ced88ebca06240959c2b7bcbf5ddc08d329304465cf63fe01",
+      "size": 2247,
+      "normalized_sha256": "95135aecd99a337ced88ebca06240959c2b7bcbf5ddc08d329304465cf63fe01"
+    },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/codex_f176_review_probe.py": {
+      "role": "index",
+      "sha256": "044b125a8cba78c40de1f40a9b5b27df78d1ecfbbbda54ef8acb21b89c9999ac",
+      "size": 2794,
+      "normalized_sha256": "044b125a8cba78c40de1f40a9b5b27df78d1ecfbbbda54ef8acb21b89c9999ac"
+    },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/hazard_order_spec_probe.py": {
+      "role": "index",
+      "sha256": "288b39bbe79d6abed22a42153028fb05a0801e3507641310bcf3a822ca175b3f",
+      "size": 5513,
+      "normalized_sha256": "288b39bbe79d6abed22a42153028fb05a0801e3507641310bcf3a822ca175b3f"
+    },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/planner_ab.py": {
+      "role": "index",
+      "sha256": "f130a6766b58bcdd0559ef63242bd5ab1be41fcc2f7493712062ac9f99af3070",
+      "size": 2435,
+      "normalized_sha256": "f130a6766b58bcdd0559ef63242bd5ab1be41fcc2f7493712062ac9f99af3070"
+    },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/planner_complaint_diag.py": {
+      "role": "index",
+      "sha256": "d6144da0a7ab106a00955b5f4ac008073c2ac2781ba3c8a72d4e4b0faffea674",
+      "size": 2798,
+      "normalized_sha256": "d6144da0a7ab106a00955b5f4ac008073c2ac2781ba3c8a72d4e4b0faffea674"
+    },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/planner_retest.py": {
+      "role": "index",
+      "sha256": "bdeb5621857275c7bc8450559634d274e62856c7516a7548e1840cdea13accab",
+      "size": 4540,
+      "normalized_sha256": "bdeb5621857275c7bc8450559634d274e62856c7516a7548e1840cdea13accab"
+    },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/retest_final.jsonl": {
+      "role": "index",
+      "sha256": "3640678d89937aaefebbd72903d94750da26574101754d3a43178e46303147b1",
+      "size": 39425,
+      "normalized_sha256": "3640678d89937aaefebbd72903d94750da26574101754d3a43178e46303147b1"
+    },
+    "docs/reviews/2026-10-18-planner-complaint-evidence/retest_run1_split_prompt.jsonl": {
+      "role": "index",
+      "sha256": "da1a297980b2d023653924cce02d20ed18360b8a6637bc7fd9be316feaaa5e9c",
+      "size": 39391,
+      "normalized_sha256": "da1a297980b2d023653924cce02d20ed18360b8a6637bc7fd9be316feaaa5e9c"
+    },
     "docs/reviews/2026-10-18_claude-to-codex-1.70.4-release-handoff.md": {
       "role": "index",
       "sha256": "e3dfecb5a31f0a48ddb8580ea6355ae619a60b59d3fc0628046cf029e9e9ee8b",
@@ -2100,6 +2160,18 @@
       "size": 5405,
       "normalized_sha256": "47c735a3350401e33e6307307fb985885a1a67d9343a3f61ef0151dcb7759339"
     },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.6-planner-complaint-spec-fix-handoff.md": {
+      "role": "index",
+      "sha256": "cd31cd36fb866f6e45619ab63428f6be98cf4800bc2d48c5c4f9f31c341db30b",
+      "size": 2684,
+      "normalized_sha256": "cd31cd36fb866f6e45619ab63428f6be98cf4800bc2d48c5c4f9f31c341db30b"
+    },
+    "docs/reviews/2026-10-18_claude-to-codex-1.70.6-planner-complaint-spec-handoff.md": {
+      "role": "index",
+      "sha256": "d74b2c61aaef86f5f24913a59e29bccfe27de941d2d11bfabe77a1bb440fffbb",
+      "size": 1829,
+      "normalized_sha256": "d74b2c61aaef86f5f24913a59e29bccfe27de941d2d11bfabe77a1bb440fffbb"
+    },
     "docs/reviews/2026-10-18_codex-to-claude-1.70.4-release-review.md": {
       "role": "index",
       "sha256": "48e1ab9995335c9964cf4c3f90cd578dbbdf7d74f1eb472b283cd0424f3b1e0c",
@@ -2153,6 +2225,48 @@
       "sha256": "2724a308e429da855f297aae43d19eb02ef839f51f3bfd160b4b4a0ab5423701",
       "size": 8461,
       "normalized_sha256": "2724a308e429da855f297aae43d19eb02ef839f51f3bfd160b4b4a0ab5423701"
+    },
+    "docs/reviews/2026-10-18_codex-to-claude-1.70.6-planner-complaint-spec-review.md": {
+      "role": "index",
+      "sha256": "8f24978268908be140540e1b76136a2292d0ac81020a4ab2803473be4b61b76e",
+      "size": 9018,
+      "normalized_sha256": "8f24978268908be140540e1b76136a2292d0ac81020a4ab2803473be4b61b76e"
+    },
+    "docs/reviews/2026-10-19_claude-to-codex-1.70.6-hazard-order-spec-handoff.md": {
+      "role": "index",
+      "sha256": "b8d9e18693cfa2441ac51f6335bd968195d61d7aef3f700afbbaca594a90d775",
+      "size": 2023,
+      "normalized_sha256": "b8d9e18693cfa2441ac51f6335bd968195d61d7aef3f700afbbaca594a90d775"
+    },
+    "docs/reviews/2026-10-19_claude-to-codex-1.70.6-hazard-order-spec-v2-handoff.md": {
+      "role": "index",
+      "sha256": "978ff9777d35e333f58b0500b443c2cc05cffd81ad40c0aa3fb2f0f795e084ed",
+      "size": 1838,
+      "normalized_sha256": "978ff9777d35e333f58b0500b443c2cc05cffd81ad40c0aa3fb2f0f795e084ed"
+    },
+    "docs/reviews/2026-10-19_claude-to-codex-1.70.6-release-handoff.md": {
+      "role": "index",
+      "sha256": "1ca6dfccbd5423bfe398eec1981ce4362dfe4d409be10cbaf0fd62d566f98b77",
+      "size": 5147,
+      "normalized_sha256": "1ca6dfccbd5423bfe398eec1981ce4362dfe4d409be10cbaf0fd62d566f98b77"
+    },
+    "docs/reviews/2026-10-19_codex-to-claude-1.70.6-hazard-order-spec-review.md": {
+      "role": "index",
+      "sha256": "88c2848d5b6f8425eab092870e90ba2f95e3da357810f1029f63c0d4537f76d2",
+      "size": 8484,
+      "normalized_sha256": "88c2848d5b6f8425eab092870e90ba2f95e3da357810f1029f63c0d4537f76d2"
+    },
+    "docs/reviews/2026-10-19_codex-to-claude-1.70.6-hazard-order-spec-v2-review.md": {
+      "role": "index",
+      "sha256": "403b46b09174815f1251f38d6a9419e2bbe54d76fe896c91651358e252ca858b",
+      "size": 6613,
+      "normalized_sha256": "403b46b09174815f1251f38d6a9419e2bbe54d76fe896c91651358e252ca858b"
+    },
+    "docs/reviews/2026-10-19_codex-to-claude-1.70.6-planner-complaint-spec-fix-review.md": {
+      "role": "index",
+      "sha256": "bc94d716c3603bc23b00112ddb44584ceb5919753820a9859b4190256b03d631",
+      "size": 7755,
+      "normalized_sha256": "bc94d716c3603bc23b00112ddb44584ceb5919753820a9859b4190256b03d631"
     },
     "docs/reviews/README.md": {
       "role": "index",
@@ -2490,6 +2604,12 @@
       "size": 24475,
       "normalized_sha256": "e97f30054b8090896cf53b566dd5d3aeb6d356b84f64a0e3582e73cb0ca7e8d5"
     },
+    "docs/specs/2026-10-18_planner-complaint-misroute-spec.md": {
+      "role": "index",
+      "sha256": "5c819f320e83ce2f2407455ec2c090924ba7de965f0f6f1df312add32c93a861",
+      "size": 37444,
+      "normalized_sha256": "5c819f320e83ce2f2407455ec2c090924ba7de965f0f6f1df312add32c93a861"
+    },
     "docs/specs/2026-10-18_tool-target-binding-spec.md": {
       "role": "index",
       "sha256": "691e74a418431797a174326c2ec9ee1e50889f20c06b97afba83cff81bb0cf83",
@@ -2782,9 +2902,9 @@
     },
     "pyproject.toml": {
       "role": "index",
-      "sha256": "1d9814ec21514214360ba17f8ee69ffd7f583cc25970737addad3bf30da05846",
+      "sha256": "3c22ead39c83e68448facba725d927212348f7988e5a8d86d838851c2cf4e6a5",
       "size": 1284,
-      "normalized_sha256": "1d9814ec21514214360ba17f8ee69ffd7f583cc25970737addad3bf30da05846"
+      "normalized_sha256": "3c22ead39c83e68448facba725d927212348f7988e5a8d86d838851c2cf4e6a5"
     },
     "requirements.lock": {
       "role": "index",
@@ -2794,9 +2914,9 @@
     },
     "scripts/release/reply_gate.sh": {
       "role": "index",
-      "sha256": "c9778722536dd2e40b732f135c5f9b7c06917132fccf5751f694108218b1584f",
-      "size": 9915,
-      "normalized_sha256": "c9778722536dd2e40b732f135c5f9b7c06917132fccf5751f694108218b1584f"
+      "sha256": "f3e11913d62af74d66e3fa7418284e6aa66152581bb3d90119b48354c72f8764",
+      "size": 10976,
+      "normalized_sha256": "f3e11913d62af74d66e3fa7418284e6aa66152581bb3d90119b48354c72f8764"
     },
     "src/homestay_bot/__init__.py": {
       "role": "index",
@@ -3340,9 +3460,9 @@
     },
     "src/homestay_bot/services/conversation_service.py": {
       "role": "index",
-      "sha256": "1564f05f1935e20e0d56c4237b0e37aff9dd664a632917bf209061687c026441",
-      "size": 119374,
-      "normalized_sha256": "1564f05f1935e20e0d56c4237b0e37aff9dd664a632917bf209061687c026441"
+      "sha256": "5b7066fd3e516654579212a29e1285f986be6b736e76b9d9c88b1847c6a829ef",
+      "size": 125239,
+      "normalized_sha256": "5b7066fd3e516654579212a29e1285f986be6b736e76b9d9c88b1847c6a829ef"
     },
     "src/homestay_bot/services/credential_delivery.py": {
       "role": "index",
@@ -3592,9 +3712,9 @@
     },
     "src/homestay_bot/services/turn_plan.py": {
       "role": "index",
-      "sha256": "4f2f93caa43929ba50cc762811b0b26bd279cd3be6918841081e907f42d873d6",
-      "size": 13090,
-      "normalized_sha256": "4f2f93caa43929ba50cc762811b0b26bd279cd3be6918841081e907f42d873d6"
+      "sha256": "3e2be55d8fbb52fd0745c8f86e52ec2a22cfcbb6f0aa71450a367f91fcd9c651",
+      "size": 13755,
+      "normalized_sha256": "3e2be55d8fbb52fd0745c8f86e52ec2a22cfcbb6f0aa71450a367f91fcd9c651"
     },
     "src/homestay_bot/static/admin.js": {
       "role": "index",
@@ -3844,9 +3964,9 @@
     },
     "src/homestay_bot/tools/reply_regression.py": {
       "role": "index",
-      "sha256": "e918a171a3bb6e024557366264e9a6641dd0b083a7767427f877b70594b5c526",
-      "size": 39213,
-      "normalized_sha256": "e918a171a3bb6e024557366264e9a6641dd0b083a7767427f877b70594b5c526"
+      "sha256": "553abfe1bd3e544c3640b679d6ce598a1eb6a5641846f877c3bc10e62330542e",
+      "size": 43424,
+      "normalized_sha256": "553abfe1bd3e544c3640b679d6ce598a1eb6a5641846f877c3bc10e62330542e"
     },
     "src/homestay_bot/version.py": {
       "role": "index",
@@ -3874,9 +3994,9 @@
     },
     "tasks/todo.md": {
       "role": "index",
-      "sha256": "9a629e84168e4609826446bb5db8fd6ccdd9e80f2a9504a1160a42bccf1cc572",
-      "size": 126226,
-      "normalized_sha256": "9a629e84168e4609826446bb5db8fd6ccdd9e80f2a9504a1160a42bccf1cc572"
+      "sha256": "20b2b4767ec0654925fa2198e3d0d0d99a6bd3d74a2ce07a42d86c204969cf7f",
+      "size": 127345,
+      "normalized_sha256": "20b2b4767ec0654925fa2198e3d0d0d99a6bd3d74a2ce07a42d86c204969cf7f"
     },
     "tests/__init__.py": {
       "role": "observe",
@@ -4129,6 +4249,12 @@
       "sha256": "7f56bc68979d472511ec0127bf747803cb163da9fe45f31a74f275b11c474bc8",
       "size": 7961,
       "normalized_sha256": "7f56bc68979d472511ec0127bf747803cb163da9fe45f31a74f275b11c474bc8"
+    },
+    "tests/integration/test_hazard_combined_reply.py": {
+      "role": "observe",
+      "sha256": "09d2e2da1e111fca74cb92163e4dfb996837fda414e4d29693224ed05c252912",
+      "size": 3494,
+      "normalized_sha256": "09d2e2da1e111fca74cb92163e4dfb996837fda414e4d29693224ed05c252912"
     },
     "tests/integration/test_human_session.py": {
       "role": "observe",
@@ -4426,9 +4552,9 @@
     },
     "tests/unit/test_conversation_plan_flows.py": {
       "role": "observe",
-      "sha256": "925413407f560abf24951f1cad334f05450c48cc2bc24e5eb8d7afbc1dc5dccb",
-      "size": 18259,
-      "normalized_sha256": "925413407f560abf24951f1cad334f05450c48cc2bc24e5eb8d7afbc1dc5dccb"
+      "sha256": "5683d12a83ed3e7bf2144ec7638e756aef824571d28dc463a95a66427726c048",
+      "size": 25970,
+      "normalized_sha256": "5683d12a83ed3e7bf2144ec7638e756aef824571d28dc463a95a66427726c048"
     },
     "tests/unit/test_conversation_service.py": {
       "role": "observe",
@@ -4762,9 +4888,9 @@
     },
     "tests/unit/test_reply_regression.py": {
       "role": "observe",
-      "sha256": "ec8a550da9203cce9e37efd571cafce3e091b0838ca79ab48062e248e3c9b5ae",
-      "size": 25241,
-      "normalized_sha256": "ec8a550da9203cce9e37efd571cafce3e091b0838ca79ab48062e248e3c9b5ae"
+      "sha256": "c0b392896cb90878bd2194e648d3779019512f4114c49087256dcdf302c3a901",
+      "size": 32705,
+      "normalized_sha256": "c0b392896cb90878bd2194e648d3779019512f4114c49087256dcdf302c3a901"
     },
     "tests/unit/test_repository_guest_data_guard.py": {
       "role": "observe",
@@ -4882,9 +5008,9 @@
     },
     "tests/unit/test_turn_plan.py": {
       "role": "observe",
-      "sha256": "0397407966c04fb13cff99d852713eb7c3ef6ae0914768e762d26f5f609bb7c9",
-      "size": 13033,
-      "normalized_sha256": "0397407966c04fb13cff99d852713eb7c3ef6ae0914768e762d26f5f609bb7c9"
+      "sha256": "e113efa0fe9994d671ab23ea688fe9599d444bfc087ddd72175c11811ae56b91",
+      "size": 14379,
+      "normalized_sha256": "e113efa0fe9994d671ab23ea688fe9599d444bfc087ddd72175c11811ae56b91"
     },
     "tests/unit/test_version.py": {
       "role": "observe",
