@@ -1,0 +1,30 @@
+AB HEAD 卫生间下水堵了！！！ 30 {"facility_fault/none": 19, "facility_fault/complaint": 11}
+AB HEAD 房间停电了！！！ 20 {"facility_fault/none": 20}
+AB HEAD 下水又堵了！！！你们怎么搞的 20 {"facility_fault/complaint": 20}
+AB HEAD The AC is broken AGAIN!!! This is unacceptable 20 {"facility_fault/complaint": 17, "failed:schema": 3}
+AB HEAD 插座一直滋滋响还发烫！！！太离谱了 20 {"facility_fault/current_hazard:electric": 20}
+AB NEW 卫生间下水堵了！！！ 30 {"facility_fault/none": 30}
+AB NEW 房间停电了！！！ 20 {"facility_fault/none": 20}
+AB NEW 下水又堵了！！！你们怎么搞的 20 {"facility_fault/complaint": 16, "failed:schema": 4}
+AB NEW The AC is broken AGAIN!!! This is unacceptable 20 {"facility_fault/complaint": 17, "facility_fault/complaint,facility_fault/complaint": 2, "failed:schema": 1}
+AB NEW 插座一直滋滋响还发烫！！！太离谱了 20 {"facility_fault/current_hazard:electric": 16, "failed:schema": 3, "facility_fault/current_hazard:electric,facility_fault/complaint": 1}
+AB HEAD2 卫生间下水堵了！！！ 30 {"facility_fault/none": 22, "facility_fault/complaint": 8}
+AB HEAD2 房间停电了！！！ 20 {"facility_fault/none": 20}
+AB HEAD2 下水又堵了！！！你们怎么搞的 20 {"facility_fault/complaint": 18, "failed:schema": 1, "facility_fault/complaint,chitchat/complaint": 1}
+AB HEAD2 The AC is broken AGAIN!!! This is unacceptable 20 {"facility_fault/complaint": 17, "facility_fault/complaint,chitchat/complaint": 2, "failed:schema": 1}
+AB HEAD2 插座一直滋滋响还发烫！！！太离谱了 20 {"facility_fault/current_hazard:electric": 20}
+AB NEW2 卫生间下水堵了！！！ 30 {"facility_fault/none": 30}
+AB NEW2 房间停电了！！！ 20 {"facility_fault/none": 20}
+AB NEW2 下水又堵了！！！你们怎么搞的 20 {"facility_fault/complaint": 18, "facility_fault/complaint,unclear/none": 1, "failed:schema": 1}
+AB NEW2 The AC is broken AGAIN!!! This is unacceptable 20 {"facility_fault/complaint": 17, "failed:schema": 3}
+AB NEW2 插座一直滋滋响还发烫！！！太离谱了 20 {"facility_fault/current_hazard:electric": 14, "failed:schema": 6}
+AB NEW3 卫生间下水堵了！！！ 30 {"facility_fault/none": 30}
+AB NEW3 房间停电了！！！ 20 {"facility_fault/none": 20}
+AB NEW3 下水又堵了！！！你们怎么搞的 20 {"facility_fault/complaint,unclear/complaint": 5, "facility_fault/complaint": 15}
+AB NEW3 The AC is broken AGAIN!!! This is unacceptable 20 {"facility_fault/complaint": 15, "facility_fault/complaint,unclear/complaint": 5}
+AB NEW3 插座一直滋滋响还发烫！！！太离谱了 20 {"facility_fault/current_hazard:electric": 17, "facility_fault/current_hazard:electric,unclear/complaint": 2, "failed:schema": 1}
+AB HEAD3 卫生间下水堵了！！！ 30 {"facility_fault/none": 20, "facility_fault/complaint": 10}
+AB HEAD3 房间停电了！！！ 20 {"facility_fault/none": 20}
+AB HEAD3 下水又堵了！！！你们怎么搞的 20 {"facility_fault/complaint": 18, "failed:schema": 2}
+AB HEAD3 The AC is broken AGAIN!!! This is unacceptable 20 {"failed:schema": 4, "facility_fault/complaint": 16}
+AB HEAD3 插座一直滋滋响还发烫！！！太离谱了 20 {"facility_fault/current_hazard:electric": 20}

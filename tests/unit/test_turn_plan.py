@@ -293,3 +293,31 @@ def test_hard_reason_in_any_text_variant_beats_agitated_review() -> None:
     text = "第一次来太开心了!!! 退\n款"
     assert resolve_handoff_reason(text, plan_for(text, ("chitchat", text))) == "refund"
     assert resolve_handoff_reason(text) == "refund"
+
+
+def test_complaint_written_as_kind_is_kept_as_unclear_item():
+    """模型把 complaint 误写进事项类型时，该项归为 unclear 并保留风险，同句危险项不丢失；
+    其他未知类型仍让整份计划失败（规划误判 Spec §9）。"""
+    import json as _json
+
+    from homestay_bot.services.turn_plan import verify_turn_plan
+
+    text = "插座一直滋滋响还发烫！！！太离谱了"
+    raw = {"items": [
+        {"id": 1, "kind": "facility_fault", "subject": "插座", "question": "插座发烫",
+         "quote": "插座一直滋滋响还发烫", "start": 0, "risk": "current_hazard:electric"},
+        {"id": 2, "kind": "complaint", "subject": "不满", "question": "不满",
+         "quote": "太离谱了", "start": 13, "risk": "complaint"},
+    ]}
+    from datetime import date as _date
+
+    today = lambda: _date(2026, 10, 7)  # noqa: E731
+    outcome = verify_turn_plan(_json.dumps(raw, ensure_ascii=False), text, today_provider=today)
+    assert outcome.ok
+    assert [(i.kind, i.risk, i.valid) for i in outcome.plan.items] == [
+        ("facility_fault", "current_hazard:electric", True), ("unclear", "complaint", True)
+    ]
+    raw["items"][1]["kind"] = "grievance"
+    assert verify_turn_plan(
+        _json.dumps(raw, ensure_ascii=False), text, today_provider=today
+    ).reason == "schema"

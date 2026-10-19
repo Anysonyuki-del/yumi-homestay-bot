@@ -196,6 +196,11 @@ def verify_turn_plan(
         if not isinstance(entry, dict):
             return failed_plan(text, "schema")
         item_id, kind, quote = entry.get("id"), entry.get("kind"), entry.get("quote")
+        if kind == "complaint":
+            # 规划模型偶尔把风险取值 complaint 误写进事项类型（另拆一项「太离谱了」）。整份计划
+            # 因此失败时，同句已识别的危险项会一起丢失、退回保守客诉（规划误判 Spec §9）。只把
+            # 这一个确定的误写归为 unclear 并保留其风险；其他未知类型照旧判为结构失败。
+            kind = "unclear"
         risk = _verify_risk(entry.get("risk"))
         withdraws = entry.get("withdraws")
         if (
@@ -287,6 +292,8 @@ PLANNER_PROMPT_ZH = (
     "YYYY-MM-DD 填写，否则为 null。risk 取 none、possible_hazard（可能有危险但不确定）、"
     "current_hazard:fire/gas/electric/medical/violence（此刻真实存在的危险）或 complaint（客人"
     "在投诉、表达不满或要求处理纠纷）；咨询、假设、引用、否定和开心激动都不是危险或投诉。"
+    "报修设施故障、请求帮助时的急切语气、感叹号和催促（如「快来人」「赶紧」）本身不算投诉，"
+    "也不算表达不满；明确的指责、抱怨或要求赔偿退款才算。"
     "普通停电、跳闸、灯不亮、设备不工作本身不是触电或火灾危险，按 facility_fault 且 "
     "risk=none；只有同时出现实际触电、火花、焦味、冒烟、明火、燃气味、带电漏水或人员受伤，"
     "才填 current_hazard。客人问「现在怎么办」不是危险事实。"

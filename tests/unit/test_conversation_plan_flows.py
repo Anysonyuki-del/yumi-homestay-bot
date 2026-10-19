@@ -401,3 +401,147 @@ async def test_service_reply_is_the_action_result_when_model_text_is_all_promise
     assert reply.startswith("您的请求已登记")
     assert "暂时无法确认" not in reply
     assert "尚未确认" not in reply
+
+
+# ── 1.70.6 危险优先于提前返回的确认（规划误判 Spec §8，H176-R1、R2）────────────────
+
+POSSIBLE_TEXT = "请先避开可能有危险的位置。现在具体是什么情况？"
+ELECTRIC_MARKER = "不要触碰"
+COMPLAINT_ACK = "您的情况我已记录"
+# 人工高风险确认「我已收到您的诉求」经现有高危策略统一为客诉确认同一句（C8-2 已说明）。
+HUMAN_ACK = COMPLAINT_ACK
+
+
+def _split_plan(fault_quote: str, fault_risk: str, other_quote: str, other: tuple[str, str]):
+    """故障项与另一项（投诉或议价）同句拆分的已核验计划工厂。"""
+    kind, risk = other
+
+    def make(text: str) -> PlanOutcome:
+        return plan_for(text, ("facility_fault", fault_quote, {"risk": fault_risk}),
+                        (kind, other_quote, {"risk": risk}))
+    return make
+
+
+async def _run_soft(text: str, make_plan, *, mode=ConversationMode.BOT_ACTIVE):
+    """经真实即时入口与合并入口跑一轮软复核；返回服务各端口与助手。"""
+    assistant = AssistantStub(plan=make_plan)
+    service, conversations, wecom, jobs, source, messages = _deferred(text, assistant)
+    conversations.conversation.mode = mode
+    await service.process_debounced_message(source)
+    return assistant, conversations, wecom, jobs, source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault_risk,expect_possible,expect_electric", [
+    ("possible_hazard", True, False),
+    ("current_hazard:electric", False, True),
+    ("none", False, False),
+])
+async def test_soft_complaint_consumes_plan_hazard_first(fault_risk, expect_possible,
+                                                         expect_electric):
+    """「插座一直滋滋响还发烫！！！太离谱了」故障项带危险、另一项为投诉：
+    - 可能危险：一次组合回复（避险正文在前、客诉确认在后），两条员工通知；
+    - 当前危险：电气危险处置并接管，不再发客诉确认；
+    - 无危险：只进客诉（原有行为）。三种都不进入主回复。"""
+    text = "插座一直滋滋响还发烫！！！太离谱了"
+    make = _split_plan("插座一直滋滋响还发烫", fault_risk, "太离谱了", ("unclear", "complaint"))
+    assistant, conversations, wecom, jobs, source = await _run_soft(text, make)
+    assert assistant.plan_calls == 1 and assistant.calls == 0
+    assert not [job for job in jobs.jobs if job[2] == f"final:{source.msgid}"]
+    assert len(wecom.guest_messages) == 1
+    reply = wecom.guest_messages[0]
+    notes = " ".join(wecom.internal_messages)
+    if expect_electric:
+        # 紧急处置的固定回复本身含「已记录」，是否进入客诉看员工通知。
+        assert ELECTRIC_MARKER in reply and "客诉待处理" not in notes
+    else:
+        assert COMPLAINT_ACK in reply
+        assert (POSSIBLE_TEXT in reply) is expect_possible
+        if expect_possible:
+            assert reply.index(POSSIBLE_TEXT) < reply.index(COMPLAINT_ACK)
+        assert ("可能的安全情况" in notes) is expect_possible and "客诉待处理" in notes
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault_risk,expect_possible,expect_electric", [
+    ("possible_hazard", True, False),
+    ("current_hazard:electric", False, True),
+    ("none", False, False),
+])
+async def test_human_high_risk_ack_consumes_plan_hazard_first(fault_risk, expect_possible,
+                                                              expect_electric):
+    """人工接待中「插座一直滋滋响还发烫！！！可以便宜点吗」：没有投诉但有硬理由 price，原来直接
+    回通用确认；现在先消费计划危险（H176-R2）。三种都不进入主回复。"""
+    text = "插座一直滋滋响还发烫！！！可以便宜点吗"
+    make = _split_plan("插座一直滋滋响还发烫", fault_risk, "可以便宜点吗", ("static_fact", "none"))
+    assistant, _, wecom, jobs, source = await _run_soft(
+        text, make, mode=ConversationMode.HUMAN_ACTIVE
+    )
+    assert assistant.plan_calls == 1 and assistant.calls == 0
+    assert not [job for job in jobs.jobs if job[2] == f"final:{source.msgid}"]
+    assert len(wecom.guest_messages) == 1
+    reply = wecom.guest_messages[0]
+    notes = " ".join(wecom.internal_messages)
+    if expect_electric:
+        assert ELECTRIC_MARKER in reply and "人工接待会话收到新的高风险消息" not in notes
+    else:
+        assert HUMAN_ACK in reply and (POSSIBLE_TEXT in reply) is expect_possible
+        if expect_possible:
+            assert reply.index(POSSIBLE_TEXT) < reply.index(HUMAN_ACK)
+        assert ("可能的安全情况" in notes) is expect_possible
+        assert "人工接待会话收到新的高风险消息" in notes
+
+
+@pytest.mark.asyncio
+async def test_soft_complaint_possible_hazard_reply_in_english():
+    """英文会话的组合回复：英文避险正文（含追问）在前，客诉确认在后，仍是一条。"""
+    text = "The socket keeps buzzing and is hot!!! This is ridiculous"
+    make = _split_plan("The socket keeps buzzing and is hot", "possible_hazard",
+                       "This is ridiculous", ("unclear", "complaint"))
+    assistant = AssistantStub(plan=make)
+    service, conversations, wecom, _, source, _ = _deferred(text, assistant)
+    conversations.conversation.language = Language.EN
+    await service.process_debounced_message(source)
+    assert len(wecom.guest_messages) == 1
+    assert wecom.guest_messages[0].startswith(
+        "Please avoid the suspected hazard for now. What is happening at the moment?"
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_hazard_is_not_consumed_when_plan_does_not_match_text():
+    """计划对不上本轮正文（来源摘要不一致）：不消费危险，按既有规则进入客诉。"""
+    text = "插座一直滋滋响还发烫！！！太离谱了"
+    other = "别的一句话！！！"
+
+    def make(_: str) -> PlanOutcome:
+        return plan_for(other, ("facility_fault", "别的一句话",
+                                {"risk": "current_hazard:electric"}))
+
+    _, _, wecom, _, _ = await _run_soft(text, make)
+    assert len(wecom.guest_messages) == 1
+    assert COMPLAINT_ACK in wecom.guest_messages[0]
+    assert ELECTRIC_MARKER not in wecom.guest_messages[0]
+
+
+def test_plan_hazard_keeps_both_dedupe_conditions():
+    """C8-1：当前危险只在词面已判紧急时不处置——词面只判可能危险、计划为当前危险时仍升级；
+    可能危险在词面已判可能危险或紧急时不重复。"""
+    from homestay_bot.services.conversation_service import ConversationService
+    from homestay_bot.services.emergency_service import EmergencyService
+
+    emergency = EmergencyService()
+    lexical_possible = "插座好像漏电了！！！太离谱了"
+    assert emergency.classify(lexical_possible).is_possible
+    current = plan_for(lexical_possible, ("facility_fault", "插座好像漏电了",
+                                          {"risk": "current_hazard:electric"}))
+    possible = plan_for(lexical_possible, ("facility_fault", "插座好像漏电了",
+                                           {"risk": "possible_hazard"}))
+    assert ConversationService._plan_hazard(lexical_possible, current, emergency) == (
+        "current", "electric"
+    )
+    assert ConversationService._plan_hazard(lexical_possible, possible, emergency) is None
+    quiet = "插座一直滋滋响还发烫"
+    assert ConversationService._plan_hazard(quiet, plan_for(quiet, (
+        "facility_fault", quiet, {"risk": "possible_hazard"})), emergency) == ("possible", None)

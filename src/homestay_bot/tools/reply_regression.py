@@ -530,6 +530,35 @@ async def _load_runtime_snapshot() -> Any:
     return RuntimeConfigCipher(bootstrap.config_encryption_key).decrypt(payload)
 
 
+def plan_summary(outcome: Any, text: str) -> dict[str, Any] | None:
+    """一次规划结果的最小摘要，写进门禁记录，供失败定位（规划误判 Spec F1）。
+
+    只记状态、失败原因、是否对得上本轮正文，以及每个事项的类型、风险、位置、对象名与摘录的
+    长度和核验结果。摘录原文和对象名都不存：对象名是模型写的自由文本，可能夹带客人原话
+    （Codex F176-R2）。没有调用规划时为空。
+    """
+    if outcome is None:
+        return None
+    plan = getattr(outcome, "plan", None)
+    return {
+        "status": outcome.status,
+        "reason": outcome.reason,
+        "matches": outcome.matches(text),
+        "items": [
+            {
+                "id": item.id,
+                "kind": item.kind,
+                "risk": item.risk,
+                "subject_len": len(item.subject),
+                "start": item.start,
+                "quote_len": len(item.quote),
+                "valid": item.valid,
+            }
+            for item in (plan.items if plan is not None else ())
+        ],
+    }
+
+
 class _Runner:
     """用同一份运行配置逐个场景调用回复决策链路。"""
 
@@ -560,17 +589,36 @@ class _Runner:
         async with self._semaphore:
             started = time.monotonic()
             record: dict[str, Any] = {"id": scenario["id"]}
+            # 本次运行的局部观测：软预规划完成时写入，异常出口用它保留已完成的规划。
+            # `_Runner` 被并发复用，不能放在实例属性上，否则不同场景会串证据（F176-R1）。
+            trace: dict[str, Any] = {}
             try:
                 record.update(
-                    await asyncio.wait_for(self._respond(scenario), _SCENARIO_TIMEOUT_SECONDS)
+                    await asyncio.wait_for(
+                        self._respond(scenario, trace), _SCENARIO_TIMEOUT_SECONDS
+                    )
                 )
             except Exception as error:  # noqa: BLE001 - 记下失败类型后继续其他场景
                 record.update(route="error", error=type(error).__name__, final="")
+                # 主回复失败时适配器会带上本轮已完成的计划；没有时用软预规划的观测。都没有时
+                # 不写 plan 字段（摘要显示「未采集」），不能当成没调用规划。
+                outcome = getattr(error, "plan_outcome", None)
+                if outcome is not None and "question" in trace:
+                    record["plan"] = plan_summary(outcome, trace["question"])
+                elif "plan" in trace:
+                    record["plan"] = trace["plan"]
             record["seconds"] = round(time.monotonic() - started, 1)
             return record
 
-    async def _respond(self, scenario: dict[str, Any]) -> dict[str, Any]:
-        """按线上同一套确定性规则分流，再调用模型并经客人侧出口处理。"""
+    async def _respond(
+        self, scenario: dict[str, Any], trace: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """按线上同一套确定性规则分流，再调用模型并经客人侧出口处理。
+
+        `trace` 是 `run` 传入的本次局部观测（软预规划摘要等），直接调用时可省略。
+        """
+        if trace is None:
+            trace = {}
         from homestay_bot.domain.enums import Language
         from homestay_bot.integrations.deepseek_client import (
             DeepSeekGuestAssistant,
@@ -599,8 +647,10 @@ class _Runner:
         from homestay_bot.services.turn_plan import plan_risks, usable_plan
 
         routed = pre_route(scenario, self._entries, language)
+        trace["question"] = question
         if routed is not None and not routed.pop("soft", False):
-            return routed
+            # 硬分流（紧急、硬客诉、转人工等）在规划之前返回，确定没有调用规划。
+            return {**routed, "plan": None}
         tools = _RecordingExecutor(
             HostexReadOnlyToolExecutor(
                 FakeHostexClient(self._fixture["hostex"], self._today),
@@ -631,13 +681,41 @@ class _Runner:
             started = time.monotonic()
             turn_plan = await assistant.plan_turn(text=question, language=language)
             stages.append(("plan", round((time.monotonic() - started) * 1000)))
+            trace["plan"] = plan_summary(turn_plan, question)
             keep = (
                 agitated_cleared_by_plan(turn_plan, question)
                 if routed["route"] == "complaint"
                 else ConversationService._plan_keeps_related(turn_plan, question)
             )
             if not keep:
-                return {**routed, "stages": stages}
+                summary = plan_summary(turn_plan, question)
+                if routed["route"] == "complaint":
+                    # 与生产同序：进入客诉前先消费同一份已核验计划里的危险（规划误判 Spec §8.2）。
+                    # 当前危险走紧急路由；可能危险把避险正文组合在客诉确认之前。
+                    from homestay_bot.services.emergency_service import (
+                        EmergencyClassification,
+                        EmergencyService,
+                    )
+                    from homestay_bot.services.turn_plan import usable_plan as _usable
+
+                    usable = _usable(turn_plan, question)
+                    found = (
+                        ConversationService._plan_hazard(question, usable, EmergencyService())
+                        if usable else None
+                    )
+                    if found is not None and found[0] == "current" and found[1] is not None:
+                        return {
+                            "route": "emergency",
+                            "final": EmergencyService().safety_reply(
+                                EmergencyClassification(True, found[1]), language
+                            ),
+                            "stages": stages,
+                            "plan": summary,
+                        }
+                    if found is not None:
+                        safety = ConversationService._possible_danger_text(language)
+                        routed = {**routed, "final": f"{safety}\n\n{routed['final']}"}
+                return {**routed, "stages": stages, "plan": summary}
         # 场景声明了客人已确认的住宿时，按线上同一入口（客户上下文的 confirmed_stay）传入，
         # 让检索按目标房间与日期过滤；没有声明的场景保持原样。
         confirmed_stay = ((scenario.get("expect") or {}).get("context") or {}).get("confirmed_stay")
@@ -675,6 +753,7 @@ class _Runner:
                     EmergencyClassification(True, hazard), language
                 ),
                 "stages": stages,
+                "plan": plan_summary(decision.turn_plan, question),
             }
         # 会话在设施分支之前处理模型升级的紧急事件；门禁同样使用固定安全回复。
         if decision.handoff_reason in {
@@ -691,6 +770,7 @@ class _Runner:
                     EmergencyClassification(True, decision.handoff_reason.split(":", 1)[1]),
                     language,
                 ),
+                "plan": plan_summary(decision.turn_plan, question),
             }
         resolution = resolve_task_request(plan, question)
         # 与会话层同一判据：计划判定没有当前故障时不进设施流程（Spec §2.5）。
@@ -749,6 +829,7 @@ class _Runner:
             "task_registered": resolution.register,
             "plan_status": decision.turn_plan.status if decision.turn_plan else "none",
             "stages": stages,
+            "plan": plan_summary(decision.turn_plan, question),
         }
 
 

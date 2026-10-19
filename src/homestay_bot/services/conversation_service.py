@@ -1065,10 +1065,17 @@ class ConversationService:
                 if turn_plan is None:
                     return True
             if not agitated_cleared_by_plan(turn_plan, merged_message.content):
+                # 不再进入主回复就返回：先消费同一份计划里的危险（规划误判 Spec §8.2）。
+                ended, safety_prefix = await self._early_plan_hazard(
+                    conversation, merged_message, turn_plan
+                )
+                if ended:
+                    return True
                 await self._enter_complaint_mode(
                     conversation,
                     merged_message,
                     classification,
+                    safety_prefix=safety_prefix,
                 )
                 return True
         handoff_reason = resolve_handoff_reason(merged_message.content, turn_plan)
@@ -1082,13 +1089,29 @@ class ConversationService:
                 return True
             handoff_reason = resolve_handoff_reason(merged_message.content, turn_plan)
         if conversation.mode is ConversationMode.HUMAN_ACTIVE and handoff_reason is not None:
-            await self._send_guest_reply(
-                conversation,
-                ("I have received your request." if conversation.language is Language.EN
-                 else "我已收到您的诉求。"),
-                requires_human=True,
-                high_risk=True,
+            # 人工接待的高风险确认同样不再进入主回复：有已核验计划时先消费其中的危险，
+            # 例如「插座一直滋滋响还发烫！！！可以便宜点吗」（规划误判 Spec §8.2，H176-R2）。
+            ended, safety_prefix = (
+                await self._early_plan_hazard(conversation, merged_message, turn_plan)
+                if turn_plan is not None else (False, None)
             )
+            if ended:
+                return True
+            acknowledgement = (
+                "I have received your request." if conversation.language is Language.EN
+                else "我已收到您的诉求。"
+            )
+            if safety_prefix:
+                await self._send_combined_safety_reply(
+                    conversation, safety_prefix, acknowledgement, message_type="text"
+                )
+            else:
+                await self._send_guest_reply(
+                    conversation,
+                    acknowledgement,
+                    requires_human=True,
+                    high_risk=True,
+                )
             await self._notify_employee(
                 conversation,
                 merged_message,
@@ -1208,20 +1231,34 @@ class ConversationService:
         conversation: Conversation,
         message: IncomingMessage,
         classification: Any,
+        *,
+        safety_prefix: str | None = None,
     ) -> None:
-        """切换人工并登记客诉分析任务，客人只收到固定安抚。"""
+        """切换人工并登记客诉分析任务，客人只收到固定安抚。
+
+        `safety_prefix` 为规划补出的可能危险避险正文时，与客诉确认组合成一次回复（规划误判
+        Spec §8.2、§8.5 C8-2）：确认语先按原有高危策略处理，再拼上本地固定前缀，最后一次
+        发出；高危策略会删去前缀里的追问，所以前缀不再经过它。消息类型仍为 complaint_ack，
+        沿用过时豁免。
+        """
         await self._switch_to_human(
             conversation,
             f"complaint:{classification.reason or 'complaint'}",
         )
         if self._complaint_service is not None:
-            await self._send_guest_reply(
-                conversation,
-                self._complaint_service.guest_acknowledgement(conversation.language),
-                message_type="complaint_ack",
-                requires_human=True,
-                high_risk=True,
-            )
+            acknowledgement = self._complaint_service.guest_acknowledgement(conversation.language)
+            if safety_prefix:
+                await self._send_combined_safety_reply(
+                    conversation, safety_prefix, acknowledgement, message_type="complaint_ack"
+                )
+            else:
+                await self._send_guest_reply(
+                    conversation,
+                    acknowledgement,
+                    message_type="complaint_ack",
+                    requires_human=True,
+                    high_risk=True,
+                )
         # 客人刚收到「会立即联系管家」：员工通知不能等后台模型分析成功才发，模型不可用
         # 时那会是员工唯一的入口。分析卡片仍由 complaint_review_generate 成功后补发。
         await self._notify_employee(
@@ -1385,6 +1422,32 @@ class ConversationService:
         if self._commit_boundary is not None:
             await self._commit_boundary()
 
+    @staticmethod
+    def _plan_hazard(
+        content: str, plan: PlanOutcome | None, emergency: EmergencyService
+    ) -> tuple[str, str | None] | None:
+        """已核验计划里需要补处置的危险（不发送、无副作用）：返回（等级, 类别）或空。
+
+        与原 `_apply_plan_risk` 的判定逐字相同，两种去重条件分别保留（Spec §8.5 C8-1）：
+        - 当前危险只在词面已判紧急时不处置；词面只判可能危险而计划是当前危险时仍升级为
+          完整处置（「插座好像漏电了！！！」），返回 ("current", 类别)；
+        - 可能危险在词面已判可能危险或紧急时不重复提醒，否则返回 ("possible", None)。
+        `plan` 须已由调用方核对来源摘要；为空时不处置。门禁 `reply_regression` 复用同一判定。
+        """
+        risks = plan_risks(plan)
+        if not risks - {"none", "complaint"}:
+            return None
+        lexical = emergency.classify(content)
+        hazard = next(
+            (risk.split(":", 1)[1] for risk in sorted(risks) if risk.startswith("current_hazard:")),
+            None,
+        )
+        if hazard is not None and not lexical.is_emergency:
+            return ("current", hazard)
+        if "possible_hazard" in risks and not (lexical.is_possible or lexical.is_emergency):
+            return ("possible", None)
+        return None
+
     async def _apply_plan_risk(
         self,
         conversation: Conversation,
@@ -1395,24 +1458,45 @@ class ConversationService:
 
         危险语义补漏只升不降（Spec §2.6）：计划判为当前危险而词面未判紧急时完整分类处置并
         接管；判为可能危险而词面未判危险时先给避险提醒，本轮继续。`plan` 须已由调用方
-        核对来源摘要，摘要不一致或规划失败时传空，不处置。
+        核对来源摘要，摘要不一致或规划失败时传空，不处置。判定见 `_plan_hazard`。
         """
-        risks = plan_risks(plan)
-        if not risks - {"none", "complaint"}:
+        found = self._plan_hazard(message.content, plan, self._emergency)
+        if found is None:
             return False
-        lexical = self._emergency.classify(message.content)
-        hazard = next(
-            (risk.split(":", 1)[1] for risk in sorted(risks) if risk.startswith("current_hazard:")),
-            None,
-        )
-        if hazard is not None and not lexical.is_emergency:
+        level, category = found
+        if level == "current" and category is not None:
             await self._escalate_emergency(
-                conversation, message, EmergencyClassification(True, hazard)
+                conversation, message, EmergencyClassification(True, category)
             )
             return True
-        if "possible_hazard" in risks and not (lexical.is_possible or lexical.is_emergency):
-            await self._answer_possible_danger(conversation, message)
+        await self._answer_possible_danger(conversation, message)
         return False
+
+    async def _early_plan_hazard(
+        self,
+        conversation: Conversation,
+        message: IncomingMessage,
+        turn_plan: PlanOutcome | None,
+    ) -> tuple[bool, str | None]:
+        """软预规划后、不再进入主回复就返回的分支先消费计划危险（规划误判 Spec §8.2）。
+
+        返回（本轮是否已结束, 安全前缀）。当前危险时完整紧急处置并接管，本轮结束；可能危险
+        时通知员工，并返回固定避险正文，由调用方与原有确认组合成**一次**客人回复，避免两条
+        独立出站任务在重试时越序（H176-R1）。只消费来源摘要一致的计划，规划失败或对不上
+        正文时不处置。仍会进入主回复的放行分支不调用这里，沿用原有消费点，避免重复提醒。
+        """
+        plan = usable_plan(turn_plan, message.content)
+        found = self._plan_hazard(message.content, plan, self._emergency) if plan else None
+        if found is None:
+            return False, None
+        level, category = found
+        if level == "current" and category is not None:
+            await self._escalate_emergency(
+                conversation, message, EmergencyClassification(True, category)
+            )
+            return True, None
+        await self._notify_employee(conversation, message, "可能的安全情况")
+        return False, self._possible_danger_text(conversation.language)
 
     def _classify_complaint(self, texts: Sequence[str]) -> Any | None:
         """对全部规则文本做客诉分类，返回应处理的结果；没有客诉时返回空。
@@ -2372,6 +2456,33 @@ class ConversationService:
         """无持久化测试替身仅判断有效文本；生产由消息历史控制切换。"""
         return substantive_language(text) or fallback
 
+    async def _send_combined_safety_reply(
+        self,
+        conversation: Conversation,
+        safety_prefix: str,
+        acknowledgement: str,
+        *,
+        message_type: str,
+    ) -> GuestReplyReceipt:
+        """可能危险避险正文与确认语组合成一次客人回复（规划误判 Spec §8.5 C8-2）。
+
+        确认语按原有高危策略处理（与单独发送时一致），本地固定的避险前缀不经过它，保留追问；
+        一次调用发送，超长时沿用分段接力，不会出现确认语越过安全正文先发出。显式过时豁免，
+        来源清空与原生接管仍由出站层优先拦截。
+        """
+        prepared = prepare_guest_reply(
+            acknowledgement,
+            language=conversation.language,
+            requires_human=True,
+            high_risk=True,
+        )
+        return await self._send_prepared_guest_reply(
+            conversation,
+            f"{safety_prefix}\n\n{prepared}",
+            message_type=message_type,
+            stale_exempt=True,
+        )
+
     async def _send_guest_reply(
         self,
         conversation: Conversation,
@@ -2505,15 +2616,20 @@ class ConversationService:
             )
         return GuestReplyReceipt(content=full_content, message_id=first_id)
 
+    @staticmethod
+    def _possible_danger_text(language: Language) -> str:
+        """可能危险时的固定避险正文（含追问），只由本地代码提供。"""
+        return (
+            "Please avoid the suspected hazard for now. What is happening at the moment?"
+            if language is Language.EN
+            else "请先避开可能有危险的位置。现在具体是什么情况？"
+        )
+
     async def _answer_possible_danger(
         self, conversation: Conversation, message: IncomingMessage,
     ) -> None:
         """不明确的安全情况先提醒和通知；不发撤离模板，不自动接管。"""
-        reply = (
-            "Please avoid the suspected hazard for now. What is happening at the moment?"
-            if conversation.language is Language.EN
-            else "请先避开可能有危险的位置。现在具体是什么情况？"
-        )
+        reply = self._possible_danger_text(conversation.language)
         await self._send_prepared_guest_reply(conversation, reply, stale_exempt=True)
         await self._notify_employee(conversation, message, "可能的安全情况")
 

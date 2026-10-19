@@ -577,3 +577,146 @@ def test_room_follow_up_judge_binds_rooms_to_answers(final, ok):
     （实施复审 R174-5）。来源归属由离线预检核对，judge 不读 source_ids。"""
     scenario = next(s for s in _fixture()["scenarios"] if s["id"] == "K-房号追问")
     assert rr.judge(scenario, {"route": "knowledge", "final": final})["ok"] is ok
+
+
+def test_plan_summary_records_status_and_risk_without_quote_text():
+    """门禁记录的规划摘要（规划误判 Spec F1）：成功时逐项记类型与风险，失败时记原因；
+    不含摘录原文，没调用规划时为空。"""
+    import hashlib
+
+    from homestay_bot.services.turn_plan import PlanOutcome
+    from tests.plan_helpers import plan_for
+
+    text = "卫生间下水堵了！！！"
+    ok = rr.plan_summary(plan_for(text, ("facility_fault", "卫生间下水堵了", {
+        "risk": "complaint", "subject": "下水"})), text)
+    assert ok is not None and ok["status"] == "ok" and ok["matches"]
+    assert [(i["kind"], i["risk"], i["quote_len"], i["subject_len"]) for i in ok["items"]] == [
+        ("facility_fault", "complaint", 7, 2)
+    ]
+    assert "卫生间下水堵了" not in str(ok)
+    failed = PlanOutcome(status="failed", reason="invalid_json",
+                         source_sha256=hashlib.sha256(text.encode()).hexdigest())
+    # matches 只核对规划是否针对本轮正文（原文哈希），与成败无关。
+    assert rr.plan_summary(failed, text) == {
+        "status": "failed", "reason": "invalid_json", "matches": True, "items": []
+    }
+    assert rr.plan_summary(None, text) is None
+
+
+@pytest.mark.parametrize(
+    "secret", ["门锁密码是846219", "我的手机13800138000", "我老公叫王建国住302"]
+)
+def test_plan_summary_never_carries_free_text_subject(secret):
+    """对象名是模型写的自由文本，可能夹带客人原话；摘要只记长度（Codex F176-R2）。"""
+    from tests.plan_helpers import plan_for
+
+    text = f"{secret}，帮我看看"
+    summary = rr.plan_summary(plan_for(text, ("service_request", text, {"subject": secret})),
+                              text)
+    assert summary is not None and summary["items"][0]["kind"] == "service_request"
+    assert secret not in json.dumps(summary, ensure_ascii=False)
+    assert summary["items"][0]["subject_len"] == len(secret[:40])
+
+
+def _bare_runner():
+    """不连网的门禁运行器：只用来测试 run 的记录与异常出口。"""
+    from types import SimpleNamespace
+
+    fixture = {"today": "2026-09-25", "knowledge": [], "scenarios": []}
+    snapshot = SimpleNamespace(deepseek_api_key="test", deepseek_base_url="http://127.0.0.1:9",
+                               deepseek_model="test-model")
+    return rr._Runner(fixture, snapshot)
+
+
+@pytest.mark.asyncio
+async def test_run_keeps_completed_plan_on_error_and_does_not_mix_runs():
+    """主回复失败时保留已完成的规划（异常自带或软预规划），没有观测时不写 plan；并发运行
+    不串记录（Codex F176-R1）。"""
+    from homestay_bot.integrations.deepseek_client import AssistantUnavailableError
+    from tests.plan_helpers import plan_for
+
+    runner = _bare_runner()
+    plans = {
+        "A": plan_for("卫生间下水堵了！！！", ("facility_fault", "卫生间下水堵了", {})),
+        "B": plan_for("房间太吵了！！！", ("static_fact", "房间太吵了", {"risk": "complaint"})),
+    }
+    texts = {"A": "卫生间下水堵了！！！", "B": "房间太吵了！！！"}
+
+    async def respond(scenario, trace):
+        sid = scenario["id"]
+        trace["question"] = texts.get(sid, "x")
+        if sid in plans:
+            await asyncio.sleep(0.01 if sid == "A" else 0)
+            if scenario.get("mode") == "carried":
+                raise AssistantUnavailableError(plan_outcome=plans[sid])
+            trace["plan"] = rr.plan_summary(plans[sid], texts[sid])
+            raise RuntimeError("main call failed")
+        raise TimeoutError()
+
+    runner._respond = respond  # type: ignore[method-assign]
+    a, b, carried, none = await asyncio.gather(
+        runner.run({"id": "A"}), runner.run({"id": "B"}),
+        runner.run({"id": "A", "mode": "carried"}), runner.run({"id": "C"}),
+    )
+    assert a["route"] == "error" and a["plan"]["items"][0]["kind"] == "facility_fault"
+    assert b["plan"]["items"][0]["risk"] == "complaint"
+    assert carried["error"] == "AssistantUnavailableError"
+    assert carried["plan"]["items"][0]["kind"] == "facility_fault"
+    assert "plan" not in none and none["error"] == "TimeoutError"
+
+
+def test_gate_summary_distinguishes_missing_and_not_called_plans(tmp_path):
+    """门禁摘要：没有 plan 字段为「未采集」，plan 为空为「未调用规划」，否则列类型与风险。"""
+    import subprocess
+
+    script = Path("scripts/release/reply_gate.sh").read_text(encoding="utf-8")
+    body = script.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    (tmp_path / "summ.py").write_text(body, encoding="utf-8")
+    plan = {"status": "ok", "reason": "", "matches": True,
+            "items": [{"kind": "facility_fault", "risk": "complaint"}]}
+    result = {
+        "code": {"package_path": "x"}, "fixture_sha256": "0" * 16,
+        "verdict": {"passed": False, "regressions": ["F-堵了"], "newly_stable": [],
+                    "safety_known_failures": [], "proposed_baseline": {},
+                    "counts": {"scenarios": 1, "first_run_passes": 0, "must_pass": 1,
+                               "known_failures": 0}},
+        "records": {"F-堵了": [{"judge": {"ok": False}}, {"judge": {"ok": False}, "plan": None},
+                               {"judge": {"ok": False}, "plan": plan}, {"judge": {"ok": True}}]},
+    }
+    (tmp_path / "r.json").write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    out = subprocess.run(["python3", str(tmp_path / "summ.py"), str(tmp_path / "r.json"), "T",
+                          str(tmp_path), "all", ""], capture_output=True, text=True, check=True)
+    assert "- F-堵了 失败记录的规划：未采集；未调用规划；ok：facility_fault/complaint" in out.stdout
+
+
+@pytest.mark.parametrize("fault_risk,expect", [
+    ("possible_hazard", "possible"), ("current_hazard:electric", "current"), ("none", "complaint"),
+])
+def test_runner_soft_complaint_consumes_plan_hazard_first(monkeypatch, fault_risk, expect):
+    """门禁与生产同序（规划误判 Spec §8.2）：软客诉提前返回前先消费计划危险。当前危险走紧急
+    路由；可能危险把避险正文组合在客诉确认之前；无危险只进客诉。"""
+    from homestay_bot.integrations.deepseek_client import DeepSeekGuestAssistant
+    from tests.plan_helpers import plan_for
+
+    text = "插座一直滋滋响还发烫！！！太离谱了"
+
+    async def plan_turn(self, *, text, language):
+        """仅替代规划模型：故障项带指定危险，另一项为投诉。"""
+        return plan_for(text, ("facility_fault", "插座一直滋滋响还发烫", {"risk": fault_risk}),
+                        ("unclear", "太离谱了", {"risk": "complaint"}))
+
+    async def respond(self, **kwargs):
+        raise AssertionError("软客诉提前返回不应调用主回复")
+
+    monkeypatch.setattr(DeepSeekGuestAssistant, "plan_turn", plan_turn)
+    monkeypatch.setattr(DeepSeekGuestAssistant, "respond", respond)
+    result = asyncio.run(
+        _synthetic_runner()._respond({"messages": [{"role": "user", "content": text}]})
+    )
+    if expect == "current":
+        assert result["route"] == "emergency" and "不要触碰" in result["final"]
+    else:
+        assert result["route"] == "complaint"
+        assert result["final"].startswith("请先避开可能有危险的位置") is (expect == "possible")
+    assert result["plan"]["items"][0]["risk"] == fault_risk

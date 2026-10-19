@@ -188,6 +188,23 @@ lines = [
 if counts.get("scoped"):
     lines.insert(1, f"- 范围：{scope}，只跑 {counts['scenarios']} 个（共 {counts['total_scenarios']} 个）；"
                     f"理由：{reason}")
+# 退步场景附上失败记录的规划摘要（状态、原因、各事项类型与风险），便于定位波动来自规划
+# 还是主回复（规划误判 Spec F1）；不含摘录原文。只列退步场景，每次记录的完整摘要在 JSON。
+# 记录里没有 plan 字段表示未采集（旧记录、中断），plan 为空才表示确定没有调用规划。
+for sid in verdict["regressions"]:
+    failed = [r for r in data["records"].get(sid, []) if not (r.get("judge") or {}).get("ok")]
+    summaries = []
+    for record in failed:
+        if "plan" not in record:
+            summaries.append("未采集")
+            continue
+        plan = record["plan"]
+        if plan is None:
+            summaries.append("未调用规划")
+            continue
+        items = "、".join(f"{i['kind']}/{i['risk']}" for i in plan["items"]) or "无事项"
+        summaries.append(f"{plan['status']}{('(' + plan['reason'] + ')') if plan['reason'] else ''}：{items}")
+    lines.append(f"- {sid} 失败记录的规划：{'；'.join(summaries) or '无'}")
 open(f"{stage}/reply-gate-{tag}.md", "w", encoding="utf-8").write("\n".join(lines) + "\n")
 json.dump(verdict["proposed_baseline"], open(f"{stage}/reply-gate-{tag}.baseline.json", "w",
           encoding="utf-8"), ensure_ascii=False, indent=1)
