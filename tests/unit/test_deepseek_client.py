@@ -3535,3 +3535,25 @@ async def test_mixed_question_keeps_failed_notice_and_restores_omitted_facts() -
     assert "东湖绿道" in text and "08:30～18:00" in text
     assert "暂时未能查到可靠的实时出行信息" in text
     assert text.count("帮您查到的") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question,expected", [
+    ("你们推荐什么景点？", True),
+    ("武汉最近有啥玩的，天气咋样", True),
+    ("朋友晚上能来房间坐坐吗", False),
+    ("Is the fridge stocked with water?", False),
+])
+async def test_recommendation_contract_does_not_reach_pure_static_questions(
+    question: str, expected: bool,
+) -> None:
+    """核对生成契约的请求作用域；不复述具体措辞，防止旅游修复影响纯静态取证。"""
+    from homestay_bot.integrations.deepseek_client import _STABLE_RECOMMENDATION_RULE
+
+    assistant, client = _mixed_question_assistant("好的。")
+    await assistant.respond(
+        guest_identifier="synthetic", language=Language.ZH,
+        messages=[{"role": "user", "content": question}],
+    )
+    prompt = client.chat.completions.requests[0]["messages"][0]["content"]
+    assert (_STABLE_RECOMMENDATION_RULE in prompt) is expected

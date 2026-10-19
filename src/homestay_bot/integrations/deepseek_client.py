@@ -655,7 +655,16 @@ class FastAckReply(BaseModel):
     reply_text: str = Field(min_length=1, max_length=180)
 
 
-# 一句多问时附在系统提示后：信封里有实时查询结果，由模型写成一段回答。
+# 仅给明确的普通推荐小句追加，避免旅游生成约束改变纯静态取证（Spec §11.5）。
+_STABLE_RECOMMENDATION_RULE = (
+    "经典景点、美食和普通推荐可依据谨慎常识先给两三个具体去处及各自适合理由，"
+    "再按需问偏好；缺少日期或本店推荐资料不能成为只追问或拒绝普通推荐的理由。"
+    "‘你们推荐’是在请您给建议，不表示问题在问本店设施；不得伪装为实时结果。"
+    "每个可独立成立的建议用完整句和句号分开，勿用分号把店外推荐与本店位置、"
+    "设施或服务断言捆成一句；条件与对应结论必须保留在同一句，不能拆掉条件。"
+)
+
+# 一句多问时附在系统提示后：信封里有实时查询结果，由模型整合回答。
 _LIVE_RESULTS_RULE_ZH = (
     "本轮信封里有 live_search_results，是刚完成的实时查询结果。current_question 中"
     "天气、门票、开放时间、活动、路线等时效信息只能依据它回答：温度、价格、时间、日期、"
@@ -4433,12 +4442,7 @@ class DeepSeekGuestAssistant:
             "房源名称、房态和参考价只以工具结果为准，不要让客人替你判断来源。"
             "武汉近期活动、天气、票价、开放时间、实时交通和精确路线属于时效信息，"
             "本轮没有查询结果时不给出具体数值或安排，说明需要以当日查询为准；"
-            # 先回答普通推荐，并在生成时隔离独立事实；不放宽出口的事实过滤（Spec §11）。
-            "经典景点、美食和普通推荐可依据谨慎常识先给两三个具体去处及各自适合理由，"
-            "再按需问偏好；缺少日期或本店推荐资料不能成为只追问或拒绝普通推荐的理由。"
-            "‘你们推荐’是在请您给建议，不表示问题在问本店设施；不得伪装为实时结果。"
-            "每个可独立成立的建议用完整句和句号分开，勿用分号把店外推荐与本店位置、"
-            "设施或服务断言捆成一句；条件与对应结论必须保留在同一句，不能拆掉条件。"
+            "经典景点、美食和普通推荐优先使用审核知识及谨慎常识，不得伪装为实时结果。"
             "active_orders 仅为已核实归属的候选订单；confirmed_stay 是客人确认的住宿；"
             "没有 confirmed_stay 时，current_stay_from_order 是按客人名下唯一当前订单识别的"
             "本次住宿，可以按它回答房间相关问题。仅在 stay_confirmation 有待确认内容且本轮"
@@ -4558,6 +4562,12 @@ class DeepSeekGuestAssistant:
             ],
             gap_units=gap_offers,
         )
+        # 使用既有小句分类，混问仍可触发；纯静态问答不接收额外旅游指令。
+        if any(
+            classify_tourism_query([{"role": "user", "content": clause}]) == "stable"
+            for clause in turn_clauses
+        ):
+            system_prompt += _STABLE_RECOMMENDATION_RULE
         if other_items:
             system_prompt += _ITEM_ANSWERS_RULE
         if gap_offers:

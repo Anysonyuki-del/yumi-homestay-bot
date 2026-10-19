@@ -515,3 +515,13 @@ Ponytail 主代理自审：核对 `DeepSeekGuestAssistant.plan_turn`、`agitated
 相关验证：`test_reply_fix2_items.py`、`test_tourism.py`、`test_deepseek_client.py`、`test_guest_reply_policy.py`、`test_knowledge_service.py`、`test_emergency_service.py` 共 **477 passed**；追加共享调用边界 `test_answer_policy.py`、`test_knowledge_evidence_gate.py`、`test_reply_evidence_boundaries.py`、`test_release_scripts.py` 共 **137 passed**。两批无重叠，共 614 项。全仓 Ruff、Mypy（155 份源码）、`git diff --check` 通过；未重跑原 RV176-1 不受影响的 154 项，保留其既有证据。曾误用不存在的 `test_knowledge_evidence_policy.py` 路径，命令未执行用例，不计通过数。
 
 主代理按 Ponytail 做最终差异自审：追踪主题识别在取证、事实过滤、政策/任务判别、欢迎卡片去重中的调用，以及旅游分类在搜索和首响中的调用；别名不改原文和危险规则，活动/明确日期/住宿优先级保留。没有新增本次范围内阻断项。旅游措辞效果尚未用真实模型证明；严格过滤仍可能保守少答，须由新候选 all 把关。此为主代理自审，不是独立 Claude 审查。
+
+
+### 11.5 rc2 阻断与提示作用域收窄
+
+rc2 的 all：160 场景首轮 140 通过，原三项各首轮通过；E-冰箱 1/3、K-访客 0/3，仍不允许发布。UN-代码仅为建议晋升，失败门禁不采纳新基线。四次有界追加诊断（两项各两次，`.stage/1.70.7-extra-diagnosis.json`）均能选对 9035／9033 并通过；不将诊断通过替代门禁，也不把原 all 失败确定归因于模型波动或这次提示词。
+
+当前全局主提示新增了旅游生成指令，虽然只期望影响推荐，却会改变纯静态问答的模型输入。为减少本轮非目标影响，保留原全局一句普通推荐规则，将新增的先答后问及完整分句规则提为 `_STABLE_RECOMMENDATION_RULE`，只在现有小句分类至少一项为 stable 时追加。天气混问的 live 约束仍仅在有实时结果时使用。这样 E-冰箱与K-访客不接受新增旅游指令；不新增静态主题白名单、检索放宽或二次调用。此为 §11.2 同一方案的作用域收窄，不是新业务取舍。补充请求级作用域测试，再跑受影响助手测试及静态检查；因源码输入改变，须用新候选再跑 all，rc2 原结果继续保留。若还失败，继续停在发布门禁前，不用重复同候选碰运气。
+
+
+收窄后 `test_deepseek_client.py` **150 passed**（含新增4项请求作用域控制），全仓 Ruff、差异检查通过；Mypy 155 份源码在同一运行改动上通过。首轮新测试误用禁止联网的 TourismStub 测天气混问而失败，改为复用既有 WeatherStub 装配后通过，不是生产链故障。其余相关验证输入未变，复用 §11.4，不相加重复用例。主代理再次核对最终差异：新增指令只按既有小句分类追加，未改变编号选择、候选、事实过滤或外部调用；AOCI 在最终发布证据稳定后收尾。
