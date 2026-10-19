@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-10-19T13:40:59Z",
+  "updated_at": "2026-10-19T13:54:56Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "2454a6fdecc9671f85a8d9910cd7da8261e36d31961856de9873838ae8553109",
-      "size": 327070,
-      "normalized_sha256": "2454a6fdecc9671f85a8d9910cd7da8261e36d31961856de9873838ae8553109"
+      "sha256": "eb3b9a31660a5d3892375d78332b498b20893bc3f94eec8d684cc443a39f503f",
+      "size": 326837,
+      "normalized_sha256": "eb3b9a31660a5d3892375d78332b498b20893bc3f94eec8d684cc443a39f503f"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1196,9 +1196,9 @@
     },
     "docs/releases/1.70.7.md": {
       "role": "index",
-      "sha256": "af1b12ab1260272b3dd9c833b4a2ce0c06812a59ec7723bd07389138cfee8f6a",
-      "size": 13369,
-      "normalized_sha256": "af1b12ab1260272b3dd9c833b4a2ce0c06812a59ec7723bd07389138cfee8f6a"
+      "sha256": "c04158286ec4df7b32ca5c2cec3d5fae4b333b87f9bd8a61d20c25df10dd3bc5",
+      "size": 14802,
+      "normalized_sha256": "c04158286ec4df7b32ca5c2cec3d5fae4b333b87f9bd8a61d20c25df10dd3bc5"
     },
     "docs/releases/README.md": {
       "role": "index",
@@ -2624,9 +2624,9 @@
     },
     "docs/specs/2026-10-18_planner-complaint-misroute-spec.md": {
       "role": "index",
-      "sha256": "ffd528d48c12ae4e643e1729705f7f8b2afa8d53e8aeabe8302a57797046aee3",
-      "size": 54395,
-      "normalized_sha256": "ffd528d48c12ae4e643e1729705f7f8b2afa8d53e8aeabe8302a57797046aee3"
+      "sha256": "adea285b9193bbc98524edbe2f0440eee31d994236f325a45f25123bd7360098",
+      "size": 54964,
+      "normalized_sha256": "adea285b9193bbc98524edbe2f0440eee31d994236f325a45f25123bd7360098"
     },
     "docs/specs/2026-10-18_tool-target-binding-spec.md": {
       "role": "index",
@@ -4012,9 +4012,9 @@
     },
     "tasks/todo.md": {
       "role": "index",
-      "sha256": "430a6f2c6000d8092b334796cc2c6d10cf66dcb2f0a06d54b075f672910be4c4",
-      "size": 129416,
-      "normalized_sha256": "430a6f2c6000d8092b334796cc2c6d10cf66dcb2f0a06d54b075f672910be4c4"
+      "sha256": "6641e5b88a45559e73e4a8196673f5b175575945db633ca52d5f45325d66763e",
+      "size": 129496,
+      "normalized_sha256": "6641e5b88a45559e73e4a8196673f5b175575945db633ca52d5f45325d66763e"
     },
     "tests/__init__.py": {
       "role": "observe",

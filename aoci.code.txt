@@ -219,7 +219,7 @@ README.md[SV5T]: F:规定逐版本发布记录的审计内容、更正与敏感�
 1.70.4.md[SV6S]: F:记录1.70.4房号省略追问的改动、三轮复审修复、候选门禁、部署核对、诊断页与测试号真实收发及发布复审更正。 | R:code:docs/specs/2026-10-17_room-follow-up-topic-spec.md,code:docs/specs/2026-10-18_tool-target-binding-spec.md,code:docs/reviews/2026-10-18_codex-to-claude-1.70.4-release-review.md | A:改动清单；复审修复；门禁表；部署核对；归因更正；收发验收 | S:后节取代前节；已上线仍有RV174-1/2两项P2；门禁波动只倾向既有不稳，6次对照无逐次原始记录；卫浴换题不代表早餐冲突已解。
 1.70.5.md[SV6S]: F:记录1.70.5工具目标共享与追问统一绑定的逐轮补修、两次all门禁、正式提交部署、诊断页与收发及CI失败修复。 | R:code:docs/specs/2026-10-18_tool-target-binding-spec.md,code:docs/reviews/2026-10-17-room-follow-up-implementation-evidence/gate_control_repeat.py | A:实施与补修；门禁；发布部署；收发；CI修复 | S:后节取代前节；第1次all因F-堵了不通过如实保留；部署时CI实为失败，依据本地全量；收发已由用户确认收件。
 1.70.6.md[SV6T]: F:记录1.70.6报修误客诉的提示词与核验归一、危险优先的组合回复、门禁规划摘要、复测、all门禁、部署、诊断页与测试号收发。 | R:code:docs/specs/2026-10-18_planner-complaint-misroute-spec.md,code:docs/reviews/2026-10-18-planner-complaint-evidence/retest_final.jsonl,code:tests/fixtures/guest_reply_regression_baseline.json | A:改动清单；本地验证；门禁；发布与部署；风险与回滚 | S:部署复用rc-1.70.6-1门禁；不带感叹号的收发只作对照；客户端收件已由用户确认；T-吸烟基线随本记录晋升。
-1.70.7.md[SV6S]: F:记录归一收窄、三项门禁补修、三轮all、CI及正式部署和独立核对，保留登录验收待办。 | R:code:docs/specs/2026-10-18_planner-complaint-misroute-spec.md,code:src/homestay_bot/integrations/deepseek_client.py | A:修复与验证；三轮门禁；5d692e2发布；备份与178文件核对；待验与回滚 | S:rc3通过非160全过，厨房按规则2/3；前两次失败保留，无新晋升。已部署仅API，数据库未重启；503与基线相同但当前组件待登录核对。未做收发与恢复演练，备份可读不等于恢复已验。
+1.70.7.md[SV6S]: F:记录归一收窄、三项补修、三轮门禁、CI、部署独立核对及登录后诊断验收。 | R:code:docs/specs/2026-10-18_planner-complaint-misroute-spec.md,code:src/homestay_bot/integrations/deepseek_client.py | A:修复验证；三轮门禁；5d692e2发布；备份与178文件；登录补验；回滚 | S:rc3非全过，厨房2/3；前两轮失败保留。仅API部署，库未重启；登录确认仅回调降级。未做收发或恢复演练。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-09-08-evidence/===
 pytest-output.txt[TQ3S]: F:保存离线回归原始输出、真实外部契约跳过原因与依赖及SQLite清理警告 | R:- | A:1406passed,15skipped,6warnings | S:历史结果含真实外部契约跳过，不能充当当前验收。
@@ -430,7 +430,7 @@ README.md[SQ5T]: F:说明评审报告及复现证据入库的原因、目录与�
 2026-10-15_room-identity-resolution-spec.md[SA5M]: F:规定房号原文优先、身份快照、静态绑定与工具筛选，追加枚举同日交接、片段职责及区间和目录覆盖契约。 | R:code:src/homestay_bot/services/item_coverage.py,code:src/homestay_bot/integrations/deepseek_client.py | A:身份快照与R1至R10；D-R1至R5；门禁；IRI修订；AV-102与片段职责；§13端点和目录 | S:§13完整区间两端须匹配，仅退房端点保守未绑定；目录按房源不比住宿日期，文档不代验收。
 2026-10-17_room-follow-up-topic-spec.md[SA5M]: F:规定房号省略追问的原文结构、A至D职责绑定、日期条件与候选隔离、工具三态，并追加实施补充、I174-4决定与门禁话题调整。 | R:code:src/homestay_bot/integrations/deepseek_client.py,code:src/homestay_bot/services/item_coverage.py,code:tests/fixtures/guest_reply_scenarios.json | A:两步判定；冻结单元；预算与转交；工具消费；实施补充；I174-4与门禁 | S:首部待确认状态已被§6取代；纯静态硬调用后的静态回退本版延期而非完成；房间专属与全店资料钟点冲突时的优先级未定。
 2026-10-18_tool-target-binding-spec.md[SA6M]: F:规定工具目标日期与方案共享，追加父句完整继承、结构分流及同项跨项统一B绑定合同。 | R:code:src/homestay_bot/integrations/deepseek_client.py | A:需求清单；D1至D6；父句绑定；结构分流；§11统一B；回归 | S:§5替代旧周末合同，无单元用整轮目标；追问绑定失败为D。诊断不晋升，实施不代验收。
-2026-10-18_planner-complaint-misroute-spec.md[SA6L]: F:规定报修误客诉观测、危险组合和归一收窄，追加三项门禁补修、旅游提示作用域及正式部署证据。 | R:code:src/homestay_bot/services/turn_plan.py,code:src/homestay_bot/integrations/deepseek_client.py,code:src/homestay_bot/services/knowledge_service.py | A:F1至F3；危险优先；§10归一；§11三项补修与作用域；验证发布 | S:仅原始risk明确投诉才容忍类型误写；all失败不放行。旅游新指令仅给stable小句，不放宽过滤；rc3通过仍保留已知失败。已部署5d692e2，登录诊断待验，不做收发。
+2026-10-18_planner-complaint-misroute-spec.md[SA6L]: F:规定报修误客诉观测、危险组合及归一收窄，追加门禁三项补修、旅游提示作用域及发布验收证据。 | R:code:src/homestay_bot/services/turn_plan.py,code:src/homestay_bot/integrations/deepseek_client.py,code:src/homestay_bot/services/knowledge_service.py | A:F1至F3；危险优先；§10归一；§11补修与作用域；验证发布；登录补验 | S:仅原始risk明确投诉才容忍类型误写；all失败不放行。旅游指令仅给stable小句，过滤不放宽；已部署并登录验收，未做收发。
 
 ===/Volumes/02/obsidian/docs/specs/assets/===
 2026-09-16_room-timeline-mobile-proto.html[SU4M]: F:以三个手机宽度静态原型对比旧分段日历与日期条、迷你占用轨和订单卡提案，展示稀疏和跨窗重叠场景。 | R:code:docs/specs/2026-09-16_room-timeline-mobile-redesign-spec.md | A:自包含HTML/CSS；A旧样式/B提案/C密集场景 | S:日期、几何与状态硬编码，链接均为井号；不能当真实房态、动态倒计时或客户导航验收。
@@ -701,7 +701,7 @@ reply_regression.py[TQ8L]: F:用虚构资料运行真实模型回复回归，判
 
 ===/Volumes/02/obsidian/tasks/===
 lessons.md[SQ6T]: F:收集尚未归并的发布验收、证据边界与客服泛化防回归教训，供后续确认并归入开发手册 | R:code:YuMi民宿AI开发经验与防回归手册.md | A:- | S:只收已有代码或测试依据的新教训；长期有效后归并唯一对应章节并删除本处正文，历史由Git保留
-todo.md[SW5L]: F:跟踪1.70.7修复、三轮门禁、CI与正式部署和证据收尾，保留登录后诊断验收待办及历史事项。 | R:code:docs/specs/2026-10-18_planner-complaint-misroute-spec.md,code:docs/releases/1.70.7.md | A:补修与验证；rc3门禁；正式推送部署；独立核对；登录待验 | S:5d692e2已部署，登录过期不能以缓存页面或401代验；勾选不能替代Git与工具回执。前两轮失败保留，早餐冲突不晋升，不做测试号收发。
+todo.md[SW5L]: F:跟踪1.70.7修复、三轮门禁、CI、正式部署及登录补验闭合，并保留历史事项。 | R:code:docs/specs/2026-10-18_planner-complaint-misroute-spec.md,code:docs/releases/1.70.7.md | A:补修验证；rc3门禁；推送部署；独立核对；登录验收 | S:勾选不替代Git与现场证据。前两轮失败保留，早餐冲突不晋升；仅既有回调降级，未做测试号收发。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-10-08-fix2-implementation-review-evidence/===
 coverage_probe.py[TB5S]: F:用成对问法离线复现ISO年份误作房号、房价词污染早餐与静态小句日期错用，并经过真实会话及事务发件箱输出最终正文。 | R:code:tests/unit/test_reply_fix2_items.py,code:tests/integration/test_knowledge_referrals.py | A:main；answer；show；PYTHONPATH=src:.:tests:tests/integration | S:退出0证明缺陷；日期用真实SQLite检索，模型及工具均合成；final入队不证明平台受理或收件。
