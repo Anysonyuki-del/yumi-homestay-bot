@@ -18,6 +18,13 @@ from homestay_bot.services.answer_policy import asks_stay_availability, is_trans
     [
         ("武汉哪里好玩？", "stable"),
         ("最近玩啥？", "stable"),
+        ("武汉最近有啥玩的", "stable"),
+        ("武汉有啥好玩的？", "stable"),
+        ("有什么玩的？", "stable"),
+        ("你们推荐什么景点？", "stable"),
+        ("今天有啥玩的？", "live"),
+        ("最近有啥玩的活动？", "live"),
+        ("入住的房间有啥玩的？", "none"),
         ("推荐几个武汉经典景点", "stable"),
         ("武汉有什么美食？", "stable"),
         ("武汉近期有什么活动？", "live"),

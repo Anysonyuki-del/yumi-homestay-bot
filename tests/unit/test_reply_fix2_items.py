@@ -926,3 +926,25 @@ async def test_foreign_weekend_qualifier_never_answers_this_weekend(text, fallba
         e for part in decision.reply_parts for e in part.evidence if e.source_kind == "knowledge"
     ]
     assert all(gap.reason != "knowledge_missing" for gap in decision.gap_units)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", ["房间能抽菸吗", "房间可以吸菸吗", "可以抽一根菸吗"])
+@pytest.mark.parametrize("has_source", [False, True])
+async def test_smoking_variant_without_model_selection_uses_only_approved_source(
+    question: str, has_source: bool,
+) -> None:
+    """模型保留异体字且未选编号时仍可取证；不靠模型改字，也不凭空补禁烟政策。"""
+    answer = "房间和阳台禁止吸烟，需要吸烟请到院外指定区域。"
+    sources = [_snippet(9721, "房间可以抽烟吗？", answer)] if has_source else []
+    assistant, _client = _assistant([_decision()], knowledge=_Knowledge(sources))
+    outcome = plan_for(question, ("static_fact", question))
+    decision = await _respond(assistant, question, outcome)
+
+    if has_source:
+        assert answer in decision.reply_text
+        assert {e.source_id for part in decision.reply_parts for e in part.evidence} == {"9721"}
+        assert UNCONFIRMED not in decision.reply_text
+    else:
+        assert UNCONFIRMED in decision.reply_text
+        assert "禁止吸烟" not in decision.reply_text

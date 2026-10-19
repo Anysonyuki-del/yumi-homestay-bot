@@ -141,7 +141,8 @@ PROPERTY_TOPICS: tuple[PropertyTopic, ...] = (
     ),
     PropertyTopic(
         "吸烟",
-        _topic_pattern(r"吸烟|抽烟|(?:来|抽)一?根烟|smoking|smoke\s+(?:in|inside)"),
+        # 只在主题匹配接纳异体字，保留原文位置和其他领域的危险判定（Spec §11）。
+        _topic_pattern(r"吸[烟菸]|抽[烟菸]|(?:来|抽)一?根[烟菸]|smoking|smoke\s+(?:in|inside)"),
         "吸烟 smoking",
         english="smoking",
     ),

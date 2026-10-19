@@ -15,7 +15,8 @@ TourismReplyLanguage = Literal["zh", "en"]
 
 _STABLE_TOURISM_PATTERN = re.compile(
     r"景点|好玩|游玩|旅游|一日游|半日游|攻略|美食|小吃|餐厅|"
-    r"玩啥|玩什么|去哪玩|"
+    # 普通玩法异序问法仍是稳定推荐，不能因「最近」就强制查活动（Spec §11）。
+    r"玩啥|玩什么|去哪玩|有(?:啥|什么)(?:好)?玩|"
     r"attraction|sightseeing|itinerary|food|restaurant|where to (?:go|visit)",
     re.IGNORECASE,
 )
