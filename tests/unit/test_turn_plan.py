@@ -295,6 +295,25 @@ def test_hard_reason_in_any_text_variant_beats_agitated_review() -> None:
     assert resolve_handoff_reason(text) == "refund"
 
 
+@pytest.mark.parametrize(
+    "risk_fields",
+    [{"risk": "none"}, {}, {"risk": None}],
+    ids=["none", "missing", "null"],
+)
+def test_complaint_kind_without_explicit_complaint_risk_fails_schema(risk_fields: dict) -> None:
+    """RV176-1：风险未明确标为投诉时，不能归一掉唯一投诉信号并放行普通维修。"""
+    outcome = _verify(
+        "下水又堵了！！！你们怎么搞的",
+        [
+            _item(id=1, kind="facility_fault", quote="下水又堵了", risk="none"),
+            _item(id=2, kind="complaint", quote="你们怎么搞的", **risk_fields),
+        ],
+    )
+    assert outcome.status == "failed"
+    assert outcome.reason == "schema"
+    assert outcome.plan is None
+
+
 def test_complaint_written_as_kind_is_kept_as_unclear_item():
     """模型把 complaint 误写进事项类型时，该项归为 unclear 并保留风险，同句危险项不丢失；
     其他未知类型仍让整份计划失败（规划误判 Spec §9）。"""

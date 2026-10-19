@@ -196,10 +196,10 @@ def verify_turn_plan(
         if not isinstance(entry, dict):
             return failed_plan(text, "schema")
         item_id, kind, quote = entry.get("id"), entry.get("kind"), entry.get("quote")
-        if kind == "complaint":
-            # 规划模型偶尔把风险取值 complaint 误写进事项类型（另拆一项「太离谱了」）。整份计划
-            # 因此失败时，同句已识别的危险项会一起丢失、退回保守客诉（规划误判 Spec §9）。只把
-            # 这一个确定的误写归为 unclear 并保留其风险；其他未知类型照旧判为结构失败。
+        if kind == "complaint" and entry.get("risk") == "complaint":
+            # 只在风险已明确保留投诉时容忍类型误写，避免整份失败丢掉同句危险项。
+            # 风险缺失、null 或 none 时不能归一掉唯一投诉信号，仍按 schema 失败保守回退
+            # （RV176-1，规划误判 Spec §10）；其他未知类型照旧拒绝。
             kind = "unclear"
         risk = _verify_risk(entry.get("risk"))
         withdraws = entry.get("withdraws")

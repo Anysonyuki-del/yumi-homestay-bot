@@ -397,3 +397,79 @@
   - `tests/unit/test_turn_plan.py`：核验归一与其他未知类型，共 1 项。
 - **本地全量**（除浏览器测试）3324 passed / 82 skipped；Ruff（整个仓库）、Mypy 通过。浏览器测试因本机 Playwright 浏览器缓存缺失无法启动（环境问题，本次未改后台页面），以 CI 为准。
 - Codex 的 `codex_f176_fix_review_probe.py`、`hazard_order_spec_probe.py` 断言的是修复前的缺陷，已由上面的正向回归取代，原脚本不改。
+
+## 10. 核验归一收窄（2026-10-19，Codex `docs/reviews/2026-10-19_codex-to-claude-1.70.6-release-review.md` RV176-1，拟 1.70.7）
+
+### 10.1 现状证据
+
+- `services/turn_plan.py::verify_turn_plan`（约 199 至 204 行）：只要 `kind == "complaint"`，就无条件归为 `unclear`。
+- 同文件 `_verify_risk`（约 129 至 140 行）：风险缺失或为 null 时按 `none` 处理，显式 `none` 也合法。
+- 因此「下水又堵了！！！你们怎么搞的」若第二项写成 `kind=complaint`、风险为 `none`、缺失或 null：
+  - 计划从旧版的 `failed:schema` 变成有效的无投诉计划；
+  - `answer_policy.py::agitated_cleared_by_plan` 只看风险集合，于是放行，会话按普通维修处理，员工收不到客诉通知。
+- Codex 已在真实核验和会话编排上用合成端口复现（见复审 §2 的表）。这是 1.70.6 新增放宽造成的可达回归；没有证据表明线上已经发生，A/B 记录里被接受的 `unclear` 项风险都是 complaint。
+- 现有用例 `tests/unit/test_turn_plan.py::test_complaint_written_as_kind_is_kept_as_unclear_item` 只覆盖风险已写成 complaint 的情况。
+
+### 10.2 修改（Codex 推荐的方案 1）
+
+- `verify_turn_plan`：只有原始风险**明确等于字符串 `complaint`** 时，才把 `kind=complaint` 归为 `unclear`。其他组合保留原类型，照旧因不在 `PLAN_KINDS` 判为 `schema` 失败，退回保守客诉。
+- 不扩大未知类型白名单，不改 `_verify_risk`、危险流程、提示词或调用方。
+
+### 10.3 验收（离线）
+
+- `test_turn_plan.py`：
+  - 风险为 `none`、缺失、null 三个参数化变体，都判为 `schema` 失败；
+  - 保留现有成功控制（危险项加 kind、risk 都为 complaint 的项）和其他未知类型失败的控制。
+- `test_conversation_plan_flows.py`：「下水又堵了！！！你们怎么搞的」加上述三种计划，走真实会话编排：
+  - 机器人模式下都进入客诉：转为 HUMAN_ACTIVE，员工收到客诉通知，没有最终回复任务，没有普通维修任务；
+  - 人工模式下都保留高风险确认：不放行到普通回复，不新增普通任务；
+  - 正向控制：危险项加 kind、risk 都为 complaint 的项，两种模式结果与上面相同。
+- 这些用例须在当前 1.70.6 实现上失败。
+- 相关单测、Ruff（整个仓库）、Mypy；不跑无关全量。
+
+### 10.4 发布
+
+- 版本 1.70.7：CHANGELOG、`docs/releases/1.70.7.md`。
+- 真实门禁 all：`turn_plan.py` 在回复链路清单里，规划核验影响所有场景，按项目规则全量。
+- 不做真实规划复测：只收紧一种原本被接受的输出，A/B 中被接受的样本都满足新条件。
+- 不做测试号收发：触发需要模型给出特定误写，测试号无法稳定复现；离线会话用例和门禁覆盖。
+- 部署和现场核对与 1.70.6 相同。
+
+### 10.5 待确认
+
+- R-1：按 10.2 至 10.4 执行，并授权 1.70.7 的门禁、提交推送、部署与现场核对。
+- 2026-10-19 授权更新：Codex 明确说明本次仅做本地修复与验证后，用户回复「开始做完吧」，据此执行 §10.2、§10.3；R-1 的真实模型及发布部分仍待当前明确授权。
+
+### 10.6 Codex 本地实施与自审（2026-10-19）
+
+- `src/homestay_bot/services/turn_plan.py::verify_turn_plan`：归一条件收紧为 `kind == "complaint" and entry.get("risk") == "complaint"`；其他组合保留未知类型并返回 `failed/schema`。未改 `_verify_risk`、提示词、危险流程或调用方。
+- `tests/unit/test_turn_plan.py::test_complaint_kind_without_explicit_complaint_risk_fails_schema`：原始风险为 `none`、缺失、null 时均核验失败且无可用计划；现有合法投诉归一与未知类型控制保留。
+- `tests/unit/test_conversation_plan_flows.py::test_miswritten_complaint_kind_never_reaches_normal_repair`：六类输入 × 机器人/人工两种模式，共 12 项，经 `handle_message → process_debounced_message`；错误实现排出最终任务时继续跑 `process_recorded_message`。三种错误风险均不调用普通主回复、不排最终任务、不登记维修；固定确认与客诉通知保留。
+- 正向控制包括 `kind/risk` 均为 `complaint` 的普通投诉，以及独立 possible/current 危险项。§10.3 的「结果相同」仅指不进入普通回复/维修；危险结果继续以已确认的 §8 为准：possible 给完整避险及客诉确认，current 给完整紧急处置并优先升级，不强行转成客诉确认。
+
+判别力证据（业务代码修改前）：
+
+```sh
+PYTHONPATH=src:.:tests .venv/bin/pytest -q tests/unit/test_turn_plan.py tests/unit/test_conversation_plan_flows.py -k 'complaint_kind_without_explicit or miswritten_complaint_kind'
+```
+
+结果：**9 failed / 6 passed / 81 deselected**。3 项核验反例原先误返回 `ok`，6 项会话反例原先调用普通主回复；6 项合法投诉/危险控制原本通过。修复后这 15 项全部包含在以下 154 项通过结果中，不重复相加。
+
+最终相关验证：
+
+```sh
+PYTHONPATH=src:.:tests .venv/bin/pytest -q tests/unit/test_turn_plan.py tests/unit/test_conversation_plan_flows.py tests/unit/test_reply_regression.py tests/unit/test_release_scripts.py tests/integration/test_hazard_combined_reply.py --tb=short
+.venv/bin/ruff check .
+.venv/bin/mypy
+git diff --check
+```
+
+结果：**154 passed**；全仓 Ruff、Mypy（155 份源码）及差异空白检查通过。覆盖核验边界、即时/合并/最终会话链、门禁路由、组合危险出站与发布路径清单；没有装配、依赖、持久化或页面改动，因此不扩大到无关全量、数据库竞争或浏览器测试。
+
+Ponytail 主代理自审：核对 `DeepSeekGuestAssistant.plan_turn`、`agitated_cleared_by_plan/resolve_handoff_reason`、会话早退与最终入口，以及合法风险、未知类型、原始风险非字符串的拒绝边界，未发现本次范围内新的阻断问题。测试走真实核验与会话编排，模型、任务和发送端口为合成替身，不证明真实模型发生率或实际收件。
+
+本轮仅完成本地修复；版本仍为 1.70.6，未创建 1.70.7 发布记录，未执行真实模型门禁、提交、推送、部署或生产核对。§10.4 在发布获准后执行；旧候选门禁不能代替本次修复后的 all 门禁。否定式投诉、残余结构失败、`process_recorded_message` 既有早退与词面早期提醒维持另立事项。AOCI 收尾以本轮最终工具回执为准。
+
+### 10.7 发布授权与执行（2026-10-19）
+
+用户在本地修复与验证完成、明确说明发布未执行后回复「全部做完」，授权完成 §10.4 的 all 真实模型门禁、版本与更新日志、提交推送、CI、可恢复备份、仅 API 部署和只读现场核对。无需测试号收发的理由保持 §10.4；本轮不发送真实客人或员工消息。发布逐项结果见 `docs/releases/1.70.7.md`，未通过门禁不得放行。

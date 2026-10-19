@@ -201,6 +201,73 @@ async def test_complaint_plan_or_planning_failure_keeps_the_complaint_path(plan)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [ConversationMode.BOT_ACTIVE, ConversationMode.HUMAN_ACTIVE])
+@pytest.mark.parametrize(
+    "fault_quote,fault_risk,risk_fields",
+    [
+        ("下水又堵了", "none", {"risk": "none"}),
+        ("下水又堵了", "none", {}),
+        ("下水又堵了", "none", {"risk": None}),
+        ("下水又堵了", "none", {"risk": "complaint"}),
+        ("插座一直滋滋响还发烫", "possible_hazard", {"risk": "complaint"}),
+        ("插座一直滋滋响还发烫", "current_hazard:electric", {"risk": "complaint"}),
+    ],
+    ids=["none", "missing", "null", "complaint", "possible", "current"],
+)
+async def test_miswritten_complaint_kind_never_reaches_normal_repair(
+    mode: ConversationMode, fault_quote: str, fault_risk: str, risk_fields: dict,
+) -> None:
+    """RV176-1：原始误写经过核验和完整会话入口，不排普通回复或维修；合法危险仍优先。"""
+    text = f"{fault_quote}！！！你们怎么搞的"
+
+    def make_plan(guest_text: str) -> PlanOutcome:
+        """只替换模型输出，类型归一与风险核验仍使用生产函数。"""
+        return plan_for(
+            guest_text,
+            ("facility_fault", fault_quote, {"risk": fault_risk}),
+            ("complaint", "你们怎么搞的", risk_fields),
+        )
+
+    async def commit() -> None:
+        """提供软复核所需的提交边界，确保确实调用计划核验。"""
+
+    assistant = AssistantStub(decision=_facility_decision(), plan=make_plan)
+    tasks, jobs, messages = BusinessTaskStub(), DeferredJobStub(), MessageServiceStub()
+    service, conversations, _, wecom = build_service(
+        assistant=assistant, business_tasks=tasks, jobs=jobs, messages=messages,
+        customer_profiles=CustomerProfileStub(), complaint_service=ComplaintService(),
+        commit_boundary=commit,
+    )
+    conversations.conversation.mode = mode
+    source = incoming(content=text)
+    await service.handle_message(source)
+    assert [job[2] for job in jobs.jobs] == [f"debounce:{source.msgid}"]
+    await service.process_debounced_message(_deferred_message_from_payload(jobs.jobs[0][1]))
+    final_jobs = [job for job in jobs.jobs if job[2] == f"final:{source.msgid}"]
+    # 跑完错误实现可能排出的最终任务，使断言能同时捕获普通维修副作用。
+    for job in final_jobs:
+        await service.process_recorded_message(_deferred_message_from_payload(job[1]))
+
+    assert assistant.plan_calls == 1
+    assert assistant.calls == 0
+    assert final_jobs == []
+    assert tasks.calls == []
+    assert conversations.conversation.mode is ConversationMode.HUMAN_ACTIVE
+    assert len(wecom.guest_messages) == 1
+    reply = wecom.guest_messages[0]
+    notes = " ".join(wecom.internal_messages)
+    if fault_risk == "current_hazard:electric":
+        assert "不要触碰" in reply
+        assert "紧急事件" in notes and "客诉待处理" not in notes
+    else:
+        assert "您的情况我已记录" in reply
+        assert "客诉待处理" in notes
+        if fault_risk == "possible_hazard":
+            assert reply.startswith("请先避开可能有危险的位置。现在具体是什么情况？")
+            assert "可能的安全情况" in notes
+
+
+@pytest.mark.asyncio
 async def test_immediate_entry_defers_a_soft_complaint_to_the_debounce_job() -> None:
     """即时入口命中情绪词时不在请求里规划：登记合并作业后返回（V5-R2）。"""
     jobs = DeferredJobStub()
