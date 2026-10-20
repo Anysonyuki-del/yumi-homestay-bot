@@ -3538,22 +3538,25 @@ async def test_mixed_question_keeps_failed_notice_and_restores_omitted_facts() -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("question,expected", [
-    ("你们推荐什么景点？", True),
-    ("武汉最近有啥玩的，天气咋样", True),
-    ("朋友晚上能来房间坐坐吗", False),
-    ("Is the fridge stocked with water?", False),
+@pytest.mark.parametrize("question,kind,expected", [
+    ("你们推荐什么景点？", "external_info", True),
+    ("武汉最近有啥玩的，天气咋样", "external_info", True),
+    ("你们推荐什么景点？", None, False),
+    ("朋友晚上能来房间坐坐吗", "static_fact", False),
+    ("Is the fridge stocked with water?", "static_fact", False),
 ])
 async def test_recommendation_contract_does_not_reach_pure_static_questions(
-    question: str, expected: bool,
+    question: str, kind: str | None, expected: bool,
 ) -> None:
-    """核对生成契约的请求作用域；不复述具体措辞，防止旅游修复影响纯静态取证。"""
+    """核对生成契约的请求作用域；不复述具体措辞，防止旅游修复影响纯静态取证。
+    推荐依据须落在店外信息事项内，没有计划时不追加（规划误判 Spec §12 F12-1）。"""
     from homestay_bot.integrations.deepseek_client import _STABLE_RECOMMENDATION_RULE
 
     assistant, client = _mixed_question_assistant("好的。")
     await assistant.respond(
         guest_identifier="synthetic", language=Language.ZH,
         messages=[{"role": "user", "content": question}],
+        turn_plan=plan_for(question, (kind, question)) if kind else None,
     )
     prompt = client.chat.completions.requests[0]["messages"][0]["content"]
     assert (_STABLE_RECOMMENDATION_RULE in prompt) is expected

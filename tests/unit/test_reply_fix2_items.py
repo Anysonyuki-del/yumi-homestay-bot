@@ -13,6 +13,7 @@ import pytest
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.deepseek_client import (
+    _STABLE_RECOMMENDATION_RULE,
     AssistantRequestContext,
     DeepSeekGuestAssistant,
 )
@@ -29,6 +30,7 @@ from homestay_bot.services.knowledge_service import (
     normalize_text,
 )
 from homestay_bot.services.reply_plan import ReplyPart
+from homestay_bot.services.turn_plan import failed_plan
 from tests.plan_helpers import PLAN_TODAY, plan_for
 
 UNCONFIRMED = "尚未确认"
@@ -948,3 +950,140 @@ async def test_smoking_variant_without_model_selection_uses_only_approved_source
     else:
         assert UNCONFIRMED in decision.reply_text
         assert "禁止吸烟" not in decision.reply_text
+
+
+# ---- 本店事实／店外信息合同（规划误判 Spec §12，RV177-1、RV177-3） ----
+
+_WEB_TEXT = "网上搜到：某商场可租借。"
+
+
+def _system_prompt(completions) -> str:
+    """主调用的系统提示；本轮没有主调用时返回空串。"""
+    return completions.requests[0]["messages"][0]["content"] if completions.requests else ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question,answer", [
+    ("今天可以借吹风机吗", "每间房都配有吹风机，在卫生间抽屉里。"),
+    ("现在有雨伞可以借吗", "前台可免费借用雨伞，用完放回门口伞架。"),
+    ("民宿离地铁站多远？", "民宿距6号线芸栖路站约450米，步行约6分钟。"),
+    ("公共客厅几点开放？", "一楼公共客厅8:00至22:00开放。"),
+])
+@pytest.mark.parametrize("has_source", [True, False])
+async def test_property_fact_with_live_words_is_answered_from_knowledge_not_search(
+    question: str, answer: str, has_source: bool,
+) -> None:
+    """计划判为本店事实时，「今天」「几点开放」「多远」等词面信号不能把整句送去联网：
+    有审核资料按来源回答，无资料回答未确认，都不出现网页结果（RV177-3）。"""
+    sources = [_snippet(9801, question, answer)] if has_source else []
+    tourism = _Tourism({question.rstrip("？"): _WEB_TEXT})
+    # 模型选中审核编号：本用例只验证联网分流，不验证无选择时的主题后备取证。
+    selection = [{"item_id": 1, "answer_ids": [9801]}] if has_source else []
+    assistant, _completions = _assistant(
+        [_decision(evidence_selection=selection)], knowledge=_Knowledge(sources), tourism=tourism
+    )
+    decision = await _respond(assistant, question, plan_for(question, ("static_fact", question)))
+
+    assert tourism.questions == []
+    assert _WEB_TEXT not in decision.reply_text
+    if has_source:
+        assert answer in decision.reply_text
+        assert UNCONFIRMED not in decision.reply_text
+    else:
+        assert UNCONFIRMED in decision.reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", ["今天可以借吹风机吗", "现在有雨伞可以借吗"])
+async def test_borrow_request_with_time_word_is_not_searched(question: str) -> None:
+    """借用被规划为服务请求时同样不联网，交回主回复（RV177-3）。"""
+    tourism = _Tourism({question: _WEB_TEXT})
+    assistant, completions = _assistant([_decision()], tourism=tourism)
+    decision = await _respond(
+        assistant, question, plan_for(question, ("service_request", question))
+    )
+
+    assert tourism.questions == []
+    assert _WEB_TEXT not in decision.reply_text
+    assert completions.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("plan_kind", [None, "failed", "mismatch"])
+async def test_unusable_plan_keeps_lexical_live_search(plan_kind: str | None) -> None:
+    """计划不可用时联网维持词面判断，天气等真实店外问题不会因此失去实时数据（D12-2）。"""
+    question = "今天可以借吹风机吗"
+    if plan_kind is None:
+        plan = None
+    elif plan_kind == "failed":
+        plan = failed_plan(question, "schema")
+    else:
+        plan = plan_for("别的正文", ("static_fact", "别的正文"))
+    tourism = _Tourism({question: _WEB_TEXT})
+    assistant, completions = _assistant([_decision()], tourism=tourism)
+    await _respond(assistant, question, plan)
+
+    assert tourism.questions == [question]
+    assert _STABLE_RECOMMENDATION_RULE not in _system_prompt(completions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question,items,searched", [
+    ("武汉明天天气怎么样", [("external_info", "武汉明天天气怎么样")], ["武汉明天天气怎么样"]),
+    (
+        "前台有什么玩具可以借吗，武汉明天天气怎么样",
+        [("service_request", "前台有什么玩具可以借吗"), ("external_info", "武汉明天天气怎么样")],
+        ["武汉明天天气怎么样"],
+    ),
+    # 「还有」不切句，整句词面不是实时（v1.70.6、v1.70.7 都不联网），合同不让它变成联网。
+    (
+        "前台有什么玩具可以借吗还有武汉明天天气怎么样",
+        [("service_request", "前台有什么玩具可以借吗"), ("external_info", "武汉明天天气怎么样")],
+        [],
+    ),
+])
+async def test_external_info_clause_keeps_search(
+    question: str, items: list[tuple[str, str]], searched: list[str],
+) -> None:
+    """落在店外信息事项内的实时小句照常联网；同轮本店小句不被带进联网。"""
+    tourism = _Tourism({clause: "明天武汉多云。" for clause in searched})
+    assistant, _completions = _assistant([_decision()], tourism=tourism)
+    await _respond(assistant, question, plan_for(question, *items))
+
+    assert tourism.questions == searched
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question,items,expected", [
+    # 店内设施的「玩」字问法：计划判为本店事项时不追加推荐约束（RV177-1）。
+    ("民宿有啥玩具吗", [("static_fact", "民宿有啥玩具吗")], False),
+    ("前台有什么玩具可以借吗", [("service_request", "前台有什么玩具可以借吗")], False),
+    ("房间有什么玩的", [("static_fact", "房间有什么玩的")], False),
+    ("电视有什么玩的频道", [("static_fact", "电视有什么玩的频道")], False),
+    ("民宿有什么好玩的玩具", [("static_fact", "民宿有什么好玩的玩具")], False),
+    # 店外推荐：W-推荐、W-小吃、W-天气玩法（一项跨两个小句）的门禁形状。
+    ("你们推荐什么景点？", [("external_info", "你们推荐什么景点？")], True),
+    ("武汉有什么必吃的小吃？", [("external_info", "武汉有什么必吃的小吃？")], True),
+    ("武汉最近有啥玩的，天气咋样", [("external_info", "武汉最近有啥玩的，天气咋样")], True),
+    ("房间附近有什么玩的", [("external_info", "房间附近有什么玩的")], True),
+    # 推荐信号不在店外事项自己的原文里，不能借用（Codex「还有」反例）。
+    (
+        "前台有什么玩具可以借吗还有武汉明天天气怎么样",
+        [("service_request", "前台有什么玩具可以借吗"), ("external_info", "武汉明天天气怎么样")],
+        False,
+    ),
+    (
+        "前台有什么玩具可以借吗另外武汉明天天气怎么样",
+        [("service_request", "前台有什么玩具可以借吗"), ("external_info", "武汉明天天气怎么样")],
+        False,
+    ),
+])
+async def test_recommendation_rule_requires_external_info_quote(
+    question: str, items: list[tuple[str, str]], expected: bool,
+) -> None:
+    """推荐生成约束只在店外信息事项自己的原文里有普通推荐小句时追加（Spec §12 F12-1）。"""
+    tourism = _Tourism({"武汉最近有啥玩的，天气咋样": "明天武汉多云。"})
+    assistant, completions = _assistant([_decision()], tourism=tourism)
+    await _respond(assistant, question, plan_for(question, *items))
+
+    assert (_STABLE_RECOMMENDATION_RULE in _system_prompt(completions)) is expected

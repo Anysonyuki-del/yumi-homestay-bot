@@ -1,4 +1,5 @@
 import re
+from collections.abc import Sequence
 from datetime import date
 from typing import Literal
 
@@ -7,6 +8,8 @@ from homestay_bot.services.answer_policy import (
     is_property_specific,
     is_transaction_sensitive,
 )
+from homestay_bot.services.item_coverage import Clause, split_clauses
+from homestay_bot.services.turn_plan import PlanItem, PlanOutcome, usable_plan
 
 WebSearchStatus = Literal["unknown", "ok", "unsupported", "degraded"]
 TourismQueryMode = Literal["none", "stable", "live"]
@@ -235,6 +238,63 @@ def classify_tourism_query(
 def is_tourism_query(messages: list[dict[str, str]]) -> bool:
     """兼容既有调用：稳定或实时旅游问题均返回真。"""
     return classify_tourism_query(messages) != "none"
+
+
+def contract_plan_items(
+    outcome: PlanOutcome | None, text: str
+) -> tuple[PlanItem, ...] | None:
+    """本店事实／店外信息合同可用的计划事项（规划误判 Spec §12）。
+
+    计划不可用、或没有任何通过原文核验的事项时返回 None，表示调用方退回各自的
+    无计划行为；返回元组时每项的 start 与 quote 都已在 text 上精确核验。
+    """
+    plan = usable_plan(outcome, text)
+    if plan is None or plan.plan is None or not plan.plan.valid_items:
+        return None
+    return plan.plan.valid_items
+
+
+def external_live_clauses(
+    text: str, plan_items: Sequence[PlanItem] | None
+) -> list[Clause]:
+    """词面判为实时的小句；有计划时只保留完整落在有效店外信息事项原文内的（Spec §12 F12-2）。
+
+    计划只用来收窄词面结果：本店事实被「今天」「几点开放」等词带进联网时，审核资料会被
+    绕过（RV177-3）。计划不可用时维持词面判断，否则天气等真实店外问题会失去实时数据。
+    """
+    live = [
+        clause
+        for clause in split_clauses(text)
+        if classify_tourism_query([{"role": "user", "content": clause.text}]) == "live"
+    ]
+    if plan_items is None:
+        return live
+    spans = [
+        (item.start, item.start + len(item.quote))
+        for item in plan_items
+        if item.kind == "external_info"
+    ]
+    return [
+        clause for clause in live
+        if any(start <= clause.start and clause.end <= end for start, end in spans)
+    ]
+
+
+def recommendation_requested(plan_items: Sequence[PlanItem] | None) -> bool:
+    """有效店外信息事项自己的原文里有普通推荐小句，才追加推荐生成约束（Spec §12 F12-1）。
+
+    只看事项自己的原文、并在其中再切句：整轮小句或区间相交会借到别处的词面信号
+    （「前台有什么玩具可以借吗还有武汉明天天气怎么样」不在「还有」处切句），而整段分类
+    会把跨两小句的「武汉最近有啥玩的，天气咋样」判成实时。没有计划时不追加，回到 1.70.6。
+    """
+    if not plan_items:
+        return False
+    return any(
+        classify_tourism_query([{"role": "user", "content": clause.text}]) == "stable"
+        for item in plan_items
+        if item.kind == "external_info"
+        for clause in split_clauses(item.quote)
+    )
 
 
 # 模型自己写在正文里的来源说明，例如「（以上天气信息来自武汉市气象台及中央气象台

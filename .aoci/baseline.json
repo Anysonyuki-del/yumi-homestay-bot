@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-10-19T13:54:56Z",
+  "updated_at": "2026-10-19T16:46:03Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "eb3b9a31660a5d3892375d78332b498b20893bc3f94eec8d684cc443a39f503f",
-      "size": 326837,
-      "normalized_sha256": "eb3b9a31660a5d3892375d78332b498b20893bc3f94eec8d684cc443a39f503f"
+      "sha256": "7d4972f997961b5804aaaa22249c74e833e7ba0aa6d518ba7349abcfbca307db",
+      "size": 327996,
+      "normalized_sha256": "7d4972f997961b5804aaaa22249c74e833e7ba0aa6d518ba7349abcfbca307db"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -2285,6 +2285,18 @@
       "sha256": "c6f312a9a1c5844d51b58a2df931c0d2ca5a5c3de64512309a6d1dd51e24abda",
       "size": 8996,
       "normalized_sha256": "c6f312a9a1c5844d51b58a2df931c0d2ca5a5c3de64512309a6d1dd51e24abda"
+    },
+    "docs/reviews/2026-10-20_claude-to-codex-1.70.7-release-review.md": {
+      "role": "index",
+      "sha256": "5bad3e9d2e0b88e7ff5df2c9ddff564ac164585bdb8ee73b16fba115d9193ccf",
+      "size": 6965,
+      "normalized_sha256": "5bad3e9d2e0b88e7ff5df2c9ddff564ac164585bdb8ee73b16fba115d9193ccf"
+    },
+    "docs/reviews/2026-10-20_codex-to-claude-1.70.7-release-review-followup.md": {
+      "role": "index",
+      "sha256": "82d2862daf25f501661241a272028b810c86f68b3c3b930f708018955a064cdb",
+      "size": 15222,
+      "normalized_sha256": "82d2862daf25f501661241a272028b810c86f68b3c3b930f708018955a064cdb"
     },
     "docs/reviews/README.md": {
       "role": "index",

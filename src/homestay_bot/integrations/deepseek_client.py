@@ -15,11 +15,13 @@ from homestay_bot.integrations.deepseek_delivery_rewriter import DeepSeekDeliver
 from homestay_bot.integrations.hostex_client import reference_price_currency
 from homestay_bot.integrations.tourism import (
     TourismSearchError,
-    classify_tourism_query,
+    contract_plan_items,
     evidence_footer,
+    external_live_clauses,
     group_live_questions,
     latest_user_question,
     live_reply_category,
+    recommendation_requested,
     split_tourism_reply,
 )
 from homestay_bot.services.answer_policy import (
@@ -4179,10 +4181,11 @@ class DeepSeekGuestAssistant:
                 target_date, target_end_date = local_today, None
         # 只切一次句：联网分组、剩余问题、问价判断与逐项覆盖都用同一组小句（Spec §2.1(3)）。
         turn_clauses = [clause.text for clause in split_clauses(question_text)]
+        # 本店事实／店外信息合同：有计划时，只有落在店外信息事项内的实时小句才联网，
+        # 其余交回审核知识与主模型（规划误判 Spec §12 F12-2，RV177-3）。
+        contract_items = contract_plan_items(plan, question_text)
         public_clauses = [
-            clause
-            for clause in turn_clauses
-            if classify_tourism_query([{"role": "user", "content": clause}]) == "live"
+            clause.text for clause in external_live_clauses(question_text, contract_items)
         ]
         price_question = "；".join(
             clause for clause in turn_clauses if clause not in public_clauses
@@ -4562,11 +4565,8 @@ class DeepSeekGuestAssistant:
             ],
             gap_units=gap_offers,
         )
-        # 使用既有小句分类，混问仍可触发；纯静态问答不接收额外旅游指令。
-        if any(
-            classify_tourism_query([{"role": "user", "content": clause}]) == "stable"
-            for clause in turn_clauses
-        ):
+        # 推荐依据须落在店外信息事项自己的原文内，本店问题不接收额外旅游指令（Spec §12 F12-1）。
+        if recommendation_requested(contract_items):
             system_prompt += _STABLE_RECOMMENDATION_RULE
         if other_items:
             system_prompt += _ITEM_ANSWERS_RULE

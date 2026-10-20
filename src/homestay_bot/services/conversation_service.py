@@ -33,7 +33,12 @@ from homestay_bot.integrations.deepseek_client import (
     FacilityIssue,
     TaskSuggestion,
 )
-from homestay_bot.integrations.tourism import TourismSearchError, classify_tourism_query
+from homestay_bot.integrations.tourism import (
+    TourismSearchError,
+    classify_tourism_query,
+    contract_plan_items,
+    external_live_clauses,
+)
 from homestay_bot.services.answer_policy import (
     FACILITY_CONFIRM_REPLY_EN,
     FACILITY_CONFIRM_REPLY_ZH,
@@ -1345,6 +1350,18 @@ class ConversationService:
             reply = f"{extra_reply}\n\n{reply}"
         await self._send_prepared_guest_reply(conversation, reply)
 
+    @staticmethod
+    def _asks_live_info(content: str, turn_plan: PlanOutcome | None) -> bool:
+        """是否值得先发「正在查询」：与主回复同一本店事实／店外信息合同（Spec §12 F12-3）。
+
+        有可用计划时，只有落在店外信息事项内的实时小句才算；普通路径在首响时往往还没有
+        计划，此时维持整句词面判断，最终答案仍由主回复按合同决定。
+        """
+        items = contract_plan_items(turn_plan, content)
+        if items is None:
+            return classify_tourism_query([{"role": "user", "content": content}]) == "live"
+        return bool(external_live_clauses(content, items))
+
     async def _stage_fast_ack(
         self,
         conversation: Conversation,
@@ -1360,7 +1377,7 @@ class ConversationService:
         sent_ack: GuestReplyReceipt | None = None
         if has_facility_fault_signal(message.content):
             pass
-        elif classify_tourism_query([{"role": "user", "content": message.content}]) == "live":
+        elif self._asks_live_info(message.content, turn_plan):
             # 1.39.13 测试号验收：联网问题分别等了约 30 秒和 21 秒，期间没有任何回复。
             sent_ack = await self._send_guest_reply(
                 conversation,

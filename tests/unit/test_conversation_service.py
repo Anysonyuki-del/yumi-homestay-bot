@@ -3228,3 +3228,27 @@ async def test_appliance_type_question_is_answered_without_evacuation() -> None:
     assert assistant.calls == 1
     assert conversations.conversation.mode is not ConversationMode.HUMAN_ACTIVE
     assert not any("开窗通风" in text for text in wecom.guest_messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,acked", [
+    ("static_fact", False),
+    ("service_request", False),
+    ("external_info", True),
+    (None, True),
+])
+async def test_fast_ack_follows_store_fact_contract(kind: str | None, acked: bool) -> None:
+    """「今天可以借吹风机吗」词面像实时问题：有计划判为本店事项时不先发「正在查询」，
+    店外信息或没有计划时维持现行安抚（规划误判 Spec §12 F12-3，D12-3）。"""
+    text = "今天可以借吹风机吗"
+    jobs = DeferredJobStub()
+    service, conversations, _, wecom = build_service(jobs=jobs, defer_model=True)
+    message = incoming(content=text)
+    conversation = await conversations.get_or_create(message)
+    plan = plan_for(text, (kind, text)) if kind else None
+
+    await service._stage_fast_ack(conversation, message, turn_plan=plan)
+
+    assert (wecom.guest_messages == ["我帮您查一下最新信息，稍等片刻。"]) is acked
+    if not acked:
+        assert wecom.guest_messages == []
