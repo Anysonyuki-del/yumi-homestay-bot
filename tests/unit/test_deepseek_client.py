@@ -3711,3 +3711,89 @@ async def test_retry_keeps_failure_of_a_query_that_was_not_retried() -> None:
     assert [part.status for part in decision.reply_parts] == ["query_failed", "grounded"]
     assert len(completions.requests) == 3
     assert executor.calls == [("search_availability", second)]
+
+
+def _receipt_fault_assistant(
+    steps: list[tuple[str, dict[str, str] | None]], failing_compose_calls: set[int] | None
+) -> tuple[DeepSeekGuestAssistant, ScriptedToolCompletionsStub]:
+    """逐项模式的房态回执路径；指定第几次 `_compose_items` 抛出合成异常（None 表示每次都抛）。"""
+    completions = ScriptedToolCompletionsStub(steps)
+    assistant = DeepSeekGuestAssistant(
+        chat_client=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=ToolExecutorStub(),
+        local_date_provider=lambda: date(2026, 7, 30),
+    )
+    original = assistant._compose_items
+    calls = 0
+
+    def faulty(*args, **kwargs):
+        """按序号注入一次构造失败，其余照常组合。"""
+        nonlocal calls
+        calls += 1
+        if failing_compose_calls is None or calls in failing_compose_calls:
+            raise ValueError("synthetic receipt fault")
+        return original(*args, **kwargs)
+
+    assistant._compose_items = faulty  # type: ignore[method-assign]
+    return assistant, completions
+
+
+async def _respond_stay(assistant: DeepSeekGuestAssistant, question: str):
+    """按住宿查询计划走一次主回复。"""
+    return await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": question}],
+        turn_plan=plan_for(question, ("stay_query", question)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_receipt_fault_without_earlier_receipt_retries_instead_of_empty_reply() -> None:
+    """回执构造中途失败、此前没有完整回执：不发半成品空回复，按异常分类重试（SH-R1 语义 A）。"""
+    query = _stay("2026-07-30", "2026-07-31")
+    assistant, completions = _receipt_fault_assistant(
+        [("tool", query), ("tool", query), ("invalid", None)], failing_compose_calls={1}
+    )
+
+    decision = await _respond_stay(assistant, "今天还有房吗？")
+
+    assert "江景房" in decision.reply_text
+    # 两次尝试都查到同一结果时分项会重复（Spec §1.8 第 7 条，正文已去重），这里不锁定数量。
+    assert decision.reply_parts
+    assert {part.status for part in decision.reply_parts} == {"grounded"}
+    assert len(completions.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_receipt_fault_keeps_earlier_complete_receipt() -> None:
+    """已有一份完整回执，后一次工具调用的回执构造失败：返回原来那份，不被半成品覆盖。"""
+    first = _stay("2026-07-30", "2026-07-31")
+    second = _stay("2026-08-05", "2026-08-06")
+    assistant, completions = _receipt_fault_assistant(
+        [("tool", first), ("tool", second)], failing_compose_calls={2}
+    )
+
+    decision = await _respond_stay(assistant, "今天还有房吗？")
+
+    assert "7月30日" in decision.reply_text
+    assert "江景房" in decision.reply_text
+    assert "8月5日" not in decision.reply_text
+    assert len(completions.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_receipt_fault_every_time_ends_in_existing_unavailable_exit() -> None:
+    """回执每次都构造失败：不发半成品，用完重试与预算后走既有的不可用出口。"""
+    query = _stay("2026-07-30", "2026-07-31")
+    assistant, completions = _receipt_fault_assistant(
+        [("tool", query), ("tool", query), ("tool", query)], failing_compose_calls=None
+    )
+
+    with pytest.raises(AssistantUnavailableError):
+        await _respond_stay(assistant, "今天还有房吗？")
+    assert 1 <= len(completions.requests) <= 3
