@@ -624,6 +624,32 @@ class _ItemLayout:
 _NO_ROOM = RoomResolution("none")
 
 
+@dataclass(frozen=True)
+class _TurnContext:
+    """主回复一轮的准备结果（拆分 Spec §2.3，S1、S2）：后续各阶段只读这里的值。
+
+    `plan_items` 已应用服务收费追问的改写；`early_reply` 非空时整轮直接返回它
+    （只问无日期房价、房态的提前澄清）。
+    """
+
+    question_text: str
+    knowledge_question: str
+    plan: PlanOutcome | None
+    plan_ok: PlanOutcome | None
+    plan_items: tuple[PlanItem, ...]
+    local_today: date
+    property_id: int | None
+    target_date: date | None
+    target_end_date: date | None
+    selection_dates: tuple[date, date | None]
+    turn_clauses: list[str]
+    contract_items: tuple[PlanItem, ...] | None
+    public_clauses: list[str]
+    service_fee_followup: bool
+    price_clarification: ReplyPart | None
+    early_reply: AssistantDecision | None
+
+
 @dataclass(frozen=True, slots=True)
 class AssistantRequestContext:
     """保存后台调试已校验的房间与日期，不混入模拟客人正文。"""
@@ -4236,19 +4262,17 @@ class DeepSeekGuestAssistant:
             ))
         return candidates
 
-    async def _respond_with_plan(
+    def _prepare_turn(
         self,
         *,
         language: Language,
         messages: list[dict[str, str]],
         customer_context: CustomerModelContext | None,
         request_context: AssistantRequestContext | None,
-        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
-        stage_timing_sink: Callable[[str, int], None] | None,
         guest_history: Sequence[str] | None,
         plan: PlanOutcome | None,
-    ) -> AssistantDecision:
-        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
+    ) -> _TurnContext:
+        """S1、S2：取问题与计划、日期、切句与店外合同小句、服务收费改写和问价澄清。"""
         question_text = latest_user_question(messages)["content"]
         plan_ok = usable_plan(plan, question_text)
         plan_items = plan_ok.plan.valid_items if plan_ok and plan_ok.plan else ()
@@ -4302,6 +4326,7 @@ class DeepSeekGuestAssistant:
                 for item in plan_items
             )
         price_clarification: ReplyPart | None = None
+        early_reply: AssistantDecision | None = None
         if not service_fee_followup and self._price_question_needs_dates(
             price_question, messages, request_context
         ):
@@ -4321,7 +4346,7 @@ class DeepSeekGuestAssistant:
                 ):
                     # 计划确认整轮只问无日期房价、房态，没有别的内容：直接问住哪天，不调用
                     # 主模型（修复 Spec D-G10 约束：粗粒度项还含其他本店问题时不提前返回）。
-                    return AssistantDecision(
+                    early_reply = AssistantDecision(
                         reply_text=clarify_text, language=language, intent="price",
                         confidence=1.0,
                     )
@@ -4330,17 +4355,74 @@ class DeepSeekGuestAssistant:
                     question="房价日期", status="clarification", text=clarify_text
                 )
 
-        def finish(result: AssistantDecision) -> AssistantDecision:
-            """返回前追加房价日期澄清分项；没有澄清时原样返回。"""
-            if price_clarification is None:
-                return result
-            return self._append_parts(result, [price_clarification], question_text)
-
         # 退房日不含；项日期在任何知识等待前固定，检索与后续核验都读同一布局。
         selection_dates = (
             target_date or local_today,
             target_end_date - timedelta(days=1) if target_end_date else None,
         )
+        return _TurnContext(
+            question_text=question_text,
+            knowledge_question=knowledge_question,
+            plan=plan,
+            plan_ok=plan_ok,
+            plan_items=plan_items,
+            local_today=local_today,
+            property_id=property_id,
+            target_date=target_date,
+            target_end_date=target_end_date,
+            selection_dates=selection_dates,
+            turn_clauses=turn_clauses,
+            contract_items=contract_items,
+            public_clauses=public_clauses,
+            service_fee_followup=service_fee_followup,
+            price_clarification=price_clarification,
+            early_reply=early_reply,
+        )
+
+    def _with_price_clarification(
+        self, ctx: _TurnContext, result: AssistantDecision
+    ) -> AssistantDecision:
+        """返回前追加房价日期澄清分项；没有澄清时原样返回（原 finish 闭包）。"""
+        if ctx.price_clarification is None:
+            return result
+        return self._append_parts(result, [ctx.price_clarification], ctx.question_text)
+
+    async def _respond_with_plan(
+        self,
+        *,
+        language: Language,
+        messages: list[dict[str, str]],
+        customer_context: CustomerModelContext | None,
+        request_context: AssistantRequestContext | None,
+        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
+        stage_timing_sink: Callable[[str, int], None] | None,
+        guest_history: Sequence[str] | None,
+        plan: PlanOutcome | None,
+    ) -> AssistantDecision:
+        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
+        ctx = self._prepare_turn(
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            request_context=request_context,
+            guest_history=guest_history,
+            plan=plan,
+        )
+        if ctx.early_reply is not None:
+            return ctx.early_reply
+        question_text = ctx.question_text
+        knowledge_question = ctx.knowledge_question
+        plan_ok = ctx.plan_ok
+        plan_items = ctx.plan_items
+        local_today = ctx.local_today
+        property_id = ctx.property_id
+        target_date = ctx.target_date
+        turn_clauses = ctx.turn_clauses
+        contract_items = ctx.contract_items
+        public_clauses = ctx.public_clauses
+        service_fee_followup = ctx.service_fee_followup
+        price_clarification = ctx.price_clarification
+        selection_dates = ctx.selection_dates
         knowledge_started = monotonic()
         # 本轮房号身份快照只读一次：静态取证、工具行筛选、覆盖判定与各出口共用（房号身份 Spec）。
         room_identities = await self._room_identities()
@@ -4488,7 +4570,7 @@ class DeepSeekGuestAssistant:
                 and not is_transaction_sensitive(remaining_question)
                 and not getattr(customer_context, "stay_confirmation", None)
             ):
-                return finish(decision.model_copy(
+                return self._with_price_clarification(ctx, decision.model_copy(
                     update={"reply_parts": parts, "reply_text": compose_reply_parts(parts)}
                 ))
 
@@ -4687,7 +4769,7 @@ class DeepSeekGuestAssistant:
                         or cumulative_request_chars + request_chars > MODEL_BUDGET.main_chain_chars
                     ):
                         if availability_fallback is not None:
-                            return finish(availability_fallback)
+                            return self._with_price_clarification(ctx, availability_fallback)
                         raise AssistantUnavailableError()
                     model_calls += 1
                     cumulative_request_chars += request_chars
@@ -4735,7 +4817,7 @@ class DeepSeekGuestAssistant:
                                 language=language,
                             )
                             if composed is not None:
-                                return finish(composed)
+                                return self._with_price_clarification(ctx, composed)
                         if tool_parts or public_parts:
                             model_parts = list(decision.reply_parts)
                             live_parts = list(public_parts)
@@ -4751,7 +4833,7 @@ class DeepSeekGuestAssistant:
                                     language=language,
                                 )
                             parts = [*model_parts, *tool_parts, *live_parts]
-                            return finish(decision.model_copy(
+                            return self._with_price_clarification(ctx, decision.model_copy(
                                 update={
                                     "reply_parts": parts,
                                     "reply_text": compose_reply_parts(parts),
@@ -4769,7 +4851,7 @@ class DeepSeekGuestAssistant:
                             evidence_plan, decision
                         ):
                             # 证据计划或核验后的证据选择已接管：审核原文不再精炼改写。
-                            return finish(decision)
+                            return self._with_price_clarification(ctx, decision)
                         refined_reply = decision.reply_text
                         if model_calls < MODEL_BUDGET.main_calls:
                             refine_started = monotonic()
@@ -4789,7 +4871,7 @@ class DeepSeekGuestAssistant:
                             decision.language,
                             grounded_in=self._knowledge_grounding(knowledge),
                         )
-                        return finish(decision.model_copy(
+                        return self._with_price_clarification(ctx, decision.model_copy(
                             update={"reply_text": refined_reply}
                         ))
                     if self._tool_executor is None:
@@ -4992,7 +5074,7 @@ class DeepSeekGuestAssistant:
                 raise AssistantUnavailableError()
             except AssistantUnavailableError:
                 if availability_fallback is not None:
-                    return finish(availability_fallback)
+                    return self._with_price_clarification(ctx, availability_fallback)
                 raise
             except (
                 IndexError,
@@ -5005,7 +5087,7 @@ class DeepSeekGuestAssistant:
                         "DeepSeek 房态结果整理失败，返回安全查询回执：error_type=%s",
                         type(error).__name__,
                     )
-                    return finish(availability_fallback)
+                    return self._with_price_clarification(ctx, availability_fallback)
                 # 仅记校验字段位置和错误类别，不写输入值、响应正文或密钥。
                 if isinstance(error, ValidationError):
                     logger.warning(
