@@ -661,6 +661,24 @@ class _TurnKnowledge:
     item_knowledge: _Candidates
 
 
+@dataclass(frozen=True)
+class _MainRequest:
+    """S6–S10 的产出：主模型请求与工具开放、交给模型的联网结果和逐项事项、证据计划。
+
+    `request` 是可变字典，主循环在其基础上逐轮复制追加消息，不改写本对象（拆分 Spec §2.3）。
+    """
+
+    request: dict[str, Any]
+    forced_tool_names: set[str]
+    allowed_tool_names: set[str]
+    live_results: list[dict[str, str]]
+    other_items: list[PlanItem]
+    tool_needs: dict[str, list[_ToolNeed]] | None
+    evidence_plan: EvidencePlan | None
+    property_knowledge_grounded: bool
+    faq_candidate_ids: set[int]
+
+
 @dataclass(frozen=True, slots=True)
 class AssistantRequestContext:
     """保存后台调试已校验的房间与日期，不混入模拟客人正文。"""
@@ -4611,58 +4629,39 @@ class DeepSeekGuestAssistant:
                 ))
         return public_parts, None
 
-    async def _respond_with_plan(
+    async def _build_main_request(
         self,
+        ctx: _TurnContext,
+        turn_knowledge: _TurnKnowledge,
+        public_parts: list[ReplyPart],
         *,
         language: Language,
         messages: list[dict[str, str]],
         customer_context: CustomerModelContext | None,
         request_context: AssistantRequestContext | None,
-        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
         stage_timing_sink: Callable[[str, int], None] | None,
-        guest_history: Sequence[str] | None,
-        plan: PlanOutcome | None,
-    ) -> AssistantDecision:
-        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
-        ctx = self._prepare_turn(
-            language=language,
-            messages=messages,
-            customer_context=customer_context,
-            request_context=request_context,
-            guest_history=guest_history,
-            plan=plan,
-        )
-        if ctx.early_reply is not None:
-            return ctx.early_reply
+    ) -> _MainRequest:
+        """S6–S10：FAQ 候选、工具开放、数据信封、条件规则、请求体与整句证据计划。
+
+        整句证据计划在计划可用时仍先算后置空：计算本身可能抛异常，按需计算会改变异常行为
+        （拆分 Spec E2 撤回，§1.8 第 6 条）。
+        """
         question_text = ctx.question_text
         knowledge_question = ctx.knowledge_question
+        plan = ctx.plan
         plan_ok = ctx.plan_ok
         plan_items = ctx.plan_items
         local_today = ctx.local_today
         property_id = ctx.property_id
         target_date = ctx.target_date
+        selection_dates = ctx.selection_dates
         contract_items = ctx.contract_items
         public_clauses = ctx.public_clauses
         service_fee_followup = ctx.service_fee_followup
         price_clarification = ctx.price_clarification
-        selection_dates = ctx.selection_dates
-        turn_knowledge = await self._load_turn_knowledge(ctx, language, stage_timing_sink)
         room_identities = turn_knowledge.room_identities
-        turn_rooms = turn_knowledge.turn_rooms
         fact_layout = turn_knowledge.fact_layout
         knowledge = turn_knowledge.knowledge
-        item_knowledge = turn_knowledge.item_knowledge
-        public_parts, live_reply = await self._answer_live_clauses(
-            ctx,
-            turn_knowledge,
-            language=language,
-            messages=messages,
-            customer_context=customer_context,
-            tool_trace_sink=tool_trace_sink,
-            stage_timing_sink=stage_timing_sink,
-        )
-        if live_reply is not None:
-            return live_reply
         faq_started = monotonic()
         try:
             faq_candidates = await self._build_faq_candidate_context()
@@ -4731,10 +4730,6 @@ class DeepSeekGuestAssistant:
         tool_needs = self._tool_targets(
             fact_layout, plan_items, room_identities, property_id, local_today
         )
-
-        def tool_rooms_for(name: str, arguments: dict[str, Any]) -> RoomResolution | None:
-            """某次实际查询的筛选目标；没有按需求重算时沿用整轮房号解析。"""
-            return self._tool_rooms_for(tool_needs, name, arguments, turn_rooms)
 
         envelope = self._build_context_envelope(
             question_text=minimized_question,
@@ -4825,6 +4820,84 @@ class DeepSeekGuestAssistant:
             # 计划成功时不再用整轮知识池的证据计划（修复 Spec §2.1(2)，G1）：本店事实项逐项
             # 取证（`fact_layout`），只有动作项的轮次本来也不让证据计划接管（SR-毛巾、SR-遗失）。
             evidence_plan = None
+        return _MainRequest(
+            request=request,
+            forced_tool_names=forced_tool_names,
+            allowed_tool_names=allowed_tool_names,
+            live_results=live_results,
+            other_items=other_items,
+            tool_needs=tool_needs,
+            evidence_plan=evidence_plan,
+            property_knowledge_grounded=property_knowledge_grounded,
+            faq_candidate_ids=faq_candidate_ids,
+        )
+
+    async def _respond_with_plan(
+        self,
+        *,
+        language: Language,
+        messages: list[dict[str, str]],
+        customer_context: CustomerModelContext | None,
+        request_context: AssistantRequestContext | None,
+        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
+        stage_timing_sink: Callable[[str, int], None] | None,
+        guest_history: Sequence[str] | None,
+        plan: PlanOutcome | None,
+    ) -> AssistantDecision:
+        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
+        ctx = self._prepare_turn(
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            request_context=request_context,
+            guest_history=guest_history,
+            plan=plan,
+        )
+        if ctx.early_reply is not None:
+            return ctx.early_reply
+        question_text = ctx.question_text
+        knowledge_question = ctx.knowledge_question
+        local_today = ctx.local_today
+        price_clarification = ctx.price_clarification
+        selection_dates = ctx.selection_dates
+        turn_knowledge = await self._load_turn_knowledge(ctx, language, stage_timing_sink)
+        turn_rooms = turn_knowledge.turn_rooms
+        fact_layout = turn_knowledge.fact_layout
+        knowledge = turn_knowledge.knowledge
+        item_knowledge = turn_knowledge.item_knowledge
+        public_parts, live_reply = await self._answer_live_clauses(
+            ctx,
+            turn_knowledge,
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            tool_trace_sink=tool_trace_sink,
+            stage_timing_sink=stage_timing_sink,
+        )
+        if live_reply is not None:
+            return live_reply
+        main = await self._build_main_request(
+            ctx,
+            turn_knowledge,
+            public_parts,
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            request_context=request_context,
+            stage_timing_sink=stage_timing_sink,
+        )
+        request = main.request
+        allowed_tool_names = main.allowed_tool_names
+        live_results = main.live_results
+        other_items = main.other_items
+        tool_needs = main.tool_needs
+        evidence_plan = main.evidence_plan
+        property_knowledge_grounded = main.property_knowledge_grounded
+        faq_candidate_ids = main.faq_candidate_ids
+        def tool_rooms_for(name: str, arguments: dict[str, Any]) -> RoomResolution | None:
+            """某次实际查询的筛选目标；没有按需求重算时沿用整轮房号解析。"""
+            return self._tool_rooms_for(tool_needs, name, arguments, turn_rooms)
+
         tool_parts: list[ReplyPart] = []
         # 查询身份 → 它在 tool_parts 里的失败分项，跨重试共享。同一查询后来成功时，失败
         # 提示已经过时，要删掉；其余分项（别的查询的成功事实、没有再查的失败）一律保留
