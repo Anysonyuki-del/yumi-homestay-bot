@@ -650,6 +650,17 @@ class _TurnContext:
     early_reply: AssistantDecision | None
 
 
+@dataclass(frozen=True)
+class _TurnKnowledge:
+    """S4 的产出：房号身份快照、逐项事实布局与检索到的知识（拆分 Spec §2.3）。"""
+
+    room_identities: list[RoomIdentity] | None
+    turn_rooms: RoomResolution
+    fact_layout: dict[int, _ItemLayout]
+    knowledge: list[Any]
+    item_knowledge: _Candidates
+
+
 @dataclass(frozen=True, slots=True)
 class AssistantRequestContext:
     """保存后台调试已校验的房间与日期，不混入模拟客人正文。"""
@@ -4387,6 +4398,53 @@ class DeepSeekGuestAssistant:
             return result
         return self._append_parts(result, [ctx.price_clarification], ctx.question_text)
 
+    async def _load_turn_knowledge(
+        self,
+        ctx: _TurnContext,
+        language: Language,
+        stage_timing_sink: Callable[[str, int], None] | None,
+    ) -> _TurnKnowledge:
+        """S4：房号身份快照、逐项事实布局、知识检索与逐项知识合并；整段记为 knowledge 阶段。"""
+        knowledge_started = monotonic()
+        # 本轮房号身份快照只读一次：静态取证、工具行筛选、覆盖判定与各出口共用（房号身份 Spec）。
+        room_identities = await self._room_identities()
+        turn_rooms = resolve_rooms(
+            room_mentions(ctx.question_text), room_identities, ctx.property_id
+        )
+        try:
+            fact_layout = (
+                await self._fact_layout(
+                    ctx.plan_items, ctx.question_text, ctx.property_id, ctx.selection_dates,
+                    ctx.local_today, room_identities,
+                ) if ctx.plan_ok is not None else {}
+            )
+            knowledge = self._scope_knowledge(
+                ctx.knowledge_question,
+                await self._knowledge.retrieve(
+                    language,
+                    ctx.knowledge_question,
+                    property_id=ctx.property_id,
+                    target_date=ctx.target_date,
+                    target_end_date=ctx.selection_dates[1],
+                    reserved_property_slots=_TARGET_ROOM_RESERVED_SLOTS,
+                ),
+            )
+            knowledge, item_knowledge = await self._merge_item_knowledge(
+                knowledge,
+                fact_layout,
+                language=language,
+                question_text=ctx.question_text,
+            )
+        finally:
+            _record_stage(stage_timing_sink, "knowledge", knowledge_started)
+        return _TurnKnowledge(
+            room_identities=room_identities,
+            turn_rooms=turn_rooms,
+            fact_layout=fact_layout,
+            knowledge=knowledge,
+            item_knowledge=item_knowledge,
+        )
+
     async def _respond_with_plan(
         self,
         *,
@@ -4423,36 +4481,12 @@ class DeepSeekGuestAssistant:
         service_fee_followup = ctx.service_fee_followup
         price_clarification = ctx.price_clarification
         selection_dates = ctx.selection_dates
-        knowledge_started = monotonic()
-        # 本轮房号身份快照只读一次：静态取证、工具行筛选、覆盖判定与各出口共用（房号身份 Spec）。
-        room_identities = await self._room_identities()
-        turn_rooms = resolve_rooms(room_mentions(question_text), room_identities, property_id)
-        try:
-            fact_layout = (
-                await self._fact_layout(
-                    plan_items, question_text, property_id, selection_dates, local_today,
-                    room_identities,
-                ) if plan_ok is not None else {}
-            )
-            knowledge = self._scope_knowledge(
-                knowledge_question,
-                await self._knowledge.retrieve(
-                    language,
-                    knowledge_question,
-                    property_id=property_id,
-                    target_date=target_date,
-                    target_end_date=selection_dates[1],
-                    reserved_property_slots=_TARGET_ROOM_RESERVED_SLOTS,
-                ),
-            )
-            knowledge, item_knowledge = await self._merge_item_knowledge(
-                knowledge,
-                fact_layout,
-                language=language,
-                question_text=question_text,
-            )
-        finally:
-            _record_stage(stage_timing_sink, "knowledge", knowledge_started)
+        turn_knowledge = await self._load_turn_knowledge(ctx, language, stage_timing_sink)
+        room_identities = turn_knowledge.room_identities
+        turn_rooms = turn_knowledge.turn_rooms
+        fact_layout = turn_knowledge.fact_layout
+        knowledge = turn_knowledge.knowledge
+        item_knowledge = turn_knowledge.item_knowledge
         # 计划成功且含本店事实项时进入逐项模式：本店事实只用该项合法候选与实际工具分项，
         # 不再使用按整轮知识池构建的证据计划（修复 Spec §2.1(2)，F1、G1）。计划失败或无计划时
         # 保持现行整句行为（已声明边界）。
