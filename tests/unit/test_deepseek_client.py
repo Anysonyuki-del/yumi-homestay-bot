@@ -3560,3 +3560,154 @@ async def test_recommendation_contract_does_not_reach_pure_static_questions(
     )
     prompt = client.chat.completions.requests[0]["messages"][0]["content"]
     assert (_STABLE_RECOMMENDATION_RULE in prompt) is expected
+
+
+class ScriptedToolCompletionsStub:
+    """按步骤脚本应答：调用房态工具、返回不合法 JSON，或抛出 SDK 类异常。"""
+
+    def __init__(self, steps: list[tuple[str, dict[str, str] | None]]) -> None:
+        """保存每次模型调用对应的步骤与请求记录。"""
+        self.steps = steps
+        self.requests: list[dict[str, object]] = []
+
+    async def create(self, **kwargs):
+        """按调用次数取步骤；超出脚本说明预算判断出错，直接失败。"""
+        self.requests.append(kwargs)
+        kind, arguments = self.steps[len(self.requests) - 1]
+        if kind == "raise":
+            raise RuntimeError("synthetic SDK failure")
+        if kind == "invalid":
+            message = SimpleNamespace(content="invalid json", tool_calls=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        call_id = f"call-{len(self.requests)}"
+        raw = json.dumps(arguments)
+        function = SimpleNamespace(name="search_availability", arguments=raw)
+        call = SimpleNamespace(id=call_id, type="function", function=function)
+        message = SimpleNamespace(
+            content=None,
+            tool_calls=[call],
+            model_dump=lambda **_: {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "search_availability", "arguments": raw},
+                }],
+            },
+        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class FlakyToolExecutorStub(ToolExecutorStub):
+    """指定的第几次执行抛异常，其余按入参日期返回固定房态。"""
+
+    def __init__(self, failing_calls: set[int]) -> None:
+        """记录哪些执行序号（从 1 开始）要失败。"""
+        super().__init__()
+        self.failing_calls = failing_calls
+        self.attempts = 0
+
+    async def execute(self, name: str, arguments: dict[str, str]) -> list[dict[str, object]]:
+        """失败的执行不计入成功调用记录。"""
+        self.attempts += 1
+        if self.attempts in self.failing_calls:
+            raise RuntimeError("synthetic tool failure")
+        return await super().execute(name, arguments)
+
+
+def _stay(check_in: str, check_out: str) -> dict[str, str]:
+    """构造房态工具参数。"""
+    return {"check_in_date": check_in, "check_out_date": check_out}
+
+
+async def _run_retry_script(
+    steps: list[tuple[str, dict[str, str] | None]],
+    failing_calls: set[int],
+    question: str,
+) -> tuple[object, ScriptedToolCompletionsStub, FlakyToolExecutorStub]:
+    """不启用规划，按脚本跑完整个主链，返回决定与两个替身。"""
+    completions = ScriptedToolCompletionsStub(steps)
+    executor = FlakyToolExecutorStub(failing_calls)
+    assistant = DeepSeekGuestAssistant(
+        chat_client=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+        tourism_searcher=TourismStub(),
+        knowledge=KnowledgeStub(),
+        model="deepseek-v4-flash",
+        safety_hmac_key=b"test-key",
+        tool_executor=executor,
+        local_date_provider=lambda: date(2026, 7, 30),
+    )
+    decision = await assistant.respond(
+        guest_identifier="wm-guest",
+        language=Language.ZH,
+        messages=[{"role": "user", "content": question}],
+    )
+    return decision, completions, executor
+
+
+@pytest.mark.asyncio
+async def test_retry_drops_failure_of_a_query_that_later_succeeds() -> None:
+    """同一查询先失败、重试后同参数成功：回执不能同时说“查询未成功”又给出结果（D3-1′）。"""
+    query = _stay("2026-07-30", "2026-07-31")
+    decision, completions, executor = await _run_retry_script(
+        [("tool", query), ("invalid", None), ("tool", query)],
+        failing_calls={1},
+        question="查询2026年7月30日入住、7月31日退房的房态",
+    )
+
+    assert [part.status for part in decision.reply_parts] == ["grounded"]
+    assert "暂未成功" not in decision.reply_text
+    assert len(completions.requests) == 3
+    assert executor.calls == [("search_availability", query)]
+
+
+@pytest.mark.asyncio
+async def test_retry_drops_weekend_failure_when_the_same_expanded_stays_succeed() -> None:
+    """周五入住参数失败、重试改用周六入住参数：两者展开后是同一组住法，成功后不留失败提示。"""
+    friday = _stay("2026-07-31", "2026-08-02")
+    saturday = _stay("2026-08-01", "2026-08-03")
+    decision, completions, executor = await _run_retry_script(
+        [("tool", friday), ("invalid", None), ("tool", saturday)],
+        failing_calls={1},
+        question="这周末有房吗",
+    )
+
+    statuses = [part.status for part in decision.reply_parts]
+    assert "query_failed" not in statuses
+    assert statuses.count("grounded") == 2
+    assert "暂未成功" not in decision.reply_text
+    assert len(completions.requests) == 3
+    # 第一次调用的第一个住法就失败，整次调用不产出结果；重试展开后两种住法都查到。
+    assert executor.calls == [("search_availability", friday), ("search_availability", saturday)]
+
+
+@pytest.mark.asyncio
+async def test_retry_keeps_success_of_a_different_earlier_query() -> None:
+    """成功 A → SDK 异常 → 成功 B：两组已经查到的事实都保留（控制，SP-R1）。"""
+    first = _stay("2026-07-30", "2026-07-31")
+    second = _stay("2026-08-05", "2026-08-06")
+    decision, completions, executor = await _run_retry_script(
+        [("tool", first), ("raise", None), ("tool", second)],
+        failing_calls=set(),
+        question="分别查询2026年7月30日入住、7月31日退房，以及2026年8月5日入住、8月6日退房的房态",
+    )
+
+    assert [part.status for part in decision.reply_parts] == ["grounded", "grounded"]
+    assert len(completions.requests) == 3
+    assert executor.calls == [("search_availability", first), ("search_availability", second)]
+
+
+@pytest.mark.asyncio
+async def test_retry_keeps_failure_of_a_query_that_was_not_retried() -> None:
+    """失败 A → SDK 异常 → 成功 B：A 没有再查，它的失败提示必须保留（控制）。"""
+    first = _stay("2026-07-30", "2026-07-31")
+    second = _stay("2026-08-05", "2026-08-06")
+    decision, completions, executor = await _run_retry_script(
+        [("tool", first), ("raise", None), ("tool", second)],
+        failing_calls={1},
+        question="分别查询2026年7月30日入住、7月31日退房，以及2026年8月5日入住、8月6日退房的房态",
+    )
+
+    assert [part.status for part in decision.reply_parts] == ["query_failed", "grounded"]
+    assert len(completions.requests) == 3
+    assert executor.calls == [("search_availability", second)]

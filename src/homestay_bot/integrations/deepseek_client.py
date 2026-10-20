@@ -4640,6 +4640,10 @@ class DeepSeekGuestAssistant:
             # 取证（`fact_layout`），只有动作项的轮次本来也不让证据计划接管（SR-毛巾、SR-遗失）。
             evidence_plan = None
         tool_parts: list[ReplyPart] = []
+        # 查询身份 → 它在 tool_parts 里的失败分项，跨重试共享。同一查询后来成功时，失败
+        # 提示已经过时，要删掉；其余分项（别的查询的成功事实、没有再查的失败）一律保留
+        # （拆分 Spec D3-1′，2026-10-20）。
+        failed_query_parts: dict[tuple[str, tuple[str, ...]], list[ReplyPart]] = {}
         availability_fallback: AssistantDecision | None = None
         model_calls = 1 if public_parts else 0
         tool_result_rounds = 0
@@ -4794,6 +4798,15 @@ class DeepSeekGuestAssistant:
                         option_arguments = self._weekend_argument_options(
                             call.function.name, arguments, question_text, local_today
                         )
+                        # 查询身份按展开后的完整参数组计：周五、周六入住会展开成同一组两种住法，
+                        # 按原始参数比对就认不出是同一查询（拆分 Spec §4.3）。
+                        query_key = (
+                            call.function.name,
+                            tuple(
+                                json.dumps(option, sort_keys=True, ensure_ascii=False)
+                                for option in option_arguments
+                            ),
+                        )
                         try:
                             option_results = [
                                 await self._tool_executor.execute(
@@ -4823,18 +4836,18 @@ class DeepSeekGuestAssistant:
                                 tool_rooms_for(call.function.name, option) is not None
                                 for option in option_arguments
                             ):
-                                tool_parts.append(
-                                    ReplyPart(
-                                        question=call.function.name,
-                                        status="query_failed",
-                                        text=(
-                                            "This query failed; "
-                                            "its availability or price is not confirmed."
-                                            if language is Language.EN
-                                            else "这项查询暂未成功，相关房态或价格尚未确认。"
-                                        ),
-                                    )
-                            )
+                                failed_part = ReplyPart(
+                                    question=call.function.name,
+                                    status="query_failed",
+                                    text=(
+                                        "This query failed; "
+                                        "its availability or price is not confirmed."
+                                        if language is Language.EN
+                                        else "这项查询暂未成功，相关房态或价格尚未确认。"
+                                    ),
+                                )
+                                tool_parts.append(failed_part)
+                                failed_query_parts.setdefault(query_key, []).append(failed_part)
                             active_messages.append(
                                 {
                                     "role": "tool",
@@ -4884,6 +4897,15 @@ class DeepSeekGuestAssistant:
                                 for option, option_result in zip(
                                     option_arguments, option_results, strict=True
                                 )
+                            ]
+                        stale_parts = failed_query_parts.pop(query_key, [])
+                        if stale_parts:
+                            # 同一查询这次整组成功，此前的失败提示已过时。按对象身份删除：
+                            # 别的查询的失败分项字段可能完全相同，不能按相等比较。
+                            # 必须在下面重建回执之前完成。
+                            tool_parts[:] = [
+                                part for part in tool_parts
+                                if not any(part is stale for stale in stale_parts)
                             ]
                         # 按需求筛选后（`tool_needs` 非空）工具结果可能整份不对应任何需求而被
                         # 丢弃，工具本身仍执行成功：照常构造回执，静态答案保留，所问事实由覆盖
