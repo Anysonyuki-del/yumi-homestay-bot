@@ -4445,45 +4445,85 @@ class DeepSeekGuestAssistant:
             item_knowledge=item_knowledge,
         )
 
-    async def _respond_with_plan(
+    async def _search_live_group(
         self,
+        group: str,
+        *,
+        language: Language,
+        queried_on: date,
+        footer: bool,
+        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
+    ) -> ReplyPart:
+        """一组同类小句联网搜一次；失败只影响本组（原 search_group）。
+
+        多组时不带时效说明，由调用方搜完统一补在最后一段成功回答之后。
+        """
+        group_started = monotonic()
+        succeeded = False
+        search_evidence: list[ReplyEvidence] = []
+        try:
+            reply = await self._tourism_searcher.search(
+                question=group,
+                language=language,
+                queried_on=queried_on,
+                evidence_sink=search_evidence.extend,
+                footer=footer,
+            )
+            reply = self._remove_property_promotion(
+                reply, language, fallback_on_empty=False
+            )
+            if not reply:
+                raise TourismSearchError("degraded")
+            succeeded = True
+            # 已有搜索证据原文不再承担另一次语义精炼成本。
+            return ReplyPart(
+                question=group,
+                status="grounded",
+                text=reply,
+                evidence=tuple(search_evidence),
+            )
+        except TourismSearchError:
+            return ReplyPart(
+                question=group,
+                status="query_failed",
+                text=(
+                    "Live travel information is unavailable at the moment; "
+                    "please check before setting out."
+                    if language is Language.EN
+                    else "暂时未能查到可靠的实时出行信息，出发前请再确认。"
+                ),
+            )
+        finally:
+            if tool_trace_sink is not None:
+                tool_trace_sink(
+                    AssistantToolTrace(
+                        name="tourism_search",
+                        succeeded=succeeded,
+                        duration_ms=max(0, round((monotonic() - group_started) * 1000)),
+                    )
+                )
+
+    async def _answer_live_clauses(
+        self,
+        ctx: _TurnContext,
+        turn_knowledge: _TurnKnowledge,
         *,
         language: Language,
         messages: list[dict[str, str]],
         customer_context: CustomerModelContext | None,
-        request_context: AssistantRequestContext | None,
         tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
         stage_timing_sink: Callable[[str, int], None] | None,
-        guest_history: Sequence[str] | None,
-        plan: PlanOutcome | None,
-    ) -> AssistantDecision:
-        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
-        ctx = self._prepare_turn(
-            language=language,
-            messages=messages,
-            customer_context=customer_context,
-            request_context=request_context,
-            guest_history=guest_history,
-            plan=plan,
-        )
-        if ctx.early_reply is not None:
-            return ctx.early_reply
+    ) -> tuple[list[ReplyPart], AssistantDecision | None]:
+        """S5：店外实时小句分组联网；联网与本地分项已答完剩余问题时，第二个值为整轮回复。"""
         question_text = ctx.question_text
         knowledge_question = ctx.knowledge_question
         plan_ok = ctx.plan_ok
         plan_items = ctx.plan_items
         local_today = ctx.local_today
-        property_id = ctx.property_id
         target_date = ctx.target_date
-        turn_clauses = ctx.turn_clauses
-        contract_items = ctx.contract_items
-        public_clauses = ctx.public_clauses
-        service_fee_followup = ctx.service_fee_followup
-        price_clarification = ctx.price_clarification
         selection_dates = ctx.selection_dates
-        turn_knowledge = await self._load_turn_knowledge(ctx, language, stage_timing_sink)
-        room_identities = turn_knowledge.room_identities
-        turn_rooms = turn_knowledge.turn_rooms
+        turn_clauses = ctx.turn_clauses
+        public_clauses = ctx.public_clauses
         fact_layout = turn_knowledge.fact_layout
         knowledge = turn_knowledge.knowledge
         item_knowledge = turn_knowledge.item_knowledge
@@ -4499,57 +4539,19 @@ class DeepSeekGuestAssistant:
             started = monotonic()
             groups = group_live_questions(public_clauses)
 
-            async def search_group(group: str) -> ReplyPart:
-                """一组同类小句联网搜一次；失败只影响本组。多组时不带时效说明，搜完统一补。"""
-                group_started = monotonic()
-                succeeded = False
-                search_evidence: list[ReplyEvidence] = []
-                try:
-                    reply = await self._tourism_searcher.search(
-                        question=group,
-                        language=language,
-                        queried_on=local_today,
-                        evidence_sink=search_evidence.extend,
-                        footer=len(groups) == 1,
-                    )
-                    reply = self._remove_property_promotion(
-                        reply, language, fallback_on_empty=False
-                    )
-                    if not reply:
-                        raise TourismSearchError("degraded")
-                    succeeded = True
-                    # 已有搜索证据原文不再承担另一次语义精炼成本。
-                    return ReplyPart(
-                        question=group,
-                        status="grounded",
-                        text=reply,
-                        evidence=tuple(search_evidence),
-                    )
-                except TourismSearchError:
-                    return ReplyPart(
-                        question=group,
-                        status="query_failed",
-                        text=(
-                            "Live travel information is unavailable at the moment; "
-                            "please check before setting out."
-                            if language is Language.EN
-                            else "暂时未能查到可靠的实时出行信息，出发前请再确认。"
-                        ),
-                    )
-                finally:
-                    if tool_trace_sink is not None:
-                        tool_trace_sink(
-                            AssistantToolTrace(
-                                name="tourism_search",
-                                succeeded=succeeded,
-                                duration_ms=max(0, round((monotonic() - group_started) * 1000)),
-                            )
-                        )
-
             try:
                 # 各组同时搜索，总耗时约等于最慢的一组（2026-09-30：一句多问逐项回答）。
                 public_parts = list(
-                    await asyncio.gather(*(search_group(group) for group in groups))
+                    await asyncio.gather(*(
+                        self._search_live_group(
+                            group,
+                            language=language,
+                            queried_on=local_today,
+                            footer=len(groups) == 1,
+                            tool_trace_sink=tool_trace_sink,
+                        )
+                        for group in groups
+                    ))
                 )
             finally:
                 _record_stage(stage_timing_sink, "tourism_search", started)
@@ -4604,10 +4606,63 @@ class DeepSeekGuestAssistant:
                 and not is_transaction_sensitive(remaining_question)
                 and not getattr(customer_context, "stay_confirmation", None)
             ):
-                return self._with_price_clarification(ctx, decision.model_copy(
+                return public_parts, self._with_price_clarification(ctx, decision.model_copy(
                     update={"reply_parts": parts, "reply_text": compose_reply_parts(parts)}
                 ))
+        return public_parts, None
 
+    async def _respond_with_plan(
+        self,
+        *,
+        language: Language,
+        messages: list[dict[str, str]],
+        customer_context: CustomerModelContext | None,
+        request_context: AssistantRequestContext | None,
+        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
+        stage_timing_sink: Callable[[str, int], None] | None,
+        guest_history: Sequence[str] | None,
+        plan: PlanOutcome | None,
+    ) -> AssistantDecision:
+        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
+        ctx = self._prepare_turn(
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            request_context=request_context,
+            guest_history=guest_history,
+            plan=plan,
+        )
+        if ctx.early_reply is not None:
+            return ctx.early_reply
+        question_text = ctx.question_text
+        knowledge_question = ctx.knowledge_question
+        plan_ok = ctx.plan_ok
+        plan_items = ctx.plan_items
+        local_today = ctx.local_today
+        property_id = ctx.property_id
+        target_date = ctx.target_date
+        contract_items = ctx.contract_items
+        public_clauses = ctx.public_clauses
+        service_fee_followup = ctx.service_fee_followup
+        price_clarification = ctx.price_clarification
+        selection_dates = ctx.selection_dates
+        turn_knowledge = await self._load_turn_knowledge(ctx, language, stage_timing_sink)
+        room_identities = turn_knowledge.room_identities
+        turn_rooms = turn_knowledge.turn_rooms
+        fact_layout = turn_knowledge.fact_layout
+        knowledge = turn_knowledge.knowledge
+        item_knowledge = turn_knowledge.item_knowledge
+        public_parts, live_reply = await self._answer_live_clauses(
+            ctx,
+            turn_knowledge,
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            tool_trace_sink=tool_trace_sink,
+            stage_timing_sink=stage_timing_sink,
+        )
+        if live_reply is not None:
+            return live_reply
         faq_started = monotonic()
         try:
             faq_candidates = await self._build_faq_candidate_context()
