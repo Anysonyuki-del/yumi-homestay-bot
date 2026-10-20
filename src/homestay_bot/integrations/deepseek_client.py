@@ -679,6 +679,24 @@ class _MainRequest:
     faq_candidate_ids: set[int]
 
 
+@dataclass
+class _LoopState:
+    """主循环跨重试共享的可变状态（拆分 Spec §2.3）。
+
+    工具分项及其失败登记、房态回执、模型调用与工具结果轮次计数、累计请求字符都整轮共享：
+    重试只换请求消息，不重置这些状态（阶段 A：重置会删掉已经查到的事实）。
+    """
+
+    tool_parts: list[ReplyPart] = field(default_factory=list)
+    failed_query_parts: dict[tuple[str, tuple[str, ...]], list[ReplyPart]] = field(
+        default_factory=dict
+    )
+    availability_fallback: AssistantDecision | None = None
+    model_calls: int = 0
+    tool_result_rounds: int = 0
+    cumulative_request_chars: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class AssistantRequestContext:
     """保存后台调试已校验的房间与日期，不混入模拟客人正文。"""
@@ -4832,81 +4850,375 @@ class DeepSeekGuestAssistant:
             faq_candidate_ids=faq_candidate_ids,
         )
 
-    async def _respond_with_plan(
+    def _availability_receipt(
         self,
+        ctx: _TurnContext,
+        turn_knowledge: _TurnKnowledge,
+        main: _MainRequest,
+        state: _LoopState,
+        public_parts: list[ReplyPart],
+        language: Language,
+    ) -> AssistantDecision:
+        """工具查询成功后先备好的安全回执：主模型之后失败时按它回复（原 4891–4936 行）。
+
+        逐项模式按同一逐项契约取证、组合；整句模式接上证据计划、工具分项与联网分项。
+        """
+        question_text = ctx.question_text
+        fact_layout = turn_knowledge.fact_layout
+        item_knowledge = turn_knowledge.item_knowledge
+        evidence_plan = main.evidence_plan
+        price_clarification = ctx.price_clarification
+        receipt = AssistantDecision(
+            reply_text="",
+            language=language,
+            intent="availability_query",
+            confidence=1.0,
+        )
+        if fact_layout:
+            # 工具成功后主模型失败的回执遵守同一逐项契约：本店事实逐项取证
+            # （没有模型选择），工具缺口按小句判定，需模型回答的项留空；这个
+            # 出口没有模型的转交选择，缺口只回未确认（修复 Spec §2.1(2)）。
+            item_plan, item_gaps = self._item_evidence_plan(
+                None, fact_layout, item_knowledge, language
+            )
+            if item_plan is not None:
+                receipt = self._apply_evidence_plan(
+                    receipt, item_plan, question_text
+                )
+            composed = self._compose_items(
+                receipt.model_copy(
+                    update={"gap_units": item_gaps}
+                ),
+                fact_layout,
+                state.tool_parts,
+                public_parts,
+                price_clarified=price_clarification is not None,
+                language=language,
+            )
+            if composed is not None:
+                receipt = composed
+        else:
+            if evidence_plan is not None and evidence_plan.handles_reply:
+                receipt = self._apply_evidence_plan(
+                    receipt, evidence_plan, question_text
+                )
+            completed_parts = [
+                *receipt.reply_parts,
+                *state.tool_parts,
+                *public_parts,
+            ]
+            receipt = receipt.model_copy(
+                update={
+                    "reply_parts": completed_parts,
+                    "reply_text": compose_reply_parts(completed_parts),
+                }
+            )
+        return receipt
+
+    async def _run_tool_calls(
+        self,
+        ctx: _TurnContext,
+        turn_knowledge: _TurnKnowledge,
+        main: _MainRequest,
+        state: _LoopState,
+        public_parts: list[ReplyPart],
+        tool_calls: list[Any],
+        active_messages: list[dict[str, Any]],
         *,
         language: Language,
-        messages: list[dict[str, str]],
-        customer_context: CustomerModelContext | None,
-        request_context: AssistantRequestContext | None,
         tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
         stage_timing_sink: Callable[[str, int], None] | None,
-        guest_history: Sequence[str] | None,
-        plan: PlanOutcome | None,
-    ) -> AssistantDecision:
-        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
-        ctx = self._prepare_turn(
-            language=language,
-            messages=messages,
-            customer_context=customer_context,
-            request_context=request_context,
-            guest_history=guest_history,
-            plan=plan,
+    ) -> None:
+        """S11 的一轮工具调用：执行、记录 trace、失败与周末两种住法分项、回填工具消息。
+
+        直接修改 `state` 与 `active_messages`；未授权工具抛出 ValueError，交给主循环按
+        校验类异常处理。
+        """
+        question_text = ctx.question_text
+        local_today = ctx.local_today
+        executor = self._tool_executor
+        if executor is None:
+            # 调用方已在进入本方法前拒绝无执行器的轮次；这里只为类型收窄，不会走到。
+            raise AssistantUnavailableError()
+        for call in tool_calls:
+            if call.function.name not in main.allowed_tool_names:
+                raise ValueError("模型请求了本轮未授权的只读工具")
+            arguments = json.loads(call.function.arguments)
+            started = monotonic()
+            trace_dates = {
+                "check_in_date": self._safe_trace_date(arguments.get("check_in_date")),
+                "check_out_date": self._safe_trace_date(
+                    arguments.get("check_out_date")
+                ),
+            }
+            option_arguments = self._weekend_argument_options(
+                call.function.name, arguments, question_text, local_today
+            )
+            # 查询身份按展开后的完整参数组计：周五、周六入住会展开成同一组两种住法，
+            # 按原始参数比对就认不出是同一查询（拆分 Spec §4.3）。
+            query_key = (
+                call.function.name,
+                tuple(
+                    json.dumps(option, sort_keys=True, ensure_ascii=False)
+                    for option in option_arguments
+                ),
+            )
+            try:
+                option_results = [
+                    await executor.execute(
+                        call.function.name, option
+                    )
+                    for option in option_arguments
+                ]
+            except BaseException as error:
+                _record_stage(
+                    stage_timing_sink, f"tool:{call.function.name}", started
+                )
+                if not isinstance(error, Exception):
+                    raise
+                if tool_trace_sink is not None:
+                    tool_trace_sink(
+                        AssistantToolTrace(
+                            name=call.function.name,
+                            succeeded=False,
+                            duration_ms=max(
+                                0,
+                                round((monotonic() - started) * 1000),
+                            ),
+                            **trace_dates,
+                        )
+                    )
+                if any(
+                    self._tool_rooms_for(
+            main.tool_needs, call.function.name, option, turn_knowledge.turn_rooms
+        ) is not None
+                    for option in option_arguments
+                ):
+                    failed_part = ReplyPart(
+                        question=call.function.name,
+                        status="query_failed",
+                        text=(
+                            "This query failed; "
+                            "its availability or price is not confirmed."
+                            if language is Language.EN
+                            else "这项查询暂未成功，相关房态或价格尚未确认。"
+                        ),
+                    )
+                    state.tool_parts.append(failed_part)
+                    state.failed_query_parts.setdefault(query_key, []).append(failed_part)
+                active_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": '{"status":"query_failed"}',
+                    }
+                )
+                continue
+            _record_stage(stage_timing_sink, f"tool:{call.function.name}", started)
+            if tool_trace_sink is not None:
+                tool_trace_sink(
+                    AssistantToolTrace(
+                        name=call.function.name,
+                        succeeded=True,
+                        duration_ms=max(
+                            0,
+                            round((monotonic() - started) * 1000),
+                        ),
+                        **trace_dates,
+                    )
+                )
+            if len(option_arguments) == 1:
+                result: Any = option_results[0]
+                state.tool_parts.extend(
+                    self._tool_reply_parts(
+                        call.function.name, arguments, result, language, call.id,
+                        question_text,
+                        self._tool_rooms_for(
+            main.tool_needs, call.function.name, option_arguments[0], turn_knowledge.turn_rooms
+        ),
+                    )
+                )
+            else:
+                # 两种住法各成一组，前面说明是哪种住法；模型也拿到两组结果。
+                state.tool_parts.extend(self._weekend_reply_parts(
+                    call.function.name, option_arguments, option_results,
+                    language, call.id, question_text,
+                    option_rooms=[
+                        self._tool_rooms_for(
+            main.tool_needs, call.function.name, option, turn_knowledge.turn_rooms
         )
-        if ctx.early_reply is not None:
-            return ctx.early_reply
+                        for option in option_arguments
+                    ],
+                ))
+                result = [
+                    {
+                        "check_in_date": option["check_in_date"],
+                        "check_out_date": option["check_out_date"],
+                        "result": option_result,
+                    }
+                    for option, option_result in zip(
+                        option_arguments, option_results, strict=True
+                    )
+                ]
+            stale_parts = state.failed_query_parts.pop(query_key, [])
+            if stale_parts:
+                # 同一查询这次整组成功，此前的失败提示已过时。按对象身份删除：
+                # 别的查询的失败分项字段可能完全相同，不能按相等比较。
+                # 必须在下面重建回执之前完成。
+                state.tool_parts[:] = [
+                    part for part in state.tool_parts
+                    if not any(part is stale for stale in stale_parts)
+                ]
+            # 按需求筛选后（`tool_needs` 非空）工具结果可能整份不对应任何需求而被
+            # 丢弃，工具本身仍执行成功：照常构造回执，静态答案保留，所问事实由覆盖
+            # 判定报未查到；否则后续协议失败会让整轮不可用（工具目标 Spec §2.2）。
+            if state.tool_parts or main.tool_needs is not None:
+                state.availability_fallback = self._availability_receipt(
+                    ctx, turn_knowledge, main, state, public_parts, language
+                )
+            active_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": json.dumps(
+                        bound_json_value(
+                            result,
+                            char_budget=MODEL_BUDGET.tool_result_chars,
+                        ),
+                        ensure_ascii=False,
+                    ),
+                }
+            )
+
+    async def _decision_without_tools(
+        self,
+        ctx: _TurnContext,
+        turn_knowledge: _TurnKnowledge,
+        main: _MainRequest,
+        state: _LoopState,
+        public_parts: list[ReplyPart],
+        message: Any,
+        *,
+        language: Language,
+        stage_timing_sink: Callable[[str, int], None] | None,
+    ) -> AssistantDecision:
+        """S11 主模型不再调用工具时：校验决定，并按 4 种组合方式之一收尾。
+
+        校验抛出的异常原样上抛，由主循环按类别重试或返回回执。
+        """
         question_text = ctx.question_text
         knowledge_question = ctx.knowledge_question
         local_today = ctx.local_today
-        price_clarification = ctx.price_clarification
         selection_dates = ctx.selection_dates
-        turn_knowledge = await self._load_turn_knowledge(ctx, language, stage_timing_sink)
-        turn_rooms = turn_knowledge.turn_rooms
+        price_clarification = ctx.price_clarification
         fact_layout = turn_knowledge.fact_layout
         knowledge = turn_knowledge.knowledge
         item_knowledge = turn_knowledge.item_knowledge
-        public_parts, live_reply = await self._answer_live_clauses(
-            ctx,
-            turn_knowledge,
-            language=language,
-            messages=messages,
-            customer_context=customer_context,
-            tool_trace_sink=tool_trace_sink,
-            stage_timing_sink=stage_timing_sink,
-        )
-        if live_reply is not None:
-            return live_reply
-        main = await self._build_main_request(
-            ctx,
-            turn_knowledge,
-            public_parts,
-            language=language,
-            messages=messages,
-            customer_context=customer_context,
-            request_context=request_context,
-            stage_timing_sink=stage_timing_sink,
-        )
-        request = main.request
-        allowed_tool_names = main.allowed_tool_names
+        evidence_plan = main.evidence_plan
         live_results = main.live_results
         other_items = main.other_items
-        tool_needs = main.tool_needs
-        evidence_plan = main.evidence_plan
         property_knowledge_grounded = main.property_knowledge_grounded
         faq_candidate_ids = main.faq_candidate_ids
-        def tool_rooms_for(name: str, arguments: dict[str, Any]) -> RoomResolution | None:
-            """某次实际查询的筛选目标；没有按需求重算时沿用整轮房号解析。"""
-            return self._tool_rooms_for(tool_needs, name, arguments, turn_rooms)
+        decision = self._validate_decision(
+            message.content or "",
+            knowledge_question,
+            property_knowledge_grounded=property_knowledge_grounded,
+            faq_candidate_ids=faq_candidate_ids,
+            knowledge_evidence=knowledge,
+            evidence_plan=evidence_plan,
+            language=language,
+            live_grounding="\n".join(item["result"] for item in live_results),
+            guest_question=question_text,
+            turn_plan=ctx.plan,
+            selection_dates=selection_dates,
+            item_knowledge=item_knowledge,
+            other_items=other_items,
+            fact_layout=fact_layout,
+        )
+        if fact_layout:
+            # 逐项模式：证据分项与逐项回答在前，工具分项、工具缺口与联网分项在后
+            # （修复 Spec §2.1(2)(3)）。模型自由正文不作本店事实。
+            composed = self._compose_items(
+                decision,
+                fact_layout,
+                state.tool_parts,
+                public_parts,
+                price_clarified=price_clarification is not None,
+                language=language,
+            )
+            if composed is not None:
+                return self._with_price_clarification(ctx, composed)
+        if state.tool_parts or public_parts:
+            model_parts = list(decision.reply_parts)
+            live_parts = list(public_parts)
+            if (
+                not model_parts
+                and not state.tool_parts
+                and public_parts
+                and decision.reply_text.strip()
+            ):
+                model_parts, live_parts = self._compose_with_live_results(
+                    decision.reply_text, public_parts,
+                    question=question_text, queried_on=local_today,
+                    language=language,
+                )
+            parts = [*model_parts, *state.tool_parts, *live_parts]
+            return self._with_price_clarification(ctx, decision.model_copy(
+                update={
+                    "reply_parts": parts,
+                    "reply_text": compose_reply_parts(parts),
+                    "knowledge_gap": any(
+                        part.status == "missing" for part in parts
+                    ),
+                    "knowledge_gap_topic": decision.knowledge_gap_topic
+                    if any(part.status == "missing" for part in parts)
+                    else None,
+                    "staff_confirmation_required": False,
+                    "staff_confirmation_reason": None,
+                }
+            ))
+        if decision.reply_parts or self._plan_handles_reply(
+            evidence_plan, decision
+        ):
+            # 证据计划或核验后的证据选择已接管：审核原文不再精炼改写。
+            return self._with_price_clarification(ctx, decision)
+        refined_reply = decision.reply_text
+        if state.model_calls < MODEL_BUDGET.main_calls:
+            refine_started = monotonic()
+            try:
+                refined_reply = await self._refine_reply(decision.reply_text)
+            finally:
+                _record_stage(stage_timing_sink, "refine", refine_started)
+        if not is_property_specific(knowledge_question):
+            refined_reply = self._remove_property_promotion(
+                refined_reply,
+                decision.language,
+                grounded_in=self._knowledge_grounding(knowledge),
+            )
+        # 精炼可能重新写进店外推测，与校验阶段同一道 P14 检查。
+        refined_reply = self._remove_unsourced_external_state(
+            refined_reply,
+            decision.language,
+            grounded_in=self._knowledge_grounding(knowledge),
+        )
+        return self._with_price_clarification(ctx, decision.model_copy(
+            update={"reply_text": refined_reply}
+        ))
 
-        tool_parts: list[ReplyPart] = []
-        # 查询身份 → 它在 tool_parts 里的失败分项，跨重试共享。同一查询后来成功时，失败
-        # 提示已经过时，要删掉；其余分项（别的查询的成功事实、没有再查的失败）一律保留
-        # （拆分 Spec D3-1′，2026-10-20）。
-        failed_query_parts: dict[tuple[str, tuple[str, ...]], list[ReplyPart]] = {}
-        availability_fallback: AssistantDecision | None = None
-        model_calls = 1 if public_parts else 0
-        tool_result_rounds = 0
-        cumulative_request_chars = 0
+    async def _run_main_loop(
+        self,
+        ctx: _TurnContext,
+        turn_knowledge: _TurnKnowledge,
+        main: _MainRequest,
+        public_parts: list[ReplyPart],
+        *,
+        language: Language,
+        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
+        stage_timing_sink: Callable[[str, int], None] | None,
+    ) -> AssistantDecision:
+        """S11：最多两次尝试，每次在预算内多轮调用主模型与只读工具；按异常类别重试或返回回执。"""
+        request = main.request
+        state = _LoopState(model_calls=1 if public_parts else 0)
         for attempt in range(1, 3):
             try:
                 active_request = {**request}
@@ -4923,23 +5235,24 @@ class DeepSeekGuestAssistant:
                             latest_user_message,
                         ]
                 for _tool_round in range(MODEL_BUDGET.main_calls):
-                    if model_calls >= MODEL_BUDGET.main_calls:
+                    if state.model_calls >= MODEL_BUDGET.main_calls:
                         raise AssistantUnavailableError()
                     request_chars = serialized_chars(active_request)
                     if (
                         request_chars > MODEL_BUDGET.main_request_chars
-                        or cumulative_request_chars + request_chars > MODEL_BUDGET.main_chain_chars
+                        or state.cumulative_request_chars + request_chars
+                        > MODEL_BUDGET.main_chain_chars
                     ):
-                        if availability_fallback is not None:
-                            return self._with_price_clarification(ctx, availability_fallback)
+                        if state.availability_fallback is not None:
+                            return self._with_price_clarification(ctx, state.availability_fallback)
                         raise AssistantUnavailableError()
-                    model_calls += 1
-                    cumulative_request_chars += request_chars
+                    state.model_calls += 1
+                    state.cumulative_request_chars += request_chars
                     logger.info(
                         "DeepSeek 主链预算：call=%s request_chars=%s cumulative_chars=%s",
-                        model_calls,
+                        state.model_calls,
                         request_chars,
-                        cumulative_request_chars,
+                        state.cumulative_request_chars,
                     )
                     call_started = monotonic()
                     try:
@@ -4951,283 +5264,24 @@ class DeepSeekGuestAssistant:
                     message = response.choices[0].message
                     tool_calls = list(message.tool_calls or [])
                     if not tool_calls:
-                        decision = self._validate_decision(
-                            message.content or "",
-                            knowledge_question,
-                            property_knowledge_grounded=property_knowledge_grounded,
-                            faq_candidate_ids=faq_candidate_ids,
-                            knowledge_evidence=knowledge,
-                            evidence_plan=evidence_plan,
-                            language=language,
-                            live_grounding="\n".join(item["result"] for item in live_results),
-                            guest_question=question_text,
-                            turn_plan=plan,
-                            selection_dates=selection_dates,
-                            item_knowledge=item_knowledge,
-                            other_items=other_items,
-                            fact_layout=fact_layout,
+                        return await self._decision_without_tools(
+                            ctx, turn_knowledge, main, state, public_parts, message,
+                            language=language, stage_timing_sink=stage_timing_sink,
                         )
-                        if fact_layout:
-                            # 逐项模式：证据分项与逐项回答在前，工具分项、工具缺口与联网分项在后
-                            # （修复 Spec §2.1(2)(3)）。模型自由正文不作本店事实。
-                            composed = self._compose_items(
-                                decision,
-                                fact_layout,
-                                tool_parts,
-                                public_parts,
-                                price_clarified=price_clarification is not None,
-                                language=language,
-                            )
-                            if composed is not None:
-                                return self._with_price_clarification(ctx, composed)
-                        if tool_parts or public_parts:
-                            model_parts = list(decision.reply_parts)
-                            live_parts = list(public_parts)
-                            if (
-                                not model_parts
-                                and not tool_parts
-                                and public_parts
-                                and decision.reply_text.strip()
-                            ):
-                                model_parts, live_parts = self._compose_with_live_results(
-                                    decision.reply_text, public_parts,
-                                    question=question_text, queried_on=local_today,
-                                    language=language,
-                                )
-                            parts = [*model_parts, *tool_parts, *live_parts]
-                            return self._with_price_clarification(ctx, decision.model_copy(
-                                update={
-                                    "reply_parts": parts,
-                                    "reply_text": compose_reply_parts(parts),
-                                    "knowledge_gap": any(
-                                        part.status == "missing" for part in parts
-                                    ),
-                                    "knowledge_gap_topic": decision.knowledge_gap_topic
-                                    if any(part.status == "missing" for part in parts)
-                                    else None,
-                                    "staff_confirmation_required": False,
-                                    "staff_confirmation_reason": None,
-                                }
-                            ))
-                        if decision.reply_parts or self._plan_handles_reply(
-                            evidence_plan, decision
-                        ):
-                            # 证据计划或核验后的证据选择已接管：审核原文不再精炼改写。
-                            return self._with_price_clarification(ctx, decision)
-                        refined_reply = decision.reply_text
-                        if model_calls < MODEL_BUDGET.main_calls:
-                            refine_started = monotonic()
-                            try:
-                                refined_reply = await self._refine_reply(decision.reply_text)
-                            finally:
-                                _record_stage(stage_timing_sink, "refine", refine_started)
-                        if not is_property_specific(knowledge_question):
-                            refined_reply = self._remove_property_promotion(
-                                refined_reply,
-                                decision.language,
-                                grounded_in=self._knowledge_grounding(knowledge),
-                            )
-                        # 精炼可能重新写进店外推测，与校验阶段同一道 P14 检查。
-                        refined_reply = self._remove_unsourced_external_state(
-                            refined_reply,
-                            decision.language,
-                            grounded_in=self._knowledge_grounding(knowledge),
-                        )
-                        return self._with_price_clarification(ctx, decision.model_copy(
-                            update={"reply_text": refined_reply}
-                        ))
                     if self._tool_executor is None:
                         raise AssistantUnavailableError()
-                    if tool_result_rounds >= MODEL_BUDGET.tool_result_rounds:
+                    if state.tool_result_rounds >= MODEL_BUDGET.tool_result_rounds:
                         raise AssistantUnavailableError()
-                    tool_result_rounds += 1
+                    state.tool_result_rounds += 1
                     active_messages = list(active_request["messages"])
                     active_messages.append(message.model_dump(exclude_none=True))
-                    for call in tool_calls:
-                        if call.function.name not in allowed_tool_names:
-                            raise ValueError("模型请求了本轮未授权的只读工具")
-                        arguments = json.loads(call.function.arguments)
-                        started = monotonic()
-                        trace_dates = {
-                            "check_in_date": self._safe_trace_date(arguments.get("check_in_date")),
-                            "check_out_date": self._safe_trace_date(
-                                arguments.get("check_out_date")
-                            ),
-                        }
-                        option_arguments = self._weekend_argument_options(
-                            call.function.name, arguments, question_text, local_today
-                        )
-                        # 查询身份按展开后的完整参数组计：周五、周六入住会展开成同一组两种住法，
-                        # 按原始参数比对就认不出是同一查询（拆分 Spec §4.3）。
-                        query_key = (
-                            call.function.name,
-                            tuple(
-                                json.dumps(option, sort_keys=True, ensure_ascii=False)
-                                for option in option_arguments
-                            ),
-                        )
-                        try:
-                            option_results = [
-                                await self._tool_executor.execute(
-                                    call.function.name, option
-                                )
-                                for option in option_arguments
-                            ]
-                        except BaseException as error:
-                            _record_stage(
-                                stage_timing_sink, f"tool:{call.function.name}", started
-                            )
-                            if not isinstance(error, Exception):
-                                raise
-                            if tool_trace_sink is not None:
-                                tool_trace_sink(
-                                    AssistantToolTrace(
-                                        name=call.function.name,
-                                        succeeded=False,
-                                        duration_ms=max(
-                                            0,
-                                            round((monotonic() - started) * 1000),
-                                        ),
-                                        **trace_dates,
-                                    )
-                                )
-                            if any(
-                                tool_rooms_for(call.function.name, option) is not None
-                                for option in option_arguments
-                            ):
-                                failed_part = ReplyPart(
-                                    question=call.function.name,
-                                    status="query_failed",
-                                    text=(
-                                        "This query failed; "
-                                        "its availability or price is not confirmed."
-                                        if language is Language.EN
-                                        else "这项查询暂未成功，相关房态或价格尚未确认。"
-                                    ),
-                                )
-                                tool_parts.append(failed_part)
-                                failed_query_parts.setdefault(query_key, []).append(failed_part)
-                            active_messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": call.id,
-                                    "content": '{"status":"query_failed"}',
-                                }
-                            )
-                            continue
-                        _record_stage(stage_timing_sink, f"tool:{call.function.name}", started)
-                        if tool_trace_sink is not None:
-                            tool_trace_sink(
-                                AssistantToolTrace(
-                                    name=call.function.name,
-                                    succeeded=True,
-                                    duration_ms=max(
-                                        0,
-                                        round((monotonic() - started) * 1000),
-                                    ),
-                                    **trace_dates,
-                                )
-                            )
-                        if len(option_arguments) == 1:
-                            result: Any = option_results[0]
-                            tool_parts.extend(
-                                self._tool_reply_parts(
-                                    call.function.name, arguments, result, language, call.id,
-                                    question_text,
-                                    tool_rooms_for(call.function.name, option_arguments[0]),
-                                )
-                            )
-                        else:
-                            # 两种住法各成一组，前面说明是哪种住法；模型也拿到两组结果。
-                            tool_parts.extend(self._weekend_reply_parts(
-                                call.function.name, option_arguments, option_results,
-                                language, call.id, question_text,
-                                option_rooms=[
-                                    tool_rooms_for(call.function.name, option)
-                                    for option in option_arguments
-                                ],
-                            ))
-                            result = [
-                                {
-                                    "check_in_date": option["check_in_date"],
-                                    "check_out_date": option["check_out_date"],
-                                    "result": option_result,
-                                }
-                                for option, option_result in zip(
-                                    option_arguments, option_results, strict=True
-                                )
-                            ]
-                        stale_parts = failed_query_parts.pop(query_key, [])
-                        if stale_parts:
-                            # 同一查询这次整组成功，此前的失败提示已过时。按对象身份删除：
-                            # 别的查询的失败分项字段可能完全相同，不能按相等比较。
-                            # 必须在下面重建回执之前完成。
-                            tool_parts[:] = [
-                                part for part in tool_parts
-                                if not any(part is stale for stale in stale_parts)
-                            ]
-                        # 按需求筛选后（`tool_needs` 非空）工具结果可能整份不对应任何需求而被
-                        # 丢弃，工具本身仍执行成功：照常构造回执，静态答案保留，所问事实由覆盖
-                        # 判定报未查到；否则后续协议失败会让整轮不可用（工具目标 Spec §2.2）。
-                        if tool_parts or tool_needs is not None:
-                            availability_fallback = AssistantDecision(
-                                reply_text="",
-                                language=language,
-                                intent="availability_query",
-                                confidence=1.0,
-                            )
-                            if fact_layout:
-                                # 工具成功后主模型失败的回执遵守同一逐项契约：本店事实逐项取证
-                                # （没有模型选择），工具缺口按小句判定，需模型回答的项留空；这个
-                                # 出口没有模型的转交选择，缺口只回未确认（修复 Spec §2.1(2)）。
-                                item_plan, item_gaps = self._item_evidence_plan(
-                                    None, fact_layout, item_knowledge, language
-                                )
-                                if item_plan is not None:
-                                    availability_fallback = self._apply_evidence_plan(
-                                        availability_fallback, item_plan, question_text
-                                    )
-                                composed = self._compose_items(
-                                    availability_fallback.model_copy(
-                                        update={"gap_units": item_gaps}
-                                    ),
-                                    fact_layout,
-                                    tool_parts,
-                                    public_parts,
-                                    price_clarified=price_clarification is not None,
-                                    language=language,
-                                )
-                                if composed is not None:
-                                    availability_fallback = composed
-                            else:
-                                if evidence_plan is not None and evidence_plan.handles_reply:
-                                    availability_fallback = self._apply_evidence_plan(
-                                        availability_fallback, evidence_plan, question_text
-                                    )
-                                completed_parts = [
-                                    *availability_fallback.reply_parts,
-                                    *tool_parts,
-                                    *public_parts,
-                                ]
-                                availability_fallback = availability_fallback.model_copy(
-                                    update={
-                                        "reply_parts": completed_parts,
-                                        "reply_text": compose_reply_parts(completed_parts),
-                                    }
-                                )
-                        active_messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": call.id,
-                                "content": json.dumps(
-                                    bound_json_value(
-                                        result,
-                                        char_budget=MODEL_BUDGET.tool_result_chars,
-                                    ),
-                                    ensure_ascii=False,
-                                ),
-                            }
-                        )
+                    await self._run_tool_calls(
+                        ctx, turn_knowledge, main, state, public_parts, tool_calls,
+                        active_messages,
+                        language=language,
+                        tool_trace_sink=tool_trace_sink,
+                        stage_timing_sink=stage_timing_sink,
+                    )
                     active_request = {
                         **request,
                         "messages": active_messages,
@@ -5235,8 +5289,8 @@ class DeepSeekGuestAssistant:
                     }
                 raise AssistantUnavailableError()
             except AssistantUnavailableError:
-                if availability_fallback is not None:
-                    return self._with_price_clarification(ctx, availability_fallback)
+                if state.availability_fallback is not None:
+                    return self._with_price_clarification(ctx, state.availability_fallback)
                 raise
             except (
                 IndexError,
@@ -5244,12 +5298,12 @@ class DeepSeekGuestAssistant:
                 ValidationError,
                 ValueError,
             ) as error:
-                if availability_fallback is not None:
+                if state.availability_fallback is not None:
                     logger.warning(
                         "DeepSeek 房态结果整理失败，返回安全查询回执：error_type=%s",
                         type(error).__name__,
                     )
-                    return self._with_price_clarification(ctx, availability_fallback)
+                    return self._with_price_clarification(ctx, state.availability_fallback)
                 # 仅记校验字段位置和错误类别，不写输入值、响应正文或密钥。
                 if isinstance(error, ValidationError):
                     logger.warning(
@@ -5273,6 +5327,62 @@ class DeepSeekGuestAssistant:
                 )
                 continue
         raise AssistantUnavailableError()
+
+
+    async def _respond_with_plan(
+        self,
+        *,
+        language: Language,
+        messages: list[dict[str, str]],
+        customer_context: CustomerModelContext | None,
+        request_context: AssistantRequestContext | None,
+        tool_trace_sink: Callable[[AssistantToolTrace], None] | None,
+        stage_timing_sink: Callable[[str, int], None] | None,
+        guest_history: Sequence[str] | None,
+        plan: PlanOutcome | None,
+    ) -> AssistantDecision:
+        """按本轮计划（可能为空）完成检索、工具、主回复与校验；外层负责附上计划。"""
+        ctx = self._prepare_turn(
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            request_context=request_context,
+            guest_history=guest_history,
+            plan=plan,
+        )
+        if ctx.early_reply is not None:
+            return ctx.early_reply
+        turn_knowledge = await self._load_turn_knowledge(ctx, language, stage_timing_sink)
+        public_parts, live_reply = await self._answer_live_clauses(
+            ctx,
+            turn_knowledge,
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            tool_trace_sink=tool_trace_sink,
+            stage_timing_sink=stage_timing_sink,
+        )
+        if live_reply is not None:
+            return live_reply
+        main = await self._build_main_request(
+            ctx,
+            turn_knowledge,
+            public_parts,
+            language=language,
+            messages=messages,
+            customer_context=customer_context,
+            request_context=request_context,
+            stage_timing_sink=stage_timing_sink,
+        )
+        return await self._run_main_loop(
+            ctx,
+            turn_knowledge,
+            main,
+            public_parts,
+            language=language,
+            tool_trace_sink=tool_trace_sink,
+            stage_timing_sink=stage_timing_sink,
+        )
 
     @staticmethod
     def _weekend_argument_options(
