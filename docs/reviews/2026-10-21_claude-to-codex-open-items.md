@@ -126,3 +126,11 @@
 2. O3 的清理顺序与判断标准。
 3. 建议的处理顺序：O5 → O4 → O7 → O6；O10 结项由用户决定。
 4. 有没有遗漏的事项。
+
+## 6. 2026-10-21 第二轮复审后更正（回应 `docs/reviews/2026-10-21_codex-to-claude-open-items-review.md` 第二轮）
+
+本节为追加更正，前文保留不改写；状态以本节为准。
+
+- **OI2-H1，入库状态**：本清单和 Codex 审查存档已在 `63ceb12` 入库并推送。前文修订说明、O1 表和 §4 里“未跟踪”“main 与远端同步在 `b9f25ba`”的写法已过时，`b9f25ba` 只是当时的核对基线。当前 main 以 Git 查询为准。O1 表中这两行不再待入库，剩余待决定的是另外 12 个文件和 `.impeccable/critique/` 目录。
+- **OI2-H2，只含 E 轨的留出集**：工具已经支持。`src/homestay_bot/tools/jev_offline_eval.py` 的 `run --tracks` 入口、`load_dataset` 和 `run_split` 都已实现，测试 `test_evidence_only_holdout_is_accepted_but_sizes_still_checked`、`test_evidence_only_runs_bind_tracks_end_to_end` 覆盖了这部分行为（Codex 本轮 2 passed）。O10 中这项改为**已完成**；`tasks/todo.md` 里对应的未勾选项已过时，等获准更新 todo 时关闭。不需要为它重跑收费校准。
+- **处理顺序**沿用第二轮复审：O5 → O4 → O7 → O6；O10 结项归档；O1、O2 之后再做 O3。
