@@ -19,7 +19,8 @@ EXPIRED_CLEANUP_LIMIT = 100
 LOGIN_WINDOW_SECONDS = 60.0
 LOGIN_WINDOW_LIMIT = 30
 LOGIN_MAX_IN_FLIGHT = 8
-# 不申请昵称、头像或手机号权限，新档案只用通用名称；人工合并后显示目标客户名称。
+# 不申请昵称、头像或手机号权限，新档案只用通用名称。返回给小程序的名称也固定为它：
+# 人工合并若合错了人，返回客户档案名称会让客人看到他人姓名（用户 2026-10-30 决定）。
 MINIPROGRAM_DISPLAY_NAME = "小程序客户"
 
 
@@ -132,12 +133,11 @@ class MiniProgramAuthService:
         now = self._clock()
         expires_at = now + MINIPROGRAM_SESSION_TTL
         async with self._factory() as session, session.begin():
-            customer = await SQLAlchemyCustomerRepository(session).ensure_identity(
+            await SQLAlchemyCustomerRepository(session).ensure_identity(
                 provider=CustomerIdentityProvider.WECHAT_MINIPROGRAM,
                 external_id=external_id,
                 display_name=MINIPROGRAM_DISPLAY_NAME,
             )
-            display_name = customer.display_name
             sessions = SQLAlchemyMiniProgramSessionRepository(session)
             identity_id = await sessions.identity_id_for(external_id)
             if identity_id is None:
@@ -152,7 +152,11 @@ class MiniProgramAuthService:
                 max_per_identity=MAX_SESSIONS_PER_IDENTITY,
                 expired_cleanup_limit=EXPIRED_CLEANUP_LIMIT,
             )
-        return MiniProgramLogin(token=token, expires_at=expires_at, display_name=display_name)
+        return MiniProgramLogin(
+            token=token,
+            expires_at=expires_at,
+            display_name=MINIPROGRAM_DISPLAY_NAME,
+        )
 
     async def profile(self, token: str) -> MiniProgramProfile | None:
         """核验 token 并返回当前客户最小资料；无效或过期返回 None。"""
@@ -163,8 +167,8 @@ class MiniProgramAuthService:
             )
         if resolved is None:
             return None
-        customer, expires_at = resolved
-        return MiniProgramProfile(expires_at=expires_at, display_name=customer.display_name)
+        _, expires_at = resolved
+        return MiniProgramProfile(expires_at=expires_at, display_name=MINIPROGRAM_DISPLAY_NAME)
 
     async def logout(self, token: str) -> None:
         """撤销当前会话；提交失败时异常上抛，调用方不得声称已退出。"""

@@ -6,8 +6,9 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _SENSITIVE_KEY_PATTERN = re.compile(
-    # aes_key 覆盖企业微信回调 EncodingAESKey；不放宽到裸 key，避免误伤业务幂等键。
-    r"token|secret|password|api[_-]?key|aes[_-]?key|authorization",
+    # aes_key 覆盖企业微信回调 EncodingAESKey；session_key 覆盖微信 code2Session 的会话密钥。
+    # 不放宽到裸 key，避免误伤业务幂等键。
+    r"token|secret|password|api[_-]?key|aes[_-]?key|session[_-]?key|authorization",
     re.IGNORECASE,
 )
 _TOKEN_IN_TEXT_PATTERN = re.compile(
@@ -37,7 +38,8 @@ _QUERY_PARAM_IN_TEXT_PATTERN = re.compile(
 )
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     # 键保留 JSON/repr 引号，值中反斜线与下一字符成组，只有真实结束引号才终止。
-    r'''(?i)(["']?[\w.-]*(?:token|secret|password|api[_-]?key|aes[_-]?key|authorization)["']?)'''
+    # 键后必须紧跟 = 或 :，所以 drop_legacy_session_key( 这类函数名不会被当成凭据赋值。
+    r'''(?i)(["']?[\w.-]*(?:token|secret|password|api[_-]?key|aes[_-]?key|session[_-]?key|authorization)["']?)'''
     r"(\s*[=:]\s*)"
     r"(?!\[REDACTED\])"
     # Bearer、Basic 等方案词与凭证之间有空格，必须一并消费才不会残留正文。

@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -73,7 +75,7 @@ class Harness:
         app_id: str = APP_ID,
         gate: MiniProgramLoginGate | None = None,
     ) -> MiniProgramAuthService:
-        """按指定 AppID 构造与生产相同装配的认证服务。"""
+        """按指定 AppID 构造认证服务：真实服务与仓储，但不经过 application_lifespan 装配。"""
         return MiniProgramAuthService(
             self.factory,
             exchanger=WeChatMiniProgramClient(
@@ -284,7 +286,7 @@ async def test_login_cleans_expired_sessions_in_bounded_batches(
 
 
 async def test_session_follows_manual_customer_merge(harness: Harness) -> None:
-    """管理员合并客户后，原 token 解析到合并后的客户，而不是被合并的旧档案。"""
+    """管理员合并客户后原 token 仍可用（解析到合并后的客户），且不显示合并目标的姓名。"""
     harness.wechat.openid("code-m", "openid-m")
     async with harness.client() as client:
         token = (await _login(client, "code-m")).json()["token"]
@@ -305,8 +307,11 @@ async def test_session_follows_manual_customer_merge(harness: Harness) -> None:
             await SQLAlchemyCustomerRepository(session).merge_locked(suggestion.id, admin.id)
             await session.commit()
         me = await client.get("/api/miniprogram/me", headers=_bearer(token))
+    # resolve 只接受未被合并的客户：仍返回 200 说明会话已随身份指向合并后的客户。
+    # 名称固定为通用名，不暴露合并目标的姓名（用户 2026-10-30 决定）。
     assert me.status_code == 200
-    assert me.json()["display_name"] == "订单客户张"
+    assert me.json()["display_name"] == "小程序客户"
+    assert "订单客户张" not in me.text
 
 
 async def test_failed_session_write_rolls_back_new_customer(
@@ -479,3 +484,30 @@ async def test_unconfigured_service_only_disables_miniprogram_endpoints(
     assert [response.status_code for response in responses] == [503, 503, 503]
     assert all(response.json()["error"] == "not_configured" for response in responses)
     assert health.status_code in {200, 503} and health.json()["status"] in {"ok", "degraded"}
+
+
+async def test_local_database_failure_log_omits_openid_parameters(
+    harness: Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """数据库异常正文带 SQL 参数（含 AppID:OpenID）；日志只记类型与位置，不得出现 OpenID。"""
+
+    async def fail_identity(*_: object, **__: object) -> None:
+        """模拟写身份时的数据库故障，异常参数里带着 external_id。"""
+        raise OperationalError(
+            "INSERT INTO customer_identities ...",
+            (f"{APP_ID}:openid-leak-check",),
+            Exception("disk I/O error"),
+        )
+
+    monkeypatch.setattr(
+        miniprogram_auth.SQLAlchemyCustomerRepository, "ensure_identity", fail_identity
+    )
+    harness.wechat.openid("code-l", "openid-leak-check")
+    caplog.set_level(logging.DEBUG)
+    async with harness.client() as client:
+        response = await _login(client, "code-l")
+    assert response.status_code == 503
+    assert "openid-leak-check" not in caplog.text
+    assert "stage=login error=OperationalError" in caplog.text

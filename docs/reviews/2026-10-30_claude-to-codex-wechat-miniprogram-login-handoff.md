@@ -167,3 +167,28 @@ node --test tests/miniprogram/auth.test.js
 3. `MiniProgramAuthService.login` 的事务边界、闸门名额的占用和释放、`_read_login_body` 和 `_bearer_token` 的边界校验，有没有遗漏的失败路径？
 4. 0036 迁移和 `MiniProgramSession` 模型是否一致（约束名、索引名、外键级联）？
 5. 是否需要在上线前补 PostgreSQL 专项测试（并发首次登录、全局清理语句）？
+
+## 9. 更正与审查后修复（2026-10-30 追加）
+
+本节依据 Codex 审查 `docs/reviews/2026-10-30_codex-to-claude-wechat-miniprogram-login-review.md` 追加，上文原文保留不改，以本节为准。
+
+**事实更正**
+
+- 第 2.2 节表格（`CustomerIdentityProvider` 行）：`customer_identities` 表及其 `provider String(32)` 列由 `migrations/versions/0003_customer_crm.py` 创建；`0001_initial` 里的 provider 属于 `external_requests`，引错了。结论（无 CHECK 约束、无需改表）不变。
+- 第 2.1 节 `MiniProgramLoginGate` 行与第 4 节风险 1：uvicorn 未显式传 `--forwarded-allow-ips` 时读取 `FORWARDED_ALLOW_IPS` 环境变量，默认只信任 127.0.0.1。原文写成「没有设置」过于绝对；服务器上该变量未现场核实。
+- 第 2.4 节：集成测试是「真实服务与仓储 + 测试自建的应用」，不是生产装配；`application_lifespan` 的装配只由全量测试间接覆盖。测试里「与生产相同装配」的说明已改。
+- 第 2.2 节「`session_key` 不加入脱敏规则」的取舍不成立，已改为按字段名精确脱敏（见下）。
+- 第 4 节风险 5：「每身份最多 5 条」是软上限，Spec 原文「最多 5 条」已同步改为软上限措辞。
+- 第 6 节回退：清空服务器 `.env` 的两个配置项后必须重启应用才生效，配置只在启动时读取。
+- 第 7 节标题写「只读」不准确：`git switch` 会改动工作区所在分支。
+- 第 2.3 节登录后本机存储失败的撤销：客户端会尝试撤销，但撤销请求本身可能失败，原文没说明此时提示什么；现已改为未确认撤销时如实提示「将在 24 小时内自动失效」。
+- `.env.example` 原先漏了两个占位，现已补上 `MINIPROGRAM_APP_ID=`、`MINIPROGRAM_APP_SECRET=`。
+- Spec 状态行与 `tasks/todo.md` 的「待授权：提交」已过时，均已更新。
+
+**审查后修复（未提交，待用户确认）**
+
+- R1 `clients/wechat-miniprogram/utils/auth.js`：读取本机存储失败时 `restore` 返回「暂时无法确认」，`logout` 直接报错且不发请求；清除失败时把该 token 记入进程内失效集合，`readStoredSession` 不再返回它，`ensureLogin` 会重新登录。
+- R2 `src/homestay_bot/routes/miniprogram_auth.py::_log_local_failure`：本地故障日志只记录阶段、异常类型、原始驱动异常类型与最内层代码位置，不再用 `exc_info`，SQL 参数中的 `AppID:OpenID` 不会进日志。
+- R3 `src/homestay_bot/logging.py`：`_SENSITIVE_KEY_PATTERN` 与 `_SECRET_ASSIGNMENT_PATTERN` 加入 `session[_-]?key`，只匹配字段名，`drop_legacy_session_key(` 之类函数名不受影响。
+- R4 `tests/integration/test_miniprogram_auth_postgresql.py`：真实 PostgreSQL 上验证并发首登（A 持事务时 B 确实阻塞在身份唯一键，A 提交后只有 1 个客户、1 个身份、2 条会话且两个 token 都能解析）与全局过期清理（LIMIT 生效、事务失败时整体回滚）。需 `YUMI_TEST_POSTGRES_URL`，未设置时跳过。
+- 用户决定：`/me` 与登录响应的显示名称固定为「小程序客户」；全局限频风险接受，公开上线前重新评估；后台客户列表出现「小程序客户」接受现状。

@@ -11,7 +11,14 @@ const TOKEN = 'a'.repeat(43)
 const FUTURE = '2999-01-01T00:00:00+00:00'
 
 // 构造 wx 替身：routes 按「方法 路径」返回响应或网络失败，请求按顺序记录。
-function installWx({ routes = {}, storage = {}, failSet = false, loginCode = 'code-1' } = {}) {
+function installWx({
+  routes = {},
+  storage = {},
+  failSet = false,
+  failGet = false,
+  failRemove = false,
+  loginCode = 'code-1',
+} = {}) {
   const calls = []
   const pending = []
   globalThis.wx = {
@@ -31,18 +38,31 @@ function installWx({ routes = {}, storage = {}, failSet = false, loginCode = 'co
       if (route && route.hold) pending.push(respond)
       else setImmediate(respond)
     },
-    getStorageSync(key) { return storage[key] },
+    getStorageSync(key) {
+      if (failGet) throw new Error('storage unavailable')
+      return storage[key]
+    },
     setStorageSync(key, value) {
       if (failSet) throw new Error('quota exceeded')
       storage[key] = value
     },
-    removeStorageSync(key) { delete storage[key] },
+    removeStorageSync(key) {
+      if (failRemove) throw new Error('storage unavailable')
+      delete storage[key]
+    },
   }
   return { calls, storage, pending }
 }
 
-const storedSession = () => ({
-  [auth.SESSION_STORAGE_KEY]: { token: TOKEN, expiresAt: FUTURE, displayName: '小程序客户' },
+// auth.js 在模块内记住已失效的 token，每个用例用不同 token，避免用例之间互相影响。
+let tokenSerial = 0
+function nextToken() {
+  tokenSerial += 1
+  return String(tokenSerial).padStart(43, 't')
+}
+
+const storedSession = (token = nextToken()) => ({
+  [auth.SESSION_STORAGE_KEY]: { token, expiresAt: FUTURE, displayName: '小程序客户' },
 })
 
 test('restore 没有本机会话时不发任何请求', async () => {
@@ -52,13 +72,14 @@ test('restore 没有本机会话时不发任何请求', async () => {
 })
 
 test('restore 带 Bearer 核验，401 时清除本机会话', async () => {
+  const token = nextToken()
   const { calls, storage } = installWx({
-    storage: storedSession(),
+    storage: storedSession(token),
     routes: { 'GET /api/miniprogram/me': { statusCode: 401, data: {} } },
   })
   const result = await auth.restore()
   assert.equal(result.status, 'logged_out')
-  assert.equal(calls[0].header.Authorization, `Bearer ${TOKEN}`)
+  assert.equal(calls[0].header.Authorization, `Bearer ${token}`)
   assert.equal(storage[auth.SESSION_STORAGE_KEY], undefined)
 })
 
@@ -74,7 +95,7 @@ test('restore 网络失败时保留本机会话，状态为待确认', async () 
 
 test('restore 本地已过期的会话直接清除，不请求服务端', async () => {
   const storage = {
-    [auth.SESSION_STORAGE_KEY]: { token: TOKEN, expiresAt: '2000-01-01T00:00:00+00:00' },
+    [auth.SESSION_STORAGE_KEY]: { token: nextToken(), expiresAt: '2000-01-01T00:00:00+00:00' },
   }
   const { calls } = installWx({ storage })
   assert.equal((await auth.restore()).status, 'logged_out')
@@ -141,6 +162,65 @@ test('logout 服务端确认后才清除本机；失败时保留并报错', asyn
   })
   await auth.logout()
   assert.equal(ok.storage[auth.SESSION_STORAGE_KEY], undefined)
+})
+
+test('登录后存储失败且撤销未确认时，如实提示未能确认撤销', async () => {
+  installWx({
+    failSet: true,
+    routes: {
+      'POST /api/miniprogram/login': {
+        statusCode: 200,
+        data: { token: nextToken(), expires_at: FUTURE, display_name: '小程序客户' },
+      },
+      'POST /api/miniprogram/logout': { statusCode: 503, data: { error: 'revoke_failed' } },
+    },
+  })
+  await assert.rejects(
+    auth.ensureLogin(),
+    (error) => error.code === 'storage' && error.message.includes('未能确认撤销'),
+  )
+})
+
+test('logout 读取本机记录失败时报错，不跳过服务端撤销', async () => {
+  const { calls } = installWx({ storage: storedSession(), failGet: true })
+  await assert.rejects(auth.logout(), (error) => error.code === 'storage_read')
+  assert.deepEqual(calls, [])
+})
+
+test('restore 读取本机记录失败时状态待确认，不当作未登录', async () => {
+  const { calls } = installWx({ storage: storedSession(), failGet: true })
+  const result = await auth.restore()
+  assert.equal(result.status, 'unknown')
+  assert.deepEqual(calls, [])
+})
+
+test('401 后本机记录清除失败，失效记录不会被 ensureLogin 当成有效会话', async () => {
+  const { calls, storage } = installWx({
+    storage: storedSession(),
+    failRemove: true,
+    routes: {
+      'GET /api/miniprogram/me': { statusCode: 401, data: {} },
+      'POST /api/miniprogram/login': {
+        statusCode: 200,
+        data: { token: nextToken(), expires_at: FUTURE, display_name: '小程序客户' },
+      },
+    },
+  })
+  assert.equal((await auth.restore()).status, 'logged_out')
+  assert.ok(storage[auth.SESSION_STORAGE_KEY], '替身中清除确实失败，旧记录仍在')
+  await auth.ensureLogin()
+  assert.ok(calls.includes('wx.login'), '必须重新登录，而不是复用失效记录')
+})
+
+test('退出时服务端已撤销但本机清除失败，重试退出即完成', async () => {
+  const { calls } = installWx({
+    storage: storedSession(),
+    failRemove: true,
+    routes: { 'POST /api/miniprogram/logout': { statusCode: 204 } },
+  })
+  await assert.rejects(auth.logout(), (error) => error.code === 'storage')
+  await auth.logout()
+  assert.equal(calls.filter((call) => call.key === 'POST /api/miniprogram/logout').length, 1)
 })
 
 // 加载首页：用 Page 替身拿到页面配置，setData 合并到 data。

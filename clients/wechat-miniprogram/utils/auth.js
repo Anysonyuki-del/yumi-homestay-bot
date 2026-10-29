@@ -60,15 +60,22 @@ function wxLoginCode() {
   })
 }
 
-// 读取本机会话；存储读取失败或内容不完整时按未登录处理。
+// 本次运行中已判定失效的 token。本机记录清除失败时，靠它阻止 ensureLogin 把失效记录当成有效会话；
+// 进程重启后集合清空，届时 restore 会再次向服务端核验并得到 401。
+const invalidatedTokens = new Set()
+
+// 读取本机会话：没有记录或内容不完整返回 null；存储本身读取失败时抛出错误，
+// 不能当作「没有记录」，否则退出会跳过服务端撤销并误报已退出。
 function readStoredSession() {
+  let stored
   try {
-    const stored = wx.getStorageSync(SESSION_STORAGE_KEY)
-    if (stored && typeof stored.token === 'string' && typeof stored.expiresAt === 'string') {
-      return stored
-    }
+    stored = wx.getStorageSync(SESSION_STORAGE_KEY)
   } catch (error) {
-    // 读取失败不能当作已登录；交由调用方展示登录入口。
+    throw new AuthError('storage_read', '读取本机登录记录失败，请重试')
+  }
+  if (stored && typeof stored.token === 'string' && typeof stored.expiresAt === 'string'
+    && !invalidatedTokens.has(stored.token)) {
+    return stored
   }
   return null
 }
@@ -81,6 +88,12 @@ function clearStoredSession() {
   } catch (error) {
     return false
   }
+}
+
+// 把已失效的 token 标记为不可再用，再尝试清除本机记录；返回本机记录是否已清除。
+function invalidateSession(token) {
+  invalidatedTokens.add(token)
+  return clearStoredSession()
 }
 
 // 本地时钟只用于跳过明显过期的会话，是否有效始终以服务端核验为准。
@@ -106,10 +119,16 @@ async function login() {
   try {
     wx.setStorageSync(SESSION_STORAGE_KEY, session)
   } catch (error) {
-    // 撤销失败也只能如实提示；服务端会话会在 24 小时后自然过期。
-    await request({ path: '/api/miniprogram/logout', method: 'POST', token: body.token })
+    // 只尝试撤销一次，不自动重试；撤销未确认时如实提示，服务端会话最迟 24 小时后过期。
+    const revoke = await request({ path: '/api/miniprogram/logout', method: 'POST', token: body.token })
       .catch(() => null)
-    throw new AuthError('storage', '本机存储失败，登录未保存，请清理微信存储后重试')
+    const revoked = revoke !== null && (revoke.statusCode === 204 || revoke.statusCode === 401)
+    throw new AuthError(
+      'storage',
+      revoked
+        ? '本机存储失败，登录未保存，请清理微信存储后重试'
+        : '本机存储失败，登录未保存；本次登录未能确认撤销，将在 24 小时内自动失效',
+    )
   }
   return { displayName: body.display_name, expiresAt: body.expires_at }
 }
@@ -123,12 +142,17 @@ async function ensureLogin() {
   return login()
 }
 
-// 恢复：没有本机会话时不发请求；401 清除本机状态；网络等故障保留本机会话，等待重试。
+// 恢复：没有本机会话时不发请求；401 使本机会话失效；网络或存储读取故障时状态待确认，等待重试。
 async function restore() {
-  const stored = readStoredSession()
+  let stored
+  try {
+    stored = readStoredSession()
+  } catch (error) {
+    return { status: 'unknown', message: error.message }
+  }
   if (!stored) return { status: 'logged_out' }
   if (isLocallyExpired(stored)) {
-    clearStoredSession()
+    invalidateSession(stored.token)
     return { status: 'logged_out', message: '登录已过期，请重新登录' }
   }
   let res
@@ -141,13 +165,14 @@ async function restore() {
     return { status: 'logged_in', displayName: res.data.display_name, expiresAt: res.data.expires_at }
   }
   if (res.statusCode === 401) {
-    clearStoredSession()
+    invalidateSession(stored.token)
     return { status: 'logged_out', message: '登录已失效，请重新登录' }
   }
   return { status: 'unknown', message: '暂时无法确认登录状态，请稍后重试' }
 }
 
 // 退出：服务端确认撤销（204）或会话本已失效（401）后才清除本机；否则保留并提示重试。
+// 读取本机记录失败时抛错，不能在没有请求服务端的情况下报告已退出。
 async function logout() {
   const stored = readStoredSession()
   if (!stored) return
@@ -155,7 +180,7 @@ async function logout() {
   if (res.statusCode !== 204 && res.statusCode !== 401) {
     throw new AuthError('revoke_failed', '退出未完成，请重试')
   }
-  if (!clearStoredSession()) {
+  if (!invalidateSession(stored.token)) {
     throw new AuthError('storage', '服务端已退出，但本机记录清除失败，请重试')
   }
 }

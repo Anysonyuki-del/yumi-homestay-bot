@@ -1,7 +1,9 @@
 import json
 import logging
 import re
+import traceback
 from datetime import datetime
+from pathlib import PurePath
 from typing import Protocol, cast
 
 from fastapi import APIRouter, Request, status
@@ -85,6 +87,29 @@ def _not_configured() -> JSONResponse:
     )
 
 
+def _log_local_failure(stage: str, error: Exception) -> None:
+    """记录本地故障的类型与出错位置，不记录异常正文。
+
+    SQLAlchemy 等异常的正文带有 SQL 参数（含 AppID:OpenID 形式的 external_id），
+    通用脱敏过滤器无法识别，因此这里不使用 exc_info；只保留异常类型、底层驱动异常
+    类型和最内层栈帧的文件、行号与函数名，足够定位问题且不含任何请求数据。
+    """
+    origin = getattr(error, "orig", None)
+    frames = traceback.extract_tb(error.__traceback__)
+    location = (
+        f"{PurePath(frames[-1].filename).name}:{frames[-1].lineno} {frames[-1].name}"
+        if frames
+        else "unknown"
+    )
+    logger.warning(
+        "小程序认证本地故障：stage=%s error=%s origin=%s at=%s",
+        stage,
+        type(error).__name__,
+        type(origin).__name__ if origin is not None else "-",
+        location,
+    )
+
+
 def _iso(value: datetime) -> str:
     """以带时区的 ISO 8601 字符串返回到期时间。"""
     return value.isoformat()
@@ -143,8 +168,8 @@ async def miniprogram_login(request: Request) -> Response:
         status_code, message = _WECHAT_FAILURE_RESPONSES[error.failure]
         return _error(status_code, error.failure.value, message)
     except Exception as error:
-        # 数据库等本地故障：记录类型与栈（日志过滤器负责脱敏），客户端只拿到安全提示。
-        logger.warning("小程序登录失败：%s", type(error).__name__, exc_info=error)
+        # 数据库等本地故障：只记录类型与位置，客户端只拿到安全提示。
+        _log_local_failure("login", error)
         return _error(
             status.HTTP_503_SERVICE_UNAVAILABLE, "unavailable", "登录暂时不可用，请稍后重试"
         )
@@ -169,7 +194,7 @@ async def miniprogram_me(request: Request) -> Response:
     try:
         profile = await service.profile(token)
     except Exception as error:
-        logger.warning("小程序登录状态核验失败：%s", type(error).__name__, exc_info=error)
+        _log_local_failure("me", error)
         return _error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "unavailable",
@@ -194,6 +219,6 @@ async def miniprogram_logout(request: Request) -> Response:
     try:
         await service.logout(token)
     except Exception as error:
-        logger.warning("小程序退出登录失败：%s", type(error).__name__, exc_info=error)
+        _log_local_failure("logout", error)
         return _error(status.HTTP_503_SERVICE_UNAVAILABLE, "revoke_failed", "退出未完成，请重试")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
