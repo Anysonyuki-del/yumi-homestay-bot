@@ -1,3 +1,17 @@
+# 本地实现完成：微信小程序基础登录（2026-10-29）
+
+依据：`docs/specs/2026-10-29_wechat-miniprogram-login-spec.md`（D1 按钮登录、按需搭建；D2 密钥走环境变量）；用户 2026-10-29「确认，开始」。只做本地实现与离线验证，不提交、不部署、不调用真实微信。
+
+- [x] 配置 `BootstrapSettings.miniprogram_app_id/_secret`（无约束可选项）、`CustomerIdentityProvider.WECHAT_MINIPROGRAM`、`MiniProgramSession` 模型与 `0036_miniprogram_sessions` 迁移
+- [x] `integrations/wechat_miniprogram.py`：按官方 code2Session 契约，5 秒总超时、不跟随重定向、64 KB 上限、零重试，失败不链接带 URL 的原异常
+- [x] `repositories/miniprogram_sessions.py`、`services/miniprogram_auth.py`（全局 30 次/分钟、在途 8 个，每身份 5 条会话，过期清理每次 100 条）、`routes/miniprogram_auth.py` 三个接口
+- [x] 装配 `application_lifespan`、`main.py` 注册路由、`NO_STORE_PATH_PREFIXES` 加 `/api/miniprogram`、`_SENSITIVE_QUERY_KEYS` 加 `js_code`；`.gitignore` 忽略 `project.private.config.json`
+- [x] 小程序 `utils/auth.js`（`ensureLogin`/`restore`/`logout`）、`app.js` 移除空 wx.login、首页登录面板并删除模板头像昵称区块
+- [x] 验证：新增集成 29 项、客户端单元 29 项、迁移升降级 1 项、Node 行为 12 项（经 pytest 包装运行）；8 处变异核对均能被测试抓到；Ruff、Mypy 通过；本地全量除 `tests/browser` 外 3522 passed、82 skipped。`tests/browser` 因本机缺 Playwright Chromium 全部无法启动（6 failed、107 errors，与本次改动无关，未改后台页面）
+- [ ] 未覆盖：PostgreSQL 上的并发首登唯一冲突（只在 SQLite 验证）；开发者工具编译与真机界面；真实微信 code2Session 交换（需真实 AppSecret 与授权）
+- [ ] 待授权：提交、配置服务器 `.env`、生产迁移、部署和真机登录验收
+
+---
 # 1.70.9 拆分阶段 A：重试中过时的查询失败分项（2026-10-21）
 
 依据：`_respond_with_plan` 拆分 Spec（未入库，去留另定）§3.1、§4.3–§4.5；用户 2026-10-21 授权完整发版流程。

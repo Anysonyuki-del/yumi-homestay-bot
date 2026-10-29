@@ -62,3 +62,6 @@ clients/yumi/src-tauri/gen/android/app/src/main/res/values/generated_entry.xml
 # AOCI agent host integration (machine-bound; do not commit)
 .codex/config.toml
 .codex/config.toml.backup.*
+
+# 微信开发者工具的本机私有配置（各开发者不同），本仓库公开，不入库。
+clients/wechat-miniprogram/project.private.config.json

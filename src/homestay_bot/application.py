@@ -50,6 +50,10 @@ from homestay_bot.domain.schemas import ConfirmBookingCommand
 from homestay_bot.domain.task_lifecycle import IDLE_RELEASE_MINUTES
 from homestay_bot.integrations.hostex_client import HostexClient
 from homestay_bot.integrations.tourism import WebSearchState
+from homestay_bot.integrations.wechat_miniprogram import (
+    WeChatMiniProgramClient,
+    load_miniprogram_credentials,
+)
 from homestay_bot.integrations.wecom.api_client import (
     WeComApiClient,
     WeComApiError,
@@ -190,6 +194,7 @@ from homestay_bot.services.lifecycle_reminders import (
     LifecycleReminderService,
 )
 from homestay_bot.services.message_service import IncomingMessage, MessageService
+from homestay_bot.services.miniprogram_auth import MiniProgramAuthService
 from homestay_bot.services.private_file_storage import (
     PrivateFileStorage,
     StoredPrivateFile,
@@ -4316,6 +4321,7 @@ def _clear_lifespan_state(app: FastAPI) -> None:
         "admin_auth_service",
         "admin_auth_available",
         "admin_login_rate_limiter",
+        "miniprogram_auth_service",
         "admin_argon2_semaphore",
         "admin_csrf_service",
         "employee_access_verifier",
@@ -4409,6 +4415,19 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.runtime_config_source = runtime_source
     app.state.admin_auth_available = admin_auth_available
     app.state.admin_login_rate_limiter = AdminLoginRateLimiter()
+    # 小程序登录只依赖数据库与可选凭据，不随运行配置激活；凭据缺失或无效时只停用
+    # 本组接口。微信客户端按次建立连接，没有需要在关闭阶段回收的资源。
+    miniprogram_credentials = load_miniprogram_credentials(
+        bootstrap.miniprogram_app_id,
+        bootstrap.miniprogram_app_secret,
+    )
+    if miniprogram_credentials is not None:
+        app.state.miniprogram_auth_service = MiniProgramAuthService(
+            factory,
+            exchanger=WeChatMiniProgramClient(miniprogram_credentials),
+        )
+    elif bootstrap.miniprogram_app_id or bootstrap.miniprogram_app_secret:
+        logger.warning("小程序登录配置不完整或格式无效，小程序登录接口已停用")
     argon2_executor: ThreadPoolExecutor | None = None
     argon2_semaphore: asyncio.Semaphore | None = None
     dummy_hash: str | None = None

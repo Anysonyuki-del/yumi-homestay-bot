@@ -20,6 +20,8 @@ _TOKEN_IN_TEXT_PATTERN = re.compile(
 )
 _SENSITIVE_QUERY_KEYS = {
     "code",
+    # 微信 code2Session 的一次性登录凭证；只有 code 一项时 `&js_code=` 不会命中。
+    "js_code",
     "state",
     "msg_signature",
     "signature",

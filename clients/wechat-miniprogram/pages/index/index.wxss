@@ -1,0 +1,59 @@
+/**index.wxss**/
+page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.scrollarea {
+  flex: 1;
+  overflow-y: hidden;
+}
+
+.auth-panel,
+.connection-test {
+  width: 100%;
+  padding: 0 32rpx;
+  box-sizing: border-box;
+}
+
+.connection-test {
+  margin-top: 48rpx;
+}
+
+.auth-title {
+  display: block;
+  margin-bottom: 16rpx;
+  font-size: 36rpx;
+  font-weight: 600;
+}
+
+.auth-state,
+.auth-hint,
+.auth-message {
+  display: block;
+  margin-bottom: 16rpx;
+  line-height: 1.6;
+}
+
+.auth-hint {
+  color: #666;
+  font-size: 26rpx;
+}
+
+.auth-secondary {
+  margin-top: 16rpx;
+}
+
+.auth-message {
+  margin-top: 16rpx;
+}
+
+.connection-result {
+  display: block;
+  margin-top: 24rpx;
+  line-height: 1.6;
+}
+
+.usermotto {
+  margin-top: 200px;
+}

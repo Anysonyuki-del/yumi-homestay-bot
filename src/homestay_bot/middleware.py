@@ -3,12 +3,13 @@
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-# 后台全部页面都可能渲染客人档案、客诉正文、订单或凭证入口，一律禁止留存。
-NO_STORE_PATH_PREFIXES = ("/employee",)
+# 后台全部页面都可能渲染客人档案、客诉正文、订单或凭证入口，一律禁止留存；
+# 小程序认证接口的响应含登录 token，同样禁止任何中间层缓存。
+NO_STORE_PATH_PREFIXES = ("/employee", "/api/miniprogram")
 
 
 def _requires_no_store(path: str) -> bool:
-    """判断请求路径是否属于必须禁止缓存的后台面。"""
+    """判断请求路径是否属于必须禁止缓存的后台面或小程序认证接口。"""
     return any(
         path == prefix or path.startswith(f"{prefix}/") for prefix in NO_STORE_PATH_PREFIXES
     )
@@ -22,7 +23,7 @@ class AdminNoStoreMiddleware:
         self._app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """只为后台路径补齐缓存、防嵌套和来源保护头，其余请求原样透传。"""
+        """只为受保护路径补齐缓存、防嵌套和来源保护头，其余请求原样透传。"""
         if scope["type"] != "http" or not _requires_no_store(scope.get("path", "")):
             await self._app(scope, receive, send)
             return

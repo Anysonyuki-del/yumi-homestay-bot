@@ -779,3 +779,47 @@ def test_sqlite_business_task_archive_migration_is_reversible(
     reupgrade = run_alembic("upgrade", "head")
     assert reupgrade.returncode == 0, reupgrade.stderr
     assert archive_columns <= task_columns()
+
+
+def test_sqlite_miniprogram_session_migration_is_reversible(
+    tmp_path: Path,
+) -> None:
+    """0036 升级建会话表；降级只删会话表并保留客户身份，之后可再次升级。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "miniprogram.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+
+    def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
+        """在隔离数据库执行一次 Alembic 命令。"""
+        return subprocess.run(
+            _alembic_command(*arguments),
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def tables() -> set[str]:
+        """读取当前数据库的表名集合。"""
+        with sqlite3.connect(database_path) as connection:
+            return {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+
+    upgrade = run_alembic("upgrade", "head")
+    assert upgrade.returncode == 0, upgrade.stderr
+    assert {"miniprogram_sessions", "customer_identities"} <= tables()
+
+    downgrade = run_alembic("downgrade", "0035_knowledge_referrals")
+    assert downgrade.returncode == 0, downgrade.stderr
+    assert "miniprogram_sessions" not in tables()
+    assert "customer_identities" in tables()
+
+    reupgrade = run_alembic("upgrade", "head")
+    assert reupgrade.returncode == 0, reupgrade.stderr
+    assert "miniprogram_sessions" in tables()
