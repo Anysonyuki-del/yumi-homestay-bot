@@ -192,3 +192,13 @@ node --test tests/miniprogram/auth.test.js
 - R3 `src/homestay_bot/logging.py`：`_SENSITIVE_KEY_PATTERN` 与 `_SECRET_ASSIGNMENT_PATTERN` 加入 `session[_-]?key`，只匹配字段名，`drop_legacy_session_key(` 之类函数名不受影响。
 - R4 `tests/integration/test_miniprogram_auth_postgresql.py`：真实 PostgreSQL 上验证并发首登（A 持事务时 B 确实阻塞在身份唯一键，A 提交后只有 1 个客户、1 个身份、2 条会话且两个 token 都能解析）与全局过期清理（LIMIT 生效、事务失败时整体回滚）。需 `YUMI_TEST_POSTGRES_URL`，未设置时跳过。
 - 用户决定：`/me` 与登录响应的显示名称固定为「小程序客户」；全局限频风险接受，公开上线前重新评估；后台客户列表出现「小程序客户」接受现状。
+
+## 10. 复审后更正（2026-10-30 追加）
+
+依据 Codex 复审 `docs/reviews/2026-10-30_codex-to-claude-wechat-miniprogram-login-fix-review.md`，以本节为准：
+
+- 第 9 节「审查后修复（未提交，待用户确认）」是提交前写的快照。这些修复已由用户授权提交为 `b631851`。
+- 第 9 节 R3 写的「按字段名精确脱敏」说得过头：规则按敏感字段模式匹配，`wx_session_key`、`SessionKey` 等带前缀或大小写不同的变体也会被遮住，裸函数名不受影响。
+- 第 9 节 R4 写的「B 确实阻塞在身份唯一键」，当时的证据只是等 0.5 秒后任务未完成，不足以证明具体等待点。现已改为从独立连接查询 `pg_stat_activity`，直接观测到 B 正在执行的 `INSERT INTO customer_identities` 在等 A 的 `transactionid` 锁。
+- 第 3 节「离线行为符合 Spec」过于笼统，只代表当时列出的具体测试所覆盖的行为，不代表全部验收项。PostgreSQL、真机和真实微信层当时都没有证据。
+- 第 5 节「CI 没跑」的原因不只是分支未推送：原 `ci.yml` 的隔离 PostgreSQL 回归步骤没有列入新文件，原样推送也会跳过。现已补上接线（复审 F1）。

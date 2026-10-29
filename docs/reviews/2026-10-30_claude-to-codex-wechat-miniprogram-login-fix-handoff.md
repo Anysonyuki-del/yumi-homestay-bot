@@ -133,3 +133,11 @@ PostgreSQL 专项需要本机专用测试库，并把 `YUMI_TEST_POSTGRES_URL` �
 3. 本轮修复是否引入了新问题，包括改动范围是否超出审查建议？
 4. 文档更正是否准确；交接 §9 和 Spec 文末的记录是否与代码一致？
 5. 从代码与离线证据的角度，这个分支是否可以进入"推送 → CI → 部署前准备"？
+
+## 7. 复审后更正（2026-10-30 追加）
+
+依据 Codex 复审 `docs/reviews/2026-10-30_codex-to-claude-wechat-miniprogram-login-fix-review.md`，以本节为准：
+
+- §1 R4 写的「B 被阻塞……B 停在 `customer_identities` 唯一键上」，原测试只靠 `_is_blocked` 定时判断，证据不足。现已改为 `_wait_for_identity_insert_lock`：从独立连接轮询 `pg_stat_activity`，要求看到一个会话正在执行 `INSERT INTO customer_identities`，并在等 `transactionid` 锁。核对结果：连续 5 次通过；让 A 不持事务时该断言失败；`ensure_identity` 冲突后不回查的变异仍被抓到。
+- §1 文档更正表称状态行「已更新」，但上一份交接 §9 的标题和 `tasks/todo.md` 当时仍写着未提交。现已分别追加更正并更新清单（复审 F2）。
+- §3「CI 没跑」的原因还包括 `ci.yml` 未列入新文件（复审 F1）。现已在「隔离 PostgreSQL 回归」步骤补上。

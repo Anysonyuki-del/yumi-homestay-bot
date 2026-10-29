@@ -9,10 +9,14 @@
 - [x] 小程序 `utils/auth.js`（`ensureLogin`/`restore`/`logout`）、`app.js` 移除空 wx.login、首页登录面板并删除模板头像昵称区块
 - [x] 验证：新增集成 29 项、客户端单元 29 项、迁移升降级 1 项、Node 行为 12 项（经 pytest 包装运行）；8 处变异核对均能被测试抓到；Ruff、Mypy 通过；本地全量除 `tests/browser` 外 3522 passed、82 skipped。`tests/browser` 因本机缺 Playwright Chromium 全部无法启动（6 failed、107 errors，与本次改动无关，未改后台页面）
 - [x] 已提交到 `feat/wechat-miniprogram-login`：d6ce9e2（实现）、2c73523（交接报告），用户 2026-10-30 授权；未推送
-- [x] Codex 审查后修复（2026-10-30，用户「按计划修复」，未提交）：R1 小程序本机存储读取/清除失败不误报状态；R2 路由本地故障日志不再带 SQL 参数（OpenID）；R3 `session_key` 按字段名精确脱敏；R4 PostgreSQL 专项 `test_miniprogram_auth_postgresql.py`（并发首登、全局清理 LIMIT 与回滚）；显示名称固定「小程序客户」；`.env.example` 补占位；Spec 与交接报告按审查更正（交接报告追加第 9 节）
+- [x] Codex 审查后修复（2026-10-30，用户「按计划修复」）：R1 小程序本机存储读取/清除失败不误报状态；R2 路由本地故障日志不再带 SQL 参数（OpenID）；R3 `session_key` 按敏感字段模式脱敏（含前缀与大小写变体，裸函数名不受影响）；R4 PostgreSQL 专项 `test_miniprogram_auth_postgresql.py`（并发首登、全局清理 LIMIT 与回滚）；显示名称固定「小程序客户」；`.env.example` 补占位；Spec 与交接报告按审查更正（交接报告追加第 9 节）
+- [x] 已提交：b631851（修复）、693b764（Codex 审查入库）、7c7468f（修复交接报告），用户 2026-10-30 授权；未推送
 - [x] 修复验证：相关 pytest 106 passed（含集成 30、PostgreSQL 专项 2 + 保留期 PostgreSQL 18，在本机临时 PostgreSQL 实例上运行）、Node 17 项；新增用例在修复前代码上均失败，PostgreSQL 两项各用一处变异核对能抓到；Ruff、Mypy 通过；未改 `application.py`，未跑全量
-- [ ] 未覆盖：开发者工具编译与真机界面；真实微信 code2Session 交换（需真实 AppSecret 与授权）；CI 上 PostgreSQL 专项尚未运行（分支未推送）
-- [ ] 待授权：提交本轮修复、推送、配置服务器 `.env`、生产迁移、部署和真机登录验收
+- [x] Codex 复审（`docs/reviews/2026-10-30_codex-to-claude-wechat-miniprogram-login-fix-review.md`）：R1–R3 闭合，R4 本地补证覆盖；有条件可进入推送与 CI
+- [x] 复审后修复（2026-10-30，用户「按计划修复」，未提交）：F1 `ci.yml` 隔离 PostgreSQL 回归步骤列入新文件；并发用例改为从独立连接查 `pg_stat_activity` 直接观测 B 的身份插入在等 A 的事务（取代 0.5 秒定时判断）；F2 与措辞更正（Spec、本清单、两份交接报告各追加复审后更正）
+- [ ] 未覆盖：开发者工具编译与真机界面；真实微信 code2Session 交换（需真实 AppSecret 与授权）；CI 上 PostgreSQL 专项尚未运行（F1 接线前原样推送也不会执行，现已补接线，分支未推送）
+- [ ] 下一阶段：其他页面接入 `ensureLogin` 前，处理失效标记不跨重启的前置核验（复审 §3 限制 1、2）
+- [ ] 待授权：提交复审后修复、推送、配置服务器 `.env`、生产迁移、部署和真机登录验收
 
 ---
 # 1.70.9 拆分阶段 A：重试中过时的查询失败分项（2026-10-21）

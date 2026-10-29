@@ -10,7 +10,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from homestay_bot.domain.enums import CustomerIdentityProvider
@@ -19,10 +19,12 @@ from homestay_bot.repositories import miniprogram_sessions
 from homestay_bot.repositories.customers import SQLAlchemyCustomerRepository
 from homestay_bot.repositories.miniprogram_sessions import SQLAlchemyMiniProgramSessionRepository
 from homestay_bot.services.miniprogram_auth import MiniProgramAuthService
-from tests.integration.test_retention_postgresql import _is_blocked, pg_engine  # noqa: F401
+from tests.integration.test_retention_postgresql import pg_engine  # noqa: F401
 
 APP_ID = "wx0123456789abcdef"
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+# 等待另一会话进入锁等待的上限；远小于夹具设置的 5 秒 lock_timeout。
+_LOCK_WAIT_TIMEOUT_SECONDS = 3.0
 
 
 class _FixedExchanger:
@@ -35,11 +37,34 @@ class _FixedExchanger:
         return "o-concurrent"
 
 
+async def _wait_for_identity_insert_lock(engine: AsyncEngine) -> bool:
+    """从独立连接轮询 pg_stat_activity，直到看到身份插入在等待另一事务结束。
+
+    唯一索引遇到未提交的同键行时，插入方等待对方的 transactionid 锁；
+    同时核对正在执行的语句，确认等待点就是 customer_identities 的插入。
+    """
+    deadline = asyncio.get_running_loop().time() + _LOCK_WAIT_TIMEOUT_SECONDS
+    while asyncio.get_running_loop().time() < deadline:
+        async with engine.connect() as connection:
+            waiting = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND pid <> pg_backend_pid() "
+                    "AND wait_event_type = 'Lock' AND wait_event = 'transactionid' "
+                    "AND query ILIKE 'INSERT INTO customer_identities%'"
+                )
+            )
+        if waiting:
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
 async def test_concurrent_first_login_creates_one_customer_and_both_tokens_resolve(
     pg_engine: AsyncEngine,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A 建档后持事务不提交，B 的身份插入须等唯一键；A 提交后 B 回退保存点复用同一身份。"""
+    """A 建档后持事务不提交，B 的身份插入等待 A 的事务；A 提交后 B 回退保存点复用同一身份。"""
     factory = async_sessionmaker(pg_engine, expire_on_commit=False)
     service = MiniProgramAuthService(factory, exchanger=_FixedExchanger(), clock=lambda: NOW)
     original_create = SQLAlchemyMiniProgramSessionRepository.create
@@ -62,8 +87,9 @@ async def test_concurrent_first_login_creates_one_customer_and_both_tokens_resol
     login_a = asyncio.create_task(service.login("code-a"))
     await asyncio.wait_for(a_holding.wait(), timeout=5)
     login_b = asyncio.create_task(service.login("code-b"))
-    # B 卡在身份唯一键上，证明两个事务确实重叠，而不是先后执行。
-    assert await _is_blocked(login_b)
+    # 直接观测到 B 的身份插入在等 A 的事务结束，证明两个事务确实重叠、走到了唯一键冲突分支。
+    assert await _wait_for_identity_insert_lock(pg_engine)
+    assert not login_b.done()
     release_a.set()
     first, second = await asyncio.wait_for(asyncio.gather(login_a, login_b), timeout=10)
 
