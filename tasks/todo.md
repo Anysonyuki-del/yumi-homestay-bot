@@ -8,14 +8,17 @@
 - [x] 装配 `application_lifespan`、`main.py` 注册路由、`NO_STORE_PATH_PREFIXES` 加 `/api/miniprogram`、`_SENSITIVE_QUERY_KEYS` 加 `js_code`；`.gitignore` 忽略 `project.private.config.json`
 - [x] 小程序 `utils/auth.js`（`ensureLogin`/`restore`/`logout`）、`app.js` 移除空 wx.login、首页登录面板并删除模板头像昵称区块
 - [x] 验证：新增集成 29 项、客户端单元 29 项、迁移升降级 1 项、Node 行为 12 项（经 pytest 包装运行）；8 处变异核对均能被测试抓到；Ruff、Mypy 通过；本地全量除 `tests/browser` 外 3522 passed、82 skipped。`tests/browser` 因本机缺 Playwright Chromium 全部无法启动（6 failed、107 errors，与本次改动无关，未改后台页面）
-- [x] 已提交到 `feat/wechat-miniprogram-login`：d6ce9e2（实现）、2c73523（交接报告），用户 2026-10-30 授权；未推送
+- [x] 已提交到 `feat/wechat-miniprogram-login`：d6ce9e2（实现）、2c73523（交接报告），用户 2026-10-30 授权；已于 2026-10-30 随分支推送
 - [x] Codex 审查后修复（2026-10-30，用户「按计划修复」）：R1 小程序本机存储读取/清除失败不误报状态；R2 路由本地故障日志不再带 SQL 参数（OpenID）；R3 `session_key` 按敏感字段模式脱敏（含前缀与大小写变体，裸函数名不受影响）；R4 PostgreSQL 专项 `test_miniprogram_auth_postgresql.py`（并发首登、全局清理 LIMIT 与回滚）；显示名称固定「小程序客户」；`.env.example` 补占位；Spec 与交接报告按审查更正（交接报告追加第 9 节）
-- [x] 已提交：b631851（修复）、693b764（Codex 审查入库）、7c7468f（修复交接报告），用户 2026-10-30 授权；已随下一行一并推送
+- [x] 已提交：b631851（修复）、693b764（Codex 审查入库）、7c7468f（修复交接报告），用户 2026-10-30 授权；已于 2026-10-30 随分支推送
 - [x] 修复验证：相关 pytest 106 passed（含集成 30、PostgreSQL 专项 2 + 保留期 PostgreSQL 18，在本机临时 PostgreSQL 实例上运行）、Node 17 项；新增用例在修复前代码上均失败，PostgreSQL 两项各用一处变异核对能抓到；Ruff、Mypy 通过；未改 `application.py`，未跑全量
 - [x] Codex 复审（`docs/reviews/2026-10-30_codex-to-claude-wechat-miniprogram-login-fix-review.md`）：R1–R3 闭合，R4 本地补证覆盖；有条件可进入推送与 CI
 - [x] 复审后修复（2026-10-30，用户「按计划修复」）：F1 `ci.yml` 隔离 PostgreSQL 回归步骤列入新文件；并发用例改为从独立连接查 `pg_stat_activity` 直接观测 B 的身份插入在等 A 的事务（取代 0.5 秒定时判断）；F2 与措辞更正（Spec、本清单、两份交接报告各追加复审后更正）
 - [x] 已提交并推送：7edf5c7（复审后修复）、278219c（Codex 复审入库），用户 2026-10-30 授权；CI run 40949362579 全部成功，「隔离 PostgreSQL 回归」27 passed 无跳过（含小程序 2 项）；未开 PR
+- [x] 已提交并推送：b46d49a（复审回应报告与本清单更正），用户 2026-10-30 授权
+- [x] Codex 第二次复审（`docs/reviews/2026-10-30_codex-to-claude-wechat-miniprogram-login-fix-review-2.md`）：同意进入「开 PR → 部署前准备」，R4 记为 CI run 40949362579 的 PostgreSQL 专项通过；两项 P3 已在回应报告 §8 追加更正（快照边界；referral 漏列与「从未执行」说过头；`_wait_for_identity_insert_lock` 只在当前隔离串行、只有 A/B 写入的前提下成立）
 - [ ] 未覆盖：开发者工具编译与真机界面；真实微信 code2Session 交换（需真实 AppSecret 与授权）
+- [ ] 另立任务（不在本分支）：approval、complaint delivery、knowledge delete、referral 四个既有 PostgreSQL 测试文件不在 CI「隔离 PostgreSQL 回归」列表中，当前默认 CI 未覆盖
 - [ ] 下一阶段：其他页面接入 `ensureLogin` 前，处理失效标记不跨重启的前置核验（复审 §3 限制 1、2）
 - [ ] 待授权：开 PR/合并、配置服务器 `.env`、生产迁移、部署和真机登录验收
 
