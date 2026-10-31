@@ -237,6 +237,33 @@ class CustomerIdentity(TimestampMixin, Base):
     customer: Mapped[Customer] = relationship(back_populates="identities")
 
 
+class MiniProgramSession(Base):
+    """保存小程序客人登录会话的 token 摘要，只能用于小程序接口。
+
+    会话指向身份而不是客户：人工合并客户时身份行会整体改挂到目标客户，
+    每次请求经身份解析当前客户，就不会把合并前的旧客户编号固定在 token 里。
+    """
+
+    __tablename__ = "miniprogram_sessions"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_miniprogram_sessions_token_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    identity_id: Mapped[int] = mapped_column(
+        ForeignKey("customer_identities.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class CustomerTag(TimestampMixin, Base):
     """保存 YuMi 内部客户标签及其可选企业微信标签映射。"""
 

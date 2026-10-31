@@ -32,6 +32,9 @@ class CustomerIdentityProvider(StrEnum):
     WECOM_KF = "wecom_kf"
     WECOM_CONTACT = "wecom_contact"
     WECHAT_UNIONID = "wechat_unionid"
+    # 外部编号为「小程序 AppID:OpenID」：OpenID 只在单个 AppID 内唯一，带上命名空间
+    # 才能避免换绑或多个小程序时把不同人认成同一客户。
+    WECHAT_MINIPROGRAM = "wechat_miniprogram"
     HOSTEX = "hostex"
 
 

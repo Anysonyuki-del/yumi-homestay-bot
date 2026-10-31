@@ -27,6 +27,13 @@ class BootstrapSettings(BaseSettings):
         ge=1024,
         le=25 * 1024 * 1024,
     )
+    # 小程序登录是可选能力：两项刻意不加 Field 约束，填错也不能让整份基础配置
+    # 加载失败、使既有系统只剩健康页；是否可用在装配时由
+    # integrations.wechat_miniprogram.load_miniprogram_credentials 判断。
+    # ponytail: 密钥只走环境变量，换密钥需改 .env 并重启；需要后台管理或热更新时
+    # 再迁入运行配置（services/runtime_config_service.py）。
+    miniprogram_app_id: str | None = None
+    miniprogram_app_secret: str | None = None
 
 
 class RuntimeEnvironmentSettings(BaseSettings):

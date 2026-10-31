@@ -1,0 +1,28 @@
+<!--index.wxml-->
+<scroll-view class="scrollarea" scroll-y type="list">
+  <view class="container">
+    <view class="auth-panel">
+      <text class="auth-title">微信登录</text>
+      <block wx:if="{{authStatus === 'logged_in'}}">
+        <text class="auth-state">已登录：{{displayName}}</text>
+        <text class="auth-hint" wx:if="{{expiresText}}">{{expiresText}}</text>
+        <button bindtap="handleLogout" loading="{{authBusy}}" disabled="{{authBusy}}">退出登录</button>
+      </block>
+      <block wx:elif="{{authStatus === 'unknown'}}">
+        <button type="primary" bindtap="restoreLogin" loading="{{authBusy}}" disabled="{{authBusy}}">重新确认登录状态</button>
+        <button class="auth-secondary" bindtap="handleLogout" disabled="{{authBusy}}">退出登录</button>
+      </block>
+      <block wx:elif="{{authStatus === 'logged_out'}}">
+        <button type="primary" bindtap="handleLogin" loading="{{authBusy}}" disabled="{{authBusy}}">微信登录</button>
+      </block>
+      <text class="auth-message" wx:if="{{authMessage}}">{{authMessage}}</text>
+    </view>
+    <view class="connection-test">
+      <button bindtap="testConnection" loading="{{connectionLoading}}" disabled="{{connectionLoading}}">测试后端连接</button>
+      <text class="connection-result" user-select>{{connectionResult}}</text>
+    </view>
+    <view class="usermotto">
+      <text class="user-motto">{{motto}}</text>
+    </view>
+  </view>
+</scroll-view>

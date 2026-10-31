@@ -360,3 +360,25 @@ def test_actual_handler_redacts_quoted_keys_and_escaped_values() -> None:
     assert "Traceback (most recent call last):" in output and "RuntimeError:" in output
     assert output.count("\n") >= 5
     assert redact_text(output) == output
+
+
+def test_wechat_session_key_is_redacted_but_function_names_are_kept() -> None:
+    """微信 session_key 在结构化字段、JSON/repr 文本和经过过滤器的日志里都要遮住；
+    drop_legacy_session_key 这类函数名后面不是赋值，不能被误伤。"""
+    fields = redact_log_fields({"session_key": "SK-STRUCTURED", "nested": {"session_key": "SK-N"}})
+    assert fields == {"session_key": "[REDACTED]", "nested": {"session_key": "[REDACTED]"}}
+
+    record = logging.LogRecord(
+        "homestay_bot.integrations.wechat_miniprogram",
+        logging.WARNING,
+        __file__,
+        1,
+        "响应 %s 与 %s；调用 drop_legacy_session_key(request, \"task_csrf\")",
+        ('{"openid": "o-1", "session_key": "SK-JSON"}', "{'session_key': 'SK-REPR'}"),
+        None,
+    )
+    SensitiveDataFilter().filter(record)
+    rendered = record.getMessage()
+
+    assert "SK-JSON" not in rendered and "SK-REPR" not in rendered
+    assert "drop_legacy_session_key(request" in rendered
