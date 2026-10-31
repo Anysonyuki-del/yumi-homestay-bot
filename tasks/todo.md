@@ -20,7 +20,9 @@
 - [ ] 未覆盖：开发者工具编译与真机界面；真实微信 code2Session 交换（需真实 AppSecret 与授权）
 - [ ] 另立任务（不在本分支）：approval、complaint delivery、knowledge delete、referral 四个既有 PostgreSQL 测试文件不在 CI「隔离 PostgreSQL 回归」列表中，当前默认 CI 未覆盖
 - [ ] 下一阶段：其他页面接入 `ensureLogin` 前，处理失效标记不跨重启的前置核验（复审 §3 限制 1、2）
-- [ ] 待授权：开 PR/合并、配置服务器 `.env`、生产迁移、部署和真机登录验收
+- [x] PR #7 已开并合并（合并提交 6aa3015），用户 2026-10-31「都做完就合并」
+- [ ] 1.71.0 发版：版本号、CHANGELOG、`docs/releases/1.71.0.md`、标签、CI、备份、部署（含迁移 0036）与现场核对
+- [ ] 用户操作：服务器写入 AppSecret（`.stage/set-miniprogram-secret.command`）、公众平台加 request 合法域名、开发者工具与真机登录验收
 
 ---
 # 1.70.9 拆分阶段 A：重试中过时的查询失败分项（2026-10-21）
