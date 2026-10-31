@@ -21,7 +21,7 @@
 - [ ] 另立任务（不在本分支）：approval、complaint delivery、knowledge delete、referral 四个既有 PostgreSQL 测试文件不在 CI「隔离 PostgreSQL 回归」列表中，当前默认 CI 未覆盖
 - [ ] 下一阶段：其他页面接入 `ensureLogin` 前，处理失效标记不跨重启的前置核验（复审 §3 限制 1、2）
 - [x] PR #7 已开并合并（合并提交 6aa3015），用户 2026-10-31「都做完就合并」
-- [ ] 1.71.0 发版：版本号、CHANGELOG、`docs/releases/1.71.0.md`、标签、CI、备份、部署（含迁移 0036）与现场核对
+- [x] 1.71.0 已发版部署（标签 c46e0c5）：CI 通过；备份后只替换 API，迁移到 0036；独立核对 182 个文件与标签一致、日志错误 0、未配置时接口 503；登录后诊断页未核对（浏览器未登录、Chrome 扩展未连接）
 - [ ] 用户操作：服务器写入 AppSecret（`.stage/set-miniprogram-secret.command`）、公众平台加 request 合法域名、开发者工具与真机登录验收
 
 ---
