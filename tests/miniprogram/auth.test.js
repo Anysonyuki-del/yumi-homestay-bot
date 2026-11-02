@@ -118,10 +118,51 @@ test('ensureLogin 取 code 登录并保存会话，返回值不含 token', async
   assert.equal(storage[auth.SESSION_STORAGE_KEY].token, TOKEN)
 })
 
-test('ensureLogin 已有未过期会话时不重复登录', async () => {
-  const { calls } = installWx({ storage: storedSession() })
+test('ensureLogin 已有未过期会话时先向服务端核验一次，本次运行内不重复核验也不重复登录', async () => {
+  const { calls } = installWx({
+    storage: storedSession(),
+    routes: {
+      'GET /api/miniprogram/me': { statusCode: 200, data: { display_name: '小程序客户', expires_at: FUTURE } },
+    },
+  })
   assert.equal((await auth.ensureLogin()).displayName, '小程序客户')
-  assert.deepEqual(calls, [])
+  assert.equal((await auth.ensureLogin()).displayName, '小程序客户')
+  assert.deepEqual(calls.map((call) => call.key || call), ['GET /api/miniprogram/me'])
+})
+
+test('小程序重启后残留的已撤销记录：ensureLogin 核验得到 401 后重新登录', async () => {
+  const newToken = nextToken()
+  const { calls, storage } = installWx({
+    storage: storedSession(),
+    routes: {
+      'GET /api/miniprogram/me': { statusCode: 401, data: {} },
+      'POST /api/miniprogram/login': {
+        statusCode: 200,
+        data: { token: newToken, expires_at: FUTURE, display_name: '小程序客户' },
+      },
+    },
+  })
+  // 重新加载模块模拟小程序重启：内存里的失效与已核验集合都清空，只剩本机残留记录。
+  const modulePath = path.join(CLIENT_ROOT, 'utils/auth.js')
+  delete require.cache[require.resolve(modulePath)]
+  const freshAuth = require(modulePath)
+  await freshAuth.ensureLogin()
+  assert.deepEqual(
+    calls.map((call) => call.key || call),
+    ['GET /api/miniprogram/me', 'wx.login', 'POST /api/miniprogram/login'],
+  )
+  assert.equal(storage[auth.SESSION_STORAGE_KEY].token, newToken)
+})
+
+test('ensureLogin 核验遇到网络失败时报可重试错误，不另签新会话', async () => {
+  const token = nextToken()
+  const { calls, storage } = installWx({
+    storage: storedSession(token),
+    routes: { 'GET /api/miniprogram/me': { fail: true } },
+  })
+  await assert.rejects(auth.ensureLogin(), (error) => error.code === 'verify_unknown' && error.retryable)
+  assert.ok(!calls.includes('wx.login'))
+  assert.equal(storage[auth.SESSION_STORAGE_KEY].token, token, '状态未确认时保留本机记录')
 })
 
 test('登录后本机存储失败：撤销刚签发的会话并报错，不留下登录状态', async () => {
@@ -212,15 +253,26 @@ test('401 后本机记录清除失败，失效记录不会被 ensureLogin 当成
   assert.ok(calls.includes('wx.login'), '必须重新登录，而不是复用失效记录')
 })
 
-test('退出时服务端已撤销但本机清除失败，重试退出即完成', async () => {
-  const { calls } = installWx({
-    storage: storedSession(),
+test('退出时服务端已撤销但本机清除失败，重试退出会再次清除本机残留', async () => {
+  const residueToken = nextToken()
+  const { calls, storage } = installWx({
+    storage: storedSession(residueToken),
     failRemove: true,
     routes: { 'POST /api/miniprogram/logout': { statusCode: 204 } },
   })
   await assert.rejects(auth.logout(), (error) => error.code === 'storage')
+  // 存储恢复后再点退出：不再请求服务端，但要真的删掉本机残留。
+  let removeAttempts = 0
+  const failingRemove = globalThis.wx.removeStorageSync
+  globalThis.wx.removeStorageSync = (key) => { removeAttempts += 1; delete storage[key] }
   await auth.logout()
   assert.equal(calls.filter((call) => call.key === 'POST /api/miniprogram/logout').length, 1)
+  assert.equal(removeAttempts, 1)
+  assert.equal(storage[auth.SESSION_STORAGE_KEY], undefined, '本机残留已清除')
+  // 存储仍然失败时如实报错，不误报已退出。
+  storage[auth.SESSION_STORAGE_KEY] = { token: residueToken, expiresAt: FUTURE, displayName: '小程序客户' }
+  globalThis.wx.removeStorageSync = failingRemove
+  await assert.rejects(auth.logout(), (error) => error.code === 'storage')
 })
 
 // 加载首页：用 Page 替身拿到页面配置，setData 合并到 data。
@@ -292,4 +344,16 @@ test('首页恢复时迟到的旧结果被丢弃', async () => {
   pending.forEach((respond) => respond())
   await restoring
   assert.equal(page.data.authStatus, 'logged_out')
+})
+
+test('首页登录时核验暂时失败，显示待确认而不是未登录', async () => {
+  const { calls } = installWx({
+    storage: storedSession(),
+    routes: { 'GET /api/miniprogram/me': { fail: true } },
+  })
+  const page = loadIndexPage()
+  page.authGeneration = 0
+  await page.handleLogin()
+  assert.equal(page.data.authStatus, 'unknown')
+  assert.ok(!calls.includes('wx.login'))
 })

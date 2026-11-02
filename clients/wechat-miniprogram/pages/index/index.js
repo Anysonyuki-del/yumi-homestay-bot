@@ -67,9 +67,10 @@ Page({
       })
     } catch (error) {
       if (generation !== this.authGeneration) return
+      // 已有会话但暂时无法核验时本机记录仍保留，显示待确认，让客人重新确认而不是误显示未登录。
       this.setData({
         authBusy: false,
-        authStatus: 'logged_out',
+        authStatus: error.code === 'verify_unknown' ? 'unknown' : 'logged_out',
         authMessage: error.message || '登录暂时不可用，请稍后重试',
       })
     }

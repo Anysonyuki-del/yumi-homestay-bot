@@ -19,7 +19,8 @@
 - [x] Codex 第二次复审（`docs/reviews/2026-10-30_codex-to-claude-wechat-miniprogram-login-fix-review-2.md`）：同意进入「开 PR → 部署前准备」，R4 记为 CI run 40949362579 的 PostgreSQL 专项通过；两项 P3 已在回应报告 §8 追加更正（快照边界；referral 漏列与「从未执行」说过头；`_wait_for_identity_insert_lock` 只在当前隔离串行、只有 A/B 写入的前提下成立）
 - [ ] 未覆盖：开发者工具编译与真机界面；真实微信 code2Session 交换（需真实 AppSecret 与授权）
 - [ ] 另立任务（不在本分支）：approval、complaint delivery、knowledge delete、referral 四个既有 PostgreSQL 测试文件不在 CI「隔离 PostgreSQL 回归」列表中，当前默认 CI 未覆盖
-- [ ] 下一阶段：其他页面接入 `ensureLogin` 前，处理失效标记不跨重启的前置核验（复审 §3 限制 1、2）
+- [x] `ensureLogin` 服务端核验与退出残留清理（复审 §3 限制 1、2；Spec `docs/specs/2026-11-02_miniprogram-ensurelogin-verify-spec.md`，用户「开始」）：本地 Node 20 passed，判别力已验证；未提交、未上传小程序
+- [ ] 上传小程序后在开发者工具或真机上验证：重新打开后自动恢复登录、登录与退出
 - [x] PR #7 已开并合并（合并提交 6aa3015），用户 2026-10-31「都做完就合并」
 - [x] 1.71.0 已发版部署（标签 c46e0c5）：CI 通过；备份后只替换 API，迁移到 0036；独立核对 182 个文件与标签一致、日志错误 0、未配置时接口 503；登录后诊断页未核对（浏览器未登录、Chrome 扩展未连接）
 - [x] 用户已写入 AppSecret（2026-10-31）：脚本 `MINIPROGRAM_CONFIG_OK`；独立核对公网 `/me` 401、`/login` 空体 400、容器正常、日志错误 0、会话表 0 行

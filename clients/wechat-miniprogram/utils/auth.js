@@ -60,24 +60,33 @@ function wxLoginCode() {
   })
 }
 
-// 本次运行中已判定失效的 token。本机记录清除失败时，靠它阻止 ensureLogin 把失效记录当成有效会话；
-// 进程重启后集合清空，届时 restore 会再次向服务端核验并得到 401。
+// 本次运行中已判定失效的 token。本机记录清除失败时，靠它阻止本次运行复用失效记录；
+// 进程重启后集合清空，残留记录由 verifyStoredSession 向服务端核验得到 401 后作废。
 const invalidatedTokens = new Set()
 
-// 读取本机会话：没有记录或内容不完整返回 null；存储本身读取失败时抛出错误，
-// 不能当作「没有记录」，否则退出会跳过服务端撤销并误报已退出。
-function readStoredSession() {
+// 本次运行中服务端已确认有效的 token，避免每次 ensureLogin 都请求一次。
+// 本次运行内会话只会因本地到期或本机退出而失效，两者都有本地判断，所以每次运行核验一次即可。
+const verifiedTokens = new Set()
+
+// 读取本机原始记录：没有记录或内容不完整返回 null，不过滤已失效 token；
+// 存储本身读取失败时抛出错误，不能当作「没有记录」，否则退出会跳过服务端撤销并误报已退出。
+function readRawSession() {
   let stored
   try {
     stored = wx.getStorageSync(SESSION_STORAGE_KEY)
   } catch (error) {
     throw new AuthError('storage_read', '读取本机登录记录失败，请重试')
   }
-  if (stored && typeof stored.token === 'string' && typeof stored.expiresAt === 'string'
-    && !invalidatedTokens.has(stored.token)) {
+  if (stored && typeof stored.token === 'string' && typeof stored.expiresAt === 'string') {
     return stored
   }
   return null
+}
+
+// 读取可用的本机会话：本次运行已判定失效的 token 视为没有记录。
+function readStoredSession() {
+  const stored = readRawSession()
+  return stored && !invalidatedTokens.has(stored.token) ? stored : null
 }
 
 // 清除本机会话，返回是否成功，供调用方如实反馈。
@@ -93,6 +102,7 @@ function clearStoredSession() {
 // 把已失效的 token 标记为不可再用，再尝试清除本机记录；返回本机记录是否已清除。
 function invalidateSession(token) {
   invalidatedTokens.add(token)
+  verifiedTokens.delete(token)
   return clearStoredSession()
 }
 
@@ -130,20 +140,13 @@ async function login() {
         : '本机存储失败，登录未保存；本次登录未能确认撤销，将在 24 小时内自动失效',
     )
   }
+  verifiedTokens.add(body.token)
   return { displayName: body.display_name, expiresAt: body.expires_at }
 }
 
-// 按需登录：本机已有未过期会话直接返回，否则发起登录；返回值不含 token，页面无需接触凭证。
-async function ensureLogin() {
-  const stored = readStoredSession()
-  if (stored && !isLocallyExpired(stored)) {
-    return { displayName: stored.displayName, expiresAt: stored.expiresAt }
-  }
-  return login()
-}
-
-// 恢复：没有本机会话时不发请求；401 使本机会话失效；网络或存储读取故障时状态待确认，等待重试。
-async function restore() {
+// 核验本机会话，restore 与 ensureLogin 共用。返回 logged_out / logged_in / unknown 三种状态；
+// 本次运行已核验过的 token 直接视为有效，不重复请求；本地过期与服务端 401 都会作废本机记录。
+async function verifyStoredSession() {
   let stored
   try {
     stored = readStoredSession()
@@ -155,6 +158,9 @@ async function restore() {
     invalidateSession(stored.token)
     return { status: 'logged_out', message: '登录已过期，请重新登录' }
   }
+  if (verifiedTokens.has(stored.token)) {
+    return { status: 'logged_in', displayName: stored.displayName, expiresAt: stored.expiresAt }
+  }
   let res
   try {
     res = await request({ path: '/api/miniprogram/me', method: 'GET', token: stored.token })
@@ -162,6 +168,7 @@ async function restore() {
     return { status: 'unknown', message: error.message }
   }
   if (res.statusCode === 200 && res.data) {
+    verifiedTokens.add(stored.token)
     return { status: 'logged_in', displayName: res.data.display_name, expiresAt: res.data.expires_at }
   }
   if (res.statusCode === 401) {
@@ -171,11 +178,37 @@ async function restore() {
   return { status: 'unknown', message: '暂时无法确认登录状态，请稍后重试' }
 }
 
+// 按需登录：本机会话经服务端核验有效则复用，确认失效或没有会话时发起登录；返回值不含 token。
+// 核验遇到网络等故障时报可重试错误，不另签新会话，避免旧会话仍有效时多出一条。
+async function ensureLogin() {
+  const result = await verifyStoredSession()
+  if (result.status === 'logged_in') {
+    return { displayName: result.displayName, expiresAt: result.expiresAt }
+  }
+  if (result.status === 'unknown') {
+    throw new AuthError('verify_unknown', result.message || '暂时无法确认登录状态，请稍后重试')
+  }
+  return login()
+}
+
+// 恢复：没有本机会话时不发请求；401 使本机会话失效；网络或存储读取故障时状态待确认，等待重试。
+async function restore() {
+  return verifyStoredSession()
+}
+
 // 退出：服务端确认撤销（204）或会话本已失效（401）后才清除本机；否则保留并提示重试。
 // 读取本机记录失败时抛错，不能在没有请求服务端的情况下报告已退出。
+// 本机只剩已作废的残留记录时（服务端已撤销、上次清除失败），不再请求服务端，只重试清除。
 async function logout() {
-  const stored = readStoredSession()
-  if (!stored) return
+  const raw = readRawSession()
+  if (!raw) return
+  if (invalidatedTokens.has(raw.token)) {
+    if (!clearStoredSession()) {
+      throw new AuthError('storage', '服务端已退出，但本机记录清除失败，请重试')
+    }
+    return
+  }
+  const stored = raw
   const res = await request({ path: '/api/miniprogram/logout', method: 'POST', token: stored.token })
   if (res.statusCode !== 204 && res.statusCode !== 401) {
     throw new AuthError('revoke_failed', '退出未完成，请重试')
