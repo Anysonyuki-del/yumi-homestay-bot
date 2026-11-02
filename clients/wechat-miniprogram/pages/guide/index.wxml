@@ -1,0 +1,21 @@
+<view class="page">
+  <view wx:if="{{status === 'loading'}}" class="card" aria-label="正在加载入住指南"><t-skeleton row-col="{{skeletonRows}}" loading /></view>
+  <view wx:elif="{{status === 'error'}}" class="state">
+    <t-empty icon="error-circle" description="{{message}}" />
+    <t-button theme="primary" variant="outline" bind:tap="retry">重试</t-button>
+  </view>
+  <view wx:elif="{{status === 'empty'}}" class="state">
+    <t-empty icon="info-circle" description="内容整理中，有问题请问管家" />
+  </view>
+  <block wx:else>
+    <view wx:for="{{sections}}" wx:for-item="section" wx:for-index="sectionIndex" wx:key="category" class="guide-section">
+      <text class="section-title">{{section.category}}</text>
+      <t-collapse theme="card">
+        <t-collapse-panel wx:for="{{section.items}}" wx:key="question" header="{{item.question}}" value="{{sectionIndex}}-{{index}}">
+          <text class="body-text" user-select>{{item.answer}}</text>
+        </t-collapse-panel>
+      </t-collapse>
+    </view>
+  </block>
+  <view class="ask-host"><t-button theme="primary" shape="round" icon="chat" bind:tap="askHost">问管家</t-button></view>
+</view>

@@ -1,15 +1,24 @@
 """为后台敏感页面统一补齐禁止缓存的响应头。"""
 
+import re
+
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # 后台全部页面都可能渲染客人档案、客诉正文、订单或凭证入口，一律禁止留存；
-# 小程序认证接口的响应含登录 token，同样禁止任何中间层缓存。
+# 小程序认证接口的响应含登录 token，同样禁止任何中间层缓存；公开内容接口沿用。
 NO_STORE_PATH_PREFIXES = ("/employee", "/api/miniprogram")
 
 
+# 唯一豁免：小程序公开房间照片。文件不可变（替换会生成新编号），且只读取已公开房间的
+# 照片，由路由自行设置可缓存头（小程序住客自助 Spec D1）。只认这一种纯数字路径形态。
+_CACHEABLE_PUBLIC_PATH = re.compile(r"/api/miniprogram/rooms/\d+/photos/\d+")
+
+
 def _requires_no_store(path: str) -> bool:
-    """判断请求路径是否属于必须禁止缓存的后台面或小程序认证接口。"""
+    """判断请求路径是否属于必须禁止缓存的后台面或小程序接口。"""
+    if _CACHEABLE_PUBLIC_PATH.fullmatch(path):
+        return False
     return any(
         path == prefix or path.startswith(f"{prefix}/") for prefix in NO_STORE_PATH_PREFIXES
     )

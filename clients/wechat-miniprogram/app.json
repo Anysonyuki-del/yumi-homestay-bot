@@ -1,12 +1,25 @@
 {
   "pages": [
-    "pages/index/index",
-    "pages/logs/logs"
+    "pages/rooms/index",
+    "pages/rooms/detail",
+    "pages/guide/index"
   ],
   "window": {
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "Weixin",
-    "navigationBarBackgroundColor": "#ffffff"
+    "navigationBarTitleText": "YuMi 民宿",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f5f5f5",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#666666",
+    "selectedColor": "#0052d9",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/rooms/index", "text": "房间" },
+      { "pagePath": "pages/guide/index", "text": "入住指南" }
+    ]
   },
   "style": "v2",
   "componentFramework": "glass-easel",

@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -605,6 +606,11 @@ class KnowledgeEntry(TimestampMixin, Base):
     trigger_any: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     trigger_exclude: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 小程序入住指南只展示管理员逐条勾选的条目；有些条目是写给机器人配合关键词用的，
+    # 不适合直接公开列出，所以默认不展示（小程序住客自助 Spec F1）。
+    show_in_miniprogram: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
 
 
@@ -998,6 +1004,61 @@ class PropertyProfile(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # 欢迎消息附带的一张图（Spec G3），私有存储文件名；为空则只发文字。
     welcome_image_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class RoomShowcase(TimestampMixin, Base):
+    """一间房在小程序里的公开介绍（小程序住客自助 Spec F2）。
+
+    与运营资料分表保存：这里的字段都会公开给任何打开小程序的人，地址、停车说明、
+    凭证等运营字段绝不放进来，避免公开接口误带出。
+    """
+
+    __tablename__ = "room_showcases"
+    __table_args__ = (
+        CheckConstraint(
+            "max_guests IS NULL OR (max_guests BETWEEN 1 AND 20)",
+            name="ck_room_showcases_max_guests",
+        ),
+        CheckConstraint(
+            "area_sqm IS NULL OR (area_sqm BETWEEN 1 AND 1000)",
+            name="ck_room_showcases_area_sqm",
+        ),
+        CheckConstraint(
+            "sort_order IS NULL OR (sort_order BETWEEN 0 AND 9999)",
+            name="ck_room_showcases_sort_order",
+        ),
+    )
+
+    property_id: Mapped[int] = mapped_column(
+        ForeignKey("property_profiles.id", ondelete="CASCADE"), primary_key=True
+    )
+    is_visible: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+    display_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    intro: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bed_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    max_guests: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    area_sqm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    facilities: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    sort_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+
+
+class RoomShowcasePhoto(Base):
+    """房间介绍的公开照片；文件存在私有存储，只经「房间可见 → 照片属于该房间」读取。"""
+
+    __tablename__ = "room_showcase_photos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    property_id: Mapped[int] = mapped_column(
+        ForeignKey("property_profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    file_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class StayOrder(TimestampMixin, Base):

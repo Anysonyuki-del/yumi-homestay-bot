@@ -823,3 +823,70 @@ def test_sqlite_miniprogram_session_migration_is_reversible(
     reupgrade = run_alembic("upgrade", "head")
     assert reupgrade.returncode == 0, reupgrade.stderr
     assert "miniprogram_sessions" in tables()
+
+
+def test_sqlite_miniprogram_showcase_migration_is_reversible(
+    tmp_path: Path,
+) -> None:
+    """0037 升级加展示开关与两张房间介绍表；降级只删本期结构，之后可再次升级。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "showcase.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+
+    def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
+        """在隔离数据库执行一次 Alembic 命令。"""
+        return subprocess.run(
+            _alembic_command(*arguments),
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def schema() -> tuple[set[str], set[str]]:
+        """读取表名集合与 knowledge_entries 的列名集合。"""
+        with sqlite3.connect(database_path) as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(knowledge_entries)").fetchall()
+            }
+        return tables, columns
+
+    showcase_tables = {"room_showcases", "room_showcase_photos"}
+
+    assert run_alembic("upgrade", "0036_miniprogram_sessions").returncode == 0
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO knowledge_entries (category, question_zh, answer_zh, question_en,"
+            " answer_en, keywords, is_enabled, scope) VALUES"
+            " ('入住', '问', '答', 'Q', 'A', '[]', 1, 'global')"
+        )
+    upgrade = run_alembic("upgrade", "head")
+    assert upgrade.returncode == 0, upgrade.stderr
+    tables, columns = schema()
+    assert showcase_tables <= tables
+    assert "show_in_miniprogram" in columns
+    with sqlite3.connect(database_path) as connection:
+        # 已有知识默认不在小程序展示，必须由管理员逐条勾选。
+        assert connection.execute(
+            "SELECT show_in_miniprogram FROM knowledge_entries"
+        ).fetchall() == [(0,)]
+
+    downgrade = run_alembic("downgrade", "0036_miniprogram_sessions")
+    assert downgrade.returncode == 0, downgrade.stderr
+    tables, columns = schema()
+    assert showcase_tables.isdisjoint(tables)
+    assert "show_in_miniprogram" not in columns
+    assert "knowledge_entries" in tables
+
+    reupgrade = run_alembic("upgrade", "head")
+    assert reupgrade.returncode == 0, reupgrade.stderr
+    assert showcase_tables <= schema()[0]

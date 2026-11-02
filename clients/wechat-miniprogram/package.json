@@ -1,0 +1,9 @@
+{
+  "name": "yumi-homestay-miniprogram",
+  "private": true,
+  "description": "YuMi 民宿住客自助小程序；依赖由微信开发者工具「构建 npm」打包",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "tdesign-miniprogram": "1.17.0"
+  }
+}

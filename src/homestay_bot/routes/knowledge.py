@@ -355,6 +355,7 @@ class KnowledgeAdminService:
             "valid_until",
             "trigger_any",
             "trigger_exclude",
+            "show_in_miniprogram",
         }
         for key, value in fields.items():
             if key in allowed:
@@ -976,8 +977,12 @@ def _fields(
     valid_until: str = "",
     trigger_any: str = "",
     trigger_exclude: str = "",
+    show_in_miniprogram: str = "",
 ) -> dict[str, Any]:
-    """清理表单并复用所有入口一致的范围、日期约束。"""
+    """清理表单并复用所有入口一致的范围、日期约束。
+
+    小程序展示开关是复选框：未勾选时浏览器不提交该字段，按「不展示」保存。
+    """
     try:
         room = int(property_id) if property_id.strip() else None
         start = date.fromisoformat(valid_from) if valid_from else None
@@ -999,6 +1004,7 @@ def _fields(
         # Spec F5：空表示不限制，存为空值而不是空列表，便于区分「没配置」。
         "trigger_any": _word_list(trigger_any),
         "trigger_exclude": _word_list(trigger_exclude),
+        "show_in_miniprogram": show_in_miniprogram == "1",
     }
 
 
@@ -1037,6 +1043,7 @@ def _submitted_form(**raw: str) -> SimpleNamespace:
         question_en=raw.get("question_en", ""),
         answer_en=raw.get("answer_en", ""),
         keywords=_word_list(raw.get("keywords", "")) or [],
+        show_in_miniprogram=raw.get("show_in_miniprogram", "") == "1",
     )
 
 
@@ -1269,6 +1276,7 @@ async def create_knowledge(
     valid_until: str = Form("", max_length=10),
     trigger_any: str = Form("", max_length=1000),
     trigger_exclude: str = Form("", max_length=1000),
+    show_in_miniprogram: str = Form("", max_length=1),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> Response:
@@ -1280,7 +1288,7 @@ async def create_knowledge(
         "question_en": question_en, "answer_en": answer_en, "keywords": keywords,
         "scope": scope, "property_id": property_id, "valid_from": valid_from,
         "valid_until": valid_until, "trigger_any": trigger_any,
-        "trigger_exclude": trigger_exclude,
+        "trigger_exclude": trigger_exclude, "show_in_miniprogram": show_in_miniprogram,
     }
     try:
         await _get_service(request).create(employee_id, **_fields(**raw))
@@ -1315,6 +1323,7 @@ async def convert_candidate(
     valid_until: str = Form("", max_length=10),
     trigger_any: str = Form("", max_length=1000),
     trigger_exclude: str = Form("", max_length=1000),
+    show_in_miniprogram: str = Form("", max_length=1),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> Response:
@@ -1326,7 +1335,7 @@ async def convert_candidate(
         "question_en": question_en, "answer_en": answer_en, "keywords": keywords,
         "scope": scope, "property_id": property_id, "valid_from": valid_from,
         "valid_until": valid_until, "trigger_any": trigger_any,
-        "trigger_exclude": trigger_exclude,
+        "trigger_exclude": trigger_exclude, "show_in_miniprogram": show_in_miniprogram,
     }
     try:
         await _get_service(request).convert_candidate(
@@ -1384,6 +1393,7 @@ async def update_knowledge(
     valid_until: str = Form("", max_length=10),
     trigger_any: str = Form("", max_length=1000),
     trigger_exclude: str = Form("", max_length=1000),
+    show_in_miniprogram: str = Form("", max_length=1),
     csrf_token: str = Form(min_length=1, max_length=128),
     return_to: Annotated[str, Form(max_length=200)] = "",
 ) -> Response:
@@ -1395,7 +1405,7 @@ async def update_knowledge(
         "question_en": question_en, "answer_en": answer_en, "keywords": keywords,
         "scope": scope, "property_id": property_id, "valid_from": valid_from,
         "valid_until": valid_until, "trigger_any": trigger_any,
-        "trigger_exclude": trigger_exclude,
+        "trigger_exclude": trigger_exclude, "show_in_miniprogram": show_in_miniprogram,
     }
     try:
         await _get_service(request).update(entry_id, employee_id, **_fields(**raw))

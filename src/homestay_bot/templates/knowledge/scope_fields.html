@@ -5,5 +5,6 @@
 <label>有效至（含当日，可不填）<input type="date" name="valid_until" value="{{ entry.valid_until or '' if entry else '' }}"></label>
 <label>附加条件词（逗号分隔，可不填：客人问题里出现其中一个才用这条）<input name="trigger_any" value="{{ (entry.trigger_any or []) | join(',') if entry else '' }}" maxlength="1000"></label>
 <label>排除词（逗号分隔，可不填：客人问题里出现任一个就不用这条）<input name="trigger_exclude" value="{{ (entry.trigger_exclude or []) | join(',') if entry else '' }}" maxlength="1000"></label>
+<label class="checkbox"><input type="checkbox" name="show_in_miniprogram" value="1" {% if entry and entry.show_in_miniprogram %}checked{% endif %}>在小程序入住指南展示（只有「本店通用」且已启用、在有效期内的条目会出现）</label>
 <p class="muted">范围待审核的知识不会用于客人回复；日期为空表示未另设期限。附加条件词和排除词改了立即生效，比如「停车」条目加排除词「黄鹤楼」，客人问景区停车时就不会拿本店停车答案作答。</p>
 {% endmacro %}

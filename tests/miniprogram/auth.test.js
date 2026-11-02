@@ -1,4 +1,5 @@
-// 小程序登录客户端行为测试：用 wx 替身验证会话存储、恢复、退出和首页状态。
+// 小程序登录客户端行为测试：用 wx 替身验证会话存储、恢复与退出。
+// 首页登录面板已随住客自助改版移除（Spec D5），登录模块保留供将来订单绑定使用。
 // 运行：node --test tests/miniprogram/auth.test.js（由 tests/unit/test_miniprogram_client_js.py 调用）
 const test = require('node:test')
 const assert = require('node:assert/strict')
@@ -273,87 +274,4 @@ test('退出时服务端已撤销但本机清除失败，重试退出会再次�
   storage[auth.SESSION_STORAGE_KEY] = { token: residueToken, expiresAt: FUTURE, displayName: '小程序客户' }
   globalThis.wx.removeStorageSync = failingRemove
   await assert.rejects(auth.logout(), (error) => error.code === 'storage')
-})
-
-// 加载首页：用 Page 替身拿到页面配置，setData 合并到 data。
-function loadIndexPage() {
-  let config
-  globalThis.Page = (options) => { config = options }
-  const pagePath = path.join(CLIENT_ROOT, 'pages/index/index.js')
-  delete require.cache[require.resolve(pagePath)]
-  require(pagePath)
-  const page = Object.create(config)
-  page.data = JSON.parse(JSON.stringify(config.data))
-  page.setData = (patch) => { Object.assign(page.data, patch) }
-  return page
-}
-
-test('首页重复点击登录只发起一次 wx.login', async () => {
-  const { calls, pending } = installWx({
-    routes: {
-      'POST /api/miniprogram/login': {
-        hold: true,
-        statusCode: 200,
-        data: { token: TOKEN, expires_at: FUTURE, display_name: '小程序客户' },
-      },
-    },
-  })
-  const page = loadIndexPage()
-  page.authGeneration = 0
-  const first = page.handleLogin()
-  const second = page.handleLogin()
-  await new Promise((resolve) => setImmediate(resolve))
-  pending.forEach((respond) => respond())
-  await Promise.all([first, second])
-  assert.equal(calls.filter((call) => call === 'wx.login').length, 1)
-  assert.equal(page.data.authStatus, 'logged_in')
-  assert.equal(page.data.authBusy, false)
-})
-
-test('首页退出失败时保持已登录并给出提示', async () => {
-  installWx({
-    storage: storedSession(),
-    routes: { 'POST /api/miniprogram/logout': { fail: true } },
-  })
-  const page = loadIndexPage()
-  page.authGeneration = 0
-  page.setData({ authStatus: 'logged_in', displayName: '小程序客户' })
-  await page.handleLogout()
-  assert.equal(page.data.authStatus, 'logged_in')
-  assert.match(page.data.authMessage, /网络/)
-})
-
-test('首页恢复时迟到的旧结果被丢弃', async () => {
-  const { pending } = installWx({
-    storage: storedSession(),
-    routes: {
-      'GET /api/miniprogram/me': {
-        hold: true,
-        statusCode: 200,
-        data: { expires_at: FUTURE, display_name: '小程序客户' },
-      },
-    },
-  })
-  const page = loadIndexPage()
-  page.authGeneration = 0
-  const restoring = page.restoreLogin()
-  await new Promise((resolve) => setImmediate(resolve))
-  // 模拟恢复请求在途期间已开始更新的操作（例如页面重新加载后的新一轮确认）。
-  page.authGeneration += 1
-  page.setData({ authStatus: 'logged_out', authBusy: false })
-  pending.forEach((respond) => respond())
-  await restoring
-  assert.equal(page.data.authStatus, 'logged_out')
-})
-
-test('首页登录时核验暂时失败，显示待确认而不是未登录', async () => {
-  const { calls } = installWx({
-    storage: storedSession(),
-    routes: { 'GET /api/miniprogram/me': { fail: true } },
-  })
-  const page = loadIndexPage()
-  page.authGeneration = 0
-  await page.handleLogin()
-  assert.equal(page.data.authStatus, 'unknown')
-  assert.ok(!calls.includes('wx.login'))
 })
