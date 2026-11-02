@@ -8,9 +8,10 @@
 - [x] F4：`services/image_metadata.py` 去掉 JPEG、PNG 元数据和 JPEG EOI 之后的附加数据
 - [x] F5：小程序删除模板页，新增房间列表、详情、入住指南三页（TDesign 1.17.0）和「问管家」按钮
 - [x] 验证：相关 91 passed，Node 25 项，7 处变异都能被测试抓到；Ruff、Mypy 通过；全量（不含 `tests/browser`）3505 passed、84 skipped
-- [ ] `tests/browser` 本机缺 Playwright Chromium，未跑；后台新页签需 CI 或人工确认
+- [x] `tests/browser` 本机缺 Playwright Chromium 未跑，已由 PR #8 CI 覆盖通过
 - [ ] 待用户提供：企业 ID、客服链接、导航栏民宿名；微信客服绑定小程序；`npm install` 后在开发者工具「构建 npm」
-- [ ] 提交、推送、1.72.0 版本与发布记录、部署，均需单独授权
+- [x] 本地提交 2f6a370（用户「提交但不推送」）；用户 2026-11-03「上线测」授权推送与发版：PR #8 CI 3618 passed / 84 skipped、PostgreSQL 回归 27 passed，合并提交 1b0504f
+- [ ] 1.72.0 发版部署与独立核对（见 `docs/releases/1.72.0.md`）
 
 # 本地实现完成：微信小程序基础登录（2026-10-29）
 
