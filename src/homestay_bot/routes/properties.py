@@ -19,6 +19,7 @@ from homestay_bot.routes.page_errors import raise_page_error, safe_return_path
 from homestay_bot.routes.query_params import empty_query_to_none
 from homestay_bot.services.private_file_storage import StoredPrivateFile
 from homestay_bot.services.property_admin_service import PropertyFields
+from homestay_bot.services.room_showcase_admin import MAX_PHOTOS_PER_ROOM, ShowcaseForm
 from homestay_bot.web import templates
 
 router = APIRouter(prefix="/employee/properties")
@@ -90,6 +91,34 @@ class PropertyAdminServicePort(Protocol):
         employee: Employee,
     ) -> StoredPrivateFile:
         """授权后返回欢迎图片。"""
+
+    async def showcase_for(self, property_id: int, employee: Employee) -> Any:
+        """返回小程序展示页签数据。"""
+
+    async def save_showcase(
+        self, property_id: int, employee: Employee, form: ShowcaseForm
+    ) -> None:
+        """保存房间介绍文字资料。"""
+
+    async def add_showcase_photo(
+        self, property_id: int, employee: Employee, stream: Any, content_type: str
+    ) -> None:
+        """上传一张房间照片。"""
+
+    async def delete_showcase_photo(
+        self, property_id: int, employee: Employee, photo_id: int
+    ) -> None:
+        """删除一张房间照片。"""
+
+    async def reorder_showcase_photos(
+        self, property_id: int, employee: Employee, orders: dict[int, str]
+    ) -> None:
+        """整体更新照片排序号。"""
+
+    async def showcase_photo_for(
+        self, property_id: int, employee: Employee, photo_id: int
+    ) -> StoredPrivateFile:
+        """后台预览一张房间照片。"""
 
 
 def _get_service(request: Request) -> PropertyAdminServicePort:
@@ -197,7 +226,7 @@ async def _with_source(request: Request, target: str) -> str:
 async def property_detail(
     request: Request,
     property_id: int,
-    tab: Literal["overview", "profile", "credentials"] = "overview",
+    tab: Literal["overview", "profile", "credentials", "showcase"] = "overview",
     return_to: Annotated[str, Query(max_length=200)] = "",
 ) -> Response:
     """展示公开配置和凭证版本，绝不回显密码或指南。"""
@@ -207,6 +236,12 @@ async def property_detail(
             property_id,
             administrator,
         )
+        # 小程序展示只在对应页签读取，其他页签不多查一次。
+        showcase = (
+            await _get_service(request).showcase_for(property_id, administrator)
+            if tab == "showcase"
+            else None
+        )
     except Exception as error:
         _raise_page_error(error)
     return templates.TemplateResponse(
@@ -214,6 +249,8 @@ async def property_detail(
         name="properties/detail.html",
         context={
             **detail,
+            "showcase": showcase,
+            "max_showcase_photos": MAX_PHOTOS_PER_ROOM,
             "tab": tab,
             "room_statuses": list(RoomOperationalStatus),
             "csrf_token": await _issue_csrf(request, property_id),
@@ -359,6 +396,147 @@ async def view_welcome_image(request: Request, property_id: int) -> Response:
     administrator = await _current_admin(request)
     try:
         stored = await _get_service(request).welcome_image_for(property_id, administrator)
+    except Exception as error:
+        _raise_page_error(error)
+    response = FileResponse(stored.path, media_type=stored.content_type, filename=None)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+def _showcase_target(property_id: int) -> str:
+    """小程序展示相关写操作完成后回到该页签。"""
+    return f"/employee/properties/{property_id}?tab=showcase"
+
+
+@router.post("/{property_id}/showcase")
+async def save_room_showcase(
+    request: Request,
+    property_id: int,
+    display_name: str = Form("", max_length=200),
+    intro: str = Form("", max_length=5000),
+    bed_type: str = Form("", max_length=200),
+    max_guests: str = Form("", max_length=10),
+    area_sqm: str = Form("", max_length=10),
+    facilities: str = Form("", max_length=2000),
+    sort_order: str = Form("", max_length=10),
+    is_visible: bool = Form(False),
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """保存房间在小程序中的介绍（小程序住客自助 Spec F2）；具体长度与范围由服务校验。"""
+    administrator = await _current_admin(request)
+    await _consume_csrf(request, property_id, csrf_token)
+    try:
+        await _get_service(request).save_showcase(
+            property_id,
+            administrator,
+            ShowcaseForm(
+                is_visible=is_visible,
+                display_name=display_name,
+                intro=intro,
+                bed_type=bed_type,
+                max_guests=max_guests,
+                area_sqm=area_sqm,
+                facilities=facilities,
+                sort_order=sort_order,
+            ),
+        )
+    except ValueError as error:
+        # 校验提示都是固定文案，回显给管理员便于修改。
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        await _with_source(request, _showcase_target(property_id)),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{property_id}/showcase/photos")
+async def upload_room_showcase_photo(
+    request: Request,
+    property_id: int,
+    image: Annotated[UploadFile, File()],
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """上传一张房间照片，排在最后。"""
+    administrator = await _current_admin(request)
+    await _consume_csrf(request, property_id, csrf_token)
+    try:
+        await _get_service(request).add_showcase_photo(
+            property_id,
+            administrator,
+            image.file,
+            image.content_type or "application/octet-stream",
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        _raise_page_error(error)
+    finally:
+        await image.close()
+    return RedirectResponse(
+        await _with_source(request, _showcase_target(property_id) + "#showcase-photos"),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{property_id}/showcase/photos/order")
+async def reorder_room_showcase_photos(
+    request: Request,
+    property_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """按提交的 order_<照片编号> 字段整体更新排序。"""
+    administrator = await _current_admin(request)
+    await _consume_csrf(request, property_id, csrf_token)
+    form = await request.form()
+    orders: dict[int, str] = {}
+    for key, value in form.multi_items():
+        if key.startswith("order_") and key[6:].isdigit() and isinstance(value, str):
+            orders[int(key[6:])] = value
+    if len(orders) > MAX_PHOTOS_PER_ROOM:
+        raise HTTPException(status_code=400, detail="照片数量超出上限")
+    try:
+        await _get_service(request).reorder_showcase_photos(property_id, administrator, orders)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        await _with_source(request, _showcase_target(property_id) + "#showcase-photos"),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{property_id}/showcase/photos/{photo_id}/delete")
+async def delete_room_showcase_photo(
+    request: Request,
+    property_id: int,
+    photo_id: int,
+    csrf_token: str = Form(min_length=1, max_length=128),
+) -> RedirectResponse:
+    """删除一张房间照片，文件由清理任务删除。"""
+    administrator = await _current_admin(request)
+    await _consume_csrf(request, property_id, csrf_token)
+    try:
+        await _get_service(request).delete_showcase_photo(property_id, administrator, photo_id)
+    except Exception as error:
+        _raise_page_error(error)
+    return RedirectResponse(
+        await _with_source(request, _showcase_target(property_id) + "#showcase-photos"),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/{property_id}/showcase/photos/{photo_id}")
+async def view_room_showcase_photo(request: Request, property_id: int, photo_id: int) -> Response:
+    """后台预览房间照片：管理员可看尚未展示的房间。"""
+    administrator = await _current_admin(request)
+    try:
+        stored = await _get_service(request).showcase_photo_for(
+            property_id, administrator, photo_id
+        )
     except Exception as error:
         _raise_page_error(error)
     response = FileResponse(stored.path, media_type=stored.content_type, filename=None)

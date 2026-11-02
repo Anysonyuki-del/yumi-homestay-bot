@@ -13,6 +13,7 @@
       {{ ui.badge("指定房间：" ~ (owner.title if owner else "房间 " ~ entry.property_id), "info") }}
     {% else %}{{ ui.badge(scope_labels.get(entry.scope, entry.scope), "info") }}{% endif %}
   {% endif %}
+  {% if entry.show_in_miniprogram %}{{ ui.badge("小程序展示", "info") }}{% endif %}
 </div>
 {% if entry.valid_from or entry.valid_until %}<p class="field-help">有效期：{{ entry.valid_from or "不限" }} 至 {{ entry.valid_until or "不限" }}（按客人所问的日期判断是否适用）</p>{% endif %}
 {% if entry.trigger_any %}<p class="field-help">附加条件词：{{ entry.trigger_any | join("、") }}</p>{% endif %}

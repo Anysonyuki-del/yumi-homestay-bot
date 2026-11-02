@@ -52,6 +52,7 @@ class EntryStub:
     valid_until: date | None = None
     trigger_any: list[str] | None = None
     trigger_exclude: list[str] | None = None
+    show_in_miniprogram: bool = False
 
 
 @dataclass
@@ -1010,6 +1011,31 @@ def test_knowledge_scope_dates_survive_form_save_and_edit_render():
     assert 'value="global" selected' in rendered
     assert 'name="valid_from" value="2026-09-25"' in rendered
     assert 'name="valid_until" value="2026-09-30"' in rendered
+
+
+def test_miniprogram_checkbox_saves_and_unchecking_clears_it() -> None:
+    """勾选后保存为展示并在编辑页回显；复选框未提交即视为取消展示，不保留旧值。"""
+    client, service = build_client(EmployeeRole.ADMIN)
+    form = {
+        "category": "入住",
+        "question_zh": "几点入住？",
+        "answer_zh": "下午三点后。",
+        "question_en": "Check-in time?",
+        "answer_en": "After 3 PM.",
+        "scope": "global",
+    }
+    token = _token(client.get("/employee/knowledge/1").text)
+    client.post(
+        "/employee/knowledge/1/edit",
+        data={**form, "show_in_miniprogram": "1", "csrf_token": token},
+    )
+    assert service.entries[0].show_in_miniprogram is True
+    rendered = client.get("/employee/knowledge/1").text
+    assert re.search(r'name="show_in_miniprogram" value="1"\s+checked', rendered)
+
+    token = _token(rendered)
+    client.post("/employee/knowledge/1/edit", data={**form, "csrf_token": token})
+    assert service.entries[0].show_in_miniprogram is False
 
 
 def _token(html: str) -> str:

@@ -1,3 +1,17 @@
+# 本地实现完成：小程序住客自助（房间介绍 + 入住指南）（2026-11-03）
+
+依据：`docs/specs/2026-11-03_miniprogram-guest-guide-spec.md`。用户 2026-11-03 回复「开始」。分支 `feat/miniprogram-guest-guide`，只做本地实现与离线验证。
+
+- [x] F1：知识条目新增「在小程序展示」开关，迁移 `0037_miniprogram_showcase`；新增 `GET /api/miniprogram/guide`
+- [x] F2：新增 `room_showcases`、`room_showcase_photos` 两张表；`RoomShowcaseAdminService` 负责后台写入；房间详情页新增「小程序展示」页签，支持文字、照片上传、排序和删除
+- [x] F3：新增 `GET /api/miniprogram/rooms`、`/rooms/{id}` 和照片读取接口；只有成功的照片响应可缓存
+- [x] F4：`services/image_metadata.py` 去掉 JPEG、PNG 元数据和 JPEG EOI 之后的附加数据
+- [x] F5：小程序删除模板页，新增房间列表、详情、入住指南三页（TDesign 1.17.0）和「问管家」按钮
+- [x] 验证：相关 91 passed，Node 25 项，7 处变异都能被测试抓到；Ruff、Mypy 通过；全量（不含 `tests/browser`）3505 passed、84 skipped
+- [ ] `tests/browser` 本机缺 Playwright Chromium，未跑；后台新页签需 CI 或人工确认
+- [ ] 待用户提供：企业 ID、客服链接、导航栏民宿名；微信客服绑定小程序；`npm install` 后在开发者工具「构建 npm」
+- [ ] 提交、推送、1.72.0 版本与发布记录、部署，均需单独授权
+
 # 本地实现完成：微信小程序基础登录（2026-10-29）
 
 依据：`docs/specs/2026-10-29_wechat-miniprogram-login-spec.md`（D1 按钮登录、按需搭建；D2 密钥走环境变量）；用户 2026-10-29「确认，开始」。只做本地实现与离线验证，不提交、不部署、不调用真实微信。
