@@ -1,0 +1,37 @@
+<import src="../../templates/state.wxml" />
+<view class="page">
+  <view wx:if="{{status === 'loading'}}" aria-label="正在加载首页">
+    <view class="banner banner--placeholder"></view>
+    <view class="room-skeleton" wx:for="{{[1, 2, 3]}}" wx:key="*this">
+      <view class="room__cover"></view>
+      <view class="room-skeleton__lines">
+        <view class="room-skeleton__line room-skeleton__line--title"></view>
+        <view class="room-skeleton__line"></view>
+        <view class="room-skeleton__line room-skeleton__line--long"></view>
+      </view>
+    </view>
+  </view>
+  <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '首页没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
+  <block wx:else>
+    <!-- 横幅只做展示，点击不跳转（Spec D4）；一张时不轮播、不显示圆点。 -->
+    <t-swiper wx:if="{{banners.length}}" class="banner" list="{{banners}}" height="386rpx" autoplay="{{banners.length > 1}}" navigation="{{banners.length > 1 ? swiperNavigation : false}}" />
+    <view wx:if="{{store.name || store.intro}}" class="store">
+      <text wx:if="{{store.name}}" class="store__name">{{store.name}}</text>
+      <text wx:if="{{store.intro}}" class="store__intro">{{store.intro}}</text>
+    </view>
+    <text class="section-title rooms-title">房间</text>
+    <template wx:if="{{status === 'empty'}}" is="state" data="{{title: '房间介绍正在准备', body: '想了解房型、床型或入住安排，可以直接问管家。', actionText: '问管家', actionIcon: 'chat'}}" />
+    <block wx:else>
+      <view class="room" wx:for="{{rooms}}" wx:key="id" data-id="{{item.id}}" bindtap="openRoom" hover-class="room--pressed" hover-stay-time="80" aria-role="button" aria-label="查看{{item.name}}">
+        <image wx:if="{{item.cover}}" class="room__cover" src="{{item.cover}}" mode="aspectFill" lazy-load />
+        <view wx:else class="room__cover room__cover--empty"><text>照片整理中</text></view>
+        <view class="room__body">
+          <text class="room__name">{{item.name}}</text>
+          <text wx:if="{{item.specLine}}" class="spec-line">{{item.specLine}}</text>
+          <text wx:if="{{item.summary}}" class="room__summary">{{item.summary}}</text>
+        </view>
+      </view>
+      <view class="ask-host"><t-button theme="primary" shape="round" icon="chat" bind:tap="askHost">问管家</t-button></view>
+    </block>
+  </block>
+</view>

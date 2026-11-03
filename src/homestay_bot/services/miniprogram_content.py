@@ -1,4 +1,4 @@
-"""小程序住客自助的公开只读内容：入住指南与房间介绍（小程序住客自助 Spec F1、F3）。
+"""小程序住客自助的公开只读内容：入住指南、房间介绍与首页（住客自助 Spec F1、F3，三标签 Spec F4）。
 
 这里的结果会返回给任何打开小程序的人，因此只做白名单式输出：每个函数只取
 Spec 列出的字段，不把 ORM 对象或运营字段交给路由。
@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from homestay_bot.domain.models import (
     KnowledgeEntry,
+    MiniProgramBanner,
+    MiniProgramStoreProfile,
     PropertyProfile,
     RoomShowcase,
     RoomShowcasePhoto,
@@ -22,6 +24,8 @@ from homestay_bot.services.private_file_storage import PrivateFileStorage, Store
 
 # 入住指南最多返回的条目数；超出部分截断不报错，避免公开接口返回无界列表。
 GUIDE_MAX_ITEMS = 200
+# 首页房间卡片的简介摘要长度；超出部分用省略号收尾，完整简介在详情页。
+ROOM_SUMMARY_CHARS = 60
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
@@ -56,6 +60,37 @@ class RoomCard:
     max_guests: int | None
     area_sqm: int | None
     cover_photo_id: int | None
+    summary: str | None
+
+
+@dataclass(frozen=True)
+class StoreInfo:
+    """门店公开信息；只含管理员主动填写、会公开显示的字段。"""
+
+    name: str | None
+    intro: str | None
+    address: str | None
+    latitude: float | None
+    longitude: float | None
+    phone: str | None
+
+
+@dataclass(frozen=True)
+class HomeContent:
+    """首页：门店信息（全部未填时为 None）与按排序的横幅编号。"""
+
+    store: StoreInfo | None
+    banner_ids: tuple[int, ...]
+
+
+def _summary(intro: str | None) -> str | None:
+    """取简介首段并截断为摘要；简介为空时返回 None。"""
+    if not intro or not intro.strip():
+        return None
+    text = " ".join(intro.split())
+    if len(text) <= ROOM_SUMMARY_CHARS:
+        return text
+    return text[:ROOM_SUMMARY_CHARS].rstrip() + "…"
 
 
 @dataclass(frozen=True)
@@ -178,6 +213,50 @@ class MiniProgramContentService:
             # 记录还在但文件已被清理（如删除后的清理任务先跑完），按不存在处理。
             return None
 
+    async def home(self) -> HomeContent:
+        """首页数据：门店信息与横幅编号。"""
+        async with self._factory() as session:
+            profile = await session.get(MiniProgramStoreProfile, 1)
+            banner_ids = tuple(
+                (
+                    await session.scalars(
+                        select(MiniProgramBanner.id).order_by(
+                            MiniProgramBanner.sort_order, MiniProgramBanner.id
+                        )
+                    )
+                ).all()
+            )
+        store = None
+        if profile is not None:
+            store = StoreInfo(
+                name=profile.name,
+                intro=profile.intro,
+                address=profile.address,
+                latitude=profile.latitude,
+                longitude=profile.longitude,
+                phone=profile.phone,
+            )
+            # 一项都没填时当作未配置，小程序据此隐藏门店标题区。
+            if not any(
+                value is not None
+                for value in (store.name, store.intro, store.address, store.latitude, store.phone)
+            ):
+                store = None
+        return HomeContent(store=store, banner_ids=banner_ids)
+
+    async def banner(self, banner_id: int) -> StoredPrivateFile | None:
+        """只按横幅记录编号读取文件，绝不按外部传入的文件编号读文件。"""
+        async with self._factory() as session:
+            file_id = await session.scalar(
+                select(MiniProgramBanner.file_id).where(MiniProgramBanner.id == banner_id)
+            )
+        if file_id is None:
+            return None
+        try:
+            return self._storage.open_for_read(file_id)
+        except LookupError:
+            return None
+
     @staticmethod
     async def _photo_ids(
         session: AsyncSession, property_ids: list[int]
@@ -207,4 +286,5 @@ class MiniProgramContentService:
             max_guests=showcase.max_guests,
             area_sqm=showcase.area_sqm,
             cover_photo_id=photo_ids[0] if photo_ids else None,
+            summary=_summary(showcase.intro),
         )

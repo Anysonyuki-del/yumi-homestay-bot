@@ -1,15 +1,74 @@
-/** 全局样式：浅灰底、白色卡片，页面底部为悬浮按钮或固定操作栏留出空间。 */
+/**
+ * 全局样式：沿用后台暖色主题（DESIGN.md 暖色 v6）——奶油纸底、暖奶油分层、珊瑚动作、宋体标题。
+ * 色值与后台令牌一一对应；珊瑚按钮配深墨字（白字对比度不足 4.5:1）。
+ * 宋体在没有中文衬线字体的手机上回落为系统黑体，按 DESIGN.md 接受这种差异，不下载字体。
+ */
 page {
-  background: #f5f5f5;
-  color: #1a1a1a;
+  --yumi-canvas: #faf9f5;
+  --yumi-surface: #efe9de;
+  --yumi-surface-soft: #f5f0e8;
+  --yumi-ink: #141413;
+  --yumi-body: #3d3d3a;
+  --yumi-muted: #6c6a64;
+  --yumi-hairline: #e6dfd8;
+  --yumi-primary: #cc785c;
+  --yumi-primary-pressed: #b8664b;
+  --yumi-primary-deep: #a9583e;
+  --yumi-serif: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
+
+  /* TDesign 主色阶换成珊瑚：7 为主色，8 为按下，1/2 为浅底。 */
+  --td-primary-color-1: #faf1ec;
+  --td-primary-color-2: #f3ddd2;
+  --td-primary-color-3: #e9c0ad;
+  --td-primary-color-4: #dda186;
+  --td-primary-color-5: #d48a6d;
+  --td-primary-color-6: #d07f63;
+  --td-primary-color-7: #cc785c;
+  --td-primary-color-8: #b8664b;
+  --td-primary-color-9: #a9583e;
+  --td-primary-color-10: #5e2f21;
+  --td-brand-color: #cc785c;
+  --td-brand-color-active: #b8664b;
+  --td-brand-color-light: #faf1ec;
+  --td-button-primary-color: #141413;
+  --td-button-primary-outline-color: #a9583e;
+  --td-button-primary-outline-border-color: #a9583e;
+  --td-bg-color-page: #faf9f5;
+  --td-text-color-primary: #141413;
+  --td-text-color-secondary: #3d3d3a;
+  --td-text-color-placeholder: #6c6a64;
+  --td-skeleton-bg-color: #efe9de;
+  --td-collapse-panel-bg-color: #f5f0e8;
+  --td-collapse-border-color: #e6dfd8;
+  --td-collapse-header-text-color: #141413;
+  --td-collapse-content-text-color: #3d3d3a;
+  --td-collapse-icon-color: #6c6a64;
+  --td-swiper-nav-fraction-bg-color: rgba(20, 20, 19, 0.55);
+
+  background: var(--yumi-canvas);
+  color: var(--yumi-body);
   font-size: 28rpx;
+  line-height: 1.6;
 }
-.page { padding: 24rpx 24rpx 200rpx; box-sizing: border-box; }
+
+/* 页面内容区；底部为悬浮按钮或固定操作栏留出空间，避免遮住最后一项。 */
+.page { padding: 32rpx 32rpx 200rpx; box-sizing: border-box; }
 .page--with-bar { padding-bottom: 220rpx; }
-.card { background: #ffffff; border-radius: 16rpx; padding: 24rpx; margin-bottom: 24rpx; }
-.state { display: flex; flex-direction: column; align-items: center; gap: 24rpx; padding: 120rpx 0; }
-.specs { display: flex; flex-wrap: wrap; gap: 12rpx; }
-.section-title { display: block; font-size: 30rpx; font-weight: 600; margin-bottom: 16rpx; }
-.body-text { font-size: 28rpx; line-height: 1.7; color: #333333; white-space: pre-wrap; }
-.ask-host { position: fixed; right: 32rpx; bottom: calc(32rpx + env(safe-area-inset-bottom)); z-index: 10; }
-.bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom)); background: #ffffff; box-shadow: 0 -2rpx 12rpx rgba(0, 0, 0, 0.06); z-index: 10; }
+
+.serif { font-family: var(--yumi-serif); font-weight: 400; }
+.section-title { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: 34rpx; line-height: 1.3; color: var(--yumi-ink); margin-bottom: 20rpx; }
+.body-text { font-size: 30rpx; line-height: 1.8; color: var(--yumi-body); white-space: pre-wrap; }
+.spec-line { font-size: 26rpx; line-height: 1.5; color: var(--yumi-muted); }
+
+/* 加载、空、出错、下架共用的状态块：标题 + 说明 + 一个动作，居中排在首屏上半部。 */
+.state { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 160rpx 48rpx 0; }
+.state__mark { width: 96rpx; height: 2rpx; background: var(--yumi-primary); margin-bottom: 48rpx; }
+.state__title { font-family: var(--yumi-serif); font-weight: 400; font-size: 40rpx; line-height: 1.35; color: var(--yumi-ink); }
+.state__body { margin-top: 20rpx; font-size: 28rpx; line-height: 1.7; color: var(--yumi-muted); max-width: 520rpx; }
+.state__action { margin-top: 56rpx; }
+
+/* 「问管家」悬浮按钮：紧凑胶囊，靠右下；只在有内容时出现。 */
+.ask-host { position: fixed; right: 32rpx; bottom: calc(40rpx + env(safe-area-inset-bottom)); z-index: 10; border-radius: 999rpx; box-shadow: 0 8rpx 28rpx rgba(20, 20, 19, 0.16); }
+
+/* 详情页底部操作栏：奶油底 + 细分隔线，不加阴影。 */
+.bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom)); background: var(--yumi-canvas); border-top: 1rpx solid var(--yumi-hairline); z-index: 10; }

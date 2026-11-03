@@ -1,3 +1,18 @@
+# 本地实现完成：小程序三标签改版（首页 · 服务 · 我的）第一期（2026-11-03）
+
+依据：`docs/specs/2026-11-03_miniprogram-three-tabs-spec.md`（第一期 F1–F6，D1–D5）。用户 2026-11-03 回复「开始」。分支 `feat/miniprogram-warm-ui`（在暖色改版基础上继续），只做本地实现与离线验证。
+
+- [x] F4 后端：`MiniProgramStoreProfile`、`MiniProgramBanner` 两张表与迁移 `0038_miniprogram_home`；`services/miniprogram_home_admin.py`；后台「小程序首页」页面（`routes/miniprogram_admin.py`、`templates/admin/miniprogram_home.html`、左侧导航）；公开接口 `GET /api/miniprogram/home`、`/banners/{id}`；房间列表加 `summary`
+- [x] F1/F2：三标签与首页（横幅、门店标题区、左图右文房间卡片）
+- [x] F3：服务宫格与分类问答页
+- [x] F5：我的页（登录/退出、联系管家、关于本店、我的订单提示）与关于页
+- [x] 坐标 CHECK 约束修正（临时 PostgreSQL 上发现只填纬度能通过），见 Spec 实施记录
+- [x] 验证：集成 13 + 摘要 1 + 迁移 1 + 后台页面浏览器 1；Node 35；变异后端 10、小程序 12、后台页面 1 处都被抓到；迁移在临时 PostgreSQL 上升降级通过；Ruff、Mypy 通过；本地全量（含 `tests/browser`，约束修正后重跑）3701 passed、84 skipped（PostgreSQL 专项因未设 `YUMI_TEST_POSTGRES_URL` 跳过）
+- [x] 本地提交（用户 2026-11-03「提交但不推送」），含暖色界面改版；未推送、未部署
+- [ ] 发布 1.73.0 需单独授权（先部署后端迁移到 0038，再上传小程序）
+- [ ] 待用户：开发者工具「构建 npm」后预览核对三个标签；后台填写门店信息和横幅；客服企业 ID 与链接
+- [ ] 第二期：我的订单（订单归属核对方案另写 Spec）
+
 # 本地实现完成：小程序住客自助（房间介绍 + 入住指南）（2026-11-03）
 
 依据：`docs/specs/2026-11-03_miniprogram-guest-guide-spec.md`。用户 2026-11-03 回复「开始」。分支 `feat/miniprogram-guest-guide`，只做本地实现与离线验证。

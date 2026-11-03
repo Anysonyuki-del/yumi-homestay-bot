@@ -1,0 +1,28 @@
+<import src="../../templates/state.wxml" />
+<view class="page">
+  <view wx:if="{{status === 'loading'}}" aria-label="正在加载门店信息"><t-skeleton row-col="{{skeletonRows}}" loading /></view>
+  <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '门店信息没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
+  <template wx:elif="{{status === 'empty'}}" is="state" data="{{title: '门店介绍正在整理', body: '地址、交通和联系方式，可以先问管家。', actionText: '问管家', actionIcon: 'chat'}}" />
+  <block wx:else>
+    <text wx:if="{{store.name}}" class="about__name">{{store.name}}</text>
+    <text wx:if="{{store.intro}}" class="body-text about__intro" user-select>{{store.intro}}</text>
+    <view class="facts">
+      <view wx:if="{{store.address}}" class="fact" bindtap="openMap" hover-class="{{store.location ? 'fact--pressed' : 'none'}}" hover-stay-time="80" aria-role="{{store.location ? 'button' : 'text'}}">
+        <t-icon name="location" size="44rpx" color="#a9583e" />
+        <view class="fact__text">
+          <text class="fact__label">地址</text>
+          <text class="fact__value" user-select>{{store.address}}</text>
+        </view>
+        <text wx:if="{{store.location}}" class="fact__action">导航</text>
+      </view>
+      <view wx:if="{{store.phone}}" class="fact" bindtap="callStore" hover-class="fact--pressed" hover-stay-time="80" aria-role="button">
+        <t-icon name="call" size="44rpx" color="#a9583e" />
+        <view class="fact__text">
+          <text class="fact__label">电话</text>
+          <text class="fact__value">{{store.phone}}</text>
+        </view>
+        <text class="fact__action">拨打</text>
+      </view>
+    </view>
+  </block>
+</view>

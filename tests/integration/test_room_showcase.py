@@ -178,6 +178,7 @@ def test_saved_room_is_public_with_whitelisted_fields(world: World) -> None:
             "max_guests": 2,
             "area_sqm": 35,
             "cover_url": None,
+            "summary": "朝南，有阳台。",
         }
     ]
     detail = world.client.get("/api/miniprogram/rooms/101")
@@ -189,6 +190,16 @@ def test_saved_room_is_public_with_whitelisted_fields(world: World) -> None:
     for leaked in ("合成地址提示", "合成停车说明", '301"'):
         assert leaked not in detail.text
     assert detail.headers["cache-control"] == "no-store"
+
+
+def test_room_summary_collapses_whitespace_and_truncates(world: World) -> None:
+    """首页卡片摘要：多行合成一行，超过 60 字截断加省略号；没有简介时为 null。"""
+    world.save(property_id=102)
+    world.save(intro="第一行\n\n" + "长" * 70)
+    listed = world.client.get("/api/miniprogram/rooms").json()["rooms"]
+    rooms = {room["id"]: room for room in listed}
+    assert rooms[101]["summary"] == "第一行 " + "长" * 56 + "…"
+    assert rooms[102]["summary"] is None
 
 
 def test_display_name_overrides_title(world: World) -> None:

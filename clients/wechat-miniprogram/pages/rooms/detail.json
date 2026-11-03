@@ -2,9 +2,7 @@
   "navigationBarTitleText": "房间详情",
   "usingComponents": {
     "t-button": "tdesign-miniprogram/button/button",
-    "t-empty": "tdesign-miniprogram/empty/empty",
     "t-skeleton": "tdesign-miniprogram/skeleton/skeleton",
-    "t-swiper": "tdesign-miniprogram/swiper/swiper",
-    "t-tag": "tdesign-miniprogram/tag/tag"
+    "t-swiper": "tdesign-miniprogram/swiper/swiper"
   }
 }

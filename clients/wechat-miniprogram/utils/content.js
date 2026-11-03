@@ -1,4 +1,4 @@
-// 公开内容请求：房间列表、房间详情、入住指南（小程序住客自助 Spec F5）。
+// 公开内容请求：首页、房间列表、房间详情、入住指南（小程序住客自助 Spec F5，三标签 Spec F2–F5）。
 // 这些接口不需要登录；返回结构不符时一律按加载失败处理，不把服务器原文显示给客人。
 
 const { API_BASE_URL } = require('./auth')
@@ -49,6 +49,7 @@ function toRoomCard(item) {
     !item || typeof item.id !== 'number' || !isString(item.name)
     || !isOptionalString(item.bed_type) || !isOptionalNumber(item.max_guests)
     || !isOptionalNumber(item.area_sqm) || !isOptionalString(item.cover_url)
+    || !isOptionalString(item.summary)
   ) {
     throw new ContentError(LOAD_FAILED)
   }
@@ -59,6 +60,7 @@ function toRoomCard(item) {
     maxGuests: item.max_guests,
     areaSqm: item.area_sqm,
     cover: item.cover_url ? absoluteUrl(item.cover_url) : '',
+    summary: item.summary || '',
   }
 }
 
@@ -96,6 +98,35 @@ async function fetchRoom(id) {
   }
 }
 
+const STORE_TEXT_FIELDS = ['name', 'intro', 'address', 'phone']
+
+// 首页：门店公开信息（后台没填为 null）与横幅图片地址。坐标只在经纬度都是数字时保留，
+// 页面据此决定是否提供导航。
+async function fetchHome() {
+  const body = await getJson('/api/miniprogram/home')
+  const { store, banners } = body
+  if (!Array.isArray(banners) || !banners.every(isString)) throw new ContentError(LOAD_FAILED)
+  if (store !== null && (
+    !store || typeof store !== 'object'
+    || !STORE_TEXT_FIELDS.every((key) => isOptionalString(store[key]))
+    || !isOptionalNumber(store.latitude) || !isOptionalNumber(store.longitude)
+  )) {
+    throw new ContentError(LOAD_FAILED)
+  }
+  return {
+    store: store && {
+      name: store.name || '',
+      intro: store.intro || '',
+      address: store.address || '',
+      phone: store.phone || '',
+      location: typeof store.latitude === 'number' && typeof store.longitude === 'number'
+        ? { latitude: store.latitude, longitude: store.longitude }
+        : null,
+    },
+    banners: banners.map(absoluteUrl).filter(Boolean),
+  }
+}
+
 // 入住指南：分类分组的问答。
 async function fetchGuide() {
   const body = await getJson('/api/miniprogram/guide')
@@ -114,7 +145,7 @@ async function fetchGuide() {
   })
 }
 
-// 三个页面共用的加载流程：每次加载领取新代次，结果返回时代次已变（重新加载或页面卸载）
+// 各页面共用的加载流程：每次加载领取新代次，结果返回时代次已变（重新加载或页面卸载）
 // 就丢弃，避免迟到的旧结果覆盖新内容。toReadyData 把结果转成页面数据。
 async function loadPageData(page, fetcher, toReadyData) {
   page.loadGeneration = (page.loadGeneration || 0) + 1
@@ -143,6 +174,7 @@ module.exports = {
   fetchRooms,
   fetchRoom,
   fetchGuide,
+  fetchHome,
   loadPageData,
   discardPendingLoads,
 }

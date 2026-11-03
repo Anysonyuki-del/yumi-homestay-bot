@@ -1,4 +1,4 @@
-"""小程序住客自助的公开只读接口（小程序住客自助 Spec F1、F3），不需要登录。"""
+"""小程序住客自助的公开只读接口（住客自助 Spec F1、F3，三标签 Spec F4），不需要登录。"""
 
 import logging
 from typing import Protocol, cast
@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from homestay_bot.services.miniprogram_content import (
     GuideSection,
+    HomeContent,
     RoomCard,
     RoomDetail,
 )
@@ -31,6 +32,12 @@ class MiniProgramContentPort(Protocol):
 
     async def photo(self, property_id: int, photo_id: int) -> StoredPrivateFile | None:
         """返回可见房间的一张照片。"""
+
+    async def home(self) -> HomeContent:
+        """返回首页门店信息与横幅。"""
+
+    async def banner(self, banner_id: int) -> StoredPrivateFile | None:
+        """返回一张首页横幅。"""
 
 
 # 照片文件不可变：替换照片会生成新编号，所以允许客户端和中间层缓存一天（Spec D1）。
@@ -69,6 +76,7 @@ def _card_json(card: RoomCard) -> dict[str, object]:
         "cover_url": (
             _photo_url(card.id, card.cover_photo_id) if card.cover_photo_id is not None else None
         ),
+        "summary": card.summary,
     }
 
 
@@ -148,21 +156,68 @@ async def read_room(request: Request, property_id: int) -> JSONResponse:
 async def read_room_photo(request: Request, property_id: int, photo_id: int) -> Response:
     """返回可见房间的照片文件；路径只含数字编号，文件位置由数据库关系决定。"""
     service = _service(request)
-    failure: JSONResponse | None = None
-    stored: StoredPrivateFile | None = None
     if service is None:
-        failure = _unavailable()
-    else:
-        try:
-            stored = await service.photo(property_id, photo_id)
-        except Exception as error:
-            logger.warning("小程序房间照片读取失败：error=%s", type(error).__name__)
-            failure = _unavailable()
-        if failure is None and stored is None:
-            failure = _not_found()
+        return _public_file(None, _unavailable())
+    try:
+        stored = await service.photo(property_id, photo_id)
+    except Exception as error:
+        logger.warning("小程序房间照片读取失败：error=%s", type(error).__name__)
+        return _public_file(None, _unavailable())
+    return _public_file(stored, None)
+
+
+@router.get("/home")
+async def read_home(request: Request) -> JSONResponse:
+    """首页：门店公开信息（未配置为 null）与横幅地址列表。"""
+    service = _service(request)
+    if service is None:
+        return _unavailable()
+    try:
+        home = await service.home()
+    except Exception as error:
+        logger.warning("小程序首页读取失败：error=%s", type(error).__name__)
+        return _unavailable()
+    store = home.store
+    return JSONResponse(
+        {
+            "store": (
+                None
+                if store is None
+                else {
+                    "name": store.name,
+                    "intro": store.intro,
+                    "address": store.address,
+                    "latitude": store.latitude,
+                    "longitude": store.longitude,
+                    "phone": store.phone,
+                }
+            ),
+            "banners": [f"/api/miniprogram/banners/{banner_id}" for banner_id in home.banner_ids],
+        }
+    )
+
+
+@router.get("/banners/{banner_id}")
+async def read_banner(request: Request, banner_id: int) -> Response:
+    """返回一张首页横幅文件；文件位置由横幅记录决定。"""
+    service = _service(request)
+    if service is None:
+        return _public_file(None, _unavailable())
+    try:
+        stored = await service.banner(banner_id)
+    except Exception as error:
+        logger.warning("小程序首页横幅读取失败：error=%s", type(error).__name__)
+        return _public_file(None, _unavailable())
+    return _public_file(stored, None)
+
+
+def _public_file(stored: StoredPrivateFile | None, failure: JSONResponse | None) -> Response:
+    """公开图片响应：成功可缓存一天；失败显式 no-store。
+
+    图片路径不经过统一的 no-store 中间件；失败结果不能被缓存，否则内容重新上架后
+    客户端仍会拿到旧的 404。
+    """
     if failure is not None or stored is None:
-        # 照片路径不经过统一的 no-store 中间件；失败结果不能被缓存，否则房间重新上架后
-        # 客户端仍会拿到旧的 404。
         rejected = failure or _not_found()
         rejected.headers["Cache-Control"] = "no-store"
         return rejected

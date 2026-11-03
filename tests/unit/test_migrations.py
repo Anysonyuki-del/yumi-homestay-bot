@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
@@ -890,3 +891,59 @@ def test_sqlite_miniprogram_showcase_migration_is_reversible(
     reupgrade = run_alembic("upgrade", "head")
     assert reupgrade.returncode == 0, reupgrade.stderr
     assert showcase_tables <= schema()[0]
+
+
+def test_sqlite_miniprogram_home_migration_is_reversible(tmp_path: Path) -> None:
+    """0038 升级建门店信息与横幅两张表并预置唯一门店行；降级只删这两张表，之后可再次升级。"""
+    project_root = Path(__file__).resolve().parents[2]
+    database_path = tmp_path / "home.db"
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = f"sqlite+aiosqlite:///{database_path}"
+
+    def run_alembic(*arguments: str) -> subprocess.CompletedProcess[str]:
+        """在隔离数据库执行一次 Alembic 命令。"""
+        return subprocess.run(
+            _alembic_command(*arguments),
+            cwd=project_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def tables() -> set[str]:
+        """读取当前表名集合。"""
+        with sqlite3.connect(database_path) as connection:
+            return {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+
+    home_tables = {"miniprogram_store_profile", "miniprogram_banners"}
+    upgrade = run_alembic("upgrade", "head")
+    assert upgrade.returncode == 0, upgrade.stderr
+    assert home_tables <= tables()
+    with sqlite3.connect(database_path) as connection:
+        # 后台写操作都锁这一行，迁移必须预置且只预置一行空资料。
+        assert connection.execute(
+            "SELECT id, name, latitude FROM miniprogram_store_profile"
+        ).fetchall() == [(1, None, None)]
+        # 只有一个坐标、坐标越界、第二行门店都要被数据库拒绝。
+        for statement in (
+            "UPDATE miniprogram_store_profile SET latitude = 30 WHERE id = 1",
+            "UPDATE miniprogram_store_profile SET latitude = 91, longitude = 120 WHERE id = 1",
+            "INSERT INTO miniprogram_store_profile (id) VALUES (2)",
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(statement)
+
+    downgrade = run_alembic("downgrade", "0037_miniprogram_showcase")
+    assert downgrade.returncode == 0, downgrade.stderr
+    assert home_tables.isdisjoint(tables())
+    assert "room_showcases" in tables()
+
+    reupgrade = run_alembic("upgrade", "head")
+    assert reupgrade.returncode == 0, reupgrade.stderr
+    assert home_tables <= tables()

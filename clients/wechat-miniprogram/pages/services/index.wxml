@@ -1,0 +1,27 @@
+<import src="../../templates/state.wxml" />
+<view class="page">
+  <view wx:if="{{status === 'loading'}}" class="grid" aria-label="正在加载服务">
+    <view class="grid__cell" wx:for="{{[1, 2, 3, 4]}}" wx:key="*this">
+      <view class="grid__icon"></view>
+      <view class="grid__label-placeholder"></view>
+    </view>
+  </view>
+  <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '服务没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
+  <template wx:elif="{{status === 'empty'}}" is="state" data="{{title: '入住指南正在整理', body: '入住时间、Wi-Fi 这类问题，可以先问管家。', actionText: '问管家', actionIcon: 'chat'}}" />
+  <block wx:else>
+    <text class="section-title">入住服务</text>
+    <view class="grid">
+      <view class="grid__cell" wx:for="{{categories}}" wx:key="name" data-name="{{item.name}}" bindtap="openCategory" hover-class="grid__cell--pressed" hover-stay-time="80" aria-role="button" aria-label="{{item.name}}">
+        <view class="grid__icon"><t-icon name="{{item.icon}}" size="48rpx" color="#a9583e" /></view>
+        <text class="grid__label">{{item.name}}</text>
+      </view>
+    </view>
+    <view class="contact" bindtap="askHost" hover-class="contact--pressed" hover-stay-time="80" aria-role="button" aria-label="联系管家">
+      <view class="contact__text">
+        <text class="contact__title">联系管家</text>
+        <text class="contact__body">没找到想问的，直接问管家。</text>
+      </view>
+      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+    </view>
+  </block>
+</view>

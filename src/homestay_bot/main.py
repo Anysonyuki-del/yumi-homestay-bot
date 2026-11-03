@@ -23,6 +23,7 @@ from homestay_bot.routes.health import router as health_router
 from homestay_bot.routes.hostex_webhook import router as hostex_webhook_router
 from homestay_bot.routes.knowledge import router as knowledge_router
 from homestay_bot.routes.knowledge_referrals import router as knowledge_referrals_router
+from homestay_bot.routes.miniprogram_admin import router as miniprogram_admin_router
 from homestay_bot.routes.miniprogram_auth import router as miniprogram_auth_router
 from homestay_bot.routes.miniprogram_content import router as miniprogram_content_router
 from homestay_bot.routes.page_errors import handle_http_exception, handle_operation_refused
@@ -87,6 +88,7 @@ app.include_router(customers_router)
 app.include_router(complaints_router)
 app.include_router(miniprogram_auth_router)
 app.include_router(miniprogram_content_router)
+app.include_router(miniprogram_admin_router)
 app.include_router(health_router)
 app.mount(
     "/static",

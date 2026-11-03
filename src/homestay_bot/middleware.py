@@ -10,9 +10,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 NO_STORE_PATH_PREFIXES = ("/employee", "/api/miniprogram")
 
 
-# 唯一豁免：小程序公开房间照片。文件不可变（替换会生成新编号），且只读取已公开房间的
-# 照片，由路由自行设置可缓存头（小程序住客自助 Spec D1）。只认这一种纯数字路径形态。
-_CACHEABLE_PUBLIC_PATH = re.compile(r"/api/miniprogram/rooms/\d+/photos/\d+")
+# 唯一豁免：小程序公开房间照片与首页横幅。文件不可变（替换会生成新编号），只读取已公开的
+# 内容，由路由自行设置可缓存头（住客自助 Spec D1、三标签 Spec F4）。只认这两种纯数字路径。
+_CACHEABLE_PUBLIC_PATH = re.compile(r"/api/miniprogram/(rooms/\d+/photos/\d+|banners/\d+)")
 
 
 def _requires_no_store(path: str) -> bool:

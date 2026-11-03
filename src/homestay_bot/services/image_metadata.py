@@ -7,9 +7,15 @@
 ponytail: 只剥离元数据，不压缩、不缩放；需要缩略图或压缩时再评估引入图像库。
 """
 
+import io
 import struct
+from typing import BinaryIO
 
-from homestay_bot.services.private_file_storage import InvalidPrivateFile
+from homestay_bot.services.private_file_storage import (
+    InvalidPrivateFile,
+    PrivateFileStorage,
+    StoredPrivateFile,
+)
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # 文本、EXIF 与时间块都可能含拍摄设备、地点或作者信息；其余块与图像显示有关，保留。
@@ -19,6 +25,29 @@ _JPEG_STANDALONE = frozenset({0x01, *range(0xD0, 0xD8)})
 _JPEG_SOS = 0xDA
 _JPEG_APP2 = 0xE2
 _JPEG_COM = 0xFE
+
+
+# 公开图片只收 JPG、PNG，单张不超过 2 MB；与知识图片同一口径。
+PUBLIC_IMAGE_TYPES = frozenset({"image/jpeg", "image/png"})
+PUBLIC_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+
+
+async def save_public_image(
+    storage: PrivateFileStorage, stream: BinaryIO, content_type: str, upload_limit: int
+) -> StoredPrivateFile:
+    """校验类型与大小、去掉元数据后落盘，房间照片与首页横幅共用。
+
+    只负责写文件；调用方登记数据库记录失败时须自行删除返回的文件，避免留下孤儿。
+    """
+    normalized_type = content_type.lower()
+    if normalized_type not in PUBLIC_IMAGE_TYPES:
+        raise ValueError("只支持 JPG 或 PNG 图片")
+    size_limit = min(upload_limit, PUBLIC_IMAGE_MAX_BYTES)
+    content = stream.read(size_limit + 1)
+    if len(content) > size_limit:
+        raise ValueError("图片大小超过限制")
+    cleaned = strip_image_metadata(content, normalized_type)
+    return await storage.save_image(io.BytesIO(cleaned), normalized_type, size_limit)
 
 
 def strip_image_metadata(content: bytes, content_type: str) -> bytes:
