@@ -27,7 +27,7 @@ Page({
   load() {
     return loadPageData(this, async () => {
       const section = (await fetchGuide()).find((item) => item.category === this.category)
-      if (!section) throw new ContentError(CATEGORY_GONE, 404)
+      if (!section) throw new ContentError(CATEGORY_GONE, 404, true)
       return section.items
     }, (items) => ({ status: 'ready', items }))
   },

@@ -6,12 +6,15 @@ const { API_BASE_URL } = require('./auth')
 const REQUEST_TIMEOUT_MS = 10000
 const LOAD_FAILED = '加载失败，请稍后重试'
 
-// 带分类的加载错误：页面只展示 message；statusCode 供调用方区分「已下架」。
+// 带分类的加载错误：页面只展示 message；statusCode 是接口状态码。
+// gone 只由调用方在确认「内容已下架」时设置：接口 404 也可能是后端版本较旧、还没有这个接口，
+// 那种情况必须按可重试的加载失败显示，不能当作下架。
 class ContentError extends Error {
-  constructor(message, statusCode = 0) {
+  constructor(message, statusCode = 0, gone = false) {
     super(message)
     this.name = 'ContentError'
     this.statusCode = statusCode
+    this.gone = gone
   }
 }
 
@@ -75,12 +78,12 @@ const ROOM_GONE = '房间不存在或已下架'
 
 // 房间详情；房间下架或不存在（404）时报「已下架」，与可重试的加载失败区分。
 async function fetchRoom(id) {
-  if (!/^\d+$/.test(String(id))) throw new ContentError(ROOM_GONE, 404)
+  if (!/^\d+$/.test(String(id))) throw new ContentError(ROOM_GONE, 404, true)
   let body
   try {
     body = await getJson(`/api/miniprogram/rooms/${id}`)
   } catch (error) {
-    if (error.statusCode === 404) throw new ContentError(ROOM_GONE, 404)
+    if (error.statusCode === 404) throw new ContentError(ROOM_GONE, 404, true)
     throw error
   }
   const card = toRoomCard(body)
@@ -158,7 +161,7 @@ async function loadPageData(page, fetcher, toReadyData) {
   } catch (error) {
     if (generation !== page.loadGeneration) return
     page.setData({
-      status: error && error.statusCode === 404 ? 'gone' : 'error',
+      status: error && error.gone ? 'gone' : 'error',
       message: (error instanceof ContentError && error.message) || LOAD_FAILED,
     })
   }

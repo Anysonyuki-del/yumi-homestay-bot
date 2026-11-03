@@ -341,3 +341,18 @@ test('关于页：没有坐标不打开地图；有坐标才导航；拨号只�
   await page.load()
   assert.equal(page.data.status, 'empty')
 })
+
+test('后端还没有首页接口（404）时，首页与关于页显示可重试的出错，不当作已下架', async () => {
+  // 现场：新版小程序先于后端 1.73.0 上线，/home 返回 404，首页曾落到空白内容区。
+  const routes = {
+    '/api/miniprogram/rooms': { statusCode: 200, data: { rooms: [] } },
+    '/api/miniprogram/home': { statusCode: 404, data: { detail: 'Not Found' } },
+  }
+  installWx(routes)
+  for (const pagePath of ['pages/home/index.js', 'pages/me/about.js']) {
+    const page = loadPage(pagePath)
+    await page.load()
+    assert.equal(page.data.status, 'error', pagePath)
+    assert.equal(page.data.message, '加载失败，请稍后重试')
+  }
+})
