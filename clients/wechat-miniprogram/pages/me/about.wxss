@@ -1,11 +1,12 @@
 /* 关于本店：宋体店名 + 正文简介；地址与电话是两行事实条，可操作的行右侧给出动词。 */
-.about__name { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: 48rpx; line-height: 1.25; color: var(--yumi-ink); margin-bottom: 24rpx; }
+.about__name { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-display); line-height: 1.25; color: var(--yumi-ink); margin-bottom: 24rpx; }
 .about__intro { display: block; margin-bottom: 48rpx; }
 .facts { border-radius: 24rpx; background: var(--yumi-surface-soft); overflow: hidden; }
-.fact { display: flex; align-items: center; gap: 24rpx; padding: 32rpx; transition: opacity 0.15s ease-out; }
+.fact { display: flex; align-items: center; gap: 24rpx; padding: 32rpx; transition: background-color 160ms ease-out; }
 .fact + .fact { border-top: 1rpx solid var(--yumi-hairline); }
-.fact--pressed { opacity: 0.6; }
+/* 事实条同在一张底板上，按下时加深底色而不缩小，缩小会露出缝隙（质感 Spec T8）。 */
+.fact--pressed { background: var(--yumi-surface); }
 .fact__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4rpx; }
-.fact__label { font-size: 24rpx; color: var(--yumi-muted); }
-.fact__value { font-size: 30rpx; line-height: 1.5; color: var(--yumi-ink); }
-.fact__action { flex: none; font-size: 26rpx; color: var(--yumi-primary-deep); }
+.fact__label { font-size: var(--yumi-text-caption); color: var(--yumi-muted); }
+.fact__value { font-size: var(--yumi-text-emphasis); line-height: 1.5; color: var(--yumi-ink); }
+.fact__action { flex: none; font-size: var(--yumi-text-caption); color: var(--yumi-primary-deep); }

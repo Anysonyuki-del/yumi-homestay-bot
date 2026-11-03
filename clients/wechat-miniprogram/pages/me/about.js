@@ -2,6 +2,7 @@
 const { fetchHome, loadPageData, discardPendingLoads } = require('../../utils/content')
 const { openServiceChat } = require('../../utils/service-chat')
 const { dialNumber } = require('../../utils/format')
+const { openStoreMap } = require('../../utils/store-map')
 
 Page({
   data: {
@@ -31,17 +32,9 @@ Page({
     if (this.data.status === 'error') this.retry()
     else openServiceChat()
   },
-  // 只有后台填了经纬度才打开地图；没有坐标时地址只供阅读和复制。
+  // 只有后台填了经纬度才打开地图；没有坐标时地址只供阅读和复制（与首页「到店导航」共用逻辑）。
   openMap() {
-    const { store } = this.data
-    if (!store || !store.location) return
-    wx.openLocation({
-      latitude: store.location.latitude,
-      longitude: store.location.longitude,
-      name: store.name,
-      address: store.address,
-      fail: () => wx.showToast({ title: '暂时无法打开地图', icon: 'none' }),
-    })
+    openStoreMap(this.data.store, { fromAbout: true })
   },
   // 客人取消拨号也会进 fail，因此失败时不提示。
   callStore() {

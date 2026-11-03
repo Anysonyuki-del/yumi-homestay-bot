@@ -1,13 +1,23 @@
-/* 服务：每行四格，图标落在暖奶油圆底上；联系管家是一整行浅底条，不加阴影。 */
-.grid { display: flex; flex-wrap: wrap; row-gap: 40rpx; margin-bottom: 64rpx; }
-.grid__cell { box-sizing: border-box; width: 25%; display: flex; flex-direction: column; align-items: center; gap: 16rpx; padding: 8rpx 4rpx; border-radius: 20rpx; transition: opacity 0.15s ease-out; }
-.grid__cell--pressed { opacity: 0.6; }
-.grid__icon { display: flex; align-items: center; justify-content: center; width: 104rpx; height: 104rpx; border-radius: 50%; background: var(--yumi-surface-soft); color: var(--yumi-primary-deep); }
-.grid__label { width: 100%; font-size: 26rpx; line-height: 1.4; color: var(--yumi-ink); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.grid__label-placeholder { width: 80rpx; height: 26rpx; border-radius: 8rpx; background: var(--yumi-surface); }
+/* 服务：两列分类卡片（质感 Spec T5），暖奶油底、圆角 24rpx，不加阴影；联系管家是一整行浅底条。 */
+.cards { display: flex; flex-wrap: wrap; gap: 20rpx; margin-bottom: 48rpx; }
+/* 两列各占一半减去间距；calc 在小程序样式里可用。 */
+.card {
+  box-sizing: border-box; width: calc((100% - 20rpx) / 2); min-height: 248rpx;
+  display: flex; flex-direction: column; padding: 28rpx; border-radius: 24rpx; background: var(--yumi-surface-soft);
+}
+.card__icon { display: flex; align-items: center; justify-content: center; width: 80rpx; height: 80rpx; margin-bottom: 28rpx; border-radius: 50%; background: var(--yumi-canvas); }
+.card__name {
+  font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-emphasis); line-height: 1.35; color: var(--yumi-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card__meta { margin-top: 8rpx; font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.contact { display: flex; align-items: center; gap: 24rpx; padding: 32rpx; border-radius: 24rpx; background: var(--yumi-surface-soft); transition: opacity 0.15s ease-out; }
-.contact--pressed { opacity: 0.72; }
+/* 加载占位与成品同形：图标圆 + 标题条 + 说明条。 */
+.card--placeholder .card__icon { background: var(--yumi-surface); }
+.card__line { height: 24rpx; width: 80%; margin-top: 12rpx; border-radius: 8rpx; background: var(--yumi-surface); }
+.card__line--title { height: 32rpx; width: 56%; margin-top: 0; }
+
+.contact { display: flex; align-items: center; gap: 24rpx; padding: 32rpx; border-radius: 24rpx; background: var(--yumi-surface-soft); }
 .contact__text { flex: 1; display: flex; flex-direction: column; gap: 6rpx; }
-.contact__title { font-family: var(--yumi-serif); font-weight: 400; font-size: 34rpx; line-height: 1.3; color: var(--yumi-ink); }
-.contact__body { font-size: 26rpx; line-height: 1.5; color: var(--yumi-muted); }
+.contact__title { font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-emphasis); line-height: 1.3; color: var(--yumi-ink); }
+.contact__body { font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); }

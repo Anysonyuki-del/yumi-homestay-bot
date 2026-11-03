@@ -1,2 +1,8 @@
 /* 服务分类：问答折叠在暖奶油面板里，末尾一句提示。 */
-.footnote { display: block; padding: 32rpx 8rpx 0; font-size: 26rpx; color: var(--yumi-muted); }
+/* 问题标题改用宋体、答案上下多留白（质感 Spec T9）。面板标题由组件内的 t-cell 渲染，
+   它用 font 简写自带字体，所以经 TDesign 的 CSS 变量覆盖，不改组件内部结构。 */
+.qa {
+  --td-cell-title-font: 32rpx / 1.5 var(--yumi-serif);
+  --td-collapse-content-padding: 8rpx 32rpx 40rpx;
+}
+.footnote { display: block; padding: 32rpx 8rpx 0; font-size: var(--yumi-text-caption); color: var(--yumi-muted); }

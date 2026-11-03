@@ -8,6 +8,7 @@
   <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '房间没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
   <block wx:else>
     <t-swiper wx:if="{{room.photos.length}}" class="hero" list="{{room.photos}}" height="600rpx" autoplay="{{false}}" navigation="{{room.photos.length > 1 ? swiperNavigation : false}}" pagination-position="bottom-right" bind:click="previewPhoto" />
+    <view wx:else class="hero hero--placeholder hero--empty"><text>照片整理中</text></view>
     <view class="detail__body">
       <view class="detail__head">
         <text class="detail__name">{{room.name}}</text>

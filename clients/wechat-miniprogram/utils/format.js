@@ -24,9 +24,22 @@ function categoryIcon(category) {
   return matched ? matched[1] : DEFAULT_CATEGORY_ICON
 }
 
+// 服务页分类卡片（质感 Spec T5）：分类名、图标、条数和第一个问题的预览；
+// 没有问答的分类不出卡片，避免点进去是空页。
+function serviceCards(sections) {
+  return sections
+    .filter((section) => section.items.length > 0)
+    .map((section) => ({
+      name: section.category,
+      icon: categoryIcon(section.category),
+      count: section.items.length,
+      preview: section.items[0].question,
+    }))
+}
+
 // 拨号前只保留数字和加号；后台允许填空格、短横线和括号方便阅读。
 function dialNumber(phone) {
   return String(phone || '').replace(/[^\d+]/g, '')
 }
 
-module.exports = { specLine, categoryIcon, dialNumber }
+module.exports = { specLine, categoryIcon, serviceCards, dialNumber }

@@ -15,6 +15,15 @@ page {
   --yumi-primary-pressed: #b8664b;
   --yumi-primary-deep: #a9583e;
   --yumi-serif: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
+  /* 五档字号（质感 Spec T4）：页面只用这五档，不再直接写数字。
+     安卓多半没有宋体、会退回黑体，标题层级主要靠这几档的字号差撑住。 */
+  --yumi-text-caption: 24rpx;
+  --yumi-text-body: 28rpx;
+  --yumi-text-emphasis: 32rpx;
+  --yumi-text-title: 40rpx;
+  --yumi-text-display: 52rpx;
+  /* 可点卡片按下时的反馈：轻微缩小加变淡，比单纯变淡更有触感。 */
+  --yumi-press-scale: 0.98;
 
   /* TDesign 主色阶换成珊瑚：7 为主色，8 为按下，1/2 为浅底。 */
   --td-primary-color-1: #faf1ec;
@@ -47,7 +56,7 @@ page {
 
   background: var(--yumi-canvas);
   color: var(--yumi-body);
-  font-size: 28rpx;
+  font-size: var(--yumi-text-body);
   line-height: 1.6;
 }
 
@@ -56,15 +65,21 @@ page {
 .page--with-bar { padding-bottom: 220rpx; }
 
 .serif { font-family: var(--yumi-serif); font-weight: 400; }
-.section-title { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: 34rpx; line-height: 1.3; color: var(--yumi-ink); margin-bottom: 20rpx; }
-.body-text { font-size: 30rpx; line-height: 1.8; color: var(--yumi-body); white-space: pre-wrap; }
-.spec-line { font-size: 26rpx; line-height: 1.5; color: var(--yumi-muted); }
+.section-title { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-title); line-height: 1.3; color: var(--yumi-ink); margin-bottom: 24rpx; }
+.body-text { font-size: var(--yumi-text-body); line-height: 1.85; color: var(--yumi-body); white-space: pre-wrap; }
+.spec-line { font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); letter-spacing: 1rpx; }
+
+/* 可点卡片的按下态：缩小加变淡，160ms 过渡；各页卡片加 pressable 类、hover-class 用 is-pressed。 */
+.pressable { transition: transform 160ms ease-out, opacity 160ms ease-out; }
+.pressable.is-pressed { transform: scale(var(--yumi-press-scale)); opacity: 0.85; }
 
 /* 加载、空、出错、下架共用的状态块：标题 + 说明 + 一个动作，居中排在首屏上半部。 */
 .state { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 160rpx 48rpx 0; }
+/* 嵌在页面区块里的紧凑版（如首页房间区为空），不再与上方标题隔出一大段。 */
+.state--compact { padding-top: 48rpx; }
 .state__mark { width: 96rpx; height: 2rpx; background: var(--yumi-primary); margin-bottom: 48rpx; }
-.state__title { font-family: var(--yumi-serif); font-weight: 400; font-size: 40rpx; line-height: 1.35; color: var(--yumi-ink); }
-.state__body { margin-top: 20rpx; font-size: 28rpx; line-height: 1.7; color: var(--yumi-muted); max-width: 520rpx; }
+.state__title { font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-title); line-height: 1.35; color: var(--yumi-ink); }
+.state__body { margin-top: 20rpx; font-size: var(--yumi-text-body); line-height: 1.7; color: var(--yumi-muted); max-width: 520rpx; }
 .state__action { margin-top: 56rpx; }
 
 /* 「问管家」悬浮按钮：紧凑胶囊，靠右下；只在有内容时出现。 */

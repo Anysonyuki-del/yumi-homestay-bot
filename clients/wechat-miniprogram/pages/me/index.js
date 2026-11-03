@@ -68,12 +68,13 @@ Page({
     }
   },
   askHost() {
-    openServiceChat()
+    return openServiceChat()
   },
   openAbout() {
     wx.navigateTo({ url: '/pages/me/about' })
   },
   // 订单需要先解决「订单归属」核对，第二期接入；本期只给入口和去向（Spec D1）。
+  // 入口排在菜单最后并标「即将开放」（质感 Spec T6），点了仍给出去向。
   openOrders() {
     wx.showToast({ title: ORDERS_COMING, icon: 'none' })
   },

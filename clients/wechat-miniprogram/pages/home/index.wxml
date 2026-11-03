@@ -1,14 +1,12 @@
 <import src="../../templates/state.wxml" />
-<view class="page">
+<!-- 首页没有悬浮按钮，底部不用为它留空（快捷导航 Spec D2）。 -->
+<view class="page page--no-fab">
   <view wx:if="{{status === 'loading'}}" aria-label="正在加载首页">
     <view class="banner banner--placeholder"></view>
-    <view class="room-skeleton" wx:for="{{[1, 2, 3]}}" wx:key="*this">
-      <view class="room__cover"></view>
-      <view class="room-skeleton__lines">
-        <view class="room-skeleton__line room-skeleton__line--title"></view>
-        <view class="room-skeleton__line"></view>
-        <view class="room-skeleton__line room-skeleton__line--long"></view>
-      </view>
+    <view class="room-skeleton" wx:for="{{[1, 2]}}" wx:key="*this">
+      <view class="room__media"></view>
+      <view class="room-skeleton__line room-skeleton__line--title"></view>
+      <view class="room-skeleton__line"></view>
     </view>
   </view>
   <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '首页没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
@@ -19,19 +17,41 @@
       <text wx:if="{{store.name}}" class="store__name">{{store.name}}</text>
       <text wx:if="{{store.intro}}" class="store__intro">{{store.intro}}</text>
     </view>
-    <text class="section-title rooms-title">房间</text>
-    <template wx:if="{{status === 'empty'}}" is="state" data="{{title: '房间介绍正在准备', body: '想了解房型、床型或入住安排，可以直接问管家。', actionText: '问管家', actionIcon: 'chat'}}" />
-    <block wx:else>
-      <view class="room" wx:for="{{rooms}}" wx:key="id" data-id="{{item.id}}" bindtap="openRoom" hover-class="room--pressed" hover-stay-time="80" aria-role="button" aria-label="查看{{item.name}}">
-        <image wx:if="{{item.cover}}" class="room__cover" src="{{item.cover}}" mode="aspectFill" lazy-load />
-        <view wx:else class="room__cover room__cover--empty"><text>照片整理中</text></view>
-        <view class="room__body">
-          <text class="room__name">{{item.name}}</text>
-          <text wx:if="{{item.specLine}}" class="spec-line">{{item.specLine}}</text>
-          <text wx:if="{{item.summary}}" class="room__summary">{{item.summary}}</text>
-        </view>
+    <!-- 后台还没填门店名和简介时，用品牌名开头，不让首屏从「房间」小标题开始（质感 Spec T2、D3）。 -->
+    <view wx:else class="store">
+      <text class="store__name">{{brandName}}</text>
+      <text class="store__intro">欢迎入住，房间和入住指南都在这里。</text>
+    </view>
+    <!-- 快捷导航（首页二级菜单，快捷导航 Spec N1）：四个固定入口，加载完成后才出现。 -->
+    <view class="quick-nav" aria-role="navigation" aria-label="快捷导航">
+      <view class="quick-nav__item" wx:for="{{quickNav}}" wx:key="key" data-key="{{item.key}}" bindtap="openQuickNav" hover-class="quick-nav__item--pressed" hover-stay-time="80" aria-role="button" aria-label="{{item.label}}">
+        <view class="quick-nav__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#a9583e" /></view>
+        <text class="quick-nav__label">{{item.label}}</text>
       </view>
-      <view class="ask-host"><t-button theme="primary" shape="round" icon="chat" bind:tap="askHost">问管家</t-button></view>
+    </view>
+    <view class="rooms-head">
+      <text class="section-title rooms-head__title">房间</text>
+      <text wx:if="{{rooms.length}}" class="rooms-head__count">共 {{rooms.length}} 间</text>
+    </view>
+    <template wx:if="{{status === 'empty'}}" is="state" data="{{title: '房间介绍正在准备', body: '想了解房型、床型或入住安排，可以直接问管家。', actionText: '问管家', actionIcon: 'chat', compact: true}}" />
+    <block wx:else>
+      <view class="room pressable" wx:for="{{rooms}}" wx:key="id" data-id="{{item.id}}" bindtap="openRoom" hover-class="is-pressed" hover-stay-time="80" aria-role="button" aria-label="查看{{item.name}}">
+        <view class="room__media">
+          <image wx:if="{{item.cover}}" class="room__cover {{item.coverLoaded ? 'room__cover--loaded' : ''}}" src="{{item.cover}}" mode="aspectFill" lazy-load data-index="{{index}}" bindload="onCoverLoad" />
+          <text wx:else class="room__media-note">照片整理中</text>
+        </view>
+        <text class="room__name">{{item.name}}</text>
+        <text wx:if="{{item.specLine}}" class="spec-line">{{item.specLine}}</text>
+        <text wx:if="{{item.summary}}" class="room__summary">{{item.summary}}</text>
+      </view>
+      <!-- 页尾联系管家条替代首页悬浮按钮，不再遮挡房间大图（快捷导航 Spec N2、D2）。 -->
+      <view class="contact pressable" bindtap="askHost" hover-class="is-pressed" hover-stay-time="80" aria-role="button" aria-label="联系管家">
+        <view class="contact__text">
+          <text class="contact__title">还有问题？直接问管家</text>
+          <text class="contact__body">房型、入住安排都可以问。</text>
+        </view>
+        <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+      </view>
     </block>
   </block>
 </view>

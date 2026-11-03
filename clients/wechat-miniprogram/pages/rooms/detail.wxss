@@ -2,9 +2,11 @@
 .detail { padding-bottom: 220rpx; }
 .hero { display: block; --td-swiper-radius: 0; }
 .hero--placeholder { height: 600rpx; background: var(--yumi-surface); }
+/* 没有照片时保留同样高度的暖底占位，页面结构与有照片时一致（质感 Spec T7）。 */
+.hero--empty { display: flex; align-items: center; justify-content: center; font-size: var(--yumi-text-caption); color: var(--yumi-muted); letter-spacing: 2rpx; }
 .detail__body { padding: 40rpx 32rpx 0; }
 .detail__head { padding-bottom: 40rpx; }
-.detail__name { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: 48rpx; line-height: 1.25; color: var(--yumi-ink); margin-bottom: 12rpx; }
+.detail__name { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-display); line-height: 1.25; color: var(--yumi-ink); margin-bottom: 12rpx; }
 .detail__section { padding: 40rpx 0; border-top: 1rpx solid var(--yumi-hairline); }
 .facilities { display: flex; flex-wrap: wrap; gap: 16rpx; }
-.facility { padding: 12rpx 24rpx; border-radius: 16rpx; background: var(--yumi-surface-soft); font-size: 26rpx; line-height: 1.4; color: var(--yumi-body); }
+.facility { padding: 12rpx 24rpx; border-radius: 16rpx; background: var(--yumi-surface-soft); font-size: var(--yumi-text-caption); line-height: 1.4; color: var(--yumi-body); }

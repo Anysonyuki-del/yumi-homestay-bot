@@ -1,12 +1,20 @@
-/* 我的：顶部账号条 + 一组菜单行；菜单在暖奶油底上，行间细分隔线。图标颜色经 t-icon 的 color 属性给出（组件不透传 class）。 */
+/* 我的：顶部问候与账号状态 + 一组菜单行；菜单在暖奶油底上，行间细分隔线。图标颜色经 t-icon 的 color 属性给出（组件不透传 class）。 */
 .account { display: flex; align-items: center; gap: 24rpx; padding: 16rpx 0 48rpx; }
-.account__avatar { flex: none; display: flex; align-items: center; justify-content: center; width: 112rpx; height: 112rpx; border-radius: 50%; background: var(--yumi-surface); color: var(--yumi-muted); }
+.account__action { margin: -8rpx 0 48rpx; }
+.account__avatar { flex: none; display: flex; align-items: center; justify-content: center; width: 112rpx; height: 112rpx; border-radius: 50%; background: var(--yumi-surface); }
 .account__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6rpx; }
-.account__title { font-family: var(--yumi-serif); font-weight: 400; font-size: 40rpx; line-height: 1.3; color: var(--yumi-ink); }
-.account__message { font-size: 26rpx; line-height: 1.5; color: var(--yumi-muted); }
+.account__title { font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-title); line-height: 1.3; color: var(--yumi-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.account__status { font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); }
+.account__message { font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-primary-deep); }
 
+/* 菜单行整行按压只变淡、不缩小：行在同一张底板上，缩小会露出缝隙。 */
 .menu { border-radius: 24rpx; background: var(--yumi-surface-soft); overflow: hidden; }
-.menu__row { display: flex; align-items: center; gap: 24rpx; padding: 32rpx; transition: opacity 0.15s ease-out; }
+.menu__row { display: flex; align-items: center; gap: 24rpx; padding: 32rpx; transition: background-color 160ms ease-out; }
 .menu__row + .menu__row { border-top: 1rpx solid var(--yumi-hairline); }
-.menu__row--pressed { opacity: 0.6; }
-.menu__label { flex: 1; font-size: 30rpx; color: var(--yumi-ink); }
+.menu__row--pressed { background: var(--yumi-surface); }
+.menu__label { flex: 1; font-size: var(--yumi-text-emphasis); color: var(--yumi-ink); }
+.menu__label--muted { color: var(--yumi-muted); }
+.menu__tag { flex: none; padding: 4rpx 16rpx; border-radius: 999rpx; background: var(--yumi-canvas); font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); }
+
+/* 已登录时的退出入口：菜单下方一行弱化的文字按钮，避免与常用菜单抢视线。 */
+.logout { margin-top: 48rpx; --td-button-default-color: var(--yumi-muted); }

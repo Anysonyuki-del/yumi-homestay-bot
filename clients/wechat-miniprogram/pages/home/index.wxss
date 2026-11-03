@@ -1,30 +1,54 @@
-/* 首页：横幅圆角落在页边内；门店名用宋体大字；房间为左图右文的行，行间用细分隔线，不套卡片框。 */
+/* 首页：横幅圆角落在页边内；门店名用宋体大字；其下是快捷导航；房间为满宽 4:3 大图卡片（质感 Spec T2），图下是房名、规格和简介。 */
 .banner { display: block; margin-bottom: 48rpx; --td-swiper-radius: 24rpx; }
 .banner--placeholder { height: 386rpx; border-radius: 24rpx; background: var(--yumi-surface); }
 
-.store { margin-bottom: 56rpx; }
-.store__name { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: 52rpx; line-height: 1.25; color: var(--yumi-ink); }
+.store { margin: 8rpx 0 40rpx; }
+.store__name { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-display); line-height: 1.25; color: var(--yumi-ink); }
 .store__intro {
-  display: -webkit-box; margin-top: 12rpx; font-size: 28rpx; line-height: 1.7; color: var(--yumi-muted);
+  display: -webkit-box; margin-top: 16rpx; font-size: var(--yumi-text-body); line-height: 1.7; color: var(--yumi-muted);
   overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
 
-.rooms-title { padding-bottom: 8rpx; }
-.room { display: flex; gap: 28rpx; padding: 32rpx 0; transition: opacity 0.15s ease-out; }
-.room + .room { border-top: 1rpx solid var(--yumi-hairline); }
-.room--pressed { opacity: 0.72; }
-.room__cover { flex: none; width: 232rpx; height: 232rpx; border-radius: 20rpx; background: var(--yumi-surface); }
-.room__cover--empty { display: flex; align-items: center; justify-content: center; font-size: 24rpx; color: var(--yumi-muted); }
-.room__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8rpx; padding-top: 4rpx; }
-.room__name { font-family: var(--yumi-serif); font-weight: 400; font-size: 36rpx; line-height: 1.3; color: var(--yumi-ink); }
+/* 卡片之间留白分隔，不加边框和阴影。 */
+.room { display: flex; flex-direction: column; gap: 8rpx; padding-bottom: 56rpx; }
+/* 页面内容宽 686rpx，按 4:3 取 514rpx 高；旧基础库不支持 aspect-ratio，所以写定高度。 */
+.room__media {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  height: 514rpx; margin-bottom: 20rpx; border-radius: 24rpx; overflow: hidden; background: var(--yumi-surface);
+}
+/* 图片加载完成前透明，露出暖底色；加载完成后 200ms 淡入，避免突然跳出。 */
+.room__cover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 200ms ease-out; }
+.room__cover--loaded { opacity: 1; }
+.room__media-note { font-size: var(--yumi-text-caption); color: var(--yumi-muted); letter-spacing: 2rpx; }
+.room__name { font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-title); line-height: 1.3; color: var(--yumi-ink); }
 .room__summary {
-  display: -webkit-box; margin-top: 4rpx; font-size: 26rpx; line-height: 1.6; color: var(--yumi-body);
+  display: -webkit-box; margin-top: 4rpx; font-size: var(--yumi-text-body); line-height: 1.7; color: var(--yumi-body);
   overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
 
-/* 加载占位与成品同形：横幅块 + 左方块右三条。 */
-.room-skeleton { display: flex; gap: 28rpx; padding: 32rpx 0; }
-.room-skeleton__lines { flex: 1; }
-.room-skeleton__line { height: 26rpx; width: 60%; margin-top: 20rpx; border-radius: 8rpx; background: var(--yumi-surface); }
-.room-skeleton__line--title { height: 36rpx; width: 44%; margin-top: 4rpx; }
-.room-skeleton__line--long { width: 92%; }
+/* 加载占位与成品同形：横幅块 + 大图卡片（图块 + 标题条 + 规格条）。 */
+.room-skeleton { padding-bottom: 56rpx; }
+.room-skeleton__line { height: 26rpx; width: 52%; margin-top: 16rpx; border-radius: 8rpx; background: var(--yumi-surface); }
+.room-skeleton__line--title { height: 40rpx; width: 40%; margin-top: 0; }
+
+/* 快捷导航：一张暖奶油卡片里一行四格均分；每格约 86×75px，大于 44px 触控下限（快捷导航 Spec N1）。
+   格子同在一张底板上，按下只变淡、不缩小。 */
+.quick-nav { display: flex; margin-bottom: 64rpx; padding: 28rpx 0; border-radius: 24rpx; background: var(--yumi-surface-soft); }
+.quick-nav__item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 12rpx; padding: 8rpx 0; transition: opacity 160ms ease-out; }
+.quick-nav__item--pressed { opacity: 0.6; }
+.quick-nav__icon { display: flex; align-items: center; justify-content: center; width: 88rpx; height: 88rpx; border-radius: 50%; background: var(--yumi-canvas); }
+.quick-nav__label { font-size: var(--yumi-text-caption); line-height: 1.4; color: var(--yumi-ink); }
+
+/* 「房间」标题与「共 N 间」同一行，数量靠右、与标题底部对齐。 */
+.rooms-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24rpx; }
+.rooms-head__title { margin-bottom: 0; }
+.rooms-head__count { font-size: var(--yumi-text-caption); color: var(--yumi-muted); }
+
+/* 页尾联系管家条：与服务页同款的浅底整行条。 */
+.contact { display: flex; align-items: center; gap: 24rpx; padding: 32rpx; border-radius: 24rpx; background: var(--yumi-surface-soft); }
+.contact__text { flex: 1; display: flex; flex-direction: column; gap: 6rpx; }
+.contact__title { font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-emphasis); line-height: 1.3; color: var(--yumi-ink); }
+.contact__body { font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); }
+
+/* 首页去掉了悬浮按钮，底部只留常规页边。 */
+.page--no-fab { padding-bottom: 64rpx; }

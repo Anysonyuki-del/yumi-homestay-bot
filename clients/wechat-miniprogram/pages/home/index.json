@@ -1,8 +1,9 @@
 {
-  "navigationBarTitleText": "首页",
+  "navigationBarTitleText": "YuMi 民宿",
   "enablePullDownRefresh": true,
   "usingComponents": {
     "t-button": "tdesign-miniprogram/button/button",
-    "t-swiper": "tdesign-miniprogram/swiper/swiper"
+    "t-swiper": "tdesign-miniprogram/swiper/swiper",
+    "t-icon": "tdesign-miniprogram/icon/icon"
   }
 }

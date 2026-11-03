@@ -19,7 +19,8 @@ const STORE = {
 const HOME_EMPTY = { statusCode: 200, data: { store: null, banners: [] } }
 
 // routes 按路径返回响应、网络失败，或挂起等测试手动放行；记录请求与客服、提示调用。
-function installWx(routes = {}) {
+// confirmModal 决定确认框的回答：true 为点「拨打」，false 为取消。
+function installWx(routes = {}, { confirmModal = true } = {}) {
   const calls = []
   const pending = []
   globalThis.wx = {
@@ -39,8 +40,13 @@ function installWx(routes = {}) {
     setNavigationBarTitle(options) { calls.push(`title:${options.title}`) },
     navigateTo(options) { calls.push(`navigate:${options.url}`) },
     navigateBack() { calls.push('back') },
+    switchTab(options) { calls.push(`tab:${options.url}`) },
     openLocation(options) { calls.push(`map:${options.latitude},${options.longitude}`) },
     makePhoneCall(options) { calls.push(`call:${options.phoneNumber}`) },
+    showModal(options) {
+      calls.push(`modal:${options.content}`)
+      options.success({ confirm: confirmModal })
+    },
   }
   return { calls, pending }
 }
@@ -95,7 +101,7 @@ test('入住指南校验每条问答都是文字', async () => {
 
 test('首页：加载成功、空列表、失败后重试', async () => {
   const routes = { '/api/miniprogram/rooms': { fail: true }, '/api/miniprogram/home': HOME_EMPTY }
-  installWx(routes)
+  const { calls } = installWx(routes)
   const page = loadPage('pages/home/index.js')
   await page.load()
   assert.equal(page.data.status, 'error')
@@ -109,6 +115,8 @@ test('首页：加载成功、空列表、失败后重试', async () => {
   await page.load()
   assert.equal(page.data.status, 'ready')
   assert.equal(page.data.rooms[0].name, '山海大床房')
+  // 没填门店名时导航栏用品牌名。
+  assert.ok(calls.includes('title:YuMi 民宿'))
 })
 
 test('页面卸载或重新加载后，迟到的旧结果被丢弃', async () => {
@@ -153,11 +161,45 @@ test('详情页：下架显示 gone，不提供重试；加载成功设置标题
   assert.ok(calls.includes('title:山海大床房'))
 })
 
-test('客服未配置时提示暂未开通，不调用微信接口', () => {
-  const { calls } = installWx()
+test('客服未配置时：有门店电话确认后拨打清洗后的号码，取消不拨', async () => {
   const { openServiceChat } = require(path.join(CLIENT_ROOT, 'utils/service-chat.js'))
-  openServiceChat()
-  assert.deepEqual(calls, ['toast:客服暂未开通'])
+  const home = { statusCode: 200, data: { store: STORE, banners: [] } }
+  let { calls } = installWx({ '/api/miniprogram/home': home })
+  await openServiceChat()
+  assert.deepEqual(calls, ['/api/miniprogram/home', 'modal:拨打门店电话 0571-1234 5678？', 'call:057112345678'])
+
+  ;({ calls } = installWx({ '/api/miniprogram/home': home }, { confirmModal: false }))
+  await openServiceChat()
+  assert.deepEqual(calls, ['/api/miniprogram/home', 'modal:拨打门店电话 0571-1234 5678？'])
+})
+
+test('客服未配置时：没填电话、没有门店信息或读取失败，都只提示暂未开通', async () => {
+  const { openServiceChat } = require(path.join(CLIENT_ROOT, 'utils/service-chat.js'))
+  const routes = [
+    { statusCode: 200, data: { store: { ...STORE, phone: null }, banners: [] } },
+    HOME_EMPTY,
+    { statusCode: 503, data: {} },
+    { fail: true },
+  ]
+  for (const route of routes) {
+    const { calls } = installWx({ '/api/miniprogram/home': route })
+    await openServiceChat()
+    assert.deepEqual(calls, ['/api/miniprogram/home', 'toast:客服暂未开通'])
+  }
+})
+
+test('客服未配置时连点两次只读一次电话、只弹一个确认框', async () => {
+  const { openServiceChat } = require(path.join(CLIENT_ROOT, 'utils/service-chat.js'))
+  const { calls, pending } = installWx({
+    '/api/miniprogram/home': { statusCode: 200, data: { store: STORE, banners: [] }, hold: true },
+  })
+  // 两次都先发出、再放行请求：没有连点保护时会读两次电话、叠出两个确认框。
+  const taps = [openServiceChat(), openServiceChat()]
+  await new Promise(setImmediate)
+  pending.forEach((respond) => respond())
+  await Promise.all(taps)
+  assert.equal(calls.filter((call) => call === '/api/miniprogram/home').length, 1)
+  assert.equal(calls.filter((call) => call.startsWith('modal:')).length, 1)
 })
 
 test('规格行跳过缺失项，三项都缺时为空串', () => {
@@ -177,7 +219,7 @@ test('状态块按钮：出错时重试，空列表时转问管家', async () =>
   await new Promise(setImmediate)
   await new Promise(setImmediate)
   assert.equal(page.data.status, 'empty')
-  page.onStateAction()
+  await page.onStateAction()
   assert.ok(calls.includes('toast:客服暂未开通'))
 })
 
@@ -214,7 +256,7 @@ test('首页：门店信息或房间任一失败整页出错；没有房间时�
     '/api/miniprogram/rooms': { statusCode: 200, data: { rooms: [ROOM] } },
     '/api/miniprogram/home': { statusCode: 503, data: {} },
   }
-  installWx(routes)
+  const { calls } = installWx(routes)
   const page = loadPage('pages/home/index.js')
   await page.load()
   assert.equal(page.data.status, 'error')
@@ -225,6 +267,7 @@ test('首页：门店信息或房间任一失败整页出错；没有房间时�
   assert.equal(page.data.status, 'empty')
   assert.equal(page.data.store.name, '山野小住')
   assert.deepEqual(page.data.banners, [`${API_BASE_URL}/api/miniprogram/banners/3`])
+  assert.ok(calls.includes('title:山野小住'))
 })
 
 test('分类图标：按关键词挑图标，Wi-Fi 不分大小写，未命中用书本', () => {
@@ -236,16 +279,30 @@ test('分类图标：按关键词挑图标，Wi-Fi 不分大小写，未命中�
   for (const [category, icon] of Object.entries(cases)) assert.equal(categoryIcon(category), icon, category)
 })
 
-test('服务页：每个分类一格并带图标；点格子以编码后的分类名进入分类页', async () => {
+test('服务页：每个分类一张卡片，带图标、条数和第一个问题；空分类不出卡片；点卡片以编码后的分类名进入分类页', async () => {
   const { calls } = installWx({ '/api/miniprogram/guide': { statusCode: 200, data: { sections: [
-    { category: '入住&退房', items: [{ question: '几点入住？', answer: '下午 3 点' }] },
+    { category: '入住&退房', items: [
+      { question: '几点入住？', answer: '下午 3 点' }, { question: '几点退房？', answer: '中午 12 点' },
+    ] },
+    { category: '空分类', items: [] },
     { category: '其他', items: [{ question: '能带宠物吗？', answer: '不能' }] },
   ] } } })
   const page = loadPage('pages/services/index.js')
   await page.load()
-  assert.deepEqual(page.data.categories, [{ name: '入住&退房', icon: 'key' }, { name: '其他', icon: 'book' }])
+  assert.equal(page.data.status, 'ready')
+  assert.deepEqual(page.data.categories, [
+    { name: '入住&退房', icon: 'key', count: 2, preview: '几点入住？' },
+    { name: '其他', icon: 'book', count: 1, preview: '能带宠物吗？' },
+  ])
   page.openCategory({ currentTarget: { dataset: { name: '入住&退房' } } })
   assert.ok(calls.includes('navigate:/pages/services/category?name=%E5%85%A5%E4%BD%8F%26%E9%80%80%E6%88%BF'))
+})
+
+test('服务页：分类全是空的时显示空状态，不出空白宫格', async () => {
+  installWx({ '/api/miniprogram/guide': { statusCode: 200, data: { sections: [{ category: '空分类', items: [] }] } } })
+  const page = loadPage('pages/services/index.js')
+  await page.load()
+  assert.equal(page.data.status, 'empty')
 })
 
 test('分类页：只显示该分类的问答；分类已不展示时显示 gone，按钮回到服务页', async () => {
@@ -329,6 +386,8 @@ test('关于页：没有坐标不打开地图；有坐标才导航；拨号只�
   assert.equal(page.data.status, 'ready')
   page.openMap()
   assert.ok(!calls.some((call) => call.startsWith('map:')))
+  // 已经在关于页：没坐标时不能再打开一个关于页（首页「到店导航」才跳关于页）。
+  assert.ok(!calls.some((call) => call.startsWith('navigate:')))
   page.callStore()
   assert.ok(calls.includes('call:057112345678'))
 
@@ -355,4 +414,52 @@ test('后端还没有首页接口（404）时，首页与关于页显示可重�
     assert.equal(page.data.status, 'error', pagePath)
     assert.equal(page.data.message, '加载失败，请稍后重试')
   }
+})
+
+test('到店导航：有坐标打开地图并带店名地址；没坐标或没门店信息进关于页；关于页里没坐标什么都不做', () => {
+  const { openStoreMap } = require(path.join(CLIENT_ROOT, 'utils/store-map.js'))
+  let opened
+  let { calls } = installWx()
+  globalThis.wx.openLocation = (options) => { opened = options; calls.push('map') }
+  openStoreMap({ name: '山野小住', address: '合成地址 1 号', location: { latitude: 30.25, longitude: 120.15 } })
+  assert.deepEqual(calls, ['map'])
+  assert.deepEqual(
+    { latitude: opened.latitude, longitude: opened.longitude, name: opened.name, address: opened.address },
+    { latitude: 30.25, longitude: 120.15, name: '山野小住', address: '合成地址 1 号' },
+  )
+
+  ;({ calls } = installWx())
+  openStoreMap({ name: '山野小住', address: '合成地址 1 号', location: null })
+  openStoreMap(null)
+  assert.deepEqual(calls, ['navigate:/pages/me/about', 'navigate:/pages/me/about'])
+
+  ;({ calls } = installWx())
+  openStoreMap({ name: '山野小住', address: '合成地址 1 号', location: null }, { fromAbout: true })
+  assert.deepEqual(calls, [])
+})
+
+test('首页快捷导航：四个固定入口按顺序显示，各自去对的地方', async () => {
+  const home = { statusCode: 200, data: { store: STORE, banners: [] } }
+  const { calls } = installWx({
+    '/api/miniprogram/rooms': { statusCode: 200, data: { rooms: [ROOM] } },
+    '/api/miniprogram/home': home,
+  })
+  const page = loadPage('pages/home/index.js')
+  await page.load()
+  assert.deepEqual(page.data.quickNav.map((item) => item.label), ['到店导航', '入住指南', '联系管家', '关于本店'])
+  const tap = (key) => page.openQuickNav({ currentTarget: { dataset: { key } } })
+
+  calls.length = 0
+  tap('map')
+  assert.deepEqual(calls, ['map:30.25,120.15'])
+
+  calls.length = 0
+  tap('guide')
+  tap('about')
+  assert.deepEqual(calls, ['tab:/pages/services/index', 'navigate:/pages/me/about'])
+
+  // 联系管家走客服兜底：客服未开通、门店有电话时弹出拨打确认。
+  calls.length = 0
+  await tap('host')
+  assert.deepEqual(calls, ['/api/miniprogram/home', 'modal:拨打门店电话 0571-1234 5678？', 'call:057112345678'])
 })

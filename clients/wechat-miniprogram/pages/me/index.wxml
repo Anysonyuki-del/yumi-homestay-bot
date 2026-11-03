@@ -1,21 +1,23 @@
 <view class="page">
+  <!-- 头部用问候开头，登录状态降为一行小字（质感 Spec T6）。 -->
   <view class="account">
-    <view class="account__avatar" aria-hidden="true"><t-icon name="user" size="56rpx" color="#6c6a64" /></view>
+    <view class="account__avatar" aria-hidden="true"><t-icon name="user" size="56rpx" color="#a9583e" /></view>
     <view class="account__main">
-      <text class="account__title">{{authStatus === 'logged_in' ? '已登录' : authStatus === 'unknown' ? '登录状态待确认' : authStatus === 'checking' ? '正在确认登录状态' : '未登录'}}</text>
+      <text class="account__title">你好，欢迎入住</text>
+      <text class="account__status">{{authStatus === 'logged_in' ? '已用微信登录' : authStatus === 'unknown' ? '登录状态待确认' : authStatus === 'checking' ? '正在确认登录状态' : '微信未登录'}}</text>
       <text wx:if="{{authMessage}}" class="account__message" aria-live="polite">{{authMessage}}</text>
     </view>
-    <t-button wx:if="{{authStatus === 'logged_out'}}" theme="primary" size="small" shape="round" loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="handleLogin">微信登录</t-button>
-    <t-button wx:elif="{{authStatus === 'unknown'}}" theme="primary" variant="outline" size="small" shape="round" loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="restoreLogin">重试</t-button>
-    <t-button wx:elif="{{authStatus === 'logged_in'}}" variant="text" size="small" loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="handleLogout">退出登录</t-button>
+  </view>
+  <!-- 登录按钮不和问候挤在一行：微信按钮自带固定宽度，同行会把问候挤成两行（预览发现）。
+       未登录、待确认时按钮放在头部下方整行；已登录时「退出登录」放到菜单之后。 -->
+  <view wx:if="{{authStatus === 'logged_out'}}" class="account__action">
+    <t-button theme="primary" block shape="round" loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="handleLogin">微信登录</t-button>
+  </view>
+  <view wx:elif="{{authStatus === 'unknown'}}" class="account__action">
+    <t-button theme="primary" variant="outline" block shape="round" loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="restoreLogin">重新确认登录</t-button>
   </view>
 
   <view class="menu">
-    <view class="menu__row" bindtap="openOrders" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button">
-      <t-icon name="order" size="44rpx" color="#a9583e" />
-      <text class="menu__label">我的订单</text>
-      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
-    </view>
     <view class="menu__row" bindtap="askHost" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button">
       <t-icon name="chat" size="44rpx" color="#a9583e" />
       <text class="menu__label">联系管家</text>
@@ -26,5 +28,15 @@
       <text class="menu__label">关于本店</text>
       <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
     </view>
+    <!-- 订单是第二期功能：排在最后，行内直接标「即将开放」，不放箭头暗示能进入（质感 Spec T6）。 -->
+    <view class="menu__row" bindtap="openOrders" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button" aria-label="我的订单，即将开放">
+      <t-icon name="order" size="44rpx" color="#6c6a64" />
+      <text class="menu__label menu__label--muted">我的订单</text>
+      <text class="menu__tag">即将开放</text>
+    </view>
+  </view>
+
+  <view wx:if="{{authStatus === 'logged_in'}}" class="logout">
+    <t-button variant="text" block loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="handleLogout">退出登录</t-button>
   </view>
 </view>
