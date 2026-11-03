@@ -1,31 +1,29 @@
-<view class="page page--with-bar">
-  <view wx:if="{{status === 'loading'}}" class="card" aria-label="正在加载房间详情"><t-skeleton row-col="{{skeletonRows}}" loading /></view>
-  <view wx:elif="{{status === 'gone'}}" class="state">
-    <t-empty icon="info-circle" description="{{message}}" />
-    <t-button theme="primary" variant="outline" bind:tap="backToList">返回房间列表</t-button>
+<import src="../../templates/state.wxml" />
+<view class="detail">
+  <view wx:if="{{status === 'loading'}}" aria-label="正在加载房间详情">
+    <view class="hero hero--placeholder"></view>
+    <view class="detail__body"><t-skeleton row-col="{{skeletonRows}}" loading /></view>
   </view>
-  <view wx:elif="{{status === 'error'}}" class="state">
-    <t-empty icon="error-circle" description="{{message}}" />
-    <t-button theme="primary" variant="outline" bind:tap="retry">重试</t-button>
-  </view>
+  <template wx:elif="{{status === 'gone'}}" is="state" data="{{title: message, body: '可以回到首页看看其他房间。', actionText: '回到首页', actionVariant: 'outline'}}" />
+  <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '房间没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
   <block wx:else>
-    <t-swiper wx:if="{{room.photos.length}}" class="photos" list="{{room.photos}}" height="480rpx" navigation="{{swiperNavigation}}" bind:click="previewPhoto" />
-    <view class="card">
-      <text class="room-name">{{room.name}}</text>
-      <view class="specs">
-        <t-tag wx:if="{{room.bedType}}" variant="light" size="small">{{room.bedType}}</t-tag>
-        <t-tag wx:if="{{room.maxGuests}}" variant="light" size="small">可住 {{room.maxGuests}} 人</t-tag>
-        <t-tag wx:if="{{room.areaSqm}}" variant="light" size="small">{{room.areaSqm}} ㎡</t-tag>
+    <t-swiper wx:if="{{room.photos.length}}" class="hero" list="{{room.photos}}" height="600rpx" autoplay="{{false}}" navigation="{{room.photos.length > 1 ? swiperNavigation : false}}" pagination-position="bottom-right" bind:click="previewPhoto" />
+    <view class="detail__body">
+      <view class="detail__head">
+        <text class="detail__name">{{room.name}}</text>
+        <text wx:if="{{room.specLine}}" class="spec-line">{{room.specLine}}</text>
+      </view>
+      <view wx:if="{{room.intro}}" class="detail__section">
+        <text class="section-title">房间介绍</text>
+        <text class="body-text" user-select>{{room.intro}}</text>
+      </view>
+      <view wx:if="{{room.facilities.length}}" class="detail__section">
+        <text class="section-title">设施</text>
+        <view class="facilities">
+          <text wx:for="{{room.facilities}}" wx:key="*this" class="facility">{{item}}</text>
+        </view>
       </view>
     </view>
-    <view wx:if="{{room.intro}}" class="card">
-      <text class="section-title">房间介绍</text>
-      <text class="body-text" user-select>{{room.intro}}</text>
-    </view>
-    <view wx:if="{{room.facilities.length}}" class="card">
-      <text class="section-title">设施</text>
-      <view class="specs"><t-tag wx:for="{{room.facilities}}" wx:key="*this" variant="outline" size="medium">{{item}}</t-tag></view>
-    </view>
+    <view class="bottom-bar"><t-button theme="primary" block shape="round" icon="chat" bind:tap="askHost">预订或咨询，问管家</t-button></view>
   </block>
-  <view class="bottom-bar"><t-button theme="primary" block icon="chat" bind:tap="askHost">预订或咨询请问管家</t-button></view>
 </view>

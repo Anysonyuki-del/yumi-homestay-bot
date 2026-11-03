@@ -1,4 +1,4 @@
-// 公开内容请求：房间列表、房间详情、入住指南（小程序住客自助 Spec F5）。
+// 公开内容请求：首页、房间列表、房间详情、入住指南（小程序住客自助 Spec F5，三标签 Spec F2–F5）。
 // 这些接口不需要登录；返回结构不符时一律按加载失败处理，不把服务器原文显示给客人。
 
 const { API_BASE_URL } = require('./auth')
@@ -6,12 +6,15 @@ const { API_BASE_URL } = require('./auth')
 const REQUEST_TIMEOUT_MS = 10000
 const LOAD_FAILED = '加载失败，请稍后重试'
 
-// 带分类的加载错误：页面只展示 message；statusCode 供调用方区分「已下架」。
+// 带分类的加载错误：页面只展示 message；statusCode 是接口状态码。
+// gone 只由调用方在确认「内容已下架」时设置：接口 404 也可能是后端版本较旧、还没有这个接口，
+// 那种情况必须按可重试的加载失败显示，不能当作下架。
 class ContentError extends Error {
-  constructor(message, statusCode = 0) {
+  constructor(message, statusCode = 0, gone = false) {
     super(message)
     this.name = 'ContentError'
     this.statusCode = statusCode
+    this.gone = gone
   }
 }
 
@@ -49,6 +52,7 @@ function toRoomCard(item) {
     !item || typeof item.id !== 'number' || !isString(item.name)
     || !isOptionalString(item.bed_type) || !isOptionalNumber(item.max_guests)
     || !isOptionalNumber(item.area_sqm) || !isOptionalString(item.cover_url)
+    || !isOptionalString(item.summary)
   ) {
     throw new ContentError(LOAD_FAILED)
   }
@@ -59,6 +63,7 @@ function toRoomCard(item) {
     maxGuests: item.max_guests,
     areaSqm: item.area_sqm,
     cover: item.cover_url ? absoluteUrl(item.cover_url) : '',
+    summary: item.summary || '',
   }
 }
 
@@ -73,12 +78,12 @@ const ROOM_GONE = '房间不存在或已下架'
 
 // 房间详情；房间下架或不存在（404）时报「已下架」，与可重试的加载失败区分。
 async function fetchRoom(id) {
-  if (!/^\d+$/.test(String(id))) throw new ContentError(ROOM_GONE, 404)
+  if (!/^\d+$/.test(String(id))) throw new ContentError(ROOM_GONE, 404, true)
   let body
   try {
     body = await getJson(`/api/miniprogram/rooms/${id}`)
   } catch (error) {
-    if (error.statusCode === 404) throw new ContentError(ROOM_GONE, 404)
+    if (error.statusCode === 404) throw new ContentError(ROOM_GONE, 404, true)
     throw error
   }
   const card = toRoomCard(body)
@@ -93,6 +98,35 @@ async function fetchRoom(id) {
     intro: body.intro || '',
     facilities: body.facilities,
     photos: body.photos.map(absoluteUrl).filter(Boolean),
+  }
+}
+
+const STORE_TEXT_FIELDS = ['name', 'intro', 'address', 'phone']
+
+// 首页：门店公开信息（后台没填为 null）与横幅图片地址。坐标只在经纬度都是数字时保留，
+// 页面据此决定是否提供导航。
+async function fetchHome() {
+  const body = await getJson('/api/miniprogram/home')
+  const { store, banners } = body
+  if (!Array.isArray(banners) || !banners.every(isString)) throw new ContentError(LOAD_FAILED)
+  if (store !== null && (
+    !store || typeof store !== 'object'
+    || !STORE_TEXT_FIELDS.every((key) => isOptionalString(store[key]))
+    || !isOptionalNumber(store.latitude) || !isOptionalNumber(store.longitude)
+  )) {
+    throw new ContentError(LOAD_FAILED)
+  }
+  return {
+    store: store && {
+      name: store.name || '',
+      intro: store.intro || '',
+      address: store.address || '',
+      phone: store.phone || '',
+      location: typeof store.latitude === 'number' && typeof store.longitude === 'number'
+        ? { latitude: store.latitude, longitude: store.longitude }
+        : null,
+    },
+    banners: banners.map(absoluteUrl).filter(Boolean),
   }
 }
 
@@ -114,7 +148,7 @@ async function fetchGuide() {
   })
 }
 
-// 三个页面共用的加载流程：每次加载领取新代次，结果返回时代次已变（重新加载或页面卸载）
+// 各页面共用的加载流程：每次加载领取新代次，结果返回时代次已变（重新加载或页面卸载）
 // 就丢弃，避免迟到的旧结果覆盖新内容。toReadyData 把结果转成页面数据。
 async function loadPageData(page, fetcher, toReadyData) {
   page.loadGeneration = (page.loadGeneration || 0) + 1
@@ -127,7 +161,7 @@ async function loadPageData(page, fetcher, toReadyData) {
   } catch (error) {
     if (generation !== page.loadGeneration) return
     page.setData({
-      status: error && error.statusCode === 404 ? 'gone' : 'error',
+      status: error && error.gone ? 'gone' : 'error',
       message: (error instanceof ContentError && error.message) || LOAD_FAILED,
     })
   }
@@ -143,6 +177,7 @@ module.exports = {
   fetchRooms,
   fetchRoom,
   fetchGuide,
+  fetchHome,
   loadPageData,
   discardPendingLoads,
 }

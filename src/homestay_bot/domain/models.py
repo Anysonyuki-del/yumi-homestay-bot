@@ -1061,6 +1061,49 @@ class RoomShowcasePhoto(Base):
     )
 
 
+class MiniProgramStoreProfile(TimestampMixin, Base):
+    """小程序公开的门店信息，单行表（小程序三标签 Spec F4）。
+
+    这里的字段都会公开给任何打开小程序的人，只放管理员主动填写的门店级信息；
+    单间房的地址提示、停车说明和凭证不放进来。迁移时预置 id=1 这一行，后台写入与
+    横幅上传都锁这一行，串行化并发修改。
+    """
+
+    __tablename__ = "miniprogram_store_profile"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_miniprogram_store_profile_singleton"),
+        CheckConstraint(
+            # 必须显式写 IS NOT NULL：只填一个坐标时 BETWEEN 得到 NULL，CHECK 会把「未知」当作通过。
+            "(latitude IS NULL AND longitude IS NULL) OR "
+            "(latitude IS NOT NULL AND longitude IS NOT NULL"
+            " AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180)",
+            name="ck_miniprogram_store_profile_location",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    name: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    intro: Mapped[str | None] = mapped_column(Text, nullable=True)
+    address: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+
+
+class MiniProgramBanner(Base):
+    """小程序首页横幅图片；文件存在私有存储，只经横幅记录编号读取。"""
+
+    __tablename__ = "miniprogram_banners"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    file_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class StayOrder(TimestampMixin, Base):
     """保存从百居易同步的入住订单关键事实。"""
 

@@ -1,0 +1,11 @@
+<!-- 三个页面共用的状态块：空、出错、下架。title 必填，body 与按钮可选；按钮统一触发页面的 onStateAction，由页面按当前状态决定做什么（不用动态事件名，兼容旧基础库）。 -->
+<template name="state">
+  <view class="state" aria-role="status">
+    <view class="state__mark" aria-hidden="true"></view>
+    <text class="state__title">{{title}}</text>
+    <text wx:if="{{body}}" class="state__body">{{body}}</text>
+    <view wx:if="{{actionText}}" class="state__action">
+      <t-button theme="primary" variant="{{actionVariant || 'base'}}" shape="round" icon="{{actionIcon}}" bind:tap="onStateAction">{{actionText}}</t-button>
+    </view>
+  </view>
+</template>

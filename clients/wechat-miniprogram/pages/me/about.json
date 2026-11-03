@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "关于本店",
+  "usingComponents": {
+    "t-button": "tdesign-miniprogram/button/button",
+    "t-icon": "tdesign-miniprogram/icon/icon",
+    "t-skeleton": "tdesign-miniprogram/skeleton/skeleton"
+  }
+}

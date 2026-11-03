@@ -1,0 +1,15 @@
+<import src="../../templates/state.wxml" />
+<view class="page">
+  <view wx:if="{{status === 'loading'}}" aria-label="正在加载问答"><t-skeleton row-col="{{skeletonRows}}" loading /></view>
+  <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '问答没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
+  <template wx:elif="{{status === 'gone'}}" is="state" data="{{title: message, body: '可以回到服务页看看其他分类。', actionText: '回到服务', actionVariant: 'outline'}}" />
+  <block wx:else>
+    <t-collapse theme="card" expandMutex>
+      <t-collapse-panel wx:for="{{items}}" wx:key="question" header="{{item.question}}" value="{{index}}">
+        <text class="body-text" user-select>{{item.answer}}</text>
+      </t-collapse-panel>
+    </t-collapse>
+    <text class="footnote">没找到答案？点右下角问管家。</text>
+    <view class="ask-host"><t-button theme="primary" shape="round" icon="chat" bind:tap="askHost">问管家</t-button></view>
+  </block>
+</view>

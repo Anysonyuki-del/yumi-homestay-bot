@@ -42,6 +42,9 @@
           <a href="/employee/complaints" {% if active_nav == "complaints" %}aria-current="page"{% endif %}>{{ icons.icon("warning") }}<span>投诉处理</span></a>
           {% endif %}
           <a href="/employee/knowledge" {% if active_nav == "knowledge" %}aria-current="page"{% endif %}>{{ icons.icon("book") }}<span>知识库</span></a>
+          {% if nav_is_admin %}
+          <a href="/employee/admin/miniprogram" {% if active_nav == "miniprogram" %}aria-current="page"{% endif %}>{{ icons.icon("home") }}<span>小程序首页</span></a>
+          {% endif %}
           </div>
           {% if nav_is_admin %}
           <div class="nav-group">
@@ -68,7 +71,7 @@
         </header>
         <details class="no-script-nav">
           <summary>打开页面导航</summary>
-          {% if nav_is_admin %}<a href="/employee/admin">工作台</a><a href="/employee/admin/attention">待我关注</a><a href="/employee/admin/operations">入住安排</a><a href="/employee/properties">房源管理</a>{% endif %}<a href="/employee/knowledge">知识库</a>{% if nav_is_admin %}<a href="/employee/customers">客户管理</a><a href="/employee/complaints">投诉处理</a>{% endif %}<a href="/employee/tasks">任务中心</a>{% if nav_is_admin %}<a href="/employee/approvals">预订审批</a><a href="/employee/admin/debug">AI 调试台</a><a href="/employee/admin/diagnostics">系统诊断</a><a href="/employee/admin/settings">接口设置</a>{% endif %}<a href="/employee/account">账号安全</a>
+          {% if nav_is_admin %}<a href="/employee/admin">工作台</a><a href="/employee/admin/attention">待我关注</a><a href="/employee/admin/operations">入住安排</a><a href="/employee/properties">房源管理</a>{% endif %}<a href="/employee/knowledge">知识库</a>{% if nav_is_admin %}<a href="/employee/customers">客户管理</a><a href="/employee/complaints">投诉处理</a><a href="/employee/admin/miniprogram">小程序首页</a>{% endif %}<a href="/employee/tasks">任务中心</a>{% if nav_is_admin %}<a href="/employee/approvals">预订审批</a><a href="/employee/admin/debug">AI 调试台</a><a href="/employee/admin/diagnostics">系统诊断</a><a href="/employee/admin/settings">接口设置</a>{% endif %}<a href="/employee/account">账号安全</a>
         </details>
         <main class="page-content{% if active_nav == "operations" %} page-content--wide{% endif %}" id="main-content" tabindex="-1">
           {% if health_degraded %}<div class="alert alert--warning" role="status">{{ icons.icon("warning") }}<span>系统当前处于降级状态，部分自动化能力可能不可用。请查看<a href="/employee/admin/diagnostics">系统诊断</a>。</span></div>{% endif %}

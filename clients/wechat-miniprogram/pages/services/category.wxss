@@ -1,0 +1,2 @@
+/* 服务分类：问答折叠在暖奶油面板里，末尾一句提示。 */
+.footnote { display: block; padding: 32rpx 8rpx 0; font-size: 26rpx; color: var(--yumi-muted); }

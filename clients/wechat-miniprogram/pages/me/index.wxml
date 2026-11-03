@@ -1,0 +1,30 @@
+<view class="page">
+  <view class="account">
+    <view class="account__avatar" aria-hidden="true"><t-icon name="user" size="56rpx" color="#6c6a64" /></view>
+    <view class="account__main">
+      <text class="account__title">{{authStatus === 'logged_in' ? '已登录' : authStatus === 'unknown' ? '登录状态待确认' : authStatus === 'checking' ? '正在确认登录状态' : '未登录'}}</text>
+      <text wx:if="{{authMessage}}" class="account__message" aria-live="polite">{{authMessage}}</text>
+    </view>
+    <t-button wx:if="{{authStatus === 'logged_out'}}" theme="primary" size="small" shape="round" loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="handleLogin">微信登录</t-button>
+    <t-button wx:elif="{{authStatus === 'unknown'}}" theme="primary" variant="outline" size="small" shape="round" loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="restoreLogin">重试</t-button>
+    <t-button wx:elif="{{authStatus === 'logged_in'}}" variant="text" size="small" loading="{{authBusy}}" disabled="{{authBusy}}" bind:tap="handleLogout">退出登录</t-button>
+  </view>
+
+  <view class="menu">
+    <view class="menu__row" bindtap="openOrders" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button">
+      <t-icon name="order" size="44rpx" color="#a9583e" />
+      <text class="menu__label">我的订单</text>
+      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+    </view>
+    <view class="menu__row" bindtap="askHost" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button">
+      <t-icon name="chat" size="44rpx" color="#a9583e" />
+      <text class="menu__label">联系管家</text>
+      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+    </view>
+    <view class="menu__row" bindtap="openAbout" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button">
+      <t-icon name="shop" size="44rpx" color="#a9583e" />
+      <text class="menu__label">关于本店</text>
+      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+    </view>
+  </view>
+</view>

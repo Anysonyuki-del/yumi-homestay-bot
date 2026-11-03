@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import functools
 import hashlib
-import io
 import json
 import logging
 import re
@@ -181,7 +180,7 @@ from homestay_bot.services.handoff_card import (
 )
 from homestay_bot.services.hostex_sync import HostexSyncService
 from homestay_bot.services.human_session import HumanSessionService
-from homestay_bot.services.image_metadata import strip_image_metadata
+from homestay_bot.services.image_metadata import save_public_image
 from homestay_bot.services.knowledge_embeddings import (
     KnowledgeEmbeddingSync,
     PendingVector,
@@ -198,6 +197,7 @@ from homestay_bot.services.lifecycle_reminders import (
 from homestay_bot.services.message_service import IncomingMessage, MessageService
 from homestay_bot.services.miniprogram_auth import MiniProgramAuthService
 from homestay_bot.services.miniprogram_content import MiniProgramContentService
+from homestay_bot.services.miniprogram_home_admin import SessionMiniProgramHomeAdmin
 from homestay_bot.services.private_file_storage import (
     PrivateFileStorage,
     StoredPrivateFile,
@@ -2585,16 +2585,10 @@ class SessionPropertyAdminService:
     ) -> None:
         """去除元数据后落盘并登记照片；登记失败时删掉刚写的文件，不留孤儿。"""
         PropertyAdminService.require_admin(employee)
-        normalized_type = content_type.lower()
-        if normalized_type not in KNOWLEDGE_IMAGE_TYPES:
-            raise ValueError("只支持 JPG 或 PNG 图片")
-        size_limit = min(self._upload_size_limit, KNOWLEDGE_IMAGE_MAX_BYTES)
-        content = stream.read(size_limit + 1)
-        if len(content) > size_limit:
-            raise ValueError("图片大小超过限制")
         # 照片会公开给任何人，先去掉 EXIF GPS 等元数据再保存（Spec F4）。
-        cleaned = strip_image_metadata(content, normalized_type)
-        stored = await self._storage.save_image(io.BytesIO(cleaned), normalized_type, size_limit)
+        stored = await save_public_image(
+            self._storage, stream, content_type, self._upload_size_limit
+        )
         try:
             async with self._factory() as session:
                 await RoomShowcaseAdminService(session).add_photo(
@@ -4406,6 +4400,7 @@ def _clear_lifespan_state(app: FastAPI) -> None:
         "admin_login_rate_limiter",
         "miniprogram_auth_service",
         "miniprogram_content_service",
+        "miniprogram_home_admin",
         "admin_argon2_semaphore",
         "admin_csrf_service",
         "employee_access_verifier",
@@ -4515,6 +4510,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 公开内容只读数据库，不依赖小程序登录凭据：未配置登录时房间介绍和入住指南照常可用。
     app.state.miniprogram_content_service = MiniProgramContentService(
         factory, private_file_storage
+    )
+    # 后台维护首页门店信息与横幅；上传上限与房间照片共用私有上传配置。
+    app.state.miniprogram_home_admin = SessionMiniProgramHomeAdmin(
+        factory, private_file_storage, bootstrap.private_upload_max_bytes
     )
     argon2_executor: ThreadPoolExecutor | None = None
     argon2_semaphore: asyncio.Semaphore | None = None

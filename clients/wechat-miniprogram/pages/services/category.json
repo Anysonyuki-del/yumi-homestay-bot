@@ -1,11 +1,10 @@
 {
-  "navigationBarTitleText": "入住指南",
+  "navigationBarTitleText": "服务",
   "enablePullDownRefresh": true,
   "usingComponents": {
     "t-button": "tdesign-miniprogram/button/button",
     "t-collapse": "tdesign-miniprogram/collapse/collapse",
     "t-collapse-panel": "tdesign-miniprogram/collapse-panel/collapse-panel",
-    "t-empty": "tdesign-miniprogram/empty/empty",
     "t-skeleton": "tdesign-miniprogram/skeleton/skeleton"
   }
 }

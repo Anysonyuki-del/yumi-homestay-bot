@@ -1,24 +1,43 @@
 {
   "pages": [
-    "pages/rooms/index",
+    "pages/home/index",
+    "pages/services/index",
+    "pages/me/index",
     "pages/rooms/detail",
-    "pages/guide/index"
+    "pages/services/category",
+    "pages/me/about"
   ],
   "window": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "YuMi 民宿",
-    "navigationBarBackgroundColor": "#ffffff",
-    "backgroundColor": "#f5f5f5",
+    "navigationBarBackgroundColor": "#faf9f5",
+    "backgroundColor": "#faf9f5",
     "backgroundTextStyle": "dark"
   },
   "tabBar": {
-    "color": "#666666",
-    "selectedColor": "#0052d9",
-    "backgroundColor": "#ffffff",
-    "borderStyle": "black",
+    "color": "#6c6a64",
+    "selectedColor": "#a9583e",
+    "backgroundColor": "#faf9f5",
+    "borderStyle": "white",
     "list": [
-      { "pagePath": "pages/rooms/index", "text": "房间" },
-      { "pagePath": "pages/guide/index", "text": "入住指南" }
+      {
+        "pagePath": "pages/home/index",
+        "text": "首页",
+        "iconPath": "assets/tab/home.png",
+        "selectedIconPath": "assets/tab/home-active.png"
+      },
+      {
+        "pagePath": "pages/services/index",
+        "text": "服务",
+        "iconPath": "assets/tab/services.png",
+        "selectedIconPath": "assets/tab/services-active.png"
+      },
+      {
+        "pagePath": "pages/me/index",
+        "text": "我的",
+        "iconPath": "assets/tab/me.png",
+        "selectedIconPath": "assets/tab/me-active.png"
+      }
     ]
   },
   "style": "v2",
