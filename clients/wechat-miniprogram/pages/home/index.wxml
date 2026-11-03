@@ -23,17 +23,24 @@
       <text class="store__intro">欢迎入住，房间和入住指南都在这里。</text>
     </view>
     <!-- 快捷导航（首页二级菜单，快捷导航 Spec N1）：四个固定入口，加载完成后才出现。 -->
+    <!-- 「联系管家」那格是原生客服按钮：客服会话只能由客人点按钮直接打开，不能从 JS 调起（客服按钮 Spec C1）。 -->
     <view class="quick-nav" aria-role="navigation" aria-label="快捷导航">
-      <view class="quick-nav__item" wx:for="{{quickNav}}" wx:key="key" data-key="{{item.key}}" bindtap="openQuickNav" hover-class="quick-nav__item--pressed" hover-stay-time="80" aria-role="button" aria-label="{{item.label}}">
-        <view class="quick-nav__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#a9583e" /></view>
-        <text class="quick-nav__label">{{item.label}}</text>
-      </view>
+      <block wx:for="{{quickNav}}" wx:key="key">
+        <button wx:if="{{item.key === 'host'}}" class="contact-reset quick-nav__item" open-type="contact" session-from="home" hover-class="quick-nav__item--pressed" hover-stay-time="80" aria-label="{{item.label}}">
+          <view class="quick-nav__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#a9583e" /></view>
+          <text class="quick-nav__label">{{item.label}}</text>
+        </button>
+        <view wx:else class="quick-nav__item" data-key="{{item.key}}" bindtap="openQuickNav" hover-class="quick-nav__item--pressed" hover-stay-time="80" aria-role="button" aria-label="{{item.label}}">
+          <view class="quick-nav__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#a9583e" /></view>
+          <text class="quick-nav__label">{{item.label}}</text>
+        </view>
+      </block>
     </view>
     <view class="rooms-head">
       <text class="section-title rooms-head__title">房间</text>
       <text wx:if="{{rooms.length}}" class="rooms-head__count">共 {{rooms.length}} 间</text>
     </view>
-    <template wx:if="{{status === 'empty'}}" is="state" data="{{title: '房间介绍正在准备', body: '想了解房型、床型或入住安排，可以直接问管家。', actionText: '问管家', actionIcon: 'chat', compact: true}}" />
+    <template wx:if="{{status === 'empty'}}" is="state" data="{{title: '房间介绍正在准备', body: '想了解房型、床型或入住安排，可以直接问管家。', actionText: '问管家', actionIcon: 'chat', compact: true, actionContact: true, sessionFrom: 'home'}}" />
     <block wx:else>
       <view class="room pressable" wx:for="{{rooms}}" wx:key="id" data-id="{{item.id}}" bindtap="openRoom" hover-class="is-pressed" hover-stay-time="80" aria-role="button" aria-label="查看{{item.name}}">
         <view class="room__media">
@@ -45,13 +52,13 @@
         <text wx:if="{{item.summary}}" class="room__summary">{{item.summary}}</text>
       </view>
       <!-- 页尾联系管家条替代首页悬浮按钮，不再遮挡房间大图（快捷导航 Spec N2、D2）。 -->
-      <view class="contact pressable" bindtap="askHost" hover-class="is-pressed" hover-stay-time="80" aria-role="button" aria-label="联系管家">
+      <button class="contact-reset contact pressable" open-type="contact" session-from="home" hover-class="is-pressed" hover-stay-time="80" aria-label="联系管家">
         <view class="contact__text">
           <text class="contact__title">还有问题？直接问管家</text>
           <text class="contact__body">房型、入住安排都可以问。</text>
         </view>
         <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
-      </view>
+      </button>
     </block>
   </block>
 </view>

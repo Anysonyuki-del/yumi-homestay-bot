@@ -1,6 +1,5 @@
 // 服务分类：一个知识分类下的问答折叠列表，导航栏标题就是分类名（三标签 Spec F3）。
 const { ContentError, fetchGuide, loadPageData, discardPendingLoads } = require('../../utils/content')
-const { openServiceChat } = require('../../utils/service-chat')
 
 const CATEGORY_GONE = '这个分类暂时没有内容'
 
@@ -38,8 +37,5 @@ Page({
   onStateAction() {
     if (this.data.status === 'error') this.retry()
     else wx.navigateBack({ fail: () => wx.switchTab({ url: '/pages/services/index' }) })
-  },
-  askHost() {
-    openServiceChat()
   },
 })

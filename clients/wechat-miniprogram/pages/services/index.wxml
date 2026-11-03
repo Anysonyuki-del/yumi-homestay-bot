@@ -8,7 +8,7 @@
     </view>
   </view>
   <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '服务没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
-  <template wx:elif="{{status === 'empty'}}" is="state" data="{{title: '入住指南正在整理', body: '入住时间、Wi-Fi 这类问题，可以先问管家。', actionText: '问管家', actionIcon: 'chat'}}" />
+  <template wx:elif="{{status === 'empty'}}" is="state" data="{{title: '入住指南正在整理', body: '入住时间、Wi-Fi 这类问题，可以先问管家。', actionText: '问管家', actionIcon: 'chat', actionContact: true, sessionFrom: 'services'}}" />
   <block wx:else>
     <!-- 导航栏已写「服务」，页内不再重复标题（质感 Spec T5）。 -->
     <view class="cards">
@@ -18,12 +18,13 @@
         <text class="card__meta">{{item.count}} 条 · {{item.preview}}</text>
       </view>
     </view>
-    <view class="contact pressable" bindtap="askHost" hover-class="is-pressed" hover-stay-time="80" aria-role="button" aria-label="联系管家">
+    <!-- 原生客服按钮：客服会话只能由客人点按钮直接打开（客服按钮 Spec C1）。 -->
+    <button class="contact-reset contact pressable" open-type="contact" session-from="services" hover-class="is-pressed" hover-stay-time="80" aria-label="联系管家">
       <view class="contact__text">
         <text class="contact__title">联系管家</text>
         <text class="contact__body">没找到想问的，直接问管家。</text>
       </view>
       <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
-    </view>
+    </button>
   </block>
 </view>

@@ -1,12 +1,14 @@
 <!-- 三个页面共用的状态块：空、出错、下架。title 必填，body 与按钮可选；按钮统一触发页面的 onStateAction，由页面按当前状态决定做什么（不用动态事件名，兼容旧基础库）。
-     compact 为真时用紧凑版，供嵌在页面区块里的空状态使用。 -->
+     compact 为真时用紧凑版，供嵌在页面区块里的空状态使用。
+     actionContact 为真时按钮是原生客服按钮，直接打开客服会话，不触发 onStateAction；sessionFrom 标明来源页（客服按钮 Spec C1）。 -->
 <template name="state">
   <view class="state {{compact ? 'state--compact' : ''}}" aria-role="status">
     <view class="state__mark" aria-hidden="true"></view>
     <text class="state__title">{{title}}</text>
     <text wx:if="{{body}}" class="state__body">{{body}}</text>
     <view wx:if="{{actionText}}" class="state__action">
-      <t-button theme="primary" variant="{{actionVariant || 'base'}}" shape="round" icon="{{actionIcon}}" bind:tap="onStateAction">{{actionText}}</t-button>
+      <t-button wx:if="{{actionContact}}" theme="primary" variant="{{actionVariant || 'base'}}" shape="round" icon="{{actionIcon}}" open-type="contact" session-from="{{sessionFrom}}">{{actionText}}</t-button>
+      <t-button wx:else theme="primary" variant="{{actionVariant || 'base'}}" shape="round" icon="{{actionIcon}}" bind:tap="onStateAction">{{actionText}}</t-button>
     </view>
   </view>
 </template>

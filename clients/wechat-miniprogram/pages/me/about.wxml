@@ -2,7 +2,7 @@
 <view class="page">
   <view wx:if="{{status === 'loading'}}" aria-label="正在加载门店信息"><t-skeleton row-col="{{skeletonRows}}" loading /></view>
   <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '门店信息没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
-  <template wx:elif="{{status === 'empty'}}" is="state" data="{{title: '门店介绍正在整理', body: '地址、交通和联系方式，可以先问管家。', actionText: '问管家', actionIcon: 'chat'}}" />
+  <template wx:elif="{{status === 'empty'}}" is="state" data="{{title: '门店介绍正在整理', body: '地址、交通和联系方式，可以先问管家。', actionText: '问管家', actionIcon: 'chat', actionContact: true, sessionFrom: 'about'}}" />
   <block wx:else>
     <text wx:if="{{store.name}}" class="about__name">{{store.name}}</text>
     <text wx:if="{{store.intro}}" class="body-text about__intro" user-select>{{store.intro}}</text>

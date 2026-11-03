@@ -13,6 +13,6 @@
       </t-collapse>
     </view>
     <text class="footnote">没找到答案？点右下角问管家。</text>
-    <view class="ask-host"><t-button theme="primary" shape="round" icon="chat" bind:tap="askHost">问管家</t-button></view>
+    <view class="ask-host"><t-button theme="primary" shape="round" icon="chat" open-type="contact" session-from="category">问管家</t-button></view>
   </block>
 </view>

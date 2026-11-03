@@ -1,6 +1,5 @@
 // 首页：横幅轮播、门店标题区、快捷导航与房间大图卡片，点房间进详情（三标签 Spec F2，快捷导航 Spec N1、N2）。
 const { fetchHome, fetchRooms, loadPageData, discardPendingLoads } = require('../../utils/content')
-const { openServiceChat } = require('../../utils/service-chat')
 const { specLine } = require('../../utils/format')
 const { openStoreMap, ABOUT_PAGE } = require('../../utils/store-map')
 
@@ -59,27 +58,23 @@ Page({
   retry() {
     this.load()
   },
-  // 状态块按钮：出错时重试，空列表时问管家。
+  // 状态块按钮只剩出错时的重试；空列表时的「问管家」是原生客服按钮，不经这里（客服按钮 Spec C1）。
   onStateAction() {
-    if (this.data.status === 'error') return this.retry()
-    return this.askHost()
+    return this.retry()
   },
   openRoom(event) {
     wx.navigateTo({ url: `/pages/rooms/detail?id=${event.currentTarget.dataset.id}` })
   },
   // 快捷导航：到店导航按有无坐标决定开地图还是进关于页；入住指南是底部标签页，只能 switchTab。
+  // 「联系管家」那格是原生客服按钮，不经这里（客服按钮 Spec C1）。
   openQuickNav(event) {
     const { key } = event.currentTarget.dataset
     if (key === 'map') return openStoreMap(this.data.store)
     if (key === 'guide') return wx.switchTab({ url: '/pages/services/index' })
     if (key === 'about') return wx.navigateTo({ url: ABOUT_PAGE })
-    return this.askHost()
   },
   // 封面加载完成后才显示，配合样式里的淡入过渡。
   onCoverLoad(event) {
     this.setData({ [`rooms[${event.currentTarget.dataset.index}].coverLoaded`]: true })
-  },
-  askHost() {
-    return openServiceChat()
   },
 })

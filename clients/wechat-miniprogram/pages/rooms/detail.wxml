@@ -25,6 +25,6 @@
         </view>
       </view>
     </view>
-    <view class="bottom-bar"><t-button theme="primary" block shape="round" icon="chat" bind:tap="askHost">预订或咨询，问管家</t-button></view>
+    <view class="bottom-bar"><t-button theme="primary" block shape="round" icon="chat" open-type="contact" session-from="room">预订或咨询，问管家</t-button></view>
   </block>
 </view>

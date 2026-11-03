@@ -18,9 +18,8 @@ const STORE = {
 }
 const HOME_EMPTY = { statusCode: 200, data: { store: null, banners: [] } }
 
-// routes 按路径返回响应、网络失败，或挂起等测试手动放行；记录请求与客服、提示调用。
-// confirmModal 决定确认框的回答：true 为点「拨打」，false 为取消；chatFails 为真时打开客服失败。
-function installWx(routes = {}, { confirmModal = true, chatFails = false } = {}) {
+// routes 按路径返回响应、网络失败，或挂起等测试手动放行；记录请求、跳转与提示调用。
+function installWx(routes = {}) {
   const calls = []
   const pending = []
   globalThis.wx = {
@@ -43,14 +42,6 @@ function installWx(routes = {}, { confirmModal = true, chatFails = false } = {})
     switchTab(options) { calls.push(`tab:${options.url}`) },
     openLocation(options) { calls.push(`map:${options.latitude},${options.longitude}`) },
     makePhoneCall(options) { calls.push(`call:${options.phoneNumber}`) },
-    openCustomerServiceChat(options) {
-      calls.push(`chat:${options.corpId}|${options.extInfo.url}`)
-      setImmediate(() => (chatFails ? options.fail({ errMsg: 'openCustomerServiceChat:fail' }) : options.success({})))
-    },
-    showModal(options) {
-      calls.push(`modal:${options.content}`)
-      options.success({ confirm: confirmModal })
-    },
   }
   return { calls, pending }
 }
@@ -165,58 +156,6 @@ test('详情页：下架显示 gone，不提供重试；加载成功设置标题
   assert.ok(calls.includes('title:山海大床房'))
 })
 
-const CHAT_CALL = 'chat:ww6412ad55e27f12dd|https://work.weixin.qq.com/kfid/kfc6727f14ed9ac0252'
-
-test('问管家打开企业微信客服：带上企业 ID 与客服链接，打开成功时不读门店电话', async () => {
-  const { openServiceChat } = require(path.join(CLIENT_ROOT, 'utils/service-chat.js'))
-  const { calls } = installWx({ '/api/miniprogram/home': { statusCode: 200, data: { store: STORE, banners: [] } } })
-  await openServiceChat()
-  assert.deepEqual(calls, [CHAT_CALL])
-})
-
-test('客服打不开时：有门店电话确认后拨打清洗后的号码，取消不拨', async () => {
-  const { openServiceChat } = require(path.join(CLIENT_ROOT, 'utils/service-chat.js'))
-  const home = { statusCode: 200, data: { store: STORE, banners: [] } }
-  let { calls } = installWx({ '/api/miniprogram/home': home }, { chatFails: true })
-  await openServiceChat()
-  assert.deepEqual(calls, [CHAT_CALL, '/api/miniprogram/home', 'modal:拨打门店电话 0571-1234 5678？', 'call:057112345678'])
-
-  ;({ calls } = installWx({ '/api/miniprogram/home': home }, { confirmModal: false, chatFails: true }))
-  await openServiceChat()
-  assert.deepEqual(calls, [CHAT_CALL, '/api/miniprogram/home', 'modal:拨打门店电话 0571-1234 5678？'])
-})
-
-test('客服打不开时：没填电话、没有门店信息或读取失败，都只提示稍后再试', async () => {
-  const { openServiceChat } = require(path.join(CLIENT_ROOT, 'utils/service-chat.js'))
-  const routes = [
-    { statusCode: 200, data: { store: { ...STORE, phone: null }, banners: [] } },
-    HOME_EMPTY,
-    { statusCode: 503, data: {} },
-    { fail: true },
-  ]
-  for (const route of routes) {
-    const { calls } = installWx({ '/api/miniprogram/home': route }, { chatFails: true })
-    await openServiceChat()
-    assert.deepEqual(calls, [CHAT_CALL, '/api/miniprogram/home', 'toast:暂时无法打开客服，请稍后再试'])
-  }
-})
-
-test('客服打不开时连点两次只读一次电话、只弹一个确认框', async () => {
-  const { openServiceChat } = require(path.join(CLIENT_ROOT, 'utils/service-chat.js'))
-  const { calls, pending } = installWx({
-    '/api/miniprogram/home': { statusCode: 200, data: { store: STORE, banners: [] }, hold: true },
-  }, { chatFails: true })
-  // 两次都先发出、再放行请求：没有连点保护时会读两次电话、叠出两个确认框。
-  const taps = [openServiceChat(), openServiceChat()]
-  // 等两次打开客服都失败、进入兜底并发出读取电话的请求。
-  await new Promise(setImmediate)
-  await new Promise(setImmediate)
-  pending.forEach((respond) => respond())
-  await Promise.all(taps)
-  assert.equal(calls.filter((call) => call === '/api/miniprogram/home').length, 1)
-  assert.equal(calls.filter((call) => call.startsWith('modal:')).length, 1)
-})
-
 test('规格行跳过缺失项，三项都缺时为空串', () => {
   const { specLine } = require(path.join(CLIENT_ROOT, 'utils/format.js'))
   assert.equal(specLine({ bedType: '1.8 米大床', maxGuests: 2, areaSqm: 35 }), '1.8 米大床 · 可住 2 人 · 35 ㎡')
@@ -224,9 +163,10 @@ test('规格行跳过缺失项，三项都缺时为空串', () => {
   assert.equal(specLine({ bedType: '', maxGuests: null, areaSqm: null }), '')
 })
 
-test('状态块按钮：出错时重试，空列表时转问管家', async () => {
+// 空列表时的「问管家」是原生客服按钮，不经 onStateAction（客服按钮 Spec C1）。
+test('状态块按钮：出错时重试，重试后可以进入空列表', async () => {
   const routes = { '/api/miniprogram/rooms': { fail: true }, '/api/miniprogram/home': HOME_EMPTY }
-  const { calls } = installWx(routes)
+  installWx(routes)
   const page = loadPage('pages/home/index.js')
   await page.load()
   routes['/api/miniprogram/rooms'] = { statusCode: 200, data: { rooms: [] } }
@@ -234,8 +174,6 @@ test('状态块按钮：出错时重试，空列表时转问管家', async () =>
   await new Promise(setImmediate)
   await new Promise(setImmediate)
   assert.equal(page.data.status, 'empty')
-  await page.onStateAction()
-  assert.ok(calls.includes(CHAT_CALL))
 })
 
 test('首页接口：门店信息为 null 时原样返回；坐标齐全才给出导航位置；结构不符报错', async () => {
@@ -472,9 +410,5 @@ test('首页快捷导航：四个固定入口按顺序显示，各自去对的�
   tap('guide')
   tap('about')
   assert.deepEqual(calls, ['tab:/pages/services/index', 'navigate:/pages/me/about'])
-
-  // 联系管家打开企业微信客服。
-  calls.length = 0
-  await tap('host')
-  assert.deepEqual(calls, [CHAT_CALL])
+  // 「联系管家」是原生客服按钮，不经 openQuickNav（客服按钮 Spec C1）。
 })

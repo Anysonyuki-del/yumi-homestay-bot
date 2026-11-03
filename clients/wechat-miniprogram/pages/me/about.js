@@ -1,6 +1,5 @@
 // 关于本店：民宿名、简介、地址与电话；有坐标才提供导航，有电话才提供拨号（三标签 Spec F5）。
 const { fetchHome, loadPageData, discardPendingLoads } = require('../../utils/content')
-const { openServiceChat } = require('../../utils/service-chat')
 const { dialNumber } = require('../../utils/format')
 const { openStoreMap } = require('../../utils/store-map')
 
@@ -27,10 +26,9 @@ Page({
   retry() {
     this.load()
   },
-  // 状态块按钮：出错时重试，没有门店信息时问管家。
+  // 状态块按钮只剩出错时的重试；没有门店信息时的「问管家」是原生客服按钮，不经这里（客服按钮 Spec C1）。
   onStateAction() {
-    if (this.data.status === 'error') this.retry()
-    else openServiceChat()
+    this.retry()
   },
   // 只有后台填了经纬度才打开地图；没有坐标时地址只供阅读和复制（与首页「到店导航」共用逻辑）。
   openMap() {

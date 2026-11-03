@@ -85,5 +85,12 @@ page {
 /* 「问管家」悬浮按钮：紧凑胶囊，靠右下；只在有内容时出现。 */
 .ask-host { position: fixed; right: 32rpx; bottom: calc(40rpx + env(safe-area-inset-bottom)); z-index: 10; border-radius: 999rpx; box-shadow: 0 8rpx 28rpx rgba(20, 20, 19, 0.16); }
 
+/* 原生客服按钮（open-type="contact"）去掉微信按钮的默认外观，让自绘的格子、行和条看起来与改前一致（客服按钮 Spec C1）。
+   这里只用单个类名，权重与页面类相同；页面样式表在全局之后加载，页面类写的内边距、底色和圆角会覆盖这里。
+   微信自带的 button:not([size=mini]) 会设宽度和左右 auto 外边距，权重更高，所以宽度和外边距要用同等权重单独清掉。 */
+.contact-reset { padding: 0; border-radius: 0; background: transparent; font-size: inherit; font-weight: inherit; line-height: inherit; text-align: left; color: inherit; }
+.contact-reset::after { border: none; }
+button.contact-reset:not([size=mini]) { width: auto; margin: 0; }
+
 /* 详情页底部操作栏：奶油底 + 细分隔线，不加阴影。 */
 .bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom)); background: var(--yumi-canvas); border-top: 1rpx solid var(--yumi-hairline); z-index: 10; }

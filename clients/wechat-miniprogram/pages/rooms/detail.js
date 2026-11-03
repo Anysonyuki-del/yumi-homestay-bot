@@ -1,6 +1,5 @@
 // 房间详情：照片轮播、基本信息、简介与设施；不显示价格房态，预订咨询转管家（Spec F5）。
 const { fetchRoom, loadPageData, discardPendingLoads } = require('../../utils/content')
-const { openServiceChat } = require('../../utils/service-chat')
 const { specLine } = require('../../utils/format')
 
 Page({
@@ -42,8 +41,5 @@ Page({
   },
   backToList() {
     wx.navigateBack({ fail: () => wx.switchTab({ url: '/pages/home/index' }) })
-  },
-  askHost() {
-    openServiceChat()
   },
 })

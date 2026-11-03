@@ -1,7 +1,6 @@
 // 我的：微信登录与退出、联系管家、关于本店、我的订单入口（三标签 Spec F5）。
 // 登录状态只经 utils/auth.js 读写；页面不接触 token，也不显示头像昵称。
 const { ensureLogin, restore, logout } = require('../../utils/auth')
-const { openServiceChat } = require('../../utils/service-chat')
 
 const ORDERS_COMING = '订单查询即将开放，现在可以问管家'
 
@@ -66,9 +65,6 @@ Page({
       if (generation !== this.authGeneration) return
       this.setData({ authBusy: false, authMessage: error.message || '退出未完成，请重试' })
     }
-  },
-  askHost() {
-    return openServiceChat()
   },
   openAbout() {
     wx.navigateTo({ url: '/pages/me/about' })

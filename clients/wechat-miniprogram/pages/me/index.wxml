@@ -18,11 +18,12 @@
   </view>
 
   <view class="menu">
-    <view class="menu__row" bindtap="askHost" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button">
+    <!-- 原生客服按钮：客服会话只能由客人点按钮直接打开（客服按钮 Spec C1）。 -->
+    <button class="contact-reset menu__row" open-type="contact" session-from="me" hover-class="menu__row--pressed" hover-stay-time="80" aria-label="联系管家">
       <t-icon name="chat" size="44rpx" color="#a9583e" />
       <text class="menu__label">联系管家</text>
       <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
-    </view>
+    </button>
     <view class="menu__row" bindtap="openAbout" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button">
       <t-icon name="shop" size="44rpx" color="#a9583e" />
       <text class="menu__label">关于本店</text>
