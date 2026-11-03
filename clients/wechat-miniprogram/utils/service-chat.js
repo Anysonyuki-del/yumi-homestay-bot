@@ -1,14 +1,13 @@
 // 「问管家」：打开企业微信的微信客服会话，AI 与人工仍在那边回复（小程序住客自助 Spec F5）。
-// 企业 ID 与客服链接都是公开值，需在微信客服后台绑定本小程序后才能打开。
+// 企业 ID 与客服链接都是公开值；需在微信客服后台把本小程序接入该客服账号，且小程序与企业微信同一主体。
 const { fetchHome } = require('./content')
 const { dialNumber } = require('./format')
 
-// 由民宿方提供后填写；为空时退回拨打门店电话（质感 Spec T1），填好后自动改走在线客服。
-const CORP_ID = ''
-const SERVICE_URL = ''
+// 用户 2026-11-03 提供：企业微信企业 ID 与机器人所用微信客服账号的客服链接。
+const CORP_ID = 'ww6412ad55e27f12dd'
+const SERVICE_URL = 'https://work.weixin.qq.com/kfid/kfc6727f14ed9ac0252'
 
 const UNAVAILABLE = '暂时无法打开客服，请稍后再试'
-const NOT_OPENED = '客服暂未开通'
 
 // 连点时只处理第一次，避免读取门店电话期间叠出多个确认框。
 let fallbackPending = false
@@ -23,8 +22,8 @@ async function storePhone() {
   }
 }
 
-// 客服未开通时的兜底：有门店电话就确认后拨打，没有就提示暂未开通。
-// 每次点击都重新读取，管理员改了电话能立刻生效（/home 不缓存）。
+// 客服打不开时的兜底（质感 Spec T1）：有门店电话就确认后拨打，没有就提示稍后再试。
+// 每次都重新读取，管理员改了电话能立刻生效（/home 不缓存）。
 async function callStoreInstead() {
   if (fallbackPending) return
   fallbackPending = true
@@ -32,11 +31,11 @@ async function callStoreInstead() {
     const phone = await storePhone()
     const number = dialNumber(phone)
     if (!number) {
-      wx.showToast({ title: NOT_OPENED, icon: 'none' })
+      wx.showToast({ title: UNAVAILABLE, icon: 'none' })
       return
     }
     wx.showModal({
-      title: '在线客服暂未开通',
+      title: '暂时打不开在线客服',
       content: `拨打门店电话 ${phone}？`,
       confirmText: '拨打',
       success: (res) => {
@@ -49,15 +48,17 @@ async function callStoreInstead() {
   }
 }
 
-// 打开客服会话；未配置时退回拨打门店电话，微信返回失败时只给出固定提示。
+// 打开客服会话；微信返回失败（如未接入、主体不一致、基础库过旧）时退回拨打门店电话。
+// 返回的 Promise 在会话打开或兜底处理完后完成，供页面与测试等待。
 function openServiceChat() {
-  if (!CORP_ID || !SERVICE_URL) return callStoreInstead()
-  wx.openCustomerServiceChat({
-    extInfo: { url: SERVICE_URL },
-    corpId: CORP_ID,
-    fail: () => wx.showToast({ title: UNAVAILABLE, icon: 'none' }),
+  return new Promise((resolve) => {
+    wx.openCustomerServiceChat({
+      extInfo: { url: SERVICE_URL },
+      corpId: CORP_ID,
+      success: () => resolve(),
+      fail: () => callStoreInstead().then(resolve),
+    })
   })
-  return Promise.resolve()
 }
 
 module.exports = { openServiceChat }
