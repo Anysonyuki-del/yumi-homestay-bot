@@ -2,11 +2,12 @@
 
 import struct
 import zlib
+from io import BytesIO
 
 import pytest
 
-from homestay_bot.services.image_metadata import strip_image_metadata
-from homestay_bot.services.private_file_storage import InvalidPrivateFile
+from homestay_bot.services.image_metadata import save_public_image, strip_image_metadata
+from homestay_bot.services.private_file_storage import InvalidPrivateFile, PrivateFileStorage
 
 
 def _segment(marker: int, payload: bytes) -> bytes:
@@ -126,3 +127,32 @@ def test_unsupported_type_is_rejected() -> None:
     """只接受 JPG 与 PNG。"""
     with pytest.raises(InvalidPrivateFile):
         strip_image_metadata(b"RIFF....WEBP", "image/webp")
+
+
+def _png_with_text(size: int) -> bytes:
+    """总长恰好为 size 字节的合法 PNG：用一个 tEXt 块撑大，保存时会被去掉。"""
+    base = len(PNG_SIGNATURE + IHDR + IDAT + IEND) + 12 + len(b"GPS\x00")
+    return PNG_SIGNATURE + IHDR + _chunk(b"tEXt", b"GPS\x00" + b"x" * (size - base)) + IDAT + IEND
+
+
+@pytest.mark.asyncio
+async def test_public_image_limit_is_five_megabytes(tmp_path) -> None:
+    """房间照片与首页横幅单张上限 5MB（用户 2026-11-03 由 2MB 放宽）。
+
+    恰好 5MB 能存，多 1 字节被拒且不留文件。
+    """
+    storage = PrivateFileStorage(tmp_path)
+    five_mb = 5 * 1024 * 1024
+    # 部署上限比 5MB 宽时，以 5MB 为准。
+    deployment_limit = 10 * 1024 * 1024
+
+    stored = await save_public_image(
+        storage, BytesIO(_png_with_text(five_mb)), "image/png", deployment_limit
+    )
+    assert stored.path.read_bytes() == PNG_SIGNATURE + IHDR + IDAT + IEND
+
+    with pytest.raises(ValueError, match="大小"):
+        await save_public_image(
+            storage, BytesIO(_png_with_text(five_mb + 1)), "image/png", deployment_limit
+        )
+    assert [path.name for path in tmp_path.iterdir()] == [stored.file_id]

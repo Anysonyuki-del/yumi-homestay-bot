@@ -27,9 +27,9 @@ _JPEG_APP2 = 0xE2
 _JPEG_COM = 0xFE
 
 
-# 公开图片只收 JPG、PNG，单张不超过 2 MB；与知识图片同一口径。
+# 公开图片只收 JPG、PNG，单张不超过 5 MB（用户 2026-11-03 由 2 MB 放宽）；与知识图片同一口径。
 PUBLIC_IMAGE_TYPES = frozenset({"image/jpeg", "image/png"})
-PUBLIC_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+PUBLIC_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 
 async def save_public_image(

@@ -95,23 +95,26 @@ def _token(client) -> str:
 
 
 def test_admin_uploads_up_to_three_images_and_bad_files_leave_nothing_behind(tmp_path) -> None:
-    """管理员可传 3 张 JPG/PNG；webp、超 2MB、第 4 张都被拒，且不留下孤儿文件。"""
+    """管理员可传 3 张 JPG/PNG（含 3MB 的大图）；webp、超 5MB、第 4 张都被拒，且不留下孤儿文件。"""
     engine, factory, storage = _world(tmp_path)
     client, _ = build_client(EmployeeRole.ADMIN)
     client.app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory, storage)
 
-    for _ in range(3):
-        assert _upload(client, _token(client), PNG).status_code == 303
-    assert len(_files(tmp_path)) == 3
-
+    # 3MB 在旧的 2MB 上限下会被拒，用来确认上限已放宽到 5MB。
+    three_mb = PNG[:-12] + b"\x00" * (3 * 1024 * 1024) + PNG[-12:]
+    assert _upload(client, _token(client), three_mb).status_code == 303
+    # 超限和 webp 要在还没满 3 张时上传，否则会被张数上限挡下，测不到大小和格式检查。
     webp = _upload(client, _token(client), WEBP, "image/webp")
     too_big = _upload(
-        client, _token(client), PNG[:-12] + b"\x00" * (2 * 1024 * 1024) + PNG[-12:]
+        client, _token(client), PNG[:-12] + b"\x00" * (5 * 1024 * 1024) + PNG[-12:]
     )
+    for _ in range(2):
+        assert _upload(client, _token(client), PNG).status_code == 303
+    assert len(_files(tmp_path)) == 3
     fourth = _upload(client, _token(client), PNG)
 
     assert webp.status_code == 400 and "JPG 或 PNG" in webp.json()["detail"]
-    assert too_big.status_code == 400
+    assert too_big.status_code == 400 and "大小" in too_big.json()["detail"]
     assert fourth.status_code == 400 and "最多 3 张" in fourth.json()["detail"]
     assert len(_files(tmp_path)) == 3
     detail = client.get("/employee/knowledge/1")

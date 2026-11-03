@@ -36,7 +36,7 @@
   </form>
 </section>
 <section class="detail-section panel panel--padded" id="welcome-image"><h2>欢迎图片</h2>
-  <p class="help-text">客人订单识别出本房后，欢迎消息发出时接着发这张图，每张订单只发一次。JPG 或 PNG，不超过 2MB。</p>
+  <p class="help-text">客人订单识别出本房后，欢迎消息发出时接着发这张图，每张订单只发一次。JPG 或 PNG，不超过 5MB。</p>
   {% if property.welcome_image_file_id %}
   <ul class="image-list"><li><a href="/employee/properties/{{ property.id }}/welcome-image" target="_blank" rel="noopener"><img src="/employee/properties/{{ property.id }}/welcome-image" alt="欢迎图片"></a>
     <form method="post" action="/employee/properties/{{ property.id }}/welcome-image/delete" data-confirm="确定删除欢迎图片吗？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}"><button class="button button--danger" type="submit">删除欢迎图片</button></form></li></ul>
@@ -57,7 +57,7 @@
   </form>
 </section>
 <section class="detail-section panel panel--padded" id="showcase-photos"><h2>房间照片</h2>
-  <p class="help-text">最多 {{ max_showcase_photos }} 张，JPG 或 PNG，每张不超过 2MB；第一张作为列表封面。上传时会自动去掉照片里的拍摄地点等信息。</p>
+  <p class="help-text">最多 {{ max_showcase_photos }} 张，JPG 或 PNG，每张不超过 5MB；第一张作为列表封面。上传时会自动去掉照片里的拍摄地点等信息。</p>
   {% if showcase.photos %}
   <form method="post" action="/employee/properties/{{ property.id }}/showcase/photos/order"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}">
     <ul class="image-list">{% for photo in showcase.photos %}<li><a href="/employee/properties/{{ property.id }}/showcase/photos/{{ photo.id }}" target="_blank" rel="noopener"><img src="/employee/properties/{{ property.id }}/showcase/photos/{{ photo.id }}" alt="房间照片 {{ loop.index }}"></a><label>排序号<input name="order_{{ photo.id }}" type="number" min="0" max="9999" value="{{ photo.sort_order }}" required></label><button class="button button--danger" type="submit" form="showcase-photo-delete-{{ photo.id }}">删除</button></li>{% endfor %}</ul>

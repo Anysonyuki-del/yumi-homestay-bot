@@ -18,7 +18,7 @@
   {% endif %}
 </section>
 <section class="panel panel--padded detail-section" id="knowledge-images"><h2>配图</h2>
-  <p class="help-text">这条知识作为固定回答发给客人时，文字之后按顺序发这些图；模型自由作答时不发。每条最多 {{ max_images }} 张，JPG 或 PNG，单张不超过 2MB。</p>
+  <p class="help-text">这条知识作为固定回答发给客人时，文字之后按顺序发这些图；模型自由作答时不发。每条最多 {{ max_images }} 张，JPG 或 PNG，单张不超过 5MB。</p>
   {% if images %}
   <ol class="image-list">{% for image in images %}<li><a href="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}" target="_blank" rel="noopener"><img src="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}" alt="配图 {{ loop.index }}"></a>
     {% if can_edit %}<div class="button-row">

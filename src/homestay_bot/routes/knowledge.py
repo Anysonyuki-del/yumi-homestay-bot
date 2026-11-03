@@ -66,10 +66,11 @@ from homestay_bot.web import pop_page_notice, set_page_notice, templates
 router = APIRouter(prefix="/employee/knowledge")
 _MAX_CSRF_TOKENS = 8
 _KNOWLEDGE_CSRF_PURPOSE = "knowledge-write"
-# 知识配图（Spec G1、D1）：每条最多 3 张，单张不超过 2MB。只收 jpg 和 png：
-# 企业微信临时图片素材只支持这两种，webp 能存下却发不出去。
+# 知识配图（Spec G1、D1）：每条最多 3 张，单张不超过 5MB（用户 2026-11-03 由 2MB 放宽）。
+# 只收 jpg 和 png：企业微信临时图片素材只支持这两种，webp 能存下却发不出去。
+# 企业微信临时图片素材上限 10MB，5MB 留有余量；房间欢迎图片也走这个上限。
 MAX_KNOWLEDGE_IMAGES = 3
-KNOWLEDGE_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+KNOWLEDGE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 KNOWLEDGE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg"})
 
 
@@ -1475,7 +1476,7 @@ async def upload_knowledge_image(
     image: Annotated[UploadFile, File()],
     csrf_token: str = Form(min_length=1, max_length=128),
 ) -> RedirectResponse:
-    """管理员给条目加一张配图：限 JPG、PNG，单张 2MB，每条最多 3 张。"""
+    """管理员给条目加一张配图：限 JPG、PNG，单张 5MB，每条最多 3 张。"""
     employee_id = await _require_admin(request)
     await _consume_csrf(request, csrf_token)
     try:

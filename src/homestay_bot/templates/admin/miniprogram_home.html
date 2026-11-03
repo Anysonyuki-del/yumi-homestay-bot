@@ -25,7 +25,7 @@
 </section>
 
 <section class="detail-section panel panel--padded" id="banners"><h2>首页横幅</h2>
-  <p class="help-text">最多 {{ limits.banners }} 张，JPG 或 PNG，每张不超过 2MB；按排序号从小到大轮播。上传时会自动去掉照片里的拍摄地点等信息。建议横图，宽高比约 16:9。</p>
+  <p class="help-text">最多 {{ limits.banners }} 张，JPG 或 PNG，每张不超过 5MB；按排序号从小到大轮播。上传时会自动去掉照片里的拍摄地点等信息。建议横图，宽高比约 16:9。</p>
   {% if home.banners %}
   <form method="post" action="/employee/admin/miniprogram/banners/order"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <ul class="image-list">{% for banner in home.banners %}<li><a href="/employee/admin/miniprogram/banners/{{ banner.id }}" target="_blank" rel="noopener"><img src="/employee/admin/miniprogram/banners/{{ banner.id }}" alt="首页横幅 {{ loop.index }}"></a><label>排序号<input name="order_{{ banner.id }}" type="number" min="0" max="9999" value="{{ banner.sort_order }}" required></label><button class="button button--danger" type="submit" form="banner-delete-{{ banner.id }}">删除</button></li>{% endfor %}</ul>
