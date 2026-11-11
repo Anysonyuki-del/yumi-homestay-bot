@@ -220,24 +220,6 @@ def candidate_value_is_grounded(
     return statement_value is not None and statement_value == excerpt_value
 
 
-def is_safe_memory_candidate(
-    *, subject_key: str, statement: str, source_excerpt: str | None, source: str
-) -> bool:
-    """组合执行候选自动晋级前可本地确定的安全检查。"""
-    return (
-        can_auto_activate_subject(subject_key)
-        and verify_source_excerpt(source_excerpt, source)
-        and candidate_value_is_grounded(
-            statement,
-            source_excerpt or "",
-            subject_key=subject_key,
-        )
-        and not contains_sensitive_memory_text(statement)
-        and not is_dynamic_memory_text(f"{subject_key} {statement}")
-        and not is_instruction_like_memory(f"{statement} {source_excerpt or ''}")
-    )
-
-
 def memory_relevance_score(
     query: str, *, subject_key: str, statement: str
 ) -> float:

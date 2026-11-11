@@ -1277,7 +1277,11 @@ class BusinessTask(TimestampMixin, Base):
         ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
     # 软归档只影响列表可见性，不参与状态机；终态任务才允许归档。
-    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 索引由迁移 0024 创建（ix_business_tasks_archived_at）；模型必须同样声明，
+    # 否则 alembic autogenerate 会把这条生产索引当成多余的而生成删除操作。
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     archived_by_employee_id: Mapped[int | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )

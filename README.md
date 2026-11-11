@@ -45,10 +45,10 @@ cp .env.example .env
 ### 2. 初始化数据库
 
 ```bash
-alembic upgrade head
+DATABASE_URL='sqlite+aiosqlite:///./homestay.db' alembic upgrade head
 ```
 
-默认本地数据库为项目目录下的 `homestay.db`。使用 PostgreSQL 时，在 `.env` 中设置完整的 `DATABASE_URL`。
+应用启动时必须在 `.env` 中提供 `DATABASE_URL`，没有默认数据库。Alembic 不读取 `.env`：只认进程环境变量 `DATABASE_URL`，未设置时退回 `alembic.ini` 中的本机 PostgreSQL 地址，因此迁移时要显式传入与 `.env` 相同的地址（如上例的本地 SQLite）。`deploy/start.sh` 会自动完成这一步。
 
 ### 3. 启动服务
 

@@ -158,13 +158,6 @@ class SQLAlchemyAdminCsrfRepository:
         )
         return found is not None
 
-    async def purge_expired(self, *, now: datetime, limit: int) -> int:
-        """按过期索引有界删除最早记录，避免一次请求形成大事务。"""
-        await self._ensure_quota()
-        deleted = await self._delete_expired(now=now, limit=limit)
-        await self._decrement_quota(deleted)
-        return deleted
-
     async def _evict_oldest_in_scope(
         self,
         *,

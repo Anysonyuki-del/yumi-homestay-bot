@@ -26,24 +26,6 @@ class SQLAlchemyEmployeeRepository:
         """绑定当前数据库会话。"""
         self._session = session
 
-    async def get_active_by_wecom_userid(self, userid: str) -> Employee | None:
-        """只返回与企业微信 userid 匹配且已启用的员工。"""
-        statement = select(Employee).where(
-            Employee.wecom_userid == userid,
-            Employee.is_active.is_(True),
-        )
-        result = await self._session.execute(statement)
-        return result.scalar_one_or_none()
-
-    async def get_active(self, employee_id: int) -> Employee | None:
-        """按本地主键返回仍启用的员工。"""
-        statement = select(Employee).where(
-            Employee.id == employee_id,
-            Employee.is_active.is_(True),
-        )
-        result = await self._session.execute(statement)
-        return result.scalar_one_or_none()
-
     async def get_active_admin(
         self,
         admin_id: int,
