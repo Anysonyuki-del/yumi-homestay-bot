@@ -558,15 +558,6 @@ class TaskPageService:
         self._require_admin(employee)
         await self._tasks.restore_task(task_id, employee.id)
 
-    async def purge_attachment_ids(
-        self,
-        task_id: int,
-        employee: Employee,
-    ) -> list[str]:
-        """校验管理员身份后返回待删除的附件文件编号。"""
-        self._require_admin(employee)
-        return await self._tasks.attachment_file_ids(task_id)
-
     async def purge(self, task_id: int, employee: Employee) -> None:
         """永久删除一条已归档任务，并在同一事务内登记照片清理。
 
@@ -645,15 +636,6 @@ class TaskPageService:
                 BusinessTaskStatus.CANCELLED,
             )
         return len(tasks)
-
-    async def purge_many_file_ids(
-        self,
-        task_ids: list[int],
-        employee: Employee,
-    ) -> list[str]:
-        """校验管理员身份与可删除性，返回待删除的文件编号。"""
-        self._require_admin(employee)
-        return await self._tasks.require_purgeable(task_ids)
 
     async def _schedule_attachment_cleanup(
         self,

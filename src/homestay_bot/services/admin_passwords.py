@@ -1,5 +1,5 @@
 from argon2 import PasswordHasher, Type, extract_parameters
-from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from argon2.exceptions import InvalidHashError
 
 ADMIN_PASSWORD_HASHER = PasswordHasher(type=Type.ID)
 MAX_ADMIN_PASSWORD_LENGTH = 128
@@ -16,19 +16,6 @@ def validate_admin_password_hash(password_hash: str) -> None:
         raise ValueError("管理员引导密码必须使用 Argon2id")
     if needs_rehash:
         raise ValueError("管理员引导密码哈希必须使用当前安全参数")
-
-
-def hash_admin_password(password: str) -> str:
-    """使用全局统一参数生成 Argon2id 管理员密码哈希。"""
-    return ADMIN_PASSWORD_HASHER.hash(password)
-
-
-def verify_admin_password(password_hash: str, password: str) -> bool:
-    """把密码不匹配或非法编码统一折叠为布尔失败。"""
-    try:
-        return ADMIN_PASSWORD_HASHER.verify(password_hash, password)
-    except (InvalidHashError, VerificationError, VerifyMismatchError):
-        return False
 
 
 def validate_new_admin_password(password: str) -> None:

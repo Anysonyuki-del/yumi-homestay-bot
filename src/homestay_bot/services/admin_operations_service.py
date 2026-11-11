@@ -347,11 +347,6 @@ class OperationsSnapshot:
         return len(self.attention_rooms)
 
     @property
-    def timeline_past_days(self) -> int:
-        """返回时间轴中已过去的天数，供页面如实描述覆盖范围。"""
-        return TIMELINE_PAST_DAYS
-
-    @property
     def timeline_start_date(self) -> date:
         """返回时间轴第一天；时间轴并非只覆盖未来若干天。"""
         return self.local_date - timedelta(days=TIMELINE_PAST_DAYS)
@@ -697,29 +692,6 @@ class AdminOperationsService:
         if occupied:
             return RoomOccupancyStatus.OCCUPIED
         return RoomOccupancyStatus.VACANT
-
-    @staticmethod
-    def _next_action(
-        *,
-        source_stale: bool,
-        operational_status: RoomOperationalStatus,
-        arrivals: int,
-        departures: int,
-        occupied: bool,
-        task_count: RoomTaskCountRecord,
-        next_arrival: date | None,
-    ) -> str:
-        """根据确定性事实给出单一优先行动，不替代员工经营判断。"""
-        return AdminOperationsService._next_step(
-            source_stale=source_stale,
-            operational_status=operational_status,
-            arrivals=arrivals,
-            departures=departures,
-            occupied=occupied,
-            task_count=task_count,
-            next_arrival=next_arrival,
-            property_id=0,
-        )[0]
 
     @staticmethod
     def _timeline_bars(

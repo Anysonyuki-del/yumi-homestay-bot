@@ -44,9 +44,6 @@ class AdminCsrfRepository(Protocol):
     ) -> bool:
         """只读核对 nonce 是否仍可消费。"""
 
-    async def purge_expired(self, *, now: datetime, limit: int) -> int:
-        """有界清理过期 nonce。"""
-
 
 class AdminCsrfCapacityError(RuntimeError):
     """表示活动 nonce 已达到应用硬上限。"""

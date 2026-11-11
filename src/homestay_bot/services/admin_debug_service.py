@@ -118,13 +118,6 @@ class DebugAssistantPort(Protocol):
         """生成只读预览决定。"""
 
 
-class RuntimeBundlePort(Protocol):
-    """限定单次租约读取的字段。"""
-
-    revision: int
-    assistant: DebugAssistantPort
-
-
 class DebugPropertyRepositoryPort(Protocol):
     """定义房源安全投影查询。"""
 
