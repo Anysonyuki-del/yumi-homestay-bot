@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 from homestay_bot.domain.runtime_config import (
     UNCONFIGURED_SECRET,
     RuntimeConfigSnapshot,
+    parse_duty_userids,
 )
 from homestay_bot.integrations.deepseek_client import (
     DeepSeekGuestAssistant,
@@ -485,13 +486,7 @@ async def build_runtime_client_bundle(
             # 生产每轮先产生轮次计划（回复泛用化 Spec P1，V-a）。
             plan_turns=True,
         )
-        duty_userids = tuple(
-            dict.fromkeys(
-                item.strip()
-                for item in snapshot.wecom_duty_userids.split(",")
-                if item.strip()
-            )
-        )
+        duty_userids = parse_duty_userids(snapshot.wecom_duty_userids)
         return RuntimeClientBundle(
             revision=revision,
             hostex=hostex,

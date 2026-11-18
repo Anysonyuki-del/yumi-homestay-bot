@@ -527,9 +527,9 @@ async def test_wecom_sync_routes_send_failure_event_without_guest_message() -> N
         """事件不得伪装成客户消息。"""
         messages.append(message)
 
-    async def handle_send_failure(message_id, fail_type):
-        """记录准确平台消息编号和失败类型。"""
-        failures.append((message_id, fail_type))
+    async def handle_send_failure(message_id, fail_type, open_kfid):
+        """记录准确平台消息编号、失败类型和所属客服账号。"""
+        failures.append((message_id, fail_type, open_kfid))
 
     async def enqueue(job_type, payload):
         """单页事件不创建续页任务。"""
@@ -544,7 +544,57 @@ async def test_wecom_sync_routes_send_failure_event_without_guest_message() -> N
     await handler.sync_page(cursor="", token="", open_kfid="wk-1")
 
     assert messages == []
-    assert failures == [("msg-accepted", 10)]
+    assert failures == [("msg-accepted", 10, "wk-1")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_fields",
+    [
+        {"fail_msgid": None, "fail_type": 10},
+        {"fail_msgid": "  ", "fail_type": 10},
+        {"fail_msgid": 12345, "fail_type": 10},
+        {"fail_msgid": "msg-1", "fail_type": True},
+        {"fail_msgid": "msg-1", "fail_type": "10"},
+    ],
+)
+async def test_malformed_send_failure_event_is_ignored(event_fields) -> None:
+    """缺编号、编号非字符串或类型非整数的失败事件不进入归属处理，避免登记假回执。"""
+    page = SimpleNamespace(
+        msg_list=[
+            SimpleNamespace(
+                msgid="event-bad", open_kfid=None, external_userid=None,
+                send_time=1785283200, origin=None, msgtype="event", text=None,
+                event={"event_type": "msg_send_fail", **event_fields},
+            )
+        ],
+        has_more=0,
+        next_cursor="",
+    )
+
+    class ApiStub:
+        """返回单个畸形失败事件。"""
+
+        async def sync_messages(self, **kwargs):
+            """返回固定页。"""
+            return page
+
+    failures = []
+
+    async def handle_send_failure(*args):
+        """畸形事件不应到达这里。"""
+        failures.append(args)
+
+    async def noop(*args, **kwargs):
+        """消息与续页均不关心。"""
+
+    handler = WeComSyncJobHandler(
+        api=ApiStub(), handle_message=noop,
+        handle_send_failure=handle_send_failure, enqueue=noop,
+    )
+    await handler.sync_page(cursor="", token="", open_kfid="wk-1")
+
+    assert failures == []
 
 
 @pytest.mark.asyncio

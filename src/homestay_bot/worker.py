@@ -49,6 +49,11 @@ class DeferredRetryJobError(RetrySafeJobError):
     """表示依赖配置暂不可用，需要长期低频重试。"""
 
 
+# 长期等待的重试上限。超时恢复（repositories/jobs.py::recover_stale）也按它判断，
+# 否则等待中的作业一次进程中断就会被普通的三次上限终止并清空载荷。
+DEFERRED_RETRY_MAX_ATTEMPTS = 10_000
+
+
 class WeComSyncApi(Protocol):
     """定义同步 worker 所需的企业微信读取接口。"""
 
@@ -122,7 +127,7 @@ class WeComSyncJobHandler:
         handle_message: Callable[[IncomingMessage], Awaitable[None]],
         enqueue: Callable[[str, dict[str, Any]], Awaitable[Any]],
         handle_send_failure: (
-            Callable[[str, int], Awaitable[None]] | None
+            Callable[[str, int, str], Awaitable[None]] | None
         ) = None,
         handle_session_end: (
             Callable[[str, str, str, datetime | None], Awaitable[None]] | None
@@ -161,14 +166,19 @@ class WeComSyncJobHandler:
                     event.get("event_type") == "msg_send_fail"
                     and self._handle_send_failure is not None
                 ):
-                    failed_message_id = str(
-                        event.get("fail_msgid", "")
-                    ).strip()
+                    # 只接受非空字符串编号与真正的整数类型：str(None) 会变成 "None"，
+                    # 布尔值也能通过 isinstance(int)，两者都会被当成真实回执持久化
+                    # 为「未匹配」（Spec 2026-11-19 M2）。
+                    raw_message_id = event.get("fail_msgid")
+                    failed_message_id = (
+                        raw_message_id.strip() if isinstance(raw_message_id, str) else ""
+                    )
                     fail_type = event.get("fail_type")
-                    if failed_message_id and isinstance(fail_type, int):
+                    if failed_message_id and type(fail_type) is int:
                         await self._handle_send_failure(
                             failed_message_id,
                             fail_type,
+                            open_kfid,
                         )
                 if (
                     event.get("event_type") == "session_status_change"
@@ -389,7 +399,7 @@ class Worker[JobType: WorkerJob]:
             except Exception as error:
                 failed_payload = dict(job.payload)
                 max_attempts = (
-                    10_000 if isinstance(error, DeferredRetryJobError) else 3
+                    DEFERRED_RETRY_MAX_ATTEMPTS if isinstance(error, DeferredRetryJobError) else 3
                 )
                 # 错误码只记录异常类型，避免把可能含客人信息的正文写进任务表。
                 await self._repository.mark_failed(

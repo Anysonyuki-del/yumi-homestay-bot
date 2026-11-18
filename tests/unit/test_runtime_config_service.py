@@ -5,7 +5,11 @@ import pytest
 from cryptography.fernet import Fernet
 
 from homestay_bot.domain.enums import RuntimeConfigVersionStatus
-from homestay_bot.domain.runtime_config import UNCONFIGURED_SECRET, RuntimeConfigSnapshot
+from homestay_bot.domain.runtime_config import (
+    UNCONFIGURED_SECRET,
+    DutyUserIdsInvalidError,
+    RuntimeConfigSnapshot,
+)
 from homestay_bot.repositories.runtime_config import RuntimeConfigConflictError
 from homestay_bot.services.runtime_config_cipher import RuntimeConfigCipher
 from homestay_bot.services.runtime_config_service import (
@@ -771,3 +775,60 @@ def test_semantic_retrieval_test_result_is_kept_for_the_version_history() -> Non
             "checks": {"embeddings": {"succeeded": False, "error_code": "embedding_auth_failed"}},
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_separator_only_duty_list_is_rejected_before_candidate_or_test() -> None:
+    """名单只有分隔符：员工通知会没有收件人，不建候选、不外联测试、不改指针。"""
+    repository = RepositoryStub()
+    tester = CandidateTesterStub()
+    service = build_service(repository, AuthStub(), tester, build_snapshot())
+
+    with pytest.raises(DutyUserIdsInvalidError):
+        await activate(
+            service,
+            UpdateRuntimeConfig(wecom_duty_userids=" , ,"),
+            expected_revision=0,
+        )
+
+    assert repository.versions == {}
+    assert tester.snapshots == []
+    assert repository.state.active_version_id is None
+
+
+@pytest.mark.asyncio
+async def test_blank_duty_field_keeps_the_existing_list() -> None:
+    """表单名单留空表示沿用原值，仍可正常保存。"""
+    repository = RepositoryStub()
+    service = build_service(repository, AuthStub(), CandidateTesterStub(), build_snapshot())
+
+    await activate(service, UpdateRuntimeConfig(wecom_duty_userids="   "), expected_revision=0)
+
+    assert (await service.load_active_or_environment()).wecom_duty_userids == "owner"
+
+
+@pytest.mark.asyncio
+async def test_rollback_to_a_version_without_duty_list_is_rejected() -> None:
+    """上一版本名单无效时拒绝回滚，指针和当前配置都不变。"""
+    repository = RepositoryStub()
+    service = build_service(repository, AuthStub(), CandidateTesterStub(), build_snapshot())
+    await activate(service, UpdateRuntimeConfig(deepseek_model="model-one"), expected_revision=0)
+    await activate(service, UpdateRuntimeConfig(deepseek_model="model-two"), expected_revision=1)
+    # 模拟校验上线前保存的旧版本：名单只有分隔符（旧规则下能通过）。
+    repository.versions[1].encrypted_payload = service._cipher.encrypt(
+        build_snapshot(wecom_duty_userids=", ,")
+    )
+    before = repository.state
+
+    with pytest.raises(DutyUserIdsInvalidError):
+        await service.rollback(
+            actor_id=7,
+            admin_id=1,
+            password="correct-password",
+            expected_session_version=4,
+            expected_revision=2,
+            expected_previous_version_id=1,
+        )
+
+    assert repository.state == before
+    assert (await service.load_active_or_environment()).deepseek_model == "model-two"

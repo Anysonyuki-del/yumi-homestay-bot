@@ -1046,3 +1046,48 @@ async def test_enqueue_unique_race_preserves_outer_transaction(monkeypatch) -> N
         ) is not None
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_type", "last_error_code", "expected"),
+    [
+        ("faq_draft_generate", "DeferredRetryJobError", JobStatus.PENDING),
+        ("faq_draft_generate", "RuntimeError", JobStatus.FAILED),
+        ("wecom_send_text", "DeferredRetryJobError", JobStatus.FAILED),
+    ],
+    ids=["waiting-survives", "ordinary-limit", "external-send-never-replayed"],
+)
+async def test_interrupted_deferred_wait_is_resumed_not_terminated(
+    job_type, last_error_code, expected
+) -> None:
+    """长期等待中的作业被中断：按等待上限恢复并保留载荷；普通作业和外部发送规则不变。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    now = datetime.now(UTC)
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        job = Job(
+            job_type=job_type,
+            payload={"marker": "kept"},
+            status=JobStatus.RUNNING,
+            attempts=5,
+            last_error_code=last_error_code,
+            available_at=now - timedelta(minutes=10),
+            locked_at=now - timedelta(minutes=10),
+        )
+        session.add(job)
+        await session.commit()
+
+        recovered = await SQLAlchemyJobRepository(session).recover_stale(
+            before=now - timedelta(minutes=5),
+        )
+
+        await session.refresh(job)
+        assert recovered == 1
+        assert job.status is expected
+        if expected is JobStatus.PENDING:
+            assert job.payload == {"marker": "kept"} and job.locked_at is None
+
+    await engine.dispose()

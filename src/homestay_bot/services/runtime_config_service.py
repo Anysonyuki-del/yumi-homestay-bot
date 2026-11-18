@@ -11,6 +11,7 @@ from homestay_bot.domain.runtime_config import (
     UNCONFIGURED_SECRET,
     RuntimeConfigSnapshot,
     RuntimeConfigView,
+    require_duty_userids,
 )
 from homestay_bot.repositories.runtime_config import RuntimeConfigConflictError
 from homestay_bot.services.cancellation import complete_cleanup
@@ -540,6 +541,9 @@ class RuntimeConfigService:
             candidate = RuntimeConfigSnapshot.from_dict(payload)
         else:
             candidate = baseline.snapshot.merged(updates)
+        # 名单按运行时同一规则解析，分割后为空就拒绝：否则员工通知会没有收件人，
+        # 而作业照样显示完成。在建候选和外联测试之前拦下（Spec 2026-11-19 M5）。
+        require_duty_userids(candidate.wecom_duty_userids)
         changed_fields = command.changed_fields()
         version = await self._repository.create_candidate(
             self._cipher.encrypt(candidate),
@@ -683,6 +687,8 @@ class RuntimeConfigService:
         if previous is None:
             raise LookupError("上一配置版本不存在")
         snapshot = self._cipher.decrypt(bytes(previous.encrypted_payload))
+        # 校验上线前保存的旧版本可能只有分隔符，回滚过去会让员工通知失去收件人。
+        require_duty_userids(snapshot.wecom_duty_userids)
         rolled_back = await self._repository.rollback(
             expected_revision=expected_revision,
             expected_previous_version_id=expected_previous_version_id,

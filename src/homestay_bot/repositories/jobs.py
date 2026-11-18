@@ -22,6 +22,7 @@ from homestay_bot.domain.models import (
     KnowledgeReferral,
 )
 from homestay_bot.repositories.conversations import SQLAlchemyMessageRepository
+from homestay_bot.worker import DEFERRED_RETRY_MAX_ATTEMPTS, DeferredRetryJobError
 
 GUEST_IMAGE_JOB_TYPE = "wecom_send_image"
 _SQLITE_CLAIM_LOCKS: WeakKeyDictionary[AsyncEngine, asyncio.Lock] = WeakKeyDictionary()
@@ -212,6 +213,26 @@ class SQLAlchemyJobRepository:
             .returning(Job)
         )
         normalized_max_attempts = max(1, max_attempts)
+        # 上一次以「长期等待」结束的作业（领取不会清掉 last_error_code）按等待上限
+        # 判断，进程中断后回到 PENDING 并保留载荷；不可重放的外部发送不在此列
+        # （Spec 2026-11-19 M6）。
+        waiting = Job.last_error_code == DeferredRetryJobError.__name__
+        deferred_retry_statement = (
+            update(Job)
+            .where(
+                Job.status == JobStatus.RUNNING,
+                Job.locked_at < before,
+                Job.job_type.not_in(non_replayable_types),
+                waiting,
+                Job.attempts < DEFERRED_RETRY_MAX_ATTEMPTS,
+                *self._job_type_conditions(),
+            )
+            .values(
+                status=JobStatus.PENDING,
+                locked_at=None,
+                last_error_code="stale_lock_recovered",
+            )
+        )
         maxed_out_statement = (
             update(Job)
             .where(
@@ -246,6 +267,10 @@ class SQLAlchemyJobRepository:
         await self._mark_stale_complaint_deliveries(before)
         # 只为实际从 RUNNING 转为 FAILED 的图片登记核查，和清空敏感载荷同事务提交。
         failed_jobs = (await self._session.scalars(failed_statement)).all()
+        # 必须先于下面两条普通恢复执行，否则等待中的作业会被三次上限抢先终止。
+        deferred_retried = cast(
+            CursorResult[Any], await self._session.execute(deferred_retry_statement)
+        )
         for job in failed_jobs:
             if job.job_type == GUEST_IMAGE_JOB_TYPE:
                 await self.enqueue_unknown_image_review(job)
@@ -259,6 +284,7 @@ class SQLAlchemyJobRepository:
         await self._session.flush()
         return (
             len(failed_jobs)
+            + int(deferred_retried.rowcount)
             + int(maxed_out.rowcount)
             + int(retried.rowcount)
         )

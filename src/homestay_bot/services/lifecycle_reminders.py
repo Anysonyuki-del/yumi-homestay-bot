@@ -335,14 +335,19 @@ class LifecycleReminderService:
         self,
         external_message_id: str,
         fail_type: int,
-    ) -> None:
-        """消费企业微信异步失败事件并幂等转人工。"""
+    ) -> bool:
+        """消费企业微信异步失败事件并幂等转人工，返回是否找到所属提醒。
+
+        重复回执也返回 True：人工待办按提醒编号去重，找到即算认领，调用方据此
+        决定是否需要延后补匹配。
+        """
         reminder = await self._reminders.find_by_message_id(
             external_message_id
         )
         if reminder is None:
-            return
+            return False
         await self._manual(reminder, f"wecom_fail_{fail_type}")
+        return True
 
     async def _manual(self, reminder: Any, reason: str) -> None:
         """先建立幂等人工任务，再结束自动发送状态。"""

@@ -20,6 +20,30 @@ OPTIONAL_EMBEDDING_FIELDS = frozenset(
 )
 
 
+class DutyUserIdsInvalidError(ValueError):
+    """值班名单按逗号分割后为空：员工通知将没有任何收件人。"""
+
+
+def parse_duty_userids(raw: str) -> tuple[str, ...]:
+    """把值班名单解析为去空白、去重、保序的企业微信账号元组。
+
+    运行时装配与保存校验共用这一份规则，避免「保存时算有效、运行时却为空」。
+    """
+    return tuple(dict.fromkeys(item.strip() for item in raw.split(",") if item.strip()))
+
+
+def require_duty_userids(raw: str) -> tuple[str, ...]:
+    """解析值班名单，分割后为空时拒绝。
+
+    只在保存新配置和主动回滚时调用；加载、解密和装配客户端不调用，旧的异常
+    配置仍能启动并打开修复页（Spec 2026-11-19 M5）。
+    """
+    userids = parse_duty_userids(raw)
+    if not userids:
+        raise DutyUserIdsInvalidError("值班员工名单分割后为空")
+    return userids
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeConfigView:
     """只包含可公开设置项和掩码凭据的后台页面投影。"""

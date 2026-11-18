@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot import application
@@ -67,6 +68,10 @@ class FakeWeCom:
         self._media: dict[str, bytes] = {}
         self._fail_on = dict(fail_on or {})
         self._after_send = after_send
+        # 兼作运行时 bundle：核查通知处理器按生产装配读取应用编号与值班名单。
+        self.agent_id = 1000002
+        self.duty_userids: tuple[str, ...] = ("staff-1",)
+        self.internal: list[tuple[tuple[str, ...], str]] = []
 
     async def _sent(self, kind: str, value: str) -> str:
         """统一登记发送结果并返回模拟 msgid。"""
@@ -94,7 +99,8 @@ class FakeWeCom:
         return await self._sent("image", self._media[media_id][16:20].decode())
 
     async def send_internal_text(self, *, agent_id, employee_userids, content) -> None:
-        """员工通知不在本文件断言。"""
+        """记录员工通知的收件人与正文，供断言通知恰好发出一次。"""
+        self.internal.append((tuple(employee_userids), content))
 
 
 def _png(tag: str) -> bytes:
@@ -131,14 +137,17 @@ async def _run_until_idle(factory, client: FakeWeCom, storage, monkeypatch) -> N
         raise StopLoop
 
     async def bindings(session, bundle) -> RuntimeWorkerBindings:
-        """与生产 build_worker_bindings 相同的配图 handler 装配。"""
+        """与生产 build_worker_bindings 相同的配图与核查通知 handler 装配。"""
         return RuntimeWorkerBindings(
             sync_handler=object(),  # type: ignore[arg-type]
             wecom=bundle,
             handlers={
                 GUEST_IMAGE_JOB_TYPE: application._build_guest_image_handler(
                     session, bundle, storage
-                )
+                ),
+                "guest_reply_chain_undelivered": (
+                    application._build_reply_chain_undelivered_handler(session, bundle)
+                ),
             },
         )
 
@@ -577,4 +586,177 @@ async def test_welcome_skips_the_card_line_the_answer_already_covers(tmp_path, m
     assert "地址与楼层：合成小区2栋201" in text
     assert "停车：地下一层A区" not in text
     assert "停地下一层 A 区。" in text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("staff_writes", [True, False], ids=["staff-during-upload", "control"])
+async def test_staff_reply_during_upload_stops_the_image(
+    tmp_path, monkeypatch, staff_writes
+) -> None:
+    """上传素材期间员工发言：这张图不发、不入库、后续图也停；没人插话时照发两张。"""
+    engine, factory, storage = await _world(tmp_path, welcome_image=False)
+    client = FakeWeCom()
+    original_upload = client.upload_temporary_image
+
+    async def upload_while_staff_writes(content: bytes, *, content_type: str) -> str:
+        """模拟上传等待期间，另一个会话提交了一条员工发言。"""
+        if staff_writes and not client.uploads:
+            async with factory() as session:
+                session.add(Message(
+                    conversation_id=1, external_message_id="staff-1",
+                    origin=MessageOrigin.SERVICER, message_type="text", content="我来处理",
+                    sent_at=datetime.now(UTC),
+                ))
+                await session.commit()
+        return await original_upload(content, content_type=content_type)
+
+    monkeypatch.setattr(client, "upload_temporary_image", upload_while_staff_writes)
+    await _receive(factory, _grounded_parking(), "g-1", "开车停哪里")
+    await _run_until_idle(factory, client, storage, monkeypatch)
+
+    images = [kind for kind, _ in client.events if kind == "image"]
+    async with factory() as session:
+        image_rows = list(await session.scalars(
+            select(Message).where(Message.message_type == "image")
+        ))
+    if staff_writes:
+        assert images == [] and image_rows == []
+    else:
+        assert len(images) == 2 and len(image_rows) == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_recheck_storage_error_after_upload_is_retried(
+    tmp_path, monkeypatch
+) -> None:
+    """上传后复核过时状态时数据库出错：此时没有向客人发过图，作业保留重试。"""
+    engine, factory, storage = await _world(tmp_path, welcome_image=False)
+    client = FakeWeCom()
+    original_check = application._guest_reply_is_stale
+
+    async def flaky_check(session, payload):
+        """上传之后的那次复核抛数据库异常，其余照常。"""
+        if payload.get("message_type") == "image" and client.uploads:
+            raise OperationalError("select", {}, Exception("fixture"))
+        return await original_check(session, payload)
+
+    monkeypatch.setattr(application, "_guest_reply_is_stale", flaky_check)
+    await _receive(factory, _grounded_parking(), "g-1", "开车停哪里")
+    await _run_until_idle(factory, client, storage, monkeypatch)
+
+    async with factory() as session:
+        image_jobs = list(await session.scalars(
+            select(Job).where(Job.job_type == GUEST_IMAGE_JOB_TYPE)
+        ))
+    assert [kind for kind, _ in client.events if kind == "image"] == []
+    assert len(image_jobs) == 1 and image_jobs[0].status is JobStatus.PENDING
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_upload_retries_exhausted_notify_staff_exactly_once(tmp_path, monkeypatch) -> None:
+    """素材上传连续超时：两次保留重试，第三次终态，客人一张图都没收到，员工恰好收到一条未送达通知。"""
+    engine, factory, storage = await _world(tmp_path, welcome_image=False)
+    client = FakeWeCom()
+
+    async def always_timeout(*args, **kwargs):
+        """模拟素材接口每次都读超时。"""
+        raise httpx.ReadTimeout("fixture")
+
+    monkeypatch.setattr(client, "upload_temporary_image", always_timeout)
+    await _receive(factory, _grounded_parking(), "g-1", "开车停哪里")
+
+    observed: list[tuple[JobStatus, int]] = []
+    for _ in range(3):
+        await _run_until_idle(factory, client, storage, monkeypatch)
+        async with factory() as session:
+            image = await session.scalar(
+                select(Job).where(Job.job_type == GUEST_IMAGE_JOB_TYPE)
+            )
+            observed.append((image.status, image.attempts))
+            # 退避期未到的重试不会被这一轮领取，按到期时间手动推进到下一次。
+            image.available_at = datetime.now(UTC) - timedelta(seconds=1)
+            await session.commit()
+    await _run_until_idle(factory, client, storage, monkeypatch)
+
+    assert observed == [
+        (JobStatus.PENDING, 1),
+        (JobStatus.PENDING, 2),
+        (JobStatus.FAILED, 3),
+    ]
+    assert [kind for kind, _ in client.events if kind == "image"] == []
+    async with factory() as session:
+        reviews = list(await session.scalars(
+            select(Job).where(Job.job_type == "guest_reply_chain_undelivered")
+        ))
+        later_images = list(await session.scalars(
+            select(Job).where(Job.job_type == GUEST_IMAGE_JOB_TYPE)
+        ))
+    assert len(later_images) == 1, "第一张失败后不再登记后续图片"
+    assert len(reviews) == 1 and reviews[0].status is JobStatus.COMPLETED
+    assert len(client.internal) == 1
+    recipients, content = client.internal[0]
+    assert recipients == ("staff-1",)
+    assert "未成功送达" in content and "结果未知" not in content
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_review_waits_for_duty_list_and_survives_an_interrupted_wait(
+    tmp_path, monkeypatch
+) -> None:
+    """名单为空时核查作业不能显示完成；等待期间进程中断也不能被清空，名单修好后只通知一次。"""
+    engine, factory, storage = await _world(tmp_path, welcome_image=False)
+    client = FakeWeCom()
+    client.duty_userids = ()
+    async with factory() as session:
+        review = await SQLAlchemyJobRepository(session).enqueue(
+            "guest_reply_chain_undelivered",
+            {"group": "g-1", "index": 2, "total": 3, "conversation_id": 1},
+            dedupe_key="reply-chain-undelivered:g-1",
+        )
+        await session.commit()
+        review_id = review.id
+
+    async def make_due() -> Job:
+        """把退避中的核查作业推进到可领取，并返回当前状态。"""
+        async with factory() as session:
+            job = await session.get(Job, review_id)
+            job.available_at = datetime.now(UTC) - timedelta(seconds=1)
+            await session.commit()
+            return job
+
+    for expected_attempts in (1, 2):
+        await _run_until_idle(factory, client, storage, monkeypatch)
+        job = await make_due()
+        assert (job.status, job.attempts) == (JobStatus.PENDING, expected_attempts)
+        assert job.last_error_code == "DeferredRetryJobError"
+    assert client.internal == []
+
+    # 第三次领取后进程中断：作业停在 RUNNING，锁超过五分钟后由恢复逻辑处理。
+    stale_at = datetime.now(UTC) - timedelta(minutes=10)
+    async with factory() as session:
+        repo = SQLAlchemyJobRepository(session)
+        assert (await repo.claim_next()).id == review_id
+        await session.commit()
+        await repo.release_claim_lock()
+        await session.execute(
+            update(Job).where(Job.id == review_id).values(locked_at=stale_at)
+        )
+        await session.commit()
+        assert await repo.recover_stale(before=datetime.now(UTC) - timedelta(minutes=5)) == 1
+        await session.commit()
+        job = await session.get(Job, review_id)
+        assert job.status is JobStatus.PENDING and job.payload["group"] == "g-1"
+
+    client.duty_userids = ("staff-1",)
+    await make_due()
+    await _run_until_idle(factory, client, storage, monkeypatch)
+    await _run_until_idle(factory, client, storage, monkeypatch)
+
+    assert len(client.internal) == 1 and client.internal[0][0] == ("staff-1",)
+    async with factory() as session:
+        assert (await session.get(Job, review_id)).status is JobStatus.COMPLETED
     await engine.dispose()

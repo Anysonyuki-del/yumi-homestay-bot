@@ -248,6 +248,7 @@ from homestay_bot.services.task_page_service import (
 )
 from homestay_bot.version import get_app_version
 from homestay_bot.worker import (
+    DeferredRetryJobError,
     JobHandler,
     RetrySafeJobError,
     WeComMessagePoller,
@@ -538,6 +539,21 @@ def _build_guest_image_handler(
                 stored.path.read_bytes(),
                 content_type=stored.content_type,
             )
+            # 上传要等平台应答，期间员工可能已经接手或发言，发送前按同一口径再判一次
+            # （Spec 2026-11-19 F2）。复核放在保存点里：查询出错时只撤销这一步，会话
+            # 仍可写作业状态；此时还没向客人发过图，按有界重试处理（M4）。
+            await session.flush()
+            try:
+                async with session.begin_nested():
+                    stale_after_upload = await _guest_reply_is_stale(session, payload)
+            except SQLAlchemyError as error:
+                raise RetrySafeJobError("回复配图发送前复核失败") from error
+            if stale_after_upload:
+                logger.info(
+                    "上传后发现回复配图已过时，跳过：outbox_id=%s",
+                    payload.get("outbox_id"),
+                )
+                return
             # 上传临时素材不会发送给客人；从调用发送接口起，响应丢失就不能自动重发。
             send_attempted = True
             real_message_id = await client.send_image(open_kfid, external_userid, media_id)
@@ -600,12 +616,28 @@ def reply_chain_undelivered_payload(
         return None
     payload = {
         "group": str(chain.get("group", "")),
-        "index": _reply_chain_index(failed_payload),
+        # 保留原始段号：缺失或异常时不回退成 1，否则通知会把未知段误说成「第 1 段」。
+        "index": chain.get("index"),
         "total": chain.get("total"),
     }
     if failed_payload.get("conversation_id") is not None:
         payload["conversation_id"] = failed_payload["conversation_id"]
     return payload
+
+
+def _reply_part_position(payload: dict[str, Any]) -> tuple[int, int] | None:
+    """返回校验过的（段号，总段数）；缺失、布尔值、零或越界时返回 None。
+
+    通知文案据此决定写「后续段」还是「最后一段」。无效段号无法判断位置，
+    只能说未送达或结果未知，不能推断（Spec 2026-11-19 M8）。
+    """
+    index, total = payload.get("index"), payload.get("total")
+    # type() 而非 isinstance：布尔值是 int 的子类，必须排除。
+    if type(index) is not int or type(total) is not int:
+        return None
+    if not 1 <= index <= total:
+        return None
+    return index, total
 
 
 async def _notify_undelivered_reply_chain(
@@ -623,24 +655,34 @@ async def _notify_undelivered_reply_chain(
         source_message_id=f"reply-chain-undelivered:{payload.get('group', '')}",
         delivery_phase="guest",
     )
+    position = _reply_part_position(payload)
     if "unknown_image_job_id" in payload:
         # 中断时平台可能已经收件，员工必须先核实再决定是否补发。
-        # 只有分段回复里的配图才有段号和后续段；欢迎图片等单张图片不提「后续段」。
-        if "index" in payload:
+        job_id = payload["unknown_image_job_id"]
+        check = "请管家核实客人是否收到，再决定是否补发。"
+        if position is None:
+            detail = f"一张图片的发送结果未知，作业编号：{job_id}。{check}"
+        elif position[0] < position[1]:
             detail = (
-                f"回复配图（第 {payload['index']}/{payload['total']} 段）的发送结果未知，"
-                f"作业编号：{payload['unknown_image_job_id']}。"
-                "后续段已停止发送，请管家核实客人是否收到，再决定是否补发。"
+                f"回复配图（第 {position[0]}/{position[1]} 段）的发送结果未知，"
+                f"作业编号：{job_id}。后续段已停止发送，{check}"
             )
         else:
             detail = (
-                f"一张图片的发送结果未知，作业编号：{payload['unknown_image_job_id']}。"
-                "请管家核实客人是否收到，再决定是否补发。"
+                f"回复配图（第 {position[0]}/{position[1]} 段，最后一段）的发送结果未知，"
+                f"作业编号：{job_id}。{check}"
             )
+    elif position is None:
+        detail = "有一条分段发送的客人回复未成功送达，请管家人工跟进。"
+    elif position[0] < position[1]:
+        detail = (
+            f"有一条分 {position[1]} 段发送的客人回复，从第 "
+            f"{position[0]} 段起未成功送达，后续段已停止发送，请管家人工跟进。"
+        )
     else:
         detail = (
-            f"有一条分 {payload.get('total')} 段发送的客人回复，从第 "
-            f"{payload.get('index')} 段起未成功送达，后续段已停止发送，请管家人工跟进。"
+            f"有一条分 {position[1]} 段发送的客人回复，第 {position[0]} 段"
+            "（最后一段）未成功送达，请管家人工跟进。"
         )
     conversation = payload.get("conversation_id", "未知（旧任务未记录，请查投递诊断）")
     await outbox.send_internal_text(
@@ -649,6 +691,32 @@ async def _notify_undelivered_reply_chain(
         content=f"会话编号：{conversation}\n{detail}",
     )
     return True
+
+
+def _build_reply_chain_undelivered_handler(
+    session: AsyncSession,
+    bundle: RuntimeClientBundle,
+) -> JobHandler:
+    """为长回复中途未送达（含图片结果未知）创建员工通知处理器。
+
+    放在模块级，生产装配与测试夹具共用同一实现，避免替身与生产不一致
+    （Spec 2026-11-19 M9）。
+    """
+
+    async def handle(payload: dict[str, Any]) -> None:
+        """登记一条去重的员工通知；值班名单为空时保留作业，等名单修好再发。"""
+        if not bundle.duty_userids:
+            # 返回 False 却记完成，等于静默丢掉核查（Spec 2026-11-19 F3）。每轮 worker
+            # 按当前配置重装 bundle，名单修好后的下一次低频重试即可送达，去重键保证只发一次。
+            raise DeferredRetryJobError("值班员工名单为空，等待配置修复")
+        await _notify_undelivered_reply_chain(
+            session,
+            payload,
+            agent_id=bundle.agent_id,
+            employee_userids=list(bundle.duty_userids),
+        )
+
+    return handle
 
 
 class TransactionalOutboxWeCom:
@@ -1152,6 +1220,168 @@ async def _notify_guest_delivery_failure(
         employee_userids=employee_userids,
         force=False,
     )
+
+
+SEND_FAILURE_REMATCH_JOB_TYPE = "wecom_send_failure_rematch"
+# 首次补匹配的延迟：凭证一个作业连发多个部件，发出到提交可能要几秒；中断的发送作业
+# 5 分钟后另由 recover_stale 走终态补偿，不依赖这条回执（Spec 2026-11-19 D2）。
+SEND_FAILURE_REMATCH_DELAY = timedelta(seconds=60)
+
+
+class UnmatchedSendFailure(RetrySafeJobError):
+    """查询成功但失败回执仍没有任何归属；类名即诊断页上的错误码。"""
+
+
+class SendFailureRematchStorageError(RetrySafeJobError):
+    """补匹配读写数据库失败；与「无人认领」分开计数，避免把故障误记为没有归属。"""
+
+
+def _send_failure_rematch_key(open_kfid: str, external_message_id: str) -> str:
+    """补匹配作业的固定长度去重键。
+
+    两个平台编号各可长达 128 字符，直接拼接会超过 `Job.dedupe_key` 列宽，PostgreSQL
+    拒绝写入时同步卡在保存游标之前（Spec 2026-11-19 M2）。按长度前缀编码后取摘要，
+    不同账号与编号的组合不会因拼接歧义而碰撞。
+    """
+    raw = f"{len(open_kfid)}:{open_kfid}|{len(external_message_id)}:{external_message_id}"
+    return f"send-fail-rematch:{hashlib.sha256(raw.encode()).hexdigest()}"
+
+
+async def _apply_send_failure(
+    session: AsyncSession,
+    external_message_id: str,
+    fail_type: int,
+    *,
+    agent_id: int,
+    duty_userids: tuple[str, ...],
+    lifecycle: LifecycleReminderService,
+) -> bool:
+    """按四类归属处理一条企业微信失败回执，返回是否找到任何归属。
+
+    读取顺序是关键（Spec 2026-11-19 M1）：先取机器人消息候选，再查客诉。发送事务在
+    同一提交里写下客诉的外部编号和机器人消息，候选一旦可见，对应客诉必然可见；
+    反过来先查客诉，就可能在两次查询之间撞上提交，把客诉回复当普通文字重发。
+    客诉与普通机器人消息互斥；凭证部件与生命周期提醒各自独立认领，与原逻辑一致。
+    """
+    error_code = f"wecom_async_{fail_type}"
+    bot_message_id = await session.scalar(
+        select(Message.id).where(
+            Message.external_message_id == external_message_id,
+            Message.origin == MessageOrigin.BOT,
+        )
+    )
+    complaint = await SQLAlchemyComplaintRepository(
+        session
+    ).mark_delivery_failed_by_external_message_id(
+        external_message_id,
+        error_code=error_code,
+    )
+    matched = complaint is not None
+    if complaint is None and bot_message_id is not None:
+        # 普通机器人消息失败时按原策略重试或改写；图片与正文已清理的消息不重发，
+        # 只记失败并通知员工。客人或员工发的消息不能认领机器人的投递回执。
+        matched = True
+        retry_queued = await _handle_guest_delivery_failure(
+            session,
+            external_message_id,
+            fail_type=fail_type,
+        )
+        if not retry_queued:
+            await _notify_guest_delivery_failure(
+                session,
+                external_message_id,
+                agent_id=agent_id,
+                employee_userids=list(duty_userids),
+            )
+    # 凭证部件也可能是这条失败回执的主人。此前没有任何地方按外部消息编号
+    # 关联凭证，于是部件和整组一直停在 SENT，人工也拿不到待办。
+    failed_part = await SQLAlchemyCredentialDeliveryRepository(
+        session
+    ).mark_part_failed_by_external_message_id(
+        external_message_id,
+        error_code=error_code,
+    )
+    if failed_part is not None:
+        matched = True
+        await SQLAlchemyOperationsRepository(session).create_credential_failure_review(
+            delivery_id=failed_part.delivery_id,
+            reason=error_code,
+        )
+    if await lifecycle.handle_send_failure(external_message_id, fail_type):
+        matched = True
+    return matched
+
+
+async def _consume_send_failure(
+    session: AsyncSession,
+    external_message_id: str,
+    fail_type: int,
+    open_kfid: str,
+    *,
+    agent_id: int,
+    duty_userids: tuple[str, ...],
+    lifecycle: LifecycleReminderService,
+) -> None:
+    """同步路径消费失败回执；找不到归属时在同一事务登记延后补匹配。
+
+    回执可能比发送事务提交得早：平台已受理、消息还没入库。此前这种回执被静默丢弃，
+    游标随即推进，消息永远停在「已受理」。补匹配作业与本次处理同一事务提交，
+    提交又早于同步保存游标，因此不会因游标前进而丢失（Spec 2026-11-19 F1）。
+    """
+    if await _apply_send_failure(
+        session,
+        external_message_id,
+        fail_type,
+        agent_id=agent_id,
+        duty_userids=duty_userids,
+        lifecycle=lifecycle,
+    ):
+        return
+    await SQLAlchemyJobRepository(session).enqueue(
+        SEND_FAILURE_REMATCH_JOB_TYPE,
+        {
+            "external_message_id": external_message_id,
+            "fail_type": fail_type,
+            "open_kfid": open_kfid,
+        },
+        available_at=datetime.now(UTC) + SEND_FAILURE_REMATCH_DELAY,
+        dedupe_key=_send_failure_rematch_key(open_kfid, external_message_id),
+    )
+
+
+def _build_send_failure_rematch_handler(
+    session: AsyncSession,
+    bundle: RuntimeClientBundle,
+    *,
+    lifecycle: LifecycleReminderService,
+) -> JobHandler:
+    """创建失败回执补匹配处理器：与同步路径调用同一份归属与处理逻辑。"""
+
+    async def handle(payload: dict[str, Any]) -> None:
+        """在保存点内补匹配；写库失败只撤销本次处理，作业按存储故障重试。"""
+        external_message_id = str(payload["external_message_id"])
+        # 保存点的隐式预刷新放在捕获范围外，避免把外层事务的错误误判为补匹配故障。
+        await session.flush()
+        try:
+            async with session.begin_nested():
+                matched = await _apply_send_failure(
+                    session,
+                    external_message_id,
+                    int(payload["fail_type"]),
+                    agent_id=bundle.agent_id,
+                    duty_userids=bundle.duty_userids,
+                    lifecycle=lifecycle,
+                )
+        except SQLAlchemyError as error:
+            raise SendFailureRematchStorageError("失败回执补匹配写库失败") from error
+        if not matched:
+            logger.info(
+                "失败回执仍未找到归属：external_message_id=%s",
+                external_message_id,
+            )
+            raise UnmatchedSendFailure("失败回执仍未找到归属")
+
+    return handle
 
 
 async def _settle_retry_origin(
@@ -4829,46 +5059,19 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     async def handle_send_failure(
         external_message_id: str,
         fail_type: int,
+        open_kfid: str,
         bundle: RuntimeClientBundle,
     ) -> None:
-        """在独立事务消费企业微信异步发送失败事件。"""
+        """在独立事务消费企业微信异步发送失败事件；提交早于同步保存游标。"""
         async with factory() as session:
-            complaint = await SQLAlchemyComplaintRepository(
-                session
-            ).mark_delivery_failed_by_external_message_id(
-                external_message_id,
-                error_code=f"wecom_async_{fail_type}",
-            )
-            if complaint is None:
-                # 普通机器人消息失败时自动重试一次；客诉消息仍走人工重发流程。
-                retry_queued = await _handle_guest_delivery_failure(
-                    session,
-                    external_message_id,
-                    fail_type=fail_type,
-                )
-                if not retry_queued:
-                    await _notify_guest_delivery_failure(
-                        session,
-                        external_message_id,
-                        agent_id=bundle.agent_id,
-                        employee_userids=list(bundle.duty_userids),
-                    )
-            # 凭证部件也可能是这条失败回执的主人。此前没有任何地方按外部消息编号
-            # 关联凭证，于是部件和整组一直停在 SENT，人工也拿不到待办。
-            failed_part = await SQLAlchemyCredentialDeliveryRepository(
-                session
-            ).mark_part_failed_by_external_message_id(
-                external_message_id,
-                error_code=f"wecom_async_{fail_type}",
-            )
-            if failed_part is not None:
-                await SQLAlchemyOperationsRepository(session).create_credential_failure_review(
-                    delivery_id=failed_part.delivery_id,
-                    reason=f"wecom_async_{fail_type}",
-                )
-            await build_lifecycle_service(session, bundle).handle_send_failure(
+            await _consume_send_failure(
+                session,
                 external_message_id,
                 fail_type,
+                open_kfid,
+                agent_id=bundle.agent_id,
+                duty_userids=bundle.duty_userids,
+                lifecycle=build_lifecycle_service(session, bundle),
             )
             await session.commit()
 
@@ -4877,9 +5080,10 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         return WeComSyncJobHandler(
             api=bundle.wecom,
             handle_message=lambda message: handle_message(message, bundle),
-            handle_send_failure=lambda message_id, fail_type: handle_send_failure(
+            handle_send_failure=lambda message_id, fail_type, open_kfid: handle_send_failure(
                 message_id,
                 fail_type,
+                open_kfid,
                 bundle,
             ),
             handle_session_end=lambda open_kfid, external_userid, msg_code, occurred_at: (
@@ -5092,23 +5296,6 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return handle
 
-    def build_reply_chain_undelivered_handler(
-        session: AsyncSession,
-        bundle: RuntimeClientBundle,
-    ) -> JobHandler:
-        """为长回复中途未送达创建员工通知处理器。"""
-
-        async def handle(payload: dict[str, Any]) -> None:
-            """登记一条去重的员工通知。"""
-            await _notify_undelivered_reply_chain(
-                session,
-                payload,
-                agent_id=bundle.agent_id,
-                employee_userids=list(bundle.duty_userids),
-            )
-
-        return handle
-
     def build_handoff_handlers(
         session: AsyncSession,
         bundle: RuntimeClientBundle,
@@ -5258,9 +5445,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             "guest_delivery_failure_compensate": (
                 build_delivery_compensation_handler(session, bundle)
             ),
-            "guest_reply_chain_undelivered": build_reply_chain_undelivered_handler(
+            "guest_reply_chain_undelivered": _build_reply_chain_undelivered_handler(
                 session,
                 bundle,
+            ),
+            SEND_FAILURE_REMATCH_JOB_TYPE: _build_send_failure_rematch_handler(
+                session,
+                bundle,
+                lifecycle=build_lifecycle_service(session, bundle),
             ),
             "customer_context_refresh": build_context_refresh_handler(
                 session,

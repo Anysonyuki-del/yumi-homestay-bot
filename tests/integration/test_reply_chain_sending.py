@@ -461,3 +461,55 @@ async def test_an_ordinary_reply_is_still_skipped_when_the_guest_writes_again(
     await _run_until_idle(factory, client, monkeypatch)
 
     assert client.sent == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unknown", [False, True], ids=["definite", "unknown"])
+@pytest.mark.parametrize(
+    ("position", "expect"),
+    [
+        ({}, "none"),
+        ({"index": 2, "total": 2}, "last"),
+        ({"index": 2, "total": 3}, "more"),
+        ({"index": 5, "total": 3}, "none"),
+        ({"index": True, "total": 3}, "none"),
+    ],
+    ids=["no-index", "2of2", "2of3", "out-of-range", "bool-index"],
+)
+async def test_notice_mentions_following_parts_only_when_they_exist(
+    tmp_path, unknown, position, expect
+) -> None:
+    """只有确实还有后续段才写「后续段」；最后一段写明最后，段号缺失或无效时不做推断。"""
+    factory, _ = await _setup(tmp_path)
+    payload: dict[str, Any] = {"group": "g-1", "conversation_id": 1, **position}
+    if unknown:
+        payload["unknown_image_job_id"] = 7
+    async with factory() as session:
+        assert await application._notify_undelivered_reply_chain(
+            session, payload, agent_id=1000002, employee_userids=["staff-1"]
+        )
+        await session.commit()
+        content = (
+            await session.scalar(
+                select(Job).where(Job.job_type == "wecom_send_internal_text")
+            )
+        ).payload["content"]
+    assert "None" not in content and "True" not in content
+    assert ("后续段" in content) is (expect == "more")
+    assert ("最后一段" in content) is (expect == "last")
+    if unknown:
+        # 结果未知时平台可能已经收件，始终先核实再决定是否补发。
+        assert "核实客人是否收到" in content and "作业编号：7" in content
+    else:
+        assert "未成功送达" in content
+
+
+def test_failure_payload_keeps_the_raw_part_index() -> None:
+    """段号缺失或异常时不回退成 1，交给通知层按「无段号」处理。"""
+    broken = {"open_kfid": "wk", "reply_chain": {"group": "g", "index": "x", "total": 3}}
+
+    assert application.reply_chain_undelivered_payload("wecom_send_text", broken) == {
+        "group": "g",
+        "index": "x",
+        "total": 3,
+    }

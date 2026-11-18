@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.routing import APIRoute
 
 from homestay_bot.domain.enums import EmployeeRole
+from homestay_bot.domain.runtime_config import DutyUserIdsInvalidError
 from homestay_bot.repositories.runtime_config import (
     RuntimeConfigConflictError,
     RuntimeConfigRollbackError,
@@ -343,6 +344,12 @@ async def activate_settings(
             admin_id=admin_id,
             error="候选配置测试未通过，旧版本继续使用。",
         )
+    except DutyUserIdsInvalidError:
+        return await _render_settings(
+            request,
+            admin_id=admin_id,
+            error="值班员工名单至少要有一个企业微信账号，多个账号用英文逗号分隔；配置未保存。",
+        )
     except (RuntimeConfigConflictError, ValueError):
         return await _render_settings(
             request,
@@ -414,6 +421,12 @@ async def rollback_settings(
             request,
             admin_id=admin_id,
             error="上一版本连接测试未通过，未执行回滚。",
+        )
+    except DutyUserIdsInvalidError:
+        return await _render_settings(
+            request,
+            admin_id=admin_id,
+            error="上一版本没有有效的值班员工名单，回滚后员工通知将无人接收；未执行回滚。",
         )
     except (RuntimeConfigConflictError, RuntimeConfigRollbackError, LookupError):
         return await _render_settings(

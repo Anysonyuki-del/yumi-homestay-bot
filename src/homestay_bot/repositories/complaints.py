@@ -360,9 +360,11 @@ class SQLAlchemyComplaintRepository:
         )
         if review_id is None:
             return None
+        # 已是投递失败的不再改：重发会换新的外部编号，同一编号再失败只能是重复回执；
+        # 再走一次状态变更会增加版本号，让员工正在操作的页面过期（Spec 2026-11-19 M1）。
         await self._transition(
             review_id,
-            allowed=frozenset({_S.SENT, _S.SEND_QUEUED, _S.DELIVERY_FAILED}),
+            allowed=frozenset({_S.SENT, _S.SEND_QUEUED}),
             external_message_id=external_message_id,
             values={
                 "status": _S.DELIVERY_FAILED,
