@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-18T09:52:19Z",
+  "updated_at": "2026-11-18T10:37:00Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -101,9 +101,9 @@
     },
     "YuMi民宿AI开发经验与防回归手册.md": {
       "role": "index",
-      "sha256": "263c16c3042bb8dfd0b53b0039366fa640acafb9c2fa421051cd23c8bc6142a8",
-      "size": 37767,
-      "normalized_sha256": "263c16c3042bb8dfd0b53b0039366fa640acafb9c2fa421051cd23c8bc6142a8"
+      "sha256": "f8f641f0ae99aa50847f438f64fdb88dcf351b486986c49d2e699f5bb2381bd2",
+      "size": 38024,
+      "normalized_sha256": "f8f641f0ae99aa50847f438f64fdb88dcf351b486986c49d2e699f5bb2381bd2"
     },
     "alembic.ini": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "fd2802b8c96a58375b80592118fc86585979bd5bd041ba24aa536973263a2ff8",
-      "size": 384779,
-      "normalized_sha256": "fd2802b8c96a58375b80592118fc86585979bd5bd041ba24aa536973263a2ff8"
+      "sha256": "8142965055341f11437e10fdb4fb37842d109fb3a84061368a8bc15d92af5a74",
+      "size": 384943,
+      "normalized_sha256": "8142965055341f11437e10fdb4fb37842d109fb3a84061368a8bc15d92af5a74"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1466,9 +1466,9 @@
     },
     "docs/releases/1.73.3.md": {
       "role": "index",
-      "sha256": "6eeeb9d26a1878d04eda1db3e2a350b6a08c96577b6ef1b926a2206edc2ce734",
-      "size": 11535,
-      "normalized_sha256": "6eeeb9d26a1878d04eda1db3e2a350b6a08c96577b6ef1b926a2206edc2ce734"
+      "sha256": "628223a228f5260ee2af9250c90f089c595ab4c292c986ca194a9fad9ff34029",
+      "size": 15286,
+      "normalized_sha256": "628223a228f5260ee2af9250c90f089c595ab4c292c986ca194a9fad9ff34029"
     },
     "docs/releases/README.md": {
       "role": "index",

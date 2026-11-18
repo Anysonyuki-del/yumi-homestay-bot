@@ -463,7 +463,7 @@ aliases:
 - [ ] 记录旧 Git 提交，备份数据库、`.env` 和私有上传目录；备份路径和日志不能输出密钥。
 - [ ] 只同步本次需要的文件，不覆盖用户其他未提交修改。
 - [ ] 仅允许 tracked worktree 干净时执行 `git pull --ff-only`，保留服务器既有未跟踪环境备份。
-- [ ] 通过 `docker compose up -d --build api` 重建 API，PostgreSQL 容器不得无故重建。
+- [ ] 通过 `docker compose build api` 与 `docker compose up -d --no-deps api` 只重建 API，PostgreSQL 容器不得无故重建。2026-11-18 轮换数据库口令后，`postgres` 服务的 Compose 配置哈希与运行中容器不同，不带 `--no-deps` 的 `up` 会顺带重建 PostgreSQL 容器（数据卷保留，但数据库会短暂中断）。
 - [ ] 检查 `http://127.0.0.1:8000/health` 与公网 `/health` 都返回 HTTP 200。
 - [ ] 核对应用版本、Git 提交、Alembic current/head 和运行配置 revision，不能只看一个编号。
 - [ ] 检查数据库、worker、企业微信轮询、百居易同步、上下文维护和生命周期调度状态。
