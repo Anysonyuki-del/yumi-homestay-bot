@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from homestay_bot.application import TransactionalOutboxWeCom
 from homestay_bot.domain.enums import ConversationMode, MessageOrigin
@@ -33,7 +34,10 @@ class _NoModel:
 
 async def _factory(tmp_path):
     """建库并写入一条启用的「紧急处置」审核知识（虚构）。"""
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'emergency.db'}")
+    # 会话关闭时释放 SQLite 线程，避免跨测试事件循环持有文件连接。
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'emergency.db'}", poolclass=NullPool,
+    )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)

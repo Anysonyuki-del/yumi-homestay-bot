@@ -18,6 +18,10 @@ class WeComApiError(RuntimeError):
         self.error_code = error_code
 
 
+class WeComImageNotSent(RuntimeError):
+    """发送图片前准备失败，或连接尚未建立，客人侧没有投递副作用。"""
+
+
 @dataclass(frozen=True)
 class CachedToken:
     """保存 access token 及提前失效时间。"""
@@ -284,22 +288,37 @@ class WeComApiClient:
         external_userid: str,
         media_id: str,
     ) -> str:
-        """向准确微信客服会话发送一条图片消息。"""
-        access_token = await self._get_access_token(self._kf_secret)
-        response = await self._client.post(
-            "/cgi-bin/kf/send_msg",
-            params={"access_token": access_token},
-            json={
-                "touser": external_userid,
-                "open_kfid": open_kfid,
-                "msgtype": "image",
-                "image": {"media_id": media_id},
-            },
-        )
+        """向指定客服会话发送图片，区分未发出、平台拒绝及无法确认的回执。"""
+        try:
+            access_token = await self._get_access_token(self._kf_secret)
+        except WeComApiError:
+            raise
+        except Exception as error:
+            # 读取 token 失败发生在发送 POST 之前，可安全重试。
+            raise WeComImageNotSent("图片发送前获取凭据失败") from error
+        try:
+            response = await self._client.post(
+                "/cgi-bin/kf/send_msg",
+                params={"access_token": access_token},
+                json={
+                    "touser": external_userid,
+                    "open_kfid": open_kfid,
+                    "msgtype": "image",
+                    "image": {"media_id": media_id},
+                },
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as error:
+            raise WeComImageNotSent("图片发送连接尚未建立") from error
         response.raise_for_status()
         payload = response.json()
+        # 缺失或非整数的 errcode 无法证明平台拒收；布尔值也不能当作整数回执。
+        if not isinstance(payload, dict) or type(payload.get("errcode")) is not int:
+            raise ValueError("图片发送回执缺少有效错误码")
         self._raise_for_error(payload)
-        return str(payload["msgid"])
+        message_id = payload.get("msgid")
+        if not isinstance(message_id, str) or not message_id.strip():
+            raise ValueError("图片发送回执缺少有效消息编号")
+        return message_id
 
     async def transfer_service_state(
         self,

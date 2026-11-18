@@ -448,6 +448,52 @@ async def test_customer_list_filters_operational_attention_and_reviews() -> None
 
 
 @pytest.mark.asyncio
+async def test_customer_list_excludes_invalid_stays_from_filters_and_cards() -> None:
+    """历史渠道状态含大小写或首尾空白时，筛选结果和卡片仍认定同一批有效住宿。"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    today = date(2026, 8, 14)
+    async with async_sessionmaker(engine)() as session:
+        room = PropertyProfile(id=701, title="春和景明")
+        statuses = (
+            "Cancelled", " CANCELED ", "\tDeclined\r\n", "Expired", "\u3000deleted\xa0",
+            "confirmed",
+        )
+        customers = {status: Customer(display_name=status.strip()) for status in statuses}
+        session.add_all([room, *customers.values()])
+        await session.flush()
+        for status, customer in customers.items():
+            session.add(
+                StayOrder(
+                    hostex_reservation_code=f"CRM-STATUS-{customer.id}",
+                    stay_code=f"CRM-STATUS-{customer.id}",
+                    customer_id=customer.id,
+                    property_id=room.id,
+                    check_in_date=today,
+                    check_out_date=date(2026, 8, 16),
+                    status=status,
+                )
+            )
+
+        confirmed_id = customers["confirmed"].id
+        excluded_ids = {customer.id for customer in customers.values()} - {confirmed_id}
+        repository = SQLAlchemyCustomerRepository(session, local_date_provider=lambda: today)
+        for stay_status, expected_ids in (("in_house", {confirmed_id}), ("none", excluded_ids)):
+            rows = await repository.list_customers(
+                CustomerListFilters(stay_status=stay_status), offset=0, limit=20,
+            )
+            assert {row.id for row in rows} == expected_ids
+        facts = await repository.customer_list_facts([confirmed_id, *excluded_ids], today=today)
+        assert facts[confirmed_id]["stay_status"] == "in_house"
+        assert facts[confirmed_id]["property_title"] == room.title
+        for customer_id in excluded_ids:
+            assert facts[customer_id]["stay_status"] == "none"
+            assert facts[customer_id]["property_title"] is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_customer_detail_stays_tab_does_not_load_other_domains() -> None:
     """住宿页签只返回订单与房间投影，不包含消息正文或记忆治理对象。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

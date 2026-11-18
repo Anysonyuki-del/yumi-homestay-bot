@@ -39,19 +39,15 @@ def _raw(items: list[dict[str, object]]) -> bytes:
     return json.dumps(items, ensure_ascii=False).encode("utf-8")
 
 
-async def _database(*, role: EmployeeRole = EmployeeRole.ADMIN, active: bool = True):
-    """建内存库并放一名员工，返回会话工厂与员工编号。"""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+async def _seed_employee(factory, *, role: EmployeeRole = EmployeeRole.ADMIN, active: bool = True):
+    """向用例的独立数据库写入指定角色的员工，返回员工编号。"""
     async with factory() as session:
         employee = Employee(
             wecom_userid="import-admin", name="管理员", role=role, is_active=active
         )
         session.add(employee)
         await session.commit()
-        return factory, employee.id
+        return employee.id
 
 
 async def _count(factory, model) -> int:
@@ -102,30 +98,30 @@ def test_summary_counts_placeholders_without_content() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preview_does_not_write() -> None:
+async def test_preview_does_not_write(sqlite_factory) -> None:
     """默认预览只读：给出新建数，数据库不变。"""
-    factory, _ = await _database()
+    await _seed_employee(sqlite_factory)
     drafts = parse_drafts(_raw([_draft(1), _draft(2)]))
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         plan = await plan_import(session, drafts)
 
     assert len(plan.new) == 2
     assert plan.skipped == 0
     assert plan.conflicts == []
-    assert await _count(factory, KnowledgeEntry) == 0
+    assert await _count(sqlite_factory, KnowledgeEntry) == 0
 
 
 @pytest.mark.asyncio
-async def test_apply_writes_every_draft_disabled_with_audit() -> None:
+async def test_apply_writes_every_draft_disabled_with_audit(sqlite_factory) -> None:
     """写入后全部停用、记录管理员与最小审计，客人检索读不到。"""
-    factory, admin_id = await _database()
+    admin_id = await _seed_employee(sqlite_factory)
     drafts = parse_drafts(_raw([_draft(1), _draft(2), _draft(3)]))
 
-    result = await apply_import(factory, drafts, admin_id=admin_id)
+    result = await apply_import(sqlite_factory, drafts, admin_id=admin_id)
 
     assert len(result.created_ids) == 3
-    async with factory() as session:
+    async with sqlite_factory() as session:
         entries = list(await session.scalars(select(KnowledgeEntry)))
         audits = list(await session.scalars(select(AuditLog)))
         active = await SQLAlchemyKnowledgeRepository(session).list_active()
@@ -139,25 +135,25 @@ async def test_apply_writes_every_draft_disabled_with_audit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rerun_skips_identical_entries() -> None:
+async def test_rerun_skips_identical_entries(sqlite_factory) -> None:
     """同一份草稿重复导入不新增。"""
-    factory, admin_id = await _database()
+    admin_id = await _seed_employee(sqlite_factory)
     drafts = parse_drafts(_raw([_draft(1), _draft(2)]))
 
-    await apply_import(factory, drafts, admin_id=admin_id)
-    second = await apply_import(factory, drafts, admin_id=admin_id)
+    await apply_import(sqlite_factory, drafts, admin_id=admin_id)
+    second = await apply_import(sqlite_factory, drafts, admin_id=admin_id)
 
     assert second.created_ids == []
     assert second.skipped == 2
-    assert await _count(factory, KnowledgeEntry) == 2
+    assert await _count(sqlite_factory, KnowledgeEntry) == 2
 
 
 @pytest.mark.asyncio
-async def test_edited_entry_is_a_conflict_and_nothing_is_written() -> None:
+async def test_edited_entry_is_a_conflict_and_nothing_is_written(sqlite_factory) -> None:
     """管理员改过的条目再导入视为冲突：整批不写，不覆盖人工修改。"""
-    factory, admin_id = await _database()
-    await apply_import(factory, parse_drafts(_raw([_draft(1)])), admin_id=admin_id)
-    async with factory() as session:
+    admin_id = await _seed_employee(sqlite_factory)
+    await apply_import(sqlite_factory, parse_drafts(_raw([_draft(1)])), admin_id=admin_id)
+    async with sqlite_factory() as session:
         entry = await session.scalar(select(KnowledgeEntry))
         entry.answer_zh = "管理员审核后改写的答案。"
         entry.is_enabled = True
@@ -165,10 +161,10 @@ async def test_edited_entry_is_a_conflict_and_nothing_is_written() -> None:
 
     with pytest.raises(ImportConflictError):
         await apply_import(
-            factory, parse_drafts(_raw([_draft(1), _draft(2)])), admin_id=admin_id
+            sqlite_factory, parse_drafts(_raw([_draft(1), _draft(2)])), admin_id=admin_id
         )
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         entries = list(await session.scalars(select(KnowledgeEntry)))
     assert len(entries) == 1
     assert entries[0].answer_zh == "管理员审核后改写的答案。"
@@ -181,33 +177,35 @@ async def test_edited_entry_is_a_conflict_and_nothing_is_written() -> None:
     [(EmployeeRole.STAFF, True), (EmployeeRole.ADMIN, False)],
     ids=["staff", "inactive-admin"],
 )
-async def test_only_an_active_admin_can_import(role: EmployeeRole, active: bool) -> None:
+async def test_only_an_active_admin_can_import(
+    sqlite_factory, role: EmployeeRole, active: bool,
+) -> None:
     """操作人必须是在职管理员，不能伪造或借用普通员工身份。"""
-    factory, employee_id = await _database(role=role, active=active)
+    employee_id = await _seed_employee(sqlite_factory, role=role, active=active)
 
     with pytest.raises(DraftError):
-        await apply_import(factory, parse_drafts(_raw([_draft(1)])), admin_id=employee_id)
+        await apply_import(sqlite_factory, parse_drafts(_raw([_draft(1)])), admin_id=employee_id)
 
-    assert await _count(factory, KnowledgeEntry) == 0
+    assert await _count(sqlite_factory, KnowledgeEntry) == 0
 
 
 @pytest.mark.asyncio
-async def test_unknown_admin_is_rejected() -> None:
+async def test_unknown_admin_is_rejected(sqlite_factory) -> None:
     """不存在的员工编号直接拒绝。"""
-    factory, _ = await _database()
+    await _seed_employee(sqlite_factory)
 
     with pytest.raises(DraftError):
-        await apply_import(factory, parse_drafts(_raw([_draft(1)])), admin_id=9999)
+        await apply_import(sqlite_factory, parse_drafts(_raw([_draft(1)])), admin_id=9999)
 
-    assert await _count(factory, KnowledgeEntry) == 0
+    assert await _count(sqlite_factory, KnowledgeEntry) == 0
 
 
 @pytest.mark.asyncio
-async def test_failure_mid_batch_rolls_back_everything(monkeypatch) -> None:
+async def test_failure_mid_batch_rolls_back_everything(sqlite_factory, monkeypatch) -> None:
     """写入途中出错时整批回滚，不留下部分导入结果。"""
     from homestay_bot.tools import import_knowledge_drafts as tool
 
-    factory, admin_id = await _database()
+    admin_id = await _seed_employee(sqlite_factory)
     calls = {"n": 0}
     original = tool._audit
 
@@ -222,11 +220,11 @@ async def test_failure_mid_batch_rolls_back_everything(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError):
         await apply_import(
-            factory, parse_drafts(_raw([_draft(1), _draft(2), _draft(3)])), admin_id=admin_id
+            sqlite_factory, parse_drafts(_raw([_draft(1), _draft(2), _draft(3)])), admin_id=admin_id
         )
 
-    assert await _count(factory, KnowledgeEntry) == 0
-    assert await _count(factory, AuditLog) == 0
+    assert await _count(sqlite_factory, KnowledgeEntry) == 0
+    assert await _count(sqlite_factory, AuditLog) == 0
 
 
 @pytest.mark.asyncio
@@ -238,7 +236,6 @@ async def test_command_line_previews_then_applies_without_printing_content(
     import sys
 
     from cryptography.fernet import Fernet
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     from homestay_bot.tools import import_knowledge_drafts as tool
 

@@ -21,7 +21,9 @@ from homestay_bot.domain.models import (
     Job,
     KnowledgeReferral,
 )
+from homestay_bot.repositories.conversations import SQLAlchemyMessageRepository
 
+GUEST_IMAGE_JOB_TYPE = "wecom_send_image"
 _SQLITE_CLAIM_LOCKS: WeakKeyDictionary[AsyncEngine, asyncio.Lock] = WeakKeyDictionary()
 
 
@@ -179,6 +181,7 @@ class SQLAlchemyJobRepository:
         """按 worker 类型恢复遗留任务，并在达到上限时终止重试。"""
         non_replayable_types = {
             "credential_send_part",
+            GUEST_IMAGE_JOB_TYPE,
             "wecom_send_text",
             "wecom_send_internal_text",
             "wecom_send_internal_card",
@@ -205,8 +208,8 @@ class SQLAlchemyJobRepository:
                 status=JobStatus.FAILED,
                 locked_at=None,
                 last_error_code="stale_non_replayable",
-                payload={},
             )
+            .returning(Job)
         )
         normalized_max_attempts = max(1, max_attempts)
         maxed_out_statement = (
@@ -241,9 +244,12 @@ class SQLAlchemyJobRepository:
             )
         )
         await self._mark_stale_complaint_deliveries(before)
-        failed = cast(
-            CursorResult[Any], await self._session.execute(failed_statement)
-        )
+        # 只为实际从 RUNNING 转为 FAILED 的图片登记核查，和清空敏感载荷同事务提交。
+        failed_jobs = (await self._session.scalars(failed_statement)).all()
+        for job in failed_jobs:
+            if job.job_type == GUEST_IMAGE_JOB_TYPE:
+                await self.enqueue_unknown_image_review(job)
+            job.payload = {}
         maxed_out = cast(
             CursorResult[Any], await self._session.execute(maxed_out_statement)
         )
@@ -252,9 +258,29 @@ class SQLAlchemyJobRepository:
         )
         await self._session.flush()
         return (
-            int(failed.rowcount)
+            len(failed_jobs)
             + int(maxed_out.rowcount)
             + int(retried.rowcount)
+        )
+
+    async def enqueue_unknown_image_review(self, job: Job) -> None:
+        """按图片作业编号去重，给员工留下内部定位信息；旧载荷可用客服和客人编号反查会话。"""
+        payload = job.payload
+        conversation_id = payload.get("conversation_id")
+        if conversation_id is None and payload.get("open_kfid") and payload.get("external_userid"):
+            conversation_id = await SQLAlchemyMessageRepository(self._session).find_conversation_id(
+                payload["open_kfid"], payload["external_userid"]
+            )
+        # 旧载荷可能缺少分组或段号，作业编号仍能独立定位，且不会把两张图的核查合并。
+        group = f"image-job:{job.id}"
+        review = {"group": group, "unknown_image_job_id": job.id}
+        if conversation_id is not None:
+            review["conversation_id"] = conversation_id
+        chain = payload.get("reply_chain")
+        if isinstance(chain, dict) and chain.get("index") and chain.get("total"):
+            review.update(index=chain["index"], total=chain["total"])
+        await self.enqueue(
+            "guest_reply_chain_undelivered", review, dedupe_key=f"reply-chain-undelivered:{group}"
         )
 
     async def _enqueue_stale_delivery_compensations(

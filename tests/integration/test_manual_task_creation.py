@@ -4,7 +4,6 @@ from datetime import date
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from homestay_bot.domain.enums import (
     BusinessTaskOrigin,
@@ -13,16 +12,8 @@ from homestay_bot.domain.enums import (
     EmployeeRole,
 )
 from homestay_bot.domain.errors import OperationRefused
-from homestay_bot.domain.models import AuditLog, Base, BusinessTask, Employee, PropertyProfile
+from homestay_bot.domain.models import AuditLog, BusinessTask, Employee, PropertyProfile
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
-
-
-async def _factory():
-    """建内存库并返回会话工厂。"""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    return async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def _seed(session) -> None:
@@ -39,10 +30,11 @@ async def _seed(session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_task_defaults_to_pending_assignment_with_manual_origin() -> None:
+async def test_manual_task_defaults_to_pending_assignment_with_manual_origin(
+    sqlite_factory,
+) -> None:
     """不带执行人时创建为待分派，来源标记为手动，且满足执行字段约束。"""
-    factory = await _factory()
-    async with factory() as session:
+    async with sqlite_factory() as session:
         await _seed(session)
         repo = SQLAlchemyOperationsRepository(session)
 
@@ -70,10 +62,9 @@ async def test_manual_task_defaults_to_pending_assignment_with_manual_origin() -
 
 
 @pytest.mark.asyncio
-async def test_manual_task_with_assignee_is_born_assigned() -> None:
+async def test_manual_task_with_assignee_is_born_assigned(sqlite_factory) -> None:
     """指定启用执行人时直接进入已分派。"""
-    factory = await _factory()
-    async with factory() as session:
+    async with sqlite_factory() as session:
         await _seed(session)
         repo = SQLAlchemyOperationsRepository(session)
 
@@ -92,10 +83,9 @@ async def test_manual_task_with_assignee_is_born_assigned() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_contact_type_is_refused() -> None:
+async def test_manual_contact_type_is_refused(sqlite_factory) -> None:
     """manual_contact 是生命周期派生类型，不允许手动创建。"""
-    factory = await _factory()
-    async with factory() as session:
+    async with sqlite_factory() as session:
         await _seed(session)
         repo = SQLAlchemyOperationsRepository(session)
         with pytest.raises(OperationRefused, match="不支持手动创建"):
@@ -109,10 +99,9 @@ async def test_manual_contact_type_is_refused() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_task_rejects_blank_description_and_bad_property() -> None:
+async def test_manual_task_rejects_blank_description_and_bad_property(sqlite_factory) -> None:
     """空描述、停用/不存在房间、停用执行人都在服务端被拒。"""
-    factory = await _factory()
-    async with factory() as session:
+    async with sqlite_factory() as session:
         await _seed(session)
         repo = SQLAlchemyOperationsRepository(session)
 

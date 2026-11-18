@@ -1,7 +1,11 @@
 import httpx
 import pytest
 
-from homestay_bot.integrations.wecom.api_client import WeComApiClient
+from homestay_bot.integrations.wecom.api_client import (
+    WeComApiClient,
+    WeComApiError,
+    WeComImageNotSent,
+)
 
 
 @pytest.mark.asyncio
@@ -357,6 +361,61 @@ async def test_send_image_uses_customer_service_endpoint() -> None:
         await client.aclose()
 
     assert message_id == "IMAGE-MSG-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {}, {"errcode": False, "msgid": "bad"}, {"errcode": 0.2, "msgid": "bad"},
+    {"errcode": 0}, {"errcode": 0, "msgid": None}, {"errcode": 0, "msgid": "  "},
+    {"errcode": 0, "msgid": 123}, {"errcode": 45009},
+])
+async def test_image_response_requires_explicit_result_and_message_id(payload) -> None:
+    """明确拒绝保留稳定业务错误码；残缺回执不能冒充明确拒绝或平台受理。"""
+    def respond(request: httpx.Request) -> httpx.Response:
+        """用真实 HTTP 客户端路径注入缺少关键字段的图片回执。"""
+        if request.url.path.endswith("/gettoken"):
+            return httpx.Response(200, json={"errcode": 0, "access_token": "kf-access"})
+        assert request.url.path.endswith("/kf/send_msg")
+        return httpx.Response(200, json=payload)
+
+    client = WeComApiClient("corp", "kf", "agent", transport=httpx.MockTransport(respond))
+    try:
+        if payload.get("errcode") == 45009:
+            with pytest.raises(WeComApiError) as rejected:
+                await client.send_image("wk", "wm", "media")
+            assert rejected.value.error_code == 45009
+        else:
+            with pytest.raises(ValueError):
+                await client.send_image("wk", "wm", "media")
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage,error,expected", [
+    ("gettoken", httpx.ReadTimeout, WeComImageNotSent),
+    ("kf/send_msg", httpx.ConnectTimeout, WeComImageNotSent),
+    ("kf/send_msg", httpx.PoolTimeout, WeComImageNotSent),
+    ("kf/send_msg", httpx.ReadTimeout, httpx.ReadTimeout),
+])
+async def test_image_transport_errors_preserve_send_boundary(stage, error, expected) -> None:
+    """取 token 或建连失败可重试，已向发送端点写出请求后读超时则不能重放。"""
+    paths = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        """记录实际端点，确保 token 失败时没有向图片端点发起请求。"""
+        paths.append(request.url.path)
+        if request.url.path.endswith(stage):
+            raise error("fixture", request=request)
+        return httpx.Response(200, json={"errcode": 0, "access_token": "kf-access"})
+
+    client = WeComApiClient("corp", "kf", "agent", transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(expected):
+            await client.send_image("wk", "wm", "media")
+    finally:
+        await client.aclose()
+    assert paths[-1] == f"/cgi-bin/{stage}"
 
 
 @pytest.mark.asyncio

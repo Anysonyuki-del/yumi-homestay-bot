@@ -38,6 +38,7 @@ from homestay_bot.repositories.conversations import (
     SQLAlchemyConversationRepository,
     SQLAlchemyMessageRepository,
 )
+from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
 from homestay_bot.repositories.operations import SQLAlchemyOperationsRepository
 from homestay_bot.services.conversation_service import ConversationService
 from homestay_bot.services.emergency_service import EmergencyService
@@ -427,9 +428,9 @@ async def test_deleted_image_file_is_skipped_and_the_rest_still_sent(
 
 @pytest.mark.asyncio
 async def test_failed_image_stops_the_rest_and_alerts_staff(tmp_path, monkeypatch) -> None:
-    """一张图终态失败：后面的图不发，登记注明段号的员工通知；连接失败则可重试。"""
+    """发送响应丢失时停止续发，并请员工核查客人是否已收到。"""
     engine, factory, storage = await _world(tmp_path, welcome_image=False)
-    client = FakeWeCom(fail_on={"PK01": RuntimeError("rejected")})
+    client = FakeWeCom(fail_on={"PK01": httpx.ReadTimeout("fixture")})
 
     await _receive(factory, _grounded_parking(), "g-1", "开车停哪里")
     await _run_until_idle(factory, client, storage, monkeypatch)
@@ -444,14 +445,82 @@ async def test_failed_image_stops_the_rest_and_alerts_staff(tmp_path, monkeypatc
     assert len(failed) == 1
     assert len(alerts) == 1 and alerts[0].payload["index"] == 2
     assert alerts[0].payload["total"] == 3
+    assert alerts[0].payload["unknown_image_job_id"] == failed[0].id
     await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_connect_error_on_image_is_retried_not_failed(tmp_path, monkeypatch) -> None:
-    """连接失败的图片任务保留重试，不算终态失败。"""
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_interrupted_image_is_reviewed_once_without_replay(tmp_path, legacy) -> None:
+    """模拟图片已领取且结果未提交；即使旧载荷缺会话、分组，恢复仍只登记一次核查。"""
+    engine, factory, _ = await _world(tmp_path, welcome_image=False)
+    now = datetime.now(UTC)
+    before = now - timedelta(minutes=5)
+    async with factory() as session:
+        repo = SQLAlchemyJobRepository(session, included_job_types={GUEST_IMAGE_JOB_TYPE})
+        payload = {"open_kfid": "test-kf", "external_userid": "test-guest"}
+        if not legacy:
+            payload.update(conversation_id=1, reply_chain={
+                "group": "image-chain", "index": 2, "total": 3, "images": ["next-image"]
+            })
+        image = await repo.enqueue(GUEST_IMAGE_JOB_TYPE, payload, available_at=before)
+        assert await repo.claim_next(now=before) is image
+        await session.commit()
+        await repo.release_claim_lock()
+
+        # 锁恰好五分钟也不算过期；跨过边界后先验证失败事务仍可重新恢复。
+        assert await repo.recover_stale(before=before) == 0
+        cutoff = before + timedelta(seconds=1)
+        assert await repo.recover_stale(before=cutoff) == 1
+        await session.rollback()
+        assert await repo.recover_stale(before=cutoff) == 1
+        await session.commit()
+        assert await repo.recover_stale(before=cutoff) == 0
+        assert await repo.claim_next(now=now) is None
+        await session.refresh(image)
+        assert image.status is JobStatus.FAILED and image.payload == {}
+        reviews = list(await session.scalars(
+            select(Job).where(Job.job_type == "guest_reply_chain_undelivered")
+        ))
+        assert len(reviews) == 1
+        review = reviews[0].payload
+        assert review["conversation_id"] == 1 and review["unknown_image_job_id"] == image.id
+        for _ in range(2):
+            assert await application._notify_undelivered_reply_chain(
+                session, review, agent_id=1, employee_userids=["staff"]
+            )
+        alerts = list(await session.scalars(
+            select(Job).where(Job.job_type == "wecom_send_internal_text")
+        ))
+        assert len(alerts) == 1
+        content = alerts[0].payload["content"]
+        assert "结果未知" in content and "未成功送达" not in content
+        if legacy:
+            # 旧载荷没有段号：既不能出现空值，也不能声称「后续段已停止」。
+            assert "None" not in content and "后续段" not in content
+        else:
+            assert "第 2/3 段" in content
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ConnectError("offline"), application.WeComImageNotSent(), "upload-timeout"],
+)
+async def test_connect_error_on_image_is_retried_not_failed(tmp_path, monkeypatch, error) -> None:
+    """未发出的图片（建连失败、发送前准备失败、素材上传超时）保留重试，不算终态失败。"""
     engine, factory, storage = await _world(tmp_path, welcome_image=False)
-    client = FakeWeCom(fail_on={"PK01": httpx.ConnectError("offline")})
+    if error == "upload-timeout":
+        client = FakeWeCom()
+
+        async def fail_upload(*args, **kwargs):
+            """模拟素材接口读超时：图片尚未进入发送阶段，客人侧没有副作用。"""
+            raise httpx.ReadTimeout("fixture")
+
+        monkeypatch.setattr(client, "upload_temporary_image", fail_upload)
+    else:
+        client = FakeWeCom(fail_on={"PK01": error})
 
     await _receive(factory, _grounded_parking(), "g-1", "开车停哪里")
     await _run_until_idle(factory, client, storage, monkeypatch)

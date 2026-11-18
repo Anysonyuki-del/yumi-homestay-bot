@@ -4,7 +4,7 @@ from collections.abc import Collection
 from datetime import date
 
 _CHECKED_OUT_STATUSES: frozenset[str] = frozenset({"checked_out", "completed"})
-_EXCLUDED_STATUSES: frozenset[str] = frozenset(
+EXCLUDED_STAY_STATUSES: frozenset[str] = frozenset(
     {"cancelled", "canceled", "declined", "expired", "deleted"}
 )
 
@@ -28,9 +28,9 @@ def is_checked_out_stay_status(status: str | None) -> bool:
 
 
 def is_excluded_stay_status(status: str | None) -> bool:
-    """判断订单是否因取消、拒绝或删除而不应参与入住备注计算。"""
+    """判断订单是否已取消或失效，需从有效住宿中排除。"""
 
-    return _has_normalized_status(status, _EXCLUDED_STATUSES)
+    return _has_normalized_status(status, EXCLUDED_STAY_STATUSES)
 
 
 def is_current_stay(

@@ -206,19 +206,15 @@ async def test_retention_no_longer_purges_approval_pii() -> None:
 
 
 @pytest.mark.asyncio
-async def test_archived_task_cleanup_respects_every_boundary() -> None:
+async def test_archived_task_cleanup_respects_every_boundary(sqlite_factory) -> None:
     """自动清理只碰归档满 180 天的任务，其余一律不动。
 
     这是本项目第一个会自动销毁业务数据的清理，边界写错就是静默丢数据：
     未归档的任务无论多旧都不删——自动删掉还没人处理的活，比留着它危险得多。
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
     now = datetime(2026, 9, 8, tzinfo=UTC)
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         await session.execute(text("PRAGMA foreign_keys=ON"))
         session.add(PropertyProfile(id=101, title="测试房间"))
         await session.flush()

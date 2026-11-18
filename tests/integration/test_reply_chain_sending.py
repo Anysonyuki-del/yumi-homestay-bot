@@ -12,6 +12,7 @@ import httpx
 import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from homestay_bot import application
 from homestay_bot.application import TransactionalOutboxWeCom
@@ -71,7 +72,8 @@ async def _setup(
     `with_conversation_id=False` 按生产装配构造出站：生产的会话服务在会话建立前
     就创建了出站对象，拿不到会话编号。1.39.11 的修复只在测试自行传入编号时生效。
     """
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'chain.db'}")
+    # 会话关闭时释放 SQLite 线程，避免跨测试事件循环持有文件连接。
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'chain.db'}", poolclass=NullPool)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)

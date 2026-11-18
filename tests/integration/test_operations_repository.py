@@ -835,17 +835,13 @@ async def test_task_queue_excludes_expired_by_default_and_allows_history_filter(
 
 
 @pytest.mark.asyncio
-async def test_archive_only_accepts_terminal_tasks_and_hides_them() -> None:
+async def test_archive_only_accepts_terminal_tasks_and_hides_them(sqlite_factory) -> None:
     """归档只接受终态任务，且归档后不再出现在默认列表。
 
     失效任务此前只能无限堆积；归档必须可逆，且不能被用来把没做的活藏起来。
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         session.add(PropertyProfile(id=101, title="测试房间"))
         await session.flush()
         repository = SQLAlchemyOperationsRepository(session)
@@ -898,14 +894,10 @@ async def test_archive_only_accepts_terminal_tasks_and_hides_them() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bulk_archive_covers_filter_and_skips_open_tasks() -> None:
+async def test_bulk_archive_covers_filter_and_skips_open_tasks(sqlite_factory) -> None:
     """批量归档以筛选条件为选择范围，且绝不触碰开放中的任务。"""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         session.add(PropertyProfile(id=101, title="测试房间"))
         await session.flush()
         repository = SQLAlchemyOperationsRepository(session)
@@ -954,18 +946,14 @@ async def test_bulk_archive_covers_filter_and_skips_open_tasks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_archived_view_lists_tasks_without_extra_status_filter() -> None:
+async def test_archived_view_lists_tasks_without_extra_status_filter(sqlite_factory) -> None:
     """只勾选「查看已归档」就必须列出全部已归档任务。
 
     归档只接受终态任务，而默认列表在未选状态时会附加「仅开放态」条件；
     两者相与恒为空，导致归档视图看起来永远是空的。
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         session.add(PropertyProfile(id=101, title="测试房间"))
         await session.flush()
         repository = SQLAlchemyOperationsRepository(session)
@@ -1004,17 +992,13 @@ async def test_archived_view_lists_tasks_without_extra_status_filter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_archive_selected_rejects_whole_batch_when_open_task_included() -> None:
+async def test_archive_selected_rejects_whole_batch_when_open_task_included(sqlite_factory) -> None:
     """勾选中混入开放态任务时整批拒绝，不静默跳过。
 
     静默跳过会让用户以为全部归档成功、实际漏了几条，比直接报错更难发现。
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         session.add(PropertyProfile(id=101, title="测试房间"))
         await session.flush()
         repository = SQLAlchemyOperationsRepository(session)
@@ -1071,18 +1055,14 @@ async def test_archive_selected_rejects_whole_batch_when_open_task_included() ->
 
 
 @pytest.mark.asyncio
-async def test_purge_task_requires_archive_and_keeps_audit() -> None:
+async def test_purge_task_requires_archive_and_keeps_audit(sqlite_factory) -> None:
     """只有已归档任务可彻底删除，审计记录必须保留。
 
     删除是本项目第一个不可逆操作：状态在仓储内重新读取校验，不信任调用方；
     审计本就应当比它描述的实体活得久。
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         # 开启外键强制，否则级联删除不会被真正验证
         await session.execute(text("PRAGMA foreign_keys=ON"))
         actor = Employee(wecom_userid="admin", name="管理员", role=EmployeeRole.ADMIN)
@@ -1137,18 +1117,14 @@ async def test_purge_task_requires_archive_and_keeps_audit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bulk_purge_validates_before_touching_any_file() -> None:
+async def test_bulk_purge_validates_before_touching_any_file(sqlite_factory) -> None:
     """混入未归档任务时整批拒绝，且校验必须发生在删除磁盘文件之前。
 
     先删文件再发现某条不该删，照片已经找不回来了。这里断言校验会在返回任何
     待删文件编号之前失败。
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         await session.execute(text("PRAGMA foreign_keys=ON"))
         actor = Employee(wecom_userid="admin", name="管理员", role=EmployeeRole.ADMIN)
         session.add_all([PropertyProfile(id=101, title="测试房间"), actor])
@@ -1205,18 +1181,14 @@ async def test_bulk_purge_validates_before_touching_any_file() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bulk_assign_validation_rejects_incomplete_or_wrong_status() -> None:
+async def test_bulk_assign_validation_rejects_incomplete_or_wrong_status(sqlite_factory) -> None:
     """批量分派前整体校验：状态不符或缺房间日期的整批拒绝并点名。
 
     校验必须先整体做完，否则前几条已改状态才发现后面某条不合格，任务会停在
     半分派状态。返回值携带每条自己的房间与日期——批量覆盖这两项才是危险操作。
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with sqlite_factory() as session:
         session.add_all(
             [
                 PropertyProfile(id=101, title="房间甲"),

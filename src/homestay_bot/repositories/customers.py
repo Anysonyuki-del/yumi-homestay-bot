@@ -39,6 +39,7 @@ from homestay_bot.domain.models import (
     PropertyProfile,
     StayOrder,
 )
+from homestay_bot.domain.stay_status import EXCLUDED_STAY_STATUSES
 from homestay_bot.repositories.knowledge_referrals import SQLAlchemyKnowledgeReferralRepository
 from homestay_bot.services.customer_errors import (
     CustomerConflictError,
@@ -55,6 +56,15 @@ TEST_ACCOUNT_TAG = "测试专用号"
 
 logger = logging.getLogger(__name__)
 WUHAN_TIMEZONE = ZoneInfo("Asia/Shanghai")
+# 两种数据库的 trim 默认仅去掉半角空格；显式给出 Python str.strip() 识别的空白。
+_STATUS_WHITESPACE = (
+    " \t\n\v\f\r\x1c\x1d\x1e\x1f\x85\xa0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
+_VALID_STAY_STATUS = func.lower(func.trim(StayOrder.status, _STATUS_WHITESPACE)).not_in(
+    EXCLUDED_STAY_STATUSES
+)
 
 
 def _wuhan_today() -> date:
@@ -263,7 +273,7 @@ class SQLAlchemyCustomerRepository:
             select(StayOrder.id)
             .where(
                 StayOrder.customer_id == Customer.id,
-                StayOrder.status != "cancelled",
+                _VALID_STAY_STATUS,
             )
             .correlate(Customer)
         )
@@ -420,7 +430,7 @@ class SQLAlchemyCustomerRepository:
                 )
                 .where(
                     StayOrder.customer_id.in_(unique_ids),
-                    StayOrder.status != "cancelled",
+                    _VALID_STAY_STATUS,
                 )
                 .order_by(StayOrder.check_in_date.desc(), StayOrder.id.desc())
             )

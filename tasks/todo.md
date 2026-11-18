@@ -1,3 +1,15 @@
+# 审计修复（2026-11-18）
+
+依据 `docs/specs/2026-11-18_audit-repairs-spec.md`。
+
+- [x] 本机启动、WAL 备份与 Alembic 连接串，已验证 WAL 还原、失败中止、编码密码在线升级
+- [x] 图片发送中断补偿与 worker 恢复周期，PostgreSQL 两个竞争恢复事务只登记一次核查
+- [x] CRM 排除订单状态，已验证 SQLite 与 PostgreSQL 的筛选及页面投影
+- [x] Compose 必填密码与既有卷说明，使用独立 Compose CLI 解析未设置、空值和合成密码三种配置
+- [x] 离线全量 3725 项通过、84 项跳过，仅剩测试客户端弃用警告。独立 PostgreSQL 16 专项 78 项通过；Ruff、mypy、差异检查通过。临时 Uvicorn 在只提供基础配置时返回登录表单。
+
+索引收尾以本轮 AOCI 的 Verify、Check 和 Guide 回执为准。
+
 # 本地实现完成：小程序质感提升（2026-11-03）
 
 依据：`docs/specs/2026-11-03_miniprogram-texture-spec.md`（T1–T10，D1–D5）。用户 2026-11-03 回复「开始」。分支 `feat/miniprogram-texture`，只改小程序，不动后端；只做本地实现与离线验证。

@@ -250,20 +250,11 @@ async def test_consume_and_expiry_purge_keep_quota_equal_to_nonce_count(tmp_path
     await engine.dispose()
 
 
-async def _memory_csrf_factory() -> async_sessionmaker:
-    """创建仅供本文件新增用例使用的内存库会话工厂。"""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    return async_sessionmaker(engine, expire_on_commit=False)
-
-
 @pytest.mark.asyncio
-async def test_full_scope_evicts_oldest_nonce_when_requested() -> None:
+async def test_full_scope_evicts_oldest_nonce_when_requested(sqlite_factory) -> None:
     """开启淘汰后，作用域满仍可签发，且最旧 nonce 立即失效。"""
-    factory = await _memory_csrf_factory()
     now = datetime(2026, 9, 3, 12, tzinfo=UTC)
-    async with factory() as session:
+    async with sqlite_factory() as session:
         service = AdminCsrfService(
             SQLAlchemyAdminCsrfRepository(session),
             clock=lambda: now,
@@ -287,11 +278,10 @@ async def test_full_scope_evicts_oldest_nonce_when_requested() -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_scope_still_rejects_without_eviction() -> None:
+async def test_full_scope_still_rejects_without_eviction(sqlite_factory) -> None:
     """不开启淘汰时必须保持既有拒绝语义，登录路径依赖它抵抗滥用。"""
-    factory = await _memory_csrf_factory()
     now = datetime(2026, 9, 3, 12, tzinfo=UTC)
-    async with factory() as session:
+    async with sqlite_factory() as session:
         service = AdminCsrfService(
             SQLAlchemyAdminCsrfRepository(session),
             clock=lambda: now,
@@ -305,11 +295,10 @@ async def test_full_scope_still_rejects_without_eviction() -> None:
 
 
 @pytest.mark.asyncio
-async def test_eviction_keeps_quota_equal_to_nonce_count() -> None:
+async def test_eviction_keeps_quota_equal_to_nonce_count(sqlite_factory) -> None:
     """淘汰路径必须按实删数回冲配额，否则活动计数会持续漂高。"""
-    factory = await _memory_csrf_factory()
     now = datetime(2026, 9, 3, 12, tzinfo=UTC)
-    async with factory() as session:
+    async with sqlite_factory() as session:
         service = AdminCsrfService(
             SQLAlchemyAdminCsrfRepository(session),
             clock=lambda: now,
@@ -331,11 +320,10 @@ async def test_eviction_keeps_quota_equal_to_nonce_count() -> None:
 
 
 @pytest.mark.asyncio
-async def test_issue_accepts_ttl_override() -> None:
+async def test_issue_accepts_ttl_override(sqlite_factory) -> None:
     """运营表单需要比默认十五分钟更长的有效期，逐次覆盖不改默认值。"""
-    factory = await _memory_csrf_factory()
     now = datetime(2026, 9, 3, 12, tzinfo=UTC)
-    async with factory() as session:
+    async with sqlite_factory() as session:
         service = AdminCsrfService(
             SQLAlchemyAdminCsrfRepository(session),
             clock=lambda: now,
@@ -359,11 +347,10 @@ async def test_issue_accepts_ttl_override() -> None:
 
 
 @pytest.mark.asyncio
-async def test_admin_nonces_reserve_capacity_for_anonymous_login() -> None:
+async def test_admin_nonces_reserve_capacity_for_anonymous_login(sqlite_factory) -> None:
     """管理员表单占满自身天花板后，未登录访客仍须能取得登录令牌。"""
-    factory = await _memory_csrf_factory()
     now = datetime(2026, 9, 3, 12, tzinfo=UTC)
-    async with factory() as session:
+    async with sqlite_factory() as session:
         service = AdminCsrfService(
             SQLAlchemyAdminCsrfRepository(session),
             clock=lambda: now,

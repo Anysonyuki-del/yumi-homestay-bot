@@ -12,7 +12,6 @@ from typing import Any, Protocol
 
 from homestay_bot.domain.enums import Language
 from homestay_bot.integrations.deepseek_client import (
-    AssistantDecision,
     AssistantRequestContext,
     AssistantToolTrace,
     TaskSuggestion,
@@ -109,13 +108,6 @@ class DebugPreviewResult:
     reply_parts: tuple[ReplyPart, ...] = ()
     guest_messages: tuple[str, ...] = ()
     simulated_action: str | None = None
-
-
-class DebugAssistantPort(Protocol):
-    """限定调试服务可调用的助手方法。"""
-
-    async def respond(self, **kwargs: object) -> AssistantDecision:
-        """生成只读预览决定。"""
 
 
 class DebugPropertyRepositoryPort(Protocol):

@@ -1,5 +1,39 @@
+import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
+
+
+def test_compose_requires_database_password_for_initialization(tmp_path: Path) -> None:
+    """仅渲染隔离配置，检查空密码被拒绝、非空密码原样传给 PostgreSQL。"""
+    if shutil.which("docker-compose"):
+        command = ["docker-compose"]
+    elif shutil.which("docker") and subprocess.run(
+        ["docker", "compose", "version"], capture_output=True, check=False,
+    ).returncode == 0:
+        command = ["docker", "compose"]
+    else:
+        pytest.skip("本机缺少 Docker Compose，无法验证配置插值")
+    shutil.copyfile("compose.yaml", tmp_path / "compose.yaml")
+    env_file = tmp_path / ".env"
+    # 不继承宿主机部署变量，不访问 Docker 守护进程或真实环境文件。
+    env = {"PATH": os.environ["PATH"]}
+    for password in (None, "", "fixture-only@%"):
+        env_file.write_text("" if password is None else f"POSTGRES_PASSWORD='{password}'\n")
+        result = subprocess.run(
+            [*command, "config", "--format", "json"], cwd=tmp_path, env=env,
+            capture_output=True, text=True, check=False, timeout=20,
+        )
+        if not password:
+            assert result.returncode != 0 and "POSTGRES_PASSWORD" in result.stderr
+        else:
+            assert result.returncode == 0, result.stderr
+            config = json.loads(result.stdout)
+            assert config["services"]["postgres"]["environment"]["POSTGRES_PASSWORD"] == password
 
 
 def _locked_requirement_blocks(content: str) -> list[str]:

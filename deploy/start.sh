@@ -8,9 +8,9 @@ PYTHON_BIN="$APP_ROOT/.venv/bin/python"
 
 cd "$APP_ROOT"
 
-# 使用与应用相同的配置解析器读取数据库和私有文件目录，避免迁移误用 alembic.ini 默认值。
-DATABASE_URL=$("$PYTHON_BIN" -c 'from homestay_bot.config import get_settings; print(get_settings().database_url)')
-PRIVATE_UPLOAD_DIR=$("$PYTHON_BIN" -c 'from homestay_bot.config import get_settings; print(get_settings().private_upload_dir)')
+# 登录和配置修复页只依赖基础参数，部署脚本不应要求已配置外部服务凭据。
+DATABASE_URL=$("$PYTHON_BIN" -c 'from homestay_bot.config import BootstrapSettings; print(BootstrapSettings().database_url)')
+PRIVATE_UPLOAD_DIR=$("$PYTHON_BIN" -c 'from homestay_bot.config import BootstrapSettings; print(BootstrapSettings().private_upload_dir)')
 export DATABASE_URL
 
 case "$PRIVATE_UPLOAD_DIR" in
@@ -18,22 +18,34 @@ case "$PRIVATE_UPLOAD_DIR" in
     *) PRIVATE_UPLOAD_DIR="$APP_ROOT/$PRIVATE_UPLOAD_DIR" ;;
 esac
 
-# 仅 SQLite 有本机可复制文件；PostgreSQL 由云端数据库备份策略负责。
-DATABASE_PATH=$("$PYTHON_BIN" -c 'import os; from sqlalchemy.engine import make_url; url = make_url(os.environ["DATABASE_URL"]); print(url.database or "" if url.get_backend_name() == "sqlite" else "")')
-case "$DATABASE_PATH" in
-    ""|/*) ;;
-    *) DATABASE_PATH="$APP_ROOT/$DATABASE_PATH" ;;
-esac
-
-# 只有迁移版本落后时才创建备份，避免守护进程重启持续占用磁盘。
-CURRENT_REV=$("$PYTHON_BIN" -m alembic current | awk 'NR == 1 {print $1}')
-HEAD_REV=$("$PYTHON_BIN" -m alembic heads | awk 'NR == 1 {print $1}')
+# 独立获取版本以保留两条命令的退出码；已到 head 的重启不再备份。
+CURRENT_REV=$("$PYTHON_BIN" -m alembic current)
+HEAD_REV=$("$PYTHON_BIN" -m alembic heads)
 if [ "$CURRENT_REV" != "$HEAD_REV" ]; then
-    BACKUP_DIR="$APP_ROOT/.backups/pre-migration-$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-    if [ -n "$DATABASE_PATH" ] && [ -f "$DATABASE_PATH" ]; then
-        cp "$DATABASE_PATH" "$BACKUP_DIR/"
-    fi
+    mkdir -p "$APP_ROOT/.backups"
+    BACKUP_DIR=$(mktemp -d "$APP_ROOT/.backups/pre-migration-$(date +%Y%m%d-%H%M%S)-XXXXXX")
+    "$PYTHON_BIN" - "$BACKUP_DIR" <<'PY'
+import os
+import sqlite3
+import sys
+from contextlib import closing
+from pathlib import Path
+
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+
+url = make_url(os.environ["DATABASE_URL"])
+if url.get_backend_name() == "sqlite":
+    # 让 SQLite 解析真实文件位置（含 URI 连接串）；纯内存库没有持久文件。
+    with create_engine(url.set(drivername="sqlite")).connect() as source:
+        filename = source.exec_driver_sql("PRAGMA database_list").one()[2]
+        if filename:
+            # 先取得有锁等待上限的读快照，再用在线备份包含尚未检查点的已提交 WAL。
+            source.exec_driver_sql("BEGIN")
+            source.exec_driver_sql("SELECT count(*) FROM sqlite_master").scalar_one()
+            with closing(sqlite3.connect(Path(sys.argv[1]) / Path(filename).name)) as target:
+                source.connection.driver_connection.backup(target)
+PY
     if [ -d "$PRIVATE_UPLOAD_DIR" ]; then
         cp -R "$PRIVATE_UPLOAD_DIR" "$BACKUP_DIR/private_uploads"
     fi

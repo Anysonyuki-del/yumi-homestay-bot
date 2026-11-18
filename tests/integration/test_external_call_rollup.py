@@ -1,22 +1,22 @@
 """外部调用结果的只读汇总；诊断页承诺能在这里看到，就必须真的有。"""
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from homestay_bot.domain.models import Base, ExternalRequest
+from homestay_bot.domain.models import ExternalRequest
 from homestay_bot.repositories.admin_diagnostics import (
     SQLAlchemyAdminDiagnosticsRepository,
 )
 
 
-async def _session() -> AsyncSession:
-    """按既有约定各自建内存库，不依赖共享 fixture。"""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    return async_sessionmaker(engine, expire_on_commit=False)()
+@pytest.fixture
+async def session(sqlite_factory) -> AsyncIterator[AsyncSession]:
+    """在每个汇总用例结束时归还连接，供引擎在同一事件循环内释放。"""
+    async with sqlite_factory() as connection:
+        yield connection
 
 
 async def _add(session: AsyncSession, **kwargs) -> None:
@@ -26,13 +26,12 @@ async def _add(session: AsyncSession, **kwargs) -> None:
 
 
 @pytest.mark.asyncio
-async def test_external_calls_roll_up_by_endpoint() -> None:
+async def test_external_calls_roll_up_by_endpoint(session: AsyncSession) -> None:
     """按端点汇总而不是逐条罗列。
 
     生产上同一个端点已有上百条完全相同的记录（对账轮询每 15 分钟一次），逐条
     列出既看不出问题也翻不完。诊断页要回答的是「这个接口现在还通不通」。
     """
-    session = await _session()
     base = datetime(2026, 9, 8, 10, 0, tzinfo=UTC)
     for i in range(3):
         await _add(
@@ -79,9 +78,8 @@ async def test_external_calls_roll_up_by_endpoint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_external_call_fields_are_sanitised() -> None:
+async def test_external_call_fields_are_sanitised(session: AsyncSession) -> None:
     """路径与提供方仍按稳定机器码校验，不让正文或查询串混进诊断页。"""
-    session = await _session()
     await _add(
         session,
         provider="hostex",

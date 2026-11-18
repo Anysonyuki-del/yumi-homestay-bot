@@ -5,6 +5,11 @@
 # 版本库、工作树、虚拟环境和工具缓存不属于运行制品。
 .git
 .github
+# 后端镜像只构建 Python 服务，客户端签名、编译缓存和本机部署副本无需发送给构建器。
+clients
+.agents
+.stage
+run-deploy.command
 .worktrees
 .venv
 venv

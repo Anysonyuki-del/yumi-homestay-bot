@@ -33,7 +33,7 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
     """PostgreSQL 离线迁移 SQL 必须完整生成到当前唯一迁移头。"""
     project_root = Path(__file__).resolve().parents[2]
     environment = dict(os.environ)
-    environment["DATABASE_URL"] = "postgresql+asyncpg://offline:offline@localhost/offline"
+    environment["DATABASE_URL"] = "postgresql+asyncpg://offline:fixture%40%25pw@localhost/offline"
 
     result = subprocess.run(
         _alembic_command("upgrade", "head", "--sql"),
@@ -44,6 +44,9 @@ def test_postgresql_offline_upgrade_sql_reaches_head() -> None:
         check=False,
     )
 
+    # 迁移 URL 保留密码里的编码分隔符，普通日志和异常也不能回显凭据。
+    assert "fixture%40%25pw" not in result.stdout + result.stderr
+    assert "fixture@%pw" not in result.stdout + result.stderr
     assert result.returncode == 0, result.stderr
     assert "0016_admin_dashboard_indexes" in result.stdout
     assert "admin_credentials" in result.stdout

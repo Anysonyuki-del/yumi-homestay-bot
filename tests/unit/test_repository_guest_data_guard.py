@@ -5,6 +5,7 @@ github」。本测试扫描所有受跟踪的文本文件，出现真实形态�
 和文档里惯用的虚构号码走白名单。CI 每次都会跑。
 """
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -36,10 +37,10 @@ _SKIPPED_SUFFIXES = {
 
 def _tracked_text_files() -> list[Path]:
     """返回 git 受跟踪、且不是二进制资源或依赖锁文件的文件。"""
-    names = subprocess.run(
-        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
-    ).stdout.splitlines()
-    return [ROOT / name for name in names if Path(name).suffix.lower() not in _SKIPPED_SUFFIXES]
+    output = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
+    # 按 Git 的原始路径边界解码，保留中文名以及文件名中可能出现的换行。
+    paths = (ROOT / os.fsdecode(name) for name in output.split(b"\0") if name)
+    return [path for path in paths if path.suffix.lower() not in _SKIPPED_SUFFIXES]
 
 
 def test_no_real_looking_phone_or_identity_numbers_are_tracked() -> None:

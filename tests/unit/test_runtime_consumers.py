@@ -1,9 +1,12 @@
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import date
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from homestay_bot import application
 from homestay_bot.application import RuntimeWorkerBindings
@@ -133,6 +136,71 @@ async def test_worker_long_job_does_not_block_swap_but_delays_old_close(monkeypa
         await task
     assert old_probe.calls == 1
     await registry.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_shard", [False, True])
+async def test_worker_recovery_interval_starts_after_commit_and_claims_continue(
+    monkeypatch, model_shard
+) -> None:
+    """两个分片都立即恢复，提交失败下一轮重试，成功后的 30 秒内繁忙和空闲领取照常。"""
+    clock = 100
+    scans: list[int] = []
+    claims: list[int] = []
+
+    async def recover(*, before) -> None:
+        """记录真实循环触发恢复时的模拟单调时钟。"""
+        scans.append(clock)
+
+    async def commit() -> None:
+        """首次提交失败，随后模拟慢提交，区分开始与成功时刻。"""
+        nonlocal clock
+        if len(scans) == 1:
+            raise SQLAlchemyError("模拟提交失败")
+        clock += 5
+
+    @asynccontextmanager
+    async def session_factory():
+        """每轮借出一个支持恢复提交的会话。"""
+        yield SimpleNamespace(commit=commit)
+
+    async def run_once() -> bool:
+        """先处理一个长任务，再经历两轮空闲，第二次成功恢复后退出。"""
+        nonlocal clock
+        claims.append(clock)
+        if len(claims) == 1:
+            clock += 28
+            return True
+        if len(claims) == 4:
+            raise asyncio.CancelledError
+        return False
+
+    async def sleep(delay) -> None:
+        """用模拟时钟推进退避和空闲等待。"""
+        nonlocal clock
+        clock += delay
+
+    approvals = AsyncMock()
+    monkeypatch.setattr(application, "time", SimpleNamespace(monotonic=lambda: clock))
+    monkeypatch.setattr(application.asyncio, "sleep", sleep)
+    monkeypatch.setattr(
+        application, "Worker", Mock(return_value=SimpleNamespace(run_once=run_once))
+    )
+    monkeypatch.setattr(
+        application, "SQLAlchemyJobRepository",
+        Mock(return_value=SimpleNamespace(recover_stale=recover)),
+    )
+    monkeypatch.setattr(application, "SQLAlchemyApprovalRepository", Mock(return_value=approvals))
+    with pytest.raises(asyncio.CancelledError):
+        await application._run_worker_loop(
+            SimpleNamespace(state=SimpleNamespace()), factory=session_factory,
+            handler=object(), wecom=object(),
+            included_job_types={"wecom_process_message"} if model_shard else None,
+        )
+
+    assert scans == [100, 101, 136]
+    assert claims == [106, 134, 135, 141]
+    assert approvals.recover_stale_creating.await_count == (0 if model_shard else 3)
 
 
 @pytest.mark.asyncio

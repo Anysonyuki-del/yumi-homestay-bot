@@ -57,6 +57,7 @@ from homestay_bot.integrations.wechat_miniprogram import (
 from homestay_bot.integrations.wecom.api_client import (
     WeComApiClient,
     WeComApiError,
+    WeComImageNotSent,
 )
 from homestay_bot.repositories.admin_credentials import (
     SQLAlchemyAdminCredentialRepository,
@@ -84,7 +85,7 @@ from homestay_bot.repositories.employees import SQLAlchemyEmployeeRepository
 from homestay_bot.repositories.faq_candidates import (
     SQLAlchemyFaqCandidateRepository,
 )
-from homestay_bot.repositories.jobs import SQLAlchemyJobRepository
+from homestay_bot.repositories.jobs import GUEST_IMAGE_JOB_TYPE, SQLAlchemyJobRepository
 from homestay_bot.repositories.knowledge import SQLAlchemyKnowledgeRepository
 from homestay_bot.repositories.knowledge_referrals import SQLAlchemyKnowledgeReferralRepository
 from homestay_bot.repositories.lifecycle_reminders import (
@@ -496,8 +497,11 @@ async def _enqueue_guest_reply_continuation(
 
 
 # 知识配图与欢迎图片的出站作业（Spec G2、G3）；消息表里记这个占位正文。
-GUEST_IMAGE_JOB_TYPE = "wecom_send_image"
 GUEST_IMAGE_PLACEHOLDER = "[图片]"
+
+
+class UnconfirmedImageDelivery(RuntimeError):
+    """图片已尝试发送，但当前事务无法确认投递结果，需要员工核查。"""
 
 
 def _build_guest_image_handler(
@@ -527,48 +531,59 @@ def _build_guest_image_handler(
             return
         open_kfid = str(payload["open_kfid"])
         external_userid = str(payload["external_userid"])
+        send_attempted = False
         try:
             # 临时素材 3 天过期，量小不缓存（Spec D3）；重试时重新上传。
             media_id = await client.upload_temporary_image(
                 stored.path.read_bytes(),
                 content_type=stored.content_type,
             )
+            # 上传临时素材不会发送给客人；从调用发送接口起，响应丢失就不能自动重发。
+            send_attempted = True
             real_message_id = await client.send_image(open_kfid, external_userid, media_id)
-        except httpx.ConnectError as error:
-            raise RetrySafeJobError("企业微信连接尚未建立") from error
+            conversation = await session.scalar(
+                select(Conversation).where(
+                    Conversation.open_kfid == open_kfid,
+                    Conversation.external_userid == external_userid,
+                )
+            )
+            if conversation is not None:
+                chain = payload.get("reply_chain")
+                metadata: dict[str, Any] = {
+                    "delivery_status": "accepted",
+                    "image_file_id": stored.file_id,
+                }
+                source_guest_message_id = payload.get("source_guest_message_id")
+                if source_guest_message_id:
+                    metadata["source_guest_message_id"] = str(source_guest_message_id)
+                if isinstance(chain, dict):
+                    metadata["reply_part"] = {
+                        "group": str(chain.get("group", "")),
+                        "index": _reply_chain_index(payload),
+                        "total": chain.get("total"),
+                    }
+                await MessageService(SQLAlchemyMessageRepository(session)).record_bot(
+                    conversation.id,
+                    real_message_id,
+                    GUEST_IMAGE_PLACEHOLDER,
+                    message_type="image",
+                    metadata=metadata,
+                )
+            await _enqueue_guest_reply_continuation(session, payload)
+        except (httpx.ConnectError, WeComImageNotSent) as error:
+            raise RetrySafeJobError("回复配图尚未发出") from error
         except WeComApiError as error:
             if error.error_code == 45009:
                 raise RetrySafeJobError("企业微信明确限流") from error
             raise
-        conversation = await session.scalar(
-            select(Conversation).where(
-                Conversation.open_kfid == open_kfid,
-                Conversation.external_userid == external_userid,
-            )
-        )
-        if conversation is not None:
-            chain = payload.get("reply_chain")
-            metadata: dict[str, Any] = {
-                "delivery_status": "accepted",
-                "image_file_id": stored.file_id,
-            }
-            source_guest_message_id = payload.get("source_guest_message_id")
-            if source_guest_message_id:
-                metadata["source_guest_message_id"] = str(source_guest_message_id)
-            if isinstance(chain, dict):
-                metadata["reply_part"] = {
-                    "group": str(chain.get("group", "")),
-                    "index": _reply_chain_index(payload),
-                    "total": chain.get("total"),
-                }
-            await MessageService(SQLAlchemyMessageRepository(session)).record_bot(
-                conversation.id,
-                real_message_id,
-                GUEST_IMAGE_PLACEHOLDER,
-                message_type="image",
-                metadata=metadata,
-            )
-        await _enqueue_guest_reply_continuation(session, payload)
+        except Exception as error:
+            if send_attempted:
+                raise UnconfirmedImageDelivery("回复配图的发送结果需核实") from error
+            if isinstance(error, httpx.TransportError):
+                # 上传素材对客人没有投递副作用，传输层瞬时故障与建连失败一样走有界重试；
+                # HTTP 状态错误、回执残缺等非传输故障仍按终态失败交给员工。
+                raise RetrySafeJobError("回复配图素材尚未上传") from error
+            raise
 
     return send_guest_image
 
@@ -608,14 +623,30 @@ async def _notify_undelivered_reply_chain(
         source_message_id=f"reply-chain-undelivered:{payload.get('group', '')}",
         delivery_phase="guest",
     )
+    if "unknown_image_job_id" in payload:
+        # 中断时平台可能已经收件，员工必须先核实再决定是否补发。
+        # 只有分段回复里的配图才有段号和后续段；欢迎图片等单张图片不提「后续段」。
+        if "index" in payload:
+            detail = (
+                f"回复配图（第 {payload['index']}/{payload['total']} 段）的发送结果未知，"
+                f"作业编号：{payload['unknown_image_job_id']}。"
+                "后续段已停止发送，请管家核实客人是否收到，再决定是否补发。"
+            )
+        else:
+            detail = (
+                f"一张图片的发送结果未知，作业编号：{payload['unknown_image_job_id']}。"
+                "请管家核实客人是否收到，再决定是否补发。"
+            )
+    else:
+        detail = (
+            f"有一条分 {payload.get('total')} 段发送的客人回复，从第 "
+            f"{payload.get('index')} 段起未成功送达，后续段已停止发送，请管家人工跟进。"
+        )
+    conversation = payload.get("conversation_id", "未知（旧任务未记录，请查投递诊断）")
     await outbox.send_internal_text(
         agent_id=agent_id,
         employee_userids=employee_userids,
-        content=(
-            f"会话编号：{payload.get('conversation_id', '未知（旧任务未记录，请查投递诊断）')}\n"
-            f"有一条分 {payload.get('total')} 段发送的客人回复，从第 "
-            f"{payload.get('index')} 段起未成功送达，后续段已停止发送，请管家人工跟进。"
-        ),
+        content=f"会话编号：{conversation}\n{detail}",
     )
     return True
 
@@ -3254,7 +3285,8 @@ async def _run_worker_loop(
     excluded_job_types: set[str] | None = None,
     recover_stale: bool = True,
 ) -> None:
-    """持续处理持久化任务；仅 recovery leader 负责恢复遗留锁。"""
+    """持续领取本分片作业，启动时和此后每隔 30 秒恢复过期锁。"""
+    next_recovery: float | None = None
     while True:
         runtime_lease: Any | None = None
         try:
@@ -3281,14 +3313,16 @@ async def _run_worker_loop(
                     included_job_types=included_job_types,
                     excluded_job_types=excluded_job_types,
                 )
-                if recover_stale:
+                if recover_stale and (next_recovery is None or time.monotonic() >= next_recovery):
                     # 预订审批没有任务类型分片，只由通用 worker 负责恢复。
                     if included_job_types is None:
                         await SQLAlchemyApprovalRepository(session).recover_stale_creating(
                             before=datetime.now(UTC) - CREATING_STALE_AFTER
                         )
                     await repository.recover_stale(before=datetime.now(UTC) - timedelta(minutes=5))
-                await session.commit()
+                    await session.commit()
+                    # 提交完成才开始计时，数据库故障后下一轮仍立即尝试恢复。
+                    next_recovery = time.monotonic() + 30
 
                 async def send_guest(
                     payload: dict[str, Any],
@@ -3468,7 +3502,7 @@ async def _run_worker_loop(
 
                 async def enqueue_terminal_delivery_compensation(
                     job: Any,
-                    _error_code: str,
+                    error_code: str,
                     failed_payload: dict[str, Any],
                     job_repository: SQLAlchemyJobRepository = repository,
                 ) -> None:
@@ -3477,6 +3511,10 @@ async def _run_worker_loop(
                         return
                     if job.job_type == KNOWLEDGE_REFERRAL_DRAFT_JOB_TYPE:
                         await _fail_exhausted_referral_draft(session, failed_payload)
+                        return
+                    if error_code == UnconfirmedImageDelivery.__name__:
+                        # 如发送后读响应超时，平台可能已受理，和进程中断共用核查入口。
+                        await job_repository.enqueue_unknown_image_review(job)
                         return
                     undelivered = reply_chain_undelivered_payload(job.job_type, failed_payload)
                     if undelivered is not None:
