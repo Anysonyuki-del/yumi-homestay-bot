@@ -1,8 +1,6 @@
-// 我的：微信登录与退出、联系管家、关于本店、我的订单入口（三标签 Spec F5）。
+// 我的：微信登录与退出、联系管家、向管家查订单、关于本店（三标签 Spec F5，到店体验 Spec R4）。
 // 登录状态只经 utils/auth.js 读写；页面不接触 token，也不显示头像昵称。
 const { ensureLogin, restore, logout } = require('../../utils/auth')
-
-const ORDERS_COMING = '订单查询即将开放，现在可以问管家'
 
 Page({
   data: {
@@ -68,10 +66,5 @@ Page({
   },
   openAbout() {
     wx.navigateTo({ url: '/pages/me/about' })
-  },
-  // 订单需要先解决「订单归属」核对，第二期接入；本期只给入口和去向（Spec D1）。
-  // 入口排在菜单最后并标「即将开放」（质感 Spec T6），点了仍给出去向。
-  openOrders() {
-    wx.showToast({ title: ORDERS_COMING, icon: 'none' })
   },
 })

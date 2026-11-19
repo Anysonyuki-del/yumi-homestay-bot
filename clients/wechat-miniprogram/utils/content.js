@@ -150,26 +150,32 @@ async function fetchGuide() {
 
 // 各页面共用的加载流程：每次加载领取新代次，结果返回时代次已变（重新加载或页面卸载）
 // 就丢弃，避免迟到的旧结果覆盖新内容。toReadyData 把结果转成页面数据。
-async function loadPageData(page, fetcher, toReadyData) {
-  page.loadGeneration = (page.loadGeneration || 0) + 1
-  const generation = page.loadGeneration
-  page.setData({ status: 'loading', message: '' })
+// statusKey / messageKey 让同一页的几个区块各自加载、各自出错（到店体验 Spec A1：首页门店区与房间区），
+// 代次按 statusKey 分开计数，重试一个区块不会作废另一个区块在途的请求。
+async function loadPageData(page, fetcher, toReadyData, { statusKey = 'status', messageKey = 'message' } = {}) {
+  // 代次表挂在页面实例上、首次加载时才创建；不写进 Page 配置，避免多个页面实例共用同一个对象。
+  if (!page.loadGenerations) page.loadGenerations = {}
+  const generations = page.loadGenerations
+  generations[statusKey] = (generations[statusKey] || 0) + 1
+  const generation = generations[statusKey]
+  page.setData({ [statusKey]: 'loading', [messageKey]: '' })
   try {
     const result = await fetcher()
-    if (generation !== page.loadGeneration) return
+    if (generation !== generations[statusKey]) return
     page.setData(toReadyData(result))
   } catch (error) {
-    if (generation !== page.loadGeneration) return
+    if (generation !== generations[statusKey]) return
     page.setData({
-      status: error && error.gone ? 'gone' : 'error',
-      message: (error instanceof ContentError && error.message) || LOAD_FAILED,
+      [statusKey]: error && error.gone ? 'gone' : 'error',
+      [messageKey]: (error instanceof ContentError && error.message) || LOAD_FAILED,
     })
   }
 }
 
-// 页面卸载时调用：让仍在途的请求结果作废。
+// 页面卸载时调用：让所有区块仍在途的请求结果作废。
 function discardPendingLoads(page) {
-  page.loadGeneration = (page.loadGeneration || 0) + 1
+  const generations = page.loadGenerations || {}
+  Object.keys(generations).forEach((key) => { generations[key] += 1 })
 }
 
 module.exports = {

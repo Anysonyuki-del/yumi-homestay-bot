@@ -7,12 +7,13 @@
   <template wx:elif="{{status === 'gone'}}" is="state" data="{{title: message, body: '可以回到首页看看其他房间。', actionText: '回到首页', actionVariant: 'outline'}}" />
   <template wx:elif="{{status === 'error'}}" is="state" data="{{title: '房间没有加载出来', body: message, actionText: '重试', actionVariant: 'outline'}}" />
   <block wx:else>
-    <t-swiper wx:if="{{room.photos.length}}" class="hero" list="{{room.photos}}" height="600rpx" autoplay="{{false}}" navigation="{{room.photos.length > 1 ? swiperNavigation : false}}" pagination-position="bottom-right" bind:click="previewPhoto" />
-    <view wx:else class="hero hero--placeholder hero--empty"><text>照片整理中</text></view>
+    <t-swiper wx:if="{{room.photos.length}}" class="hero" list="{{room.photoItems}}" height="600rpx" autoplay="{{false}}" navigation="{{room.photos.length > 1 ? swiperNavigation : false}}" pagination-position="bottom-right" bind:click="previewPhoto" />
+    <!-- 没有照片时不再留 600rpx 空图位，房名与规格直接从页顶开始，图位处改为一句说明（到店体验 Spec R3）。 -->
     <view class="detail__body">
       <view class="detail__head">
         <text class="detail__name">{{room.name}}</text>
         <text wx:if="{{room.specLine}}" class="spec-line">{{room.specLine}}</text>
+        <text wx:if="{{!room.photos.length}}" class="detail__photo-note">照片整理中，想看实拍可以问管家。</text>
       </view>
       <view wx:if="{{room.intro}}" class="detail__section">
         <text class="section-title">房间介绍</text>

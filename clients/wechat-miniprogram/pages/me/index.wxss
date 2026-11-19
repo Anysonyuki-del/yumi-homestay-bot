@@ -13,8 +13,6 @@
 .menu__row + .menu__row { border-top: 1rpx solid var(--yumi-hairline); }
 .menu__row--pressed { background: var(--yumi-surface); }
 .menu__label { flex: 1; font-size: var(--yumi-text-emphasis); color: var(--yumi-ink); }
-.menu__label--muted { color: var(--yumi-muted); }
-.menu__tag { flex: none; padding: 4rpx 16rpx; border-radius: 999rpx; background: var(--yumi-canvas); font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); }
 
 /* 已登录时的退出入口：菜单下方一行弱化的文字按钮，避免与常用菜单抢视线。 */
 .logout { margin-top: 48rpx; --td-button-default-color: var(--yumi-muted); }

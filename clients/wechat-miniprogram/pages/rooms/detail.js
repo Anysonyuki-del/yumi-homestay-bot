@@ -2,6 +2,16 @@
 const { fetchRoom, loadPageData, discardPendingLoads } = require('../../utils/content')
 const { specLine } = require('../../utils/format')
 
+// 轮播项带读屏文字（到店体验 Spec R3）：TDesign 轮播只从对象项读取 ariaLabel，纯地址字符串读不出内容。
+// 放大预览仍用 room.photos 这份地址列表。
+function photoItems(room) {
+  const total = room.photos.length
+  return room.photos.map((url, i) => ({
+    value: url,
+    ariaLabel: `${room.name}，第 ${i + 1} 张，共 ${total} 张，点按放大`,
+  }))
+}
+
 Page({
   data: {
     // gone：房间已下架或不存在，不提供重试。
@@ -22,7 +32,7 @@ Page({
   load() {
     return loadPageData(this, () => fetchRoom(this.roomId), (room) => {
       wx.setNavigationBarTitle({ title: room.name })
-      return { status: 'ready', room: { ...room, specLine: specLine(room) } }
+      return { status: 'ready', room: { ...room, specLine: specLine(room), photoItems: photoItems(room) } }
     })
   },
   retry() {

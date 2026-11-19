@@ -4,6 +4,10 @@
 
 .store { margin: 8rpx 0 40rpx; }
 .store__name { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-display); line-height: 1.25; color: var(--yumi-ink); }
+.store-skeleton { height: 52rpx; width: 44%; border-radius: 8rpx; background: var(--yumi-surface); }
+/* 门店资料没取到时：一句说明加「重新加载」，只重试门店区。 */
+.store__notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8rpx; }
+.store__notice .store__intro { margin-top: 0; }
 .store__intro {
   display: -webkit-box; margin-top: 16rpx; font-size: var(--yumi-text-body); line-height: 1.7; color: var(--yumi-muted);
   overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
@@ -19,12 +23,16 @@
 /* 图片加载完成前透明，露出暖底色；加载完成后 200ms 淡入，避免突然跳出。 */
 .room__cover { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 200ms ease-out; }
 .room__cover--loaded { opacity: 1; }
-.room__media-note { font-size: var(--yumi-text-caption); color: var(--yumi-muted); letter-spacing: 2rpx; }
 .room__name { font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-title); line-height: 1.3; color: var(--yumi-ink); }
 .room__summary {
   display: -webkit-box; margin-top: 4rpx; font-size: var(--yumi-text-body); line-height: 1.7; color: var(--yumi-body);
   overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
+
+/* 没有封面或封面失效时的紧凑卡片（到店体验 Spec R3）：去掉 514rpx 图位，改为浅底卡片，
+   房名和规格在首屏直接可见；与大图卡片之间仍靠下边距分隔。 */
+.room--compact { padding: 32rpx; margin-bottom: 40rpx; border-radius: 24rpx; background: var(--yumi-surface-soft); }
+.room__photo-note { margin-top: 8rpx; font-size: var(--yumi-text-caption); color: var(--yumi-muted); letter-spacing: 2rpx; }
 
 /* 加载占位与成品同形：横幅块 + 大图卡片（图块 + 标题条 + 规格条）。 */
 .room-skeleton { padding-bottom: 56rpx; }

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-18T20:37:39Z",
+  "updated_at": "2026-11-19T05:44:45Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "80c92babb424a7e23b5e8884c9f5df12e5ab2d1917d4fb3caa61882a356bad29",
-      "size": 390012,
-      "normalized_sha256": "80c92babb424a7e23b5e8884c9f5df12e5ab2d1917d4fb3caa61882a356bad29"
+      "sha256": "4957cc2a77b1f2e49fc205013a735f916e7c21b7db897089e9de5349f9c22612",
+      "size": 393625,
+      "normalized_sha256": "4957cc2a77b1f2e49fc205013a735f916e7c21b7db897089e9de5349f9c22612"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -161,9 +161,9 @@
     },
     "clients/wechat-miniprogram/pages/home/index.js": {
       "role": "index",
-      "sha256": "dc0e2f69d085f09a43544fecece0c35122fd2e143d057b8918425e071de8c3f6",
-      "size": 3304,
-      "normalized_sha256": "dc0e2f69d085f09a43544fecece0c35122fd2e143d057b8918425e071de8c3f6"
+      "sha256": "1294d609123838a22efb694186313d38abe3414f2d50f416bee22734312f95d3",
+      "size": 5965,
+      "normalized_sha256": "1294d609123838a22efb694186313d38abe3414f2d50f416bee22734312f95d3"
     },
     "clients/wechat-miniprogram/pages/home/index.json": {
       "role": "index",
@@ -173,21 +173,21 @@
     },
     "clients/wechat-miniprogram/pages/home/index.wxml": {
       "role": "index",
-      "sha256": "c44e9abb15181cbc2826ad4eb4c70c60b2df479e3a54aa2f1b11d81bcb8d680a",
-      "size": 4721,
-      "normalized_sha256": "c44e9abb15181cbc2826ad4eb4c70c60b2df479e3a54aa2f1b11d81bcb8d680a"
+      "sha256": "8d4040da46d49f4287739b831ced7edb739011804f3c8e79508762a76fdd1a75",
+      "size": 6001,
+      "normalized_sha256": "8d4040da46d49f4287739b831ced7edb739011804f3c8e79508762a76fdd1a75"
     },
     "clients/wechat-miniprogram/pages/home/index.wxss": {
       "role": "index",
-      "sha256": "d31a8d20d82ed3e6be0f9b056f540d8b27901ec1df9ba05607880d2b5ae6dde2",
-      "size": 4087,
-      "normalized_sha256": "d31a8d20d82ed3e6be0f9b056f540d8b27901ec1df9ba05607880d2b5ae6dde2"
+      "sha256": "d96e45256930e8097f562917d8e62ff59acd8cf3d3c04971180853b5232031bb",
+      "size": 4759,
+      "normalized_sha256": "d96e45256930e8097f562917d8e62ff59acd8cf3d3c04971180853b5232031bb"
     },
     "clients/wechat-miniprogram/pages/me/about.js": {
       "role": "index",
-      "sha256": "e9ee39c60cb24f86116a9b0305aad54c65940fb9c05b27365d75abca549dd656",
-      "size": 1498,
-      "normalized_sha256": "e9ee39c60cb24f86116a9b0305aad54c65940fb9c05b27365d75abca549dd656"
+      "sha256": "a49337d5b28dae4af9495aabe8338ea7df1839c8a449e0a99b6ee186aec661fa",
+      "size": 1891,
+      "normalized_sha256": "a49337d5b28dae4af9495aabe8338ea7df1839c8a449e0a99b6ee186aec661fa"
     },
     "clients/wechat-miniprogram/pages/me/about.json": {
       "role": "index",
@@ -197,9 +197,9 @@
     },
     "clients/wechat-miniprogram/pages/me/about.wxml": {
       "role": "index",
-      "sha256": "8bd6197d4fd681f2c0685fd9aba1d45e983906e7f8d78062337883b1b564d7f4",
-      "size": 1827,
-      "normalized_sha256": "8bd6197d4fd681f2c0685fd9aba1d45e983906e7f8d78062337883b1b564d7f4"
+      "sha256": "33440d43f966d4512b0d946229c6ec9c6110f839c04b2e89c0454085067732b9",
+      "size": 2558,
+      "normalized_sha256": "33440d43f966d4512b0d946229c6ec9c6110f839c04b2e89c0454085067732b9"
     },
     "clients/wechat-miniprogram/pages/me/about.wxss": {
       "role": "index",
@@ -209,9 +209,9 @@
     },
     "clients/wechat-miniprogram/pages/me/index.js": {
       "role": "index",
-      "sha256": "02c9dcb06a0ffb0d3a683a11b76d154df89741c2120a3ae26e7290c896801afe",
-      "size": 3261,
-      "normalized_sha256": "02c9dcb06a0ffb0d3a683a11b76d154df89741c2120a3ae26e7290c896801afe"
+      "sha256": "eeb609bf3019d745873a9d13e21d8ab092c2ef4409b59a937956e4504ed71f10",
+      "size": 2915,
+      "normalized_sha256": "eeb609bf3019d745873a9d13e21d8ab092c2ef4409b59a937956e4504ed71f10"
     },
     "clients/wechat-miniprogram/pages/me/index.json": {
       "role": "index",
@@ -221,21 +221,21 @@
     },
     "clients/wechat-miniprogram/pages/me/index.wxml": {
       "role": "index",
-      "sha256": "0d6f4b34c8ee6676414e387478aa302fea5b6a5ed7ae581290a11d9bc1f44b5a",
-      "size": 2944,
-      "normalized_sha256": "0d6f4b34c8ee6676414e387478aa302fea5b6a5ed7ae581290a11d9bc1f44b5a"
+      "sha256": "15a7f6356af5ceef9e9f1533e3ab32d54f945cd73a341931e426e28b3c5ce9fe",
+      "size": 3352,
+      "normalized_sha256": "15a7f6356af5ceef9e9f1533e3ab32d54f945cd73a341931e426e28b3c5ce9fe"
     },
     "clients/wechat-miniprogram/pages/me/index.wxss": {
       "role": "index",
-      "sha256": "0ebed64aa8006d2e5ecddf4e57a3e3e938ee1b3cdf8ef5514e2fe43aac88c4e3",
-      "size": 1967,
-      "normalized_sha256": "0ebed64aa8006d2e5ecddf4e57a3e3e938ee1b3cdf8ef5514e2fe43aac88c4e3"
+      "sha256": "8834d0de382fed5878c93ec0ec94e81d503ba3e7e26052c13556c49df2027ab7",
+      "size": 1733,
+      "normalized_sha256": "8834d0de382fed5878c93ec0ec94e81d503ba3e7e26052c13556c49df2027ab7"
     },
     "clients/wechat-miniprogram/pages/rooms/detail.js": {
       "role": "index",
-      "sha256": "876f8a88e352d337cb46e16dd33d859ad2fd9b3867241cd08d9825b2bb7f7cae",
-      "size": 1547,
-      "normalized_sha256": "876f8a88e352d337cb46e16dd33d859ad2fd9b3867241cd08d9825b2bb7f7cae"
+      "sha256": "8a729e34f1e578ab0944190f50acb28d8325841a5a9ad7b3807d5ac7671fda7a",
+      "size": 1986,
+      "normalized_sha256": "8a729e34f1e578ab0944190f50acb28d8325841a5a9ad7b3807d5ac7671fda7a"
     },
     "clients/wechat-miniprogram/pages/rooms/detail.json": {
       "role": "index",
@@ -245,15 +245,15 @@
     },
     "clients/wechat-miniprogram/pages/rooms/detail.wxml": {
       "role": "index",
-      "sha256": "184e2c3b3b4c08ccda0975de667244083e6499799f1db747ac7eff888a7b72b3",
-      "size": 1909,
-      "normalized_sha256": "184e2c3b3b4c08ccda0975de667244083e6499799f1db747ac7eff888a7b72b3"
+      "sha256": "2a9d6f09394621a126e3dc286f4bf9f4a9758e5eab1bcc2fa96a4f4b8be9cf03",
+      "size": 2098,
+      "normalized_sha256": "2a9d6f09394621a126e3dc286f4bf9f4a9758e5eab1bcc2fa96a4f4b8be9cf03"
     },
     "clients/wechat-miniprogram/pages/rooms/detail.wxss": {
       "role": "index",
-      "sha256": "7cbf208d021151793184e623900d3a90ca0f95edc31c3418644e036db5a7c8a2",
-      "size": 1141,
-      "normalized_sha256": "7cbf208d021151793184e623900d3a90ca0f95edc31c3418644e036db5a7c8a2"
+      "sha256": "5e8176799b6871543a6b8581948cba6ef3df9bc596984974491f335cec2b1b77",
+      "size": 986,
+      "normalized_sha256": "5e8176799b6871543a6b8581948cba6ef3df9bc596984974491f335cec2b1b77"
     },
     "clients/wechat-miniprogram/pages/services/category.js": {
       "role": "index",
@@ -299,9 +299,9 @@
     },
     "clients/wechat-miniprogram/pages/services/index.wxss": {
       "role": "index",
-      "sha256": "b834b9c757de6370a7ca502f9fbe40e984314dd340c803b1bb364ca00876552c",
-      "size": 1859,
-      "normalized_sha256": "b834b9c757de6370a7ca502f9fbe40e984314dd340c803b1bb364ca00876552c"
+      "sha256": "b4bd3759278eabcffa3f8364171e39e5902a0b75e657a077497076badb502e49",
+      "size": 2089,
+      "normalized_sha256": "b4bd3759278eabcffa3f8364171e39e5902a0b75e657a077497076badb502e49"
     },
     "clients/wechat-miniprogram/project.config.json": {
       "role": "index",
@@ -329,9 +329,9 @@
     },
     "clients/wechat-miniprogram/utils/content.js": {
       "role": "index",
-      "sha256": "52dcc5507aee1144e3e1aaf1b2671c60584cebf272f53299e66c4705f6d2f5a8",
-      "size": 6659,
-      "normalized_sha256": "52dcc5507aee1144e3e1aaf1b2671c60584cebf272f53299e66c4705f6d2f5a8"
+      "sha256": "caad58f032cd3044cd402bc9e1318a3ced601480b3a6ed98f2747de646326ca0",
+      "size": 7304,
+      "normalized_sha256": "caad58f032cd3044cd402bc9e1318a3ced601480b3a6ed98f2747de646326ca0"
     },
     "clients/wechat-miniprogram/utils/format.js": {
       "role": "index",
@@ -341,9 +341,9 @@
     },
     "clients/wechat-miniprogram/utils/store-map.js": {
       "role": "index",
-      "sha256": "4bd7a4fedc8a880a355966ea57da10063d88e8ab1b7bf89a33e5f8ef51cb3bc1",
-      "size": 891,
-      "normalized_sha256": "4bd7a4fedc8a880a355966ea57da10063d88e8ab1b7bf89a33e5f8ef51cb3bc1"
+      "sha256": "1cf2695cb6e86a7846fcd125c1964b4e8522aa5ba4e77ed0208a130e56dee094",
+      "size": 2448,
+      "normalized_sha256": "1cf2695cb6e86a7846fcd125c1964b4e8522aa5ba4e77ed0208a130e56dee094"
     },
     "clients/yumi/rust-toolchain.toml": {
       "role": "index",
@@ -2736,11 +2736,29 @@
       "size": 12712,
       "normalized_sha256": "fd435b2ec1bea06ff8e4e7a8eae740dfb62bb91b492e327bf60462f38257beb7"
     },
+    "docs/reviews/2026-11-19_claude-to-codex-miniprogram-design-review-reply.md": {
+      "role": "index",
+      "sha256": "9dae7703046f96f7ee909a83f76dd42c7d516f6f19f8eb9334b4544863d7116a",
+      "size": 9285,
+      "normalized_sha256": "9dae7703046f96f7ee909a83f76dd42c7d516f6f19f8eb9334b4544863d7116a"
+    },
     "docs/reviews/2026-11-19_codex-to-claude-message-chain-implementation-plan-review.md": {
       "role": "index",
       "sha256": "468427a9400b2bb59191a7e09f3518d1f83aa8ec04f55fc629f09aa189fa904e",
       "size": 16120,
       "normalized_sha256": "468427a9400b2bb59191a7e09f3518d1f83aa8ec04f55fc629f09aa189fa904e"
+    },
+    "docs/reviews/2026-11-19_codex-to-claude-miniprogram-arrival-implementation-review.md": {
+      "role": "index",
+      "sha256": "2de007fe6751da840e72ee095e4e93413545f07c172e6f10f24dc4a71f9e0ace",
+      "size": 5629,
+      "normalized_sha256": "2de007fe6751da840e72ee095e4e93413545f07c172e6f10f24dc4a71f9e0ace"
+    },
+    "docs/reviews/2026-11-19_codex-to-claude-miniprogram-design-review.md": {
+      "role": "index",
+      "sha256": "4b54083fa0e2290072e767e1bb77257801711e8ea6cfe7a85d426efe50d3ba6d",
+      "size": 7991,
+      "normalized_sha256": "4b54083fa0e2290072e767e1bb77257801711e8ea6cfe7a85d426efe50d3ba6d"
     },
     "docs/reviews/README.md": {
       "role": "index",
@@ -3161,6 +3179,12 @@
       "sha256": "201e9437013f0d896851997d4479eb5f11ff34e8d864d9b81f44861bff6e43d8",
       "size": 26557,
       "normalized_sha256": "201e9437013f0d896851997d4479eb5f11ff34e8d864d9b81f44861bff6e43d8"
+    },
+    "docs/specs/2026-11-19_miniprogram-arrival-spec.md": {
+      "role": "index",
+      "sha256": "cfd0cf13b5927152a332db5907526412048f0addf3e1ae87e8776aa7ff688a45",
+      "size": 9097,
+      "normalized_sha256": "cfd0cf13b5927152a332db5907526412048f0addf3e1ae87e8776aa7ff688a45"
     },
     "docs/specs/assets/2026-09-16_room-timeline-mobile-proto.html": {
       "role": "index",
@@ -5116,9 +5140,9 @@
     },
     "tests/miniprogram/content.test.js": {
       "role": "observe",
-      "sha256": "83c6d6ea5e835ed3c3bfa13761beec4133873eed4f9cb0de5395be3b74ec2f6f",
-      "size": 19348,
-      "normalized_sha256": "83c6d6ea5e835ed3c3bfa13761beec4133873eed4f9cb0de5395be3b74ec2f6f"
+      "sha256": "479e7980b82e0a1a53447fdd6fd489116340c7989e92c9194aae891b07dbe717",
+      "size": 28651,
+      "normalized_sha256": "479e7980b82e0a1a53447fdd6fd489116340c7989e92c9194aae891b07dbe717"
     },
     "tests/plan_helpers.py": {
       "role": "observe",

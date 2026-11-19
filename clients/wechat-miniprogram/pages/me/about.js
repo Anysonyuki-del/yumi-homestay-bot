@@ -1,7 +1,8 @@
-// 关于本店：民宿名、简介、地址与电话；有坐标才提供导航，有电话才提供拨号（三标签 Spec F5）。
+// 关于本店：民宿名、简介、到店方式与电话；有电话才提供拨号（三标签 Spec F5）。
+// 到店方式与首页快捷导航第一格同源（到店体验 Spec A2）：有坐标导航、只有地址复制、都没有问管家。
 const { fetchHome, loadPageData, discardPendingLoads } = require('../../utils/content')
 const { dialNumber } = require('../../utils/format')
-const { openStoreMap } = require('../../utils/store-map')
+const { arrivalAction, openStoreMap, copyStoreAddress } = require('../../utils/store-map')
 
 Page({
   data: {
@@ -9,6 +10,8 @@ Page({
     status: 'loading',
     message: '',
     store: null,
+    // 到店动作：map / copy / ask，决定位置行显示什么、点了做什么。
+    arrival: 'ask',
     skeletonRows: [{ width: '48%', height: '48rpx' }, 1, 1, { width: '70%' }],
   },
   onLoad() {
@@ -21,6 +24,7 @@ Page({
     return loadPageData(this, fetchHome, (home) => ({
       status: home.store ? 'ready' : 'empty',
       store: home.store,
+      arrival: arrivalAction(home.store),
     }))
   },
   retry() {
@@ -30,9 +34,11 @@ Page({
   onStateAction() {
     this.retry()
   },
-  // 只有后台填了经纬度才打开地图；没有坐标时地址只供阅读和复制（与首页「到店导航」共用逻辑）。
-  openMap() {
-    openStoreMap(this.data.store, { fromAbout: true })
+  // 位置行：有坐标打开地图，只有地址时复制地址；ask 时那一行是原生客服按钮，不经这里。
+  openArrival() {
+    const { arrival, store } = this.data
+    if (arrival === 'map') openStoreMap(store)
+    else if (arrival === 'copy') copyStoreAddress(store.address)
   },
   // 客人取消拨号也会进 fail，因此失败时不提示。
   callStore() {
