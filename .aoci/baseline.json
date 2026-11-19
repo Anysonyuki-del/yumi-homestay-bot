@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-19T13:40:49Z",
+  "updated_at": "2026-11-19T14:30:43Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -71,9 +71,9 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "76f52cd18f1e5542b974edd527cfb25829a61fb57615cb3ee582a6abebdaa5a7",
-      "size": 201200,
-      "normalized_sha256": "76f52cd18f1e5542b974edd527cfb25829a61fb57615cb3ee582a6abebdaa5a7"
+      "sha256": "ac45e9057c3fca635ef5663938102415d493eefb1e3e304812e455d8489c6379",
+      "size": 203758,
+      "normalized_sha256": "ac45e9057c3fca635ef5663938102415d493eefb1e3e304812e455d8489c6379"
     },
     "DESIGN.md": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "a62311b863ed36da0f0e241a6875979a82bf58606d23f30feb342d9e15e01e47",
-      "size": 394613,
-      "normalized_sha256": "a62311b863ed36da0f0e241a6875979a82bf58606d23f30feb342d9e15e01e47"
+      "sha256": "e06ce23992b70c2e60c2fd75b69ed8b7d5455804a61cd00146d2d84f23ce6112",
+      "size": 395209,
+      "normalized_sha256": "e06ce23992b70c2e60c2fd75b69ed8b7d5455804a61cd00146d2d84f23ce6112"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1469,6 +1469,12 @@
       "sha256": "628223a228f5260ee2af9250c90f089c595ab4c292c986ca194a9fad9ff34029",
       "size": 15286,
       "normalized_sha256": "628223a228f5260ee2af9250c90f089c595ab4c292c986ca194a9fad9ff34029"
+    },
+    "docs/releases/1.74.0.md": {
+      "role": "index",
+      "sha256": "911bb14a39bd8c8be04d190f7e092e1b71bad8ff90af96108000f6debdd74528",
+      "size": 10641,
+      "normalized_sha256": "911bb14a39bd8c8be04d190f7e092e1b71bad8ff90af96108000f6debdd74528"
     },
     "docs/releases/README.md": {
       "role": "index",
@@ -3502,9 +3508,9 @@
     },
     "pyproject.toml": {
       "role": "index",
-      "sha256": "0720f89861de74ca4563fe08bc94659b69089aaf5072c1aa42459792175ec14a",
+      "sha256": "1f94542518a2fccfc500c8e0cbf3808ff2b14369546170a2e4adba7bbac5dbe2",
       "size": 1284,
-      "normalized_sha256": "0720f89861de74ca4563fe08bc94659b69089aaf5072c1aa42459792175ec14a"
+      "normalized_sha256": "1f94542518a2fccfc500c8e0cbf3808ff2b14369546170a2e4adba7bbac5dbe2"
     },
     "requirements.lock": {
       "role": "index",
