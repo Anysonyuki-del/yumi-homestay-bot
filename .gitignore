@@ -69,3 +69,6 @@ clients/wechat-miniprogram/project.private.config.json
 # 微信小程序 npm：依赖由开发者工具「构建 npm」生成，不入库
 clients/wechat-miniprogram/node_modules/
 clients/wechat-miniprogram/miniprogram_npm/
+
+# impeccable 界面审查的逐次产出（critique 报告），属本机过程记录，不入库
+.impeccable/critique/
