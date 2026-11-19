@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-19T05:44:45Z",
+  "updated_at": "2026-11-19T12:02:50Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "4957cc2a77b1f2e49fc205013a735f916e7c21b7db897089e9de5349f9c22612",
-      "size": 393625,
-      "normalized_sha256": "4957cc2a77b1f2e49fc205013a735f916e7c21b7db897089e9de5349f9c22612"
+      "sha256": "75f1b689f8e948a27d93069345c607a0dd8fd6a7258ccf45236fca05fefcf857",
+      "size": 394907,
+      "normalized_sha256": "75f1b689f8e948a27d93069345c607a0dd8fd6a7258ccf45236fca05fefcf857"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -2730,6 +2730,12 @@
       "size": 10599,
       "normalized_sha256": "d32c10e4f67aeb789d594cff5eb58d3c0f39b4b8a19c6bb9cb085dc3cfe081a4"
     },
+    "docs/reviews/2026-11-19_claude-to-codex-local-cleanup-handoff.md": {
+      "role": "index",
+      "sha256": "92f1ec9e0b2cc698759ed3c8e7060c59f8ec9f673db21425f8e95e31486e3271",
+      "size": 10935,
+      "normalized_sha256": "92f1ec9e0b2cc698759ed3c8e7060c59f8ec9f673db21425f8e95e31486e3271"
+    },
     "docs/reviews/2026-11-19_claude-to-codex-message-chain-implementation-plan.md": {
       "role": "index",
       "sha256": "fd435b2ec1bea06ff8e4e7a8eae740dfb62bb91b492e327bf60462f38257beb7",
@@ -2741,6 +2747,12 @@
       "sha256": "9dae7703046f96f7ee909a83f76dd42c7d516f6f19f8eb9334b4544863d7116a",
       "size": 9285,
       "normalized_sha256": "9dae7703046f96f7ee909a83f76dd42c7d516f6f19f8eb9334b4544863d7116a"
+    },
+    "docs/reviews/2026-11-19_codex-to-claude-local-cleanup-review.md": {
+      "role": "index",
+      "sha256": "b0d155cddecbf011925c4dd635a45c058ca0e31e7e36292a7b3c6d8e5b2143a8",
+      "size": 5129,
+      "normalized_sha256": "b0d155cddecbf011925c4dd635a45c058ca0e31e7e36292a7b3c6d8e5b2143a8"
     },
     "docs/reviews/2026-11-19_codex-to-claude-message-chain-implementation-plan-review.md": {
       "role": "index",
@@ -4849,6 +4861,12 @@
       "sha256": "54d6ded20eca3e84a04b520ae4bf8a54570e7c4ce914200c8c52009d6e63f2fa",
       "size": 21903,
       "normalized_sha256": "54d6ded20eca3e84a04b520ae4bf8a54570e7c4ce914200c8c52009d6e63f2fa"
+    },
+    "tests/integration/test_context_maintenance.py": {
+      "role": "observe",
+      "sha256": "5f91f5d51c3494c440efb9372327427fbecdd7b8623a6c584d358c039ff6abb4",
+      "size": 5607,
+      "normalized_sha256": "5f91f5d51c3494c440efb9372327427fbecdd7b8623a6c584d358c039ff6abb4"
     },
     "tests/integration/test_context_repository.py": {
       "role": "observe",
