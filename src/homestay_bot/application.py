@@ -1905,6 +1905,8 @@ class SessionRuntimeConfigService:
                 previous_version_id=page.previous_version_id,
                 source=page.source,
                 writable=self._writable,
+                # 重建页面对象时必须带上待配可信 IP 标记，否则设置页提醒会被吞掉（Spec M1）。
+                wecom_trusted_ip_pending=page.wecom_trusted_ip_pending,
             )
 
     async def list_version_views(

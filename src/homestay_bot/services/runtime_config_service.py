@@ -197,12 +197,17 @@ class RuntimeConfigTestResult:
     succeeded: bool
     error_code: str | None = None
     providers: tuple[RuntimeConfigProviderTestResult, ...] = ()
+    # 企业微信只因应用未配可信 IP 失败、其余全部通过时放行生效，并留下这个标记
+    # 供设置页常驻提醒（企业微信迁移 Spec M1）。
+    wecom_trusted_ip_pending: bool = False
 
     def to_safe_dict(self) -> dict[str, object]:
         """返回只含布尔状态和稳定错误码的候选元数据。"""
         result: dict[str, object] = {"succeeded": self.succeeded}
         if self.error_code is not None:
             result["error_code"] = self.error_code
+        if self.wecom_trusted_ip_pending:
+            result["wecom_trusted_ip_pending"] = True
         if self.providers:
             provider_results: dict[str, object] = {}
             for provider in self.providers:
@@ -293,6 +298,8 @@ class RuntimeConfigPage:
     previous_version_id: int | None
     source: str
     writable: bool = True
+    # 当前生效版本保存时企业微信还没配可信 IP（Spec M1）；重新测试保存后才会消失。
+    wecom_trusted_ip_pending: bool = False
 
 
 class RuntimeConfigTestError(RuntimeError):
@@ -481,12 +488,18 @@ class RuntimeConfigService:
         else:
             view = RuntimeConfigView.empty()
             source = "unconfigured"
+        # 只信持久化测试结果里的显式 True，旧版本没有这个键时按未挂起处理。
+        test_results = getattr(version, "test_results", None) if version is not None else None
         return RuntimeConfigPage(
             view=view,
             revision=int(state.revision),
             active_version_id=state.active_version_id,
             previous_version_id=state.previous_version_id,
             source=source,
+            wecom_trusted_ip_pending=(
+                isinstance(test_results, dict)
+                and test_results.get("wecom_trusted_ip_pending") is True
+            ),
         )
 
     async def list_version_views(self, *, limit: int = 20) -> list[RuntimeConfigVersionView]:

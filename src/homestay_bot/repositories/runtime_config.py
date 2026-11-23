@@ -416,9 +416,18 @@ class SQLAlchemyRuntimeConfigRepository:
         succeeded: bool,
     ) -> dict[str, object]:
         """只允许总状态和固定供应商的安全分项进入候选元数据。"""
-        if set(test_results) - {"succeeded", "error_code", "providers"}:
+        if set(test_results) - {
+            "succeeded",
+            "error_code",
+            "providers",
+            "wecom_trusted_ip_pending",
+        }:
             raise ValueError("配置测试结果字段无效")
         if test_results.get("succeeded") is not succeeded:
+            raise ValueError("配置测试结果状态无效")
+        # 待配可信 IP 标记只能是 True，且只出现在通过的结果上（企业微信迁移 Spec M1）。
+        pending = test_results.get("wecom_trusted_ip_pending")
+        if pending is not None and (pending is not True or not succeeded):
             raise ValueError("配置测试结果状态无效")
         error_code = test_results.get("error_code")
         if error_code is not None and (
@@ -432,6 +441,8 @@ class SQLAlchemyRuntimeConfigRepository:
         providers = test_results.get("providers")
         if providers is not None:
             result["providers"] = cls._validate_provider_results(providers)
+        if pending is True:
+            result["wecom_trusted_ip_pending"] = True
         return result
 
     @classmethod

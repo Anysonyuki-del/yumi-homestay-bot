@@ -723,3 +723,67 @@ async def test_blocked_embedding_url_is_rejected_before_client_creation() -> Non
 
     assert result.error_code == "embedding_url_blocked"
     assert constructed == []
+
+
+class PerCheckWeComClientStub(WeComClientStub):
+    """客服、应用两项探针各自返回不同结果，用于构造混合失败。"""
+
+    def __init__(self, kf_error: Exception | None, agent_error: Exception | None) -> None:
+        """分别保存两项探针的异常。"""
+        super().__init__()
+        self.kf_error = kf_error
+        self.agent_error = agent_error
+
+    async def probe_kf_credentials(self) -> None:
+        """按客服探针自己的异常失败。"""
+        if self.kf_error is not None:
+            raise self.kf_error
+
+    async def probe_agent_credentials(self, *, agent_id: int) -> None:
+        """按应用探针自己的异常失败。"""
+        if self.agent_error is not None:
+            raise self.agent_error
+
+
+def _ip_error() -> WeComApiError:
+    """企业微信未配可信 IP 时的典型返回。"""
+    return WeComApiError(60020, "not allow to access from your ip")
+
+
+@pytest.mark.asyncio
+async def test_wecom_failing_only_on_trusted_ip_is_allowed_to_activate_with_marker() -> None:
+    """其余全部通过、企业微信每项都只因可信 IP 失败时放行，并带待配标记（企业微信迁移 Spec M1）。"""
+    tester, *_ = build_tester(wecom=WeComClientStub(_ip_error()))
+
+    result = await tester.test(build_snapshot(wecom_contact_secret="contact-secret"))
+    safe = result.to_safe_dict()
+
+    assert result.succeeded is True
+    assert result.error_code is None
+    assert safe["wecom_trusted_ip_pending"] is True
+    # 企业微信分项仍如实记为失败，不伪装成通过。
+    assert safe["providers"]["wecom"]["succeeded"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("wecom", "snapshot_overrides"),
+    [
+        # 一项只差 IP、另一项是认证失败：Secret 有问题，不能放行。
+        (PerCheckWeComClientStub(_ip_error(), WeComApiError(40001, "invalid secret")), {}),
+        # 一项通过、一项只差 IP：不是新应用的初始化状态，照旧拒绝。
+        (PerCheckWeComClientStub(None, _ip_error()), {}),
+        # 只差 IP，但回调参数本地自检失败：回调地址校验必然失败，不能放行。
+        (WeComClientStub(_ip_error()), {"wecom_encoding_aes_key": "!" * 43}),
+    ],
+)
+async def test_trusted_ip_allowance_rejects_any_other_wecom_problem(
+    wecom: WeComClientStub, snapshot_overrides: dict[str, object]
+) -> None:
+    """企业微信除可信 IP 外还有任何问题，都按原规则拒绝生效。"""
+    tester, *_ = build_tester(wecom=wecom)
+
+    result = await tester.test(build_snapshot(**snapshot_overrides))
+
+    assert result.succeeded is False
+    assert "wecom_trusted_ip_pending" not in result.to_safe_dict()

@@ -142,11 +142,39 @@ class RuntimeConfigTester:
         # 语义检索关闭时不联系服务商，也不要求填写 key；开启后测试不通过就不激活。
         if snapshot.embedding_enabled:
             providers = (*providers, await self._test_embedding(snapshot))
+        others_succeeded = all(item.succeeded for item in providers if item is not wecom)
+        if others_succeeded and self._only_trusted_ip_missing(wecom):
+            # 新建的企业微信应用要先有回调地址才能配可信 IP，而回调地址校验只认已生效配置；
+            # 不放行就永远换不过去（企业微信迁移 Spec M1）。企业微信分项仍如实记为失败。
+            # ponytail: 60020 可能在获取 token 时就返回，此时 Secret 未被验证；填错要等配好
+            # 可信 IP 后轮询报认证失败才暴露。若企业微信提供不受 IP 限制的验密方式，改用它。
+            return RuntimeConfigTestResult(
+                succeeded=True,
+                providers=providers,
+                wecom_trusted_ip_pending=True,
+            )
         first_failure = next((item.error_code for item in providers if not item.succeeded), None)
         return RuntimeConfigTestResult(
             succeeded=first_failure is None,
             error_code=first_failure,
             providers=providers,
+        )
+
+    @staticmethod
+    def _only_trusted_ip_missing(wecom: RuntimeConfigProviderTestResult) -> bool:
+        """企业微信回调自检通过，且每一项接口检查都只因可信 IP 未配置而失败。"""
+        api_checks = [item for item in wecom.checks if item.check != "callback"]
+        callback_ok = any(
+            item.check == "callback" and item.succeeded for item in wecom.checks
+        )
+        return (
+            not wecom.succeeded
+            and callback_ok
+            and bool(api_checks)
+            and all(
+                not item.succeeded and item.error_code == "wecom_trusted_ip_required"
+                for item in api_checks
+            )
         )
 
     async def _test_deepseek(

@@ -1354,3 +1354,73 @@ def test_unavailable_admin_bootstrap_keeps_workers_running_and_reports_degraded(
     assert chat_configuration["closed"] is True
     assert tourism_configuration["closed"] is True
     assert not hasattr(app.state, "admin_auth_service")
+
+
+@pytest.mark.asyncio
+async def test_trusted_ip_pending_marker_survives_real_settings_wiring(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """只差可信 IP 放行的版本，经真实装配层读设置页时仍带提醒标记（企业微信迁移 Spec M1）。"""
+    config_key = Fernet.generate_key().decode()
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'trusted-ip.db'}"
+    await _create_runtime_database(database_url, active_payload=b"corrupt-ciphertext")
+    password = _set_bootstrap_environment(
+        monkeypatch,
+        database_url=database_url,
+        config_encryption_key=config_key,
+    )
+    snapshot = _runtime_snapshot()
+    engine = application.create_engine(database_url)
+    factory = application.create_session_factory(engine)
+    assert await application._bootstrap_admin_auth(
+        factory,
+        username="owner",
+        password_hash=PasswordHasher(type=Type.ID).hash(password),
+    )
+
+    class TrustedIpPendingTester:
+        """返回测试器在「企业微信只差可信 IP」时给出的放行结果。"""
+
+        async def test(self, candidate: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+            """校验候选后放行并带待配标记。"""
+            candidate.validate()
+            return RuntimeConfigTestResult(succeeded=True, wecom_trusted_ip_pending=True)
+
+    executor = ThreadPoolExecutor(max_workers=2)
+    try:
+        dummy_hash = await asyncio.get_running_loop().run_in_executor(
+            executor,
+            application.ADMIN_PASSWORD_HASHER.hash,
+            "runtime-config-dummy",
+        )
+        service = application.SessionRuntimeConfigService(
+            factory,
+            cipher=RuntimeConfigCipher(config_key),
+            environment_snapshot=snapshot,
+            password_hasher=application.ADMIN_PASSWORD_HASHER,
+            dummy_hash=dummy_hash,
+            argon2_semaphore=asyncio.Semaphore(2),
+            argon2_executor=executor,
+            writable=True,
+            tester=TrustedIpPendingTester(),
+        )
+        async with factory() as session:
+            credential = await session.scalar(select(AdminCredential))
+            assert credential is not None
+
+        await service.create_and_test(
+            UpdateRuntimeConfig(wecom_corp_id="ww-new-corp"),
+            actor_id=credential.employee_id,
+            admin_id=credential.id,
+            password=password,
+            expected_session_version=credential.session_version,
+            expected_revision=1,
+        )
+
+        page = await service.page_data()
+        assert page.source == "database"
+        assert page.wecom_trusted_ip_pending is True
+    finally:
+        await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
+        await engine.dispose()

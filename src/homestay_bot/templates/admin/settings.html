@@ -6,6 +6,7 @@
 <div class="alert alert--warning" role="note">
   <span>版本通过测试后会安全保存。当前进程将在安全切换完成后使用；在此之前，正在处理的消息继续使用原配置。</span>
 </div>
+{% if page.wecom_trusted_ip_pending %}<div class="alert alert--danger" role="alert">已生效，但企业微信应用还没配可信 IP，机器人暂时收发不了消息。请在企业微信后台给应用配置可信 IP，再点「测试并保存新版本」（密钥留空即可）重新验证，本提示随之消失。</div>{% endif %}
 {% if not page.writable %}<div class="alert alert--danger" role="alert">当前为只读模式：请先在服务器环境中配置独立的配置加密主密钥，再保存接口设置。</div>{% endif %}
 
 <section class="panel">

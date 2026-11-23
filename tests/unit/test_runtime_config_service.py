@@ -832,3 +832,33 @@ async def test_rollback_to_a_version_without_duty_list_is_rejected() -> None:
 
     assert repository.state == before
     assert (await service.load_active_or_environment()).deepseek_model == "model-two"
+
+
+class TrustedIpPendingTesterStub(CandidateTesterStub):
+    """模拟测试器判定「企业微信只差可信 IP」后的放行结果（企业微信迁移 Spec M1）。"""
+
+    async def test(self, snapshot: RuntimeConfigSnapshot) -> RuntimeConfigTestResult:
+        """记录候选并返回带待配可信 IP 标记的通过结果。"""
+        self.snapshots.append(snapshot)
+        return RuntimeConfigTestResult(succeeded=True, wecom_trusted_ip_pending=True)
+
+
+@pytest.mark.asyncio
+async def test_trusted_ip_pending_version_activates_and_page_keeps_warning() -> None:
+    """只差可信 IP 的候选要能生效，设置页据持久化结果常驻提醒；再次正常保存后提醒消失。"""
+    repository = RepositoryStub()
+    service = build_service(
+        repository, AuthStub(), TrustedIpPendingTesterStub(), build_snapshot()
+    )
+
+    await activate(service, UpdateRuntimeConfig(wecom_corp_id="ww-new-corp"), expected_revision=0)
+    pending_page = await service.page_data()
+
+    assert repository.state.active_version_id is not None
+    assert pending_page.wecom_trusted_ip_pending is True
+
+    # 配好可信 IP 后重新测试保存：普通通过结果不带标记，提醒随新版本消失。
+    service._tester = CandidateTesterStub()
+    await activate(service, UpdateRuntimeConfig(), expected_revision=pending_page.revision)
+
+    assert (await service.page_data()).wecom_trusted_ip_pending is False

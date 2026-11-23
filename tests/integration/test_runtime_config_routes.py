@@ -531,3 +531,16 @@ def test_semantic_retrieval_status_separates_saved_key_from_switch() -> None:
     assert '<span class="badge badge--success">已开启</span> key 已通过连接测试' in enabled
     assert "已保存 ····abcd" in saved_only
     assert "开启语义检索（保存时测试 key，通过才生效）" in saved_only
+
+
+def test_settings_page_warns_only_while_trusted_ip_is_pending() -> None:
+    """生效版本只差可信 IP 时设置页常驻提醒，普通版本不显示（企业微信迁移 Spec M1）。"""
+    client, service = build_client()
+    login_admin(client, next_path="/employee/admin/settings")
+
+    normal = client.get("/employee/admin/settings").text
+    service.page = replace(service.page, wecom_trusted_ip_pending=True)
+    pending = client.get("/employee/admin/settings").text
+
+    assert "还没配可信 IP" not in normal
+    assert "还没配可信 IP" in pending
