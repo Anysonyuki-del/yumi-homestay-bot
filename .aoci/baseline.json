@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-23T14:24:41Z",
+  "updated_at": "2026-11-23T14:31:57Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "c50f7028fe16fd95c8bc4f6b963ead44b5a2fa854ce0f663f9f86e4a0eadf1af",
-      "size": 396799,
-      "normalized_sha256": "c50f7028fe16fd95c8bc4f6b963ead44b5a2fa854ce0f663f9f86e4a0eadf1af"
+      "sha256": "33b50e758911374cec708e16613cbbe3494de14a2835cda7bd46a1044e9b5ff3",
+      "size": 396920,
+      "normalized_sha256": "33b50e758911374cec708e16613cbbe3494de14a2835cda7bd46a1044e9b5ff3"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1472,15 +1472,15 @@
     },
     "docs/releases/1.74.0.md": {
       "role": "index",
-      "sha256": "911bb14a39bd8c8be04d190f7e092e1b71bad8ff90af96108000f6debdd74528",
-      "size": 10641,
-      "normalized_sha256": "911bb14a39bd8c8be04d190f7e092e1b71bad8ff90af96108000f6debdd74528"
+      "sha256": "d49b93f6a04274bf768ff227e0461e992d4162a888430da5bba71c2fdd18463d",
+      "size": 10866,
+      "normalized_sha256": "d49b93f6a04274bf768ff227e0461e992d4162a888430da5bba71c2fdd18463d"
     },
     "docs/releases/1.74.1.md": {
       "role": "index",
-      "sha256": "0751d3e91221512dbbddd6b17f867b999f8792f96e6b8882053d5711d0625dcd",
-      "size": 5229,
-      "normalized_sha256": "0751d3e91221512dbbddd6b17f867b999f8792f96e6b8882053d5711d0625dcd"
+      "sha256": "120e6cf8b0866562ff572ce4216410f1ed0f9fd992f1de04ae745a833973e931",
+      "size": 6583,
+      "normalized_sha256": "120e6cf8b0866562ff572ce4216410f1ed0f9fd992f1de04ae745a833973e931"
     },
     "docs/releases/README.md": {
       "role": "index",
@@ -3212,9 +3212,9 @@
     },
     "docs/specs/2026-11-23_wecom-corp-migration-spec.md": {
       "role": "index",
-      "sha256": "f979881760befd915450895c2b4f97b6fa15f0055b92375f2a4f3cc323e008b9",
-      "size": 9016,
-      "normalized_sha256": "f979881760befd915450895c2b4f97b6fa15f0055b92375f2a4f3cc323e008b9"
+      "sha256": "44ba640642630630ab160ed60621114575b72b097ea64ec3650f4a47b0dad9a5",
+      "size": 9335,
+      "normalized_sha256": "44ba640642630630ab160ed60621114575b72b097ea64ec3650f4a47b0dad9a5"
     },
     "docs/specs/assets/2026-09-16_room-timeline-mobile-proto.html": {
       "role": "index",
