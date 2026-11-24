@@ -229,7 +229,7 @@ README.md[SV5T]: F:规定逐版本发布记录的审计内容、更正与敏感�
 1.73.3.md[SV6T]: F:记录1.73.3审计修复与复审补修的改动依据、部署前置、验证、风险、回滚、部署结果，以及同日生产数据库口令轮换。 | R:code:docs/specs/2026-11-18_audit-repairs-spec.md,code:docs/reviews/2026-11-18_claude-to-codex-audit-repairs-review.md,code:CHANGELOG.md,code:compose.yaml,code:README.md | A:改动清单；部署前置；验证证据；风险与回滚；正式发布与部署结果；生产数据库口令轮换 | S:口令已轮换，旧字面量失效；库只收到SCRAM校验值，API停约26秒；postgres配置哈希已与运行容器不同，只能--no-deps重建API；回复门禁按判断跳过。
 1.74.0.md[SV6T]: F:记录1.74.0消息链投递修复与小程序到店体验等改动的依据、改动清单、验证证据、风险与回滚。 | R:code:docs/specs/2026-11-19_message-chain-delivery-fixes-spec.md,code:docs/specs/2026-11-19_miniprogram-arrival-spec.md,code:docs/releases/1.74.1.md,code:CHANGELOG.md,code:pyproject.toml | A:依据；改动清单；验证证据；风险与未覆盖；回滚 | S:本版未单独部署，2026-11-23随1.74.1一起上线，部署结果记在1.74.1记录里；回滚到1.73.3后已登记的补匹配作业因无处理器以unknown_job_type失败。
 1.74.1.md[SV6T]: F:记录1.74.1运行配置在企业微信只差可信IP时放行生效的依据、改动清单、验证证据、风险、回滚与部署结果。 | R:code:docs/specs/2026-11-23_wecom-corp-migration-spec.md,code:docs/releases/1.74.0.md,code:CHANGELOG.md,code:pyproject.toml | A:依据；改动清单；验证证据；风险与未覆盖；回滚；部署记录 | S:生产此前停在1.73.3，本次部署一并上线1.74.0；真实企业微信与设置页提醒留给迁移第4–8步验证。
-1.75.0.md[SV6S]: F:记录1.75.0前端审查修复与后台内容安全策略收紧的依据、复核更正、改动清单、验证证据、风险回滚及生产部署与独立核对结果。 | R:code:CHANGELOG.md,code:pyproject.toml,code:docs/releases/1.74.1.md | A:依据；复核更正；改动清单；验证证据；风险与未覆盖、回滚；部署记录 | S:按用户授权跳过Spec分段确认；登录后后台页未在生产验证；小程序与桌面客户端改动需另行上传或打包，服务端部署不使其生效。
+1.75.0.md[SV6S]: F:记录1.75.0前端审查修复与后台内容安全策略收紧的依据、复核更正、改动清单、验证证据、风险回滚及生产部署、独立核对与登录后页面核对结果。 | R:code:CHANGELOG.md,code:pyproject.toml,code:docs/releases/1.74.1.md | A:依据；复核更正；改动清单；验证证据；风险与未覆盖、回滚；部署记录与登录后核对补记 | S:按用户授权跳过Spec分段确认；登录后核对只用管理员账号，普通员工返回链接与WebView2未覆盖；小程序与桌面客户端改动需另行上传或打包。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-09-08-evidence/===
 pytest-output.txt[TQ3S]: F:保存离线回归原始输出、真实外部契约跳过原因与依赖及SQLite清理警告 | R:- | A:1406passed,15skipped,6warnings | S:历史结果含真实外部契约跳过，不能充当当前验收。
@@ -876,4 +876,4 @@ format.js[CU5T]: F:为页面拼装展示文字：房间规格行、分类图标�
 store-map.js[CU5T]: F:首页快捷导航第一格与关于页位置行共用的到店动作：按门店资料判定导航、复制地址或问管家，并执行打开地图、弹框给地址与复制地址。 | R:code:clients/wechat-miniprogram/pages/home/index.js,code:clients/wechat-miniprogram/pages/me/about.js | A:arrivalAction(store)=map/copy/ask；openStoreMap(store)；offerAddressCopy(address,title)；copyStoreAddress(address)；ABOUT_PAGE | S:有简介但无坐标和地址仍判ask。地图失败只弹框，客人确认才写剪贴板。setClipboardData是隐私接口，未声明剪切板会失败，失败须提示长按复制。
 
 ===/Volumes/02/obsidian/.impeccable/surfaces/===
-src-homestay-bot-templates.md[SU4T]: F:记录后台模板、静态资源与小程序的界面重设计方向：暖沙底白卡、赤陶色只用于可操作元素，以及无障碍与无脚本降级约束。 | R:code:PRODUCT.md,code:.impeccable/config.json | A:Scope/Visitor mode/Constraints；Direction contract：THESIS/OWN-WORLD/STORY/FIRST VIEWPORT/FORM/FINISH | S:CSS/JS架构与测试迁移范围未定，须先经三段Spec确认再改业务代码；认证布局不加载admin.js。
+src-homestay-bot-templates.md[SU4T]: F:记录后台模板、静态资源与小程序的界面重设计方向：暖沙底白卡、赤陶色只用于可操作元素、单一主题，以及无障碍与无脚本降级约束。 | R:code:PRODUCT.md,code:.impeccable/config.json | A:Scope/Visitor mode/Constraints/Unresolved decisions；Direction contract：THESIS/OWN-WORLD/STORY/FIRST VIEWPORT/FORM/FINISH | S:主题移除与CSS/JS架构未定，须经三段Spec确认再改业务代码；认证布局不加载admin.js
