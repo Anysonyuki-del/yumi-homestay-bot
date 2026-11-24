@@ -229,7 +229,7 @@ README.md[SV5T]: F:规定逐版本发布记录的审计内容、更正与敏感�
 1.73.3.md[SV6T]: F:记录1.73.3审计修复与复审补修的改动依据、部署前置、验证、风险、回滚、部署结果，以及同日生产数据库口令轮换。 | R:code:docs/specs/2026-11-18_audit-repairs-spec.md,code:docs/reviews/2026-11-18_claude-to-codex-audit-repairs-review.md,code:CHANGELOG.md,code:compose.yaml,code:README.md | A:改动清单；部署前置；验证证据；风险与回滚；正式发布与部署结果；生产数据库口令轮换 | S:口令已轮换，旧字面量失效；库只收到SCRAM校验值，API停约26秒；postgres配置哈希已与运行容器不同，只能--no-deps重建API；回复门禁按判断跳过。
 1.74.0.md[SV6T]: F:记录1.74.0消息链投递修复与小程序到店体验等改动的依据、改动清单、验证证据、风险与回滚。 | R:code:docs/specs/2026-11-19_message-chain-delivery-fixes-spec.md,code:docs/specs/2026-11-19_miniprogram-arrival-spec.md,code:docs/releases/1.74.1.md,code:CHANGELOG.md,code:pyproject.toml | A:依据；改动清单；验证证据；风险与未覆盖；回滚 | S:本版未单独部署，2026-11-23随1.74.1一起上线，部署结果记在1.74.1记录里；回滚到1.73.3后已登记的补匹配作业因无处理器以unknown_job_type失败。
 1.74.1.md[SV6T]: F:记录1.74.1运行配置在企业微信只差可信IP时放行生效的依据、改动清单、验证证据、风险、回滚与部署结果。 | R:code:docs/specs/2026-11-23_wecom-corp-migration-spec.md,code:docs/releases/1.74.0.md,code:CHANGELOG.md,code:pyproject.toml | A:依据；改动清单；验证证据；风险与未覆盖；回滚；部署记录 | S:生产此前停在1.73.3，本次部署一并上线1.74.0；真实企业微信与设置页提醒留给迁移第4–8步验证。
-1.75.0.md[SV6T]: F:记录1.75.0前端审查修复与后台内容安全策略收紧的依据、复核更正、改动清单、验证证据、风险与回滚。 | R:code:CHANGELOG.md,code:pyproject.toml,code:docs/releases/1.74.1.md | A:依据；复核更正；改动清单；验证证据；风险与未覆盖；回滚 | S:按用户授权跳过Spec分段确认；小程序与桌面客户端改动需另行上传或打包，服务端部署不使其生效。
+1.75.0.md[SV6S]: F:记录1.75.0前端审查修复与后台内容安全策略收紧的依据、复核更正、改动清单、验证证据、风险回滚及生产部署与独立核对结果。 | R:code:CHANGELOG.md,code:pyproject.toml,code:docs/releases/1.74.1.md | A:依据；复核更正；改动清单；验证证据；风险与未覆盖、回滚；部署记录 | S:按用户授权跳过Spec分段确认；登录后后台页未在生产验证；小程序与桌面客户端改动需另行上传或打包，服务端部署不使其生效。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-09-08-evidence/===
 pytest-output.txt[TQ3S]: F:保存离线回归原始输出、真实外部契约跳过原因与依赖及SQLite清理警告 | R:- | A:1406passed,15skipped,6warnings | S:历史结果含真实外部契约跳过，不能充当当前验收。
