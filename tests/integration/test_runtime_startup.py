@@ -1421,6 +1421,9 @@ async def test_trusted_ip_pending_marker_survives_real_settings_wiring(
         page = await service.page_data()
         assert page.source == "database"
         assert page.wecom_trusted_ip_pending is True
+        # 版本记录页走装配层自己的投影，同样要带上标记（前端审查 N-03）。
+        views = await service.list_version_views()
+        assert [view.wecom_trusted_ip_pending for view in views if view.is_active] == [True]
     finally:
         await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
         await engine.dispose()

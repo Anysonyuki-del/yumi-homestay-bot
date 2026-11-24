@@ -17,7 +17,9 @@
 {% if snapshot.rooms %}
 {# 所有房间一屏可扫读，需要关注的已在服务端排前；不再把在住房藏进折叠。
    下一步先于完整日历展示；低频的记录调整独立展开。 #}
-<section class="operations-rooms" aria-label="全部房间入住安排">
+<section class="operations-rooms" aria-labelledby="operations-rooms-title">
+  {# 房间卡片标题是 h3，补一个隐藏 h2 让标题层级连续。 #}
+  <h2 class="visually-hidden" id="operations-rooms-title">全部房间入住安排</h2>
   <div class="room-operations-list{% if snapshot.horizon_days >= 7 %} room-operations-list--wide{% endif %}">
   {% for room in snapshot.rooms %}{% set timeline = snapshot.timeline_for(room.property_id) %}
   <article class="room-operation-card" aria-labelledby="room-title-{{ room.property_id }}" id="room-{{ room.property_id }}">

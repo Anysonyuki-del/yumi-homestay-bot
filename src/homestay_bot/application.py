@@ -234,6 +234,7 @@ from homestay_bot.services.runtime_config_service import (
     RuntimeConfigVersionView,
     UpdateRuntimeConfig,
     safe_provider_results,
+    trusted_ip_pending,
 )
 from homestay_bot.services.runtime_config_tester import RuntimeConfigTester
 from homestay_bot.services.sensitive_data import SensitiveDataCipher
@@ -1930,6 +1931,7 @@ class SessionRuntimeConfigService:
                     is_previous=version.id == state.previous_version_id,
                     masked_summary=dict(version.masked_summary),
                     provider_results=safe_provider_results(version.test_results),
+                    wecom_trusted_ip_pending=trusted_ip_pending(version.test_results),
                 )
                 for version in versions
             ]

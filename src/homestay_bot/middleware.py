@@ -15,6 +15,23 @@ NO_STORE_PATH_PREFIXES = ("/employee", "/api/miniprogram")
 _CACHEABLE_PUBLIC_PATH = re.compile(r"/api/miniprogram/(rooms/\d+/photos/\d+|banners/\d+)")
 
 
+# 后台 HTML 页面的内容安全策略。页面只加载同源脚本、样式和图片，表单只提交回本站；
+# 样式放开 'unsafe-inline' 是因为日历用 style 属性传 --days/--rows 等布局变量，脚本不放开。
+# 若以后引入外部字体、图片或第三方脚本，必须先在这里显式加来源，否则会被浏览器拦下。
+EMPLOYEE_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; "
+    "base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
+)
+# 小程序接口只返回 JSON，不应被当作页面渲染任何资源。
+API_CSP = "default-src 'none'; frame-ancestors 'none'"
+
+
+def _content_security_policy(path: str) -> str:
+    """按受保护路径的用途返回内容安全策略：后台页面与 JSON 接口分开收紧。"""
+    return API_CSP if path.startswith("/api/") else EMPLOYEE_CSP
+
+
 def _requires_no_store(path: str) -> bool:
     """判断请求路径是否属于必须禁止缓存的后台面或小程序接口。"""
     if _CACHEABLE_PUBLIC_PATH.fullmatch(path):
@@ -33,16 +50,18 @@ class AdminNoStoreMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """只为受保护路径补齐缓存、防嵌套和来源保护头，其余请求原样透传。"""
-        if scope["type"] != "http" or not _requires_no_store(scope.get("path", "")):
+        path = scope.get("path", "") if scope["type"] == "http" else ""
+        if scope["type"] != "http" or not _requires_no_store(path):
             await self._app(scope, receive, send)
             return
+        csp = _content_security_policy(path)
 
         async def send_with_no_store(message: Message) -> None:
             """在响应头发出前统一收紧后台缓存、嵌套展示和来源泄漏策略。"""
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 headers["cache-control"] = "no-store"
-                headers["content-security-policy"] = "frame-ancestors 'none'"
+                headers["content-security-policy"] = csp
                 headers["x-frame-options"] = "DENY"
                 headers["referrer-policy"] = "no-referrer"
                 if "x-content-type-options" not in headers:

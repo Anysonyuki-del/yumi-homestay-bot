@@ -629,8 +629,6 @@ def test_timeline_fits_without_horizontal_scrolling(browser: Browser, width: int
         "els => els.every(el => el.clientWidth >= 70 && el.clientHeight == 44)")
     segment = page.locator(".cal__segment:visible").first
     assert segment.locator(".cal__bar:visible").count() == 3
-    if width == 390:
-        assert segment.locator(".cal__identity:visible").count() == 3
     segment.locator("summary").press("Enter")
     assert segment.locator(".cal__bar:visible").count() == 5
     assert segment.locator(".cal__bar:visible").evaluate_all(

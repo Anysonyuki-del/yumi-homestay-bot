@@ -3,6 +3,15 @@ const { ContentError, fetchGuide, loadPageData, discardPendingLoads } = require(
 
 const CATEGORY_GONE = '这个分类暂时没有内容'
 
+// 分类名来自页面参数，外部链接可能带残缺的百分号编码；解码失败按空分类处理，页面显示「已下架」而不是卡在加载。
+function safeDecodeCategory(raw) {
+  try {
+    return decodeURIComponent(raw || '')
+  } catch (error) {
+    return ''
+  }
+}
+
 Page({
   data: {
     status: 'loading',
@@ -11,7 +20,7 @@ Page({
     skeletonRows: [1, 1, 1, 1],
   },
   onLoad(options) {
-    this.category = decodeURIComponent((options && options.name) || '')
+    this.category = safeDecodeCategory(options && options.name)
     if (this.category) wx.setNavigationBarTitle({ title: this.category })
     this.load()
   },

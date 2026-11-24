@@ -114,9 +114,26 @@ def test_admin_surface_sets_no_store(path: str) -> None:
 
     assert response.headers.get("cache-control") == "no-store"
     assert response.headers.get("x-content-type-options") == "nosniff"
-    assert response.headers.get("content-security-policy") == "frame-ancestors 'none'"
+    csp = response.headers.get("content-security-policy", "")
+    directives = {item.split()[0]: item.split()[1:] for item in csp.split("; ")}
+    assert directives["frame-ancestors"] == ["'none'"]
+    assert directives["script-src"] == ["'self'"]
+    assert directives["form-action"] == ["'self'"]
+    assert directives["object-src"] == ["'none'"]
     assert response.headers.get("x-frame-options") == "DENY"
     assert response.headers.get("referrer-policy") == "no-referrer"
+
+
+def test_miniprogram_api_gets_resource_free_csp() -> None:
+    """小程序 JSON 接口不渲染任何资源，策略应比后台页面更严。"""
+    from homestay_bot.main import app as real_app
+
+    with TestClient(real_app) as client:
+        response = client.get("/api/miniprogram/guide")
+
+    assert response.headers.get("content-security-policy") == (
+        "default-src 'none'; frame-ancestors 'none'"
+    )
 
 
 @pytest.mark.parametrize("path", ["/static/app.css", "/health"])

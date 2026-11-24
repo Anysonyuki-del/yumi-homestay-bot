@@ -2,6 +2,8 @@
 {% import "components/ui.html" as ui %}
 {% block title %}配置版本记录 · {{ app_name }}{% endblock %}
 {% block page_actions %}<a class="button button--secondary" href="/employee/admin/settings">返回设置</a>{% endblock %}
+{# 版本状态是持久化的枚举值字符串，这里就地映射为中文；未知值原样显示，不隐藏异常数据。 #}
+{% set status_labels = {"candidate": "待测试", "test_failed": "测试未通过", "test_passed": "测试通过", "activation_conflict": "生效冲突", "activation_failed": "生效失败"} %}
 {% block content %}
 <section class="panel">
   <div class="panel__header"><div><p class="eyebrow">只读审计视图</p><h2>最近配置版本</h2></div><span class="muted">修订 {{ page.revision }}</span></div>
@@ -13,7 +15,8 @@
       <div><strong>版本 #{{ version.version_id }}</strong>
         {% if version.is_active %}{{ ui.badge("当前数据库版本", "info") }}{% endif %}
         {% if version.is_previous %}{{ ui.badge("可回滚", "gold") }}{% endif %}
-        {{ ui.badge(version.status, "neutral") }}
+        {{ ui.badge(status_labels.get(version.status, version.status), "danger" if version.status in ("test_failed", "activation_conflict", "activation_failed") else "neutral") }}
+        {% if version.wecom_trusted_ip_pending %}{{ ui.badge("待配可信 IP（已放行生效）", "warning") }}{% endif %}
       </div>
       <small>{{ version.created_at|datetime_zh }} · {{ version.created_by_label }}</small>
       {% if version.failure_code %}<p class="muted">结果码：{{ version.failure_code }}</p>{% endif %}
@@ -39,6 +42,7 @@
                   {% elif check_name == "contact" %}通讯录权限
                   {% elif check_name == "callback" %}回调 Token / AESKey
                   {% elif check_name == "embeddings" %}向量接口
+                  {% else %}{{ check_name }}
                   {% endif %}
                   {% if check.succeeded %}<span>通过</span>{% else %}<span>未通过</span>{% endif %}
                   {% if check.error_code %}<small>（{{ check.error_code }}）</small>{% endif %}

@@ -250,6 +250,8 @@ def test_direct_post_without_required_choices_is_rejected_and_keeps_input(
     page = _render(browser, response.text)
     try:
         assert error in page.get_by_role("alert").first.inner_text()
+        # 布局与摘要卡曾各渲染一次同一条错误，读屏念两遍（前端审查 N-02）。
+        assert page.locator(".alert--danger").filter(has_text=error).count() == 1
         assert page.locator('textarea[name="answer_zh"]').input_value() == (
             "健身房每天早上七点开门（已核）。"
         )

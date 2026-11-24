@@ -1,13 +1,14 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
+{# 失败提示就地显示在摘要卡里并附「已保留填写内容」，顶层布局不再重复渲染同一条 error。 #}
+{% set layout_error_inline = true %}
 
 {% block page_actions %}<a class="button button--secondary" href="/employee/knowledge-referrals">返回资料核实</a>{% endblock %}
 {% block content %}
 {% set label = status_labels[referral.status] %}
 {% set values = submitted %}
 <section class="panel panel--padded detail-section" id="referral-summary">
-  <div class="section-heading"><div><p class="eyebrow">资料核实 #{{ referral.id }} · {{ referral.created_at.strftime("%Y-%m-%d %H:%M") }}</p><h2>{{ referral.question or "（已清空）" }}</h2></div>{{ ui.badge(label[0], label[1]) }}</div>
-  {% if notice %}<p class="alert alert--success" role="status">{{ notice }}</p>{% endif %}
+  <div class="section-heading"><div><p class="eyebrow">资料核实 #{{ referral.id }} · {{ referral.created_at | datetime_zh }}</p><h2>{{ referral.question or "（已清空）" }}</h2></div>{{ ui.badge(label[0], label[1]) }}</div>
   {% if error %}<p class="alert alert--danger" role="alert" id="referral-error" tabindex="-1">{{ error }}{% if values %}（已保留你刚才填写的内容。）{% endif %}</p>{% endif %}
   <dl class="detail-grid">
     <dt>客人原问（已脱敏）</dt><dd class="long-text">{{ referral.question or "—" }}</dd>
@@ -22,7 +23,7 @@
   <p class="help-text">只列转交之后 48 小时内管家在会话里发的文字消息。含密码、验证码、链接等敏感内容的消息只在这里列出，不会交给模型；每次整理取最新 5 条。</p>
   {% if detail.messages %}
   <ol class="entry-list">{% for item in detail.messages %}<li class="entry-card"><div>
-    <p class="eyebrow">{{ item.message.sent_at.strftime("%m-%d %H:%M:%S") }}</p>
+    <p class="eyebrow">{{ item.message.sent_at | datetime_zh(seconds=True) }}</p>
     <p class="long-text">{{ item.message.content }}</p>
     <div class="button-row">{% if item.sensitive %}{{ ui.badge("含敏感内容，不交给模型", "danger") }}{% endif %}{% if item.near_time %}{{ ui.badge("时间接近，请核对", "warning") }}{% endif %}{% if item.used %}{{ ui.badge("本次草稿依据", "info") }}{% elif item.frozen %}{{ ui.badge("本次整理来源", "neutral") }}{% endif %}</div>
   </div></li>{% endfor %}</ol>
@@ -45,8 +46,8 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="generation" value="{{ referral.generation }}">
     <fieldset><legend>适用范围（必选）</legend>
-      <label><input type="radio" name="scope_choice" value="property" required {% if values and values.scope_choice == "property" %}checked{% endif %}> 仅此房间</label>
-      <label><input type="radio" name="scope_choice" value="global" required {% if values and values.scope_choice == "global" %}checked{% endif %}> 全店</label>
+      <label class="checkbox"><input type="radio" name="scope_choice" value="property" required {% if values and values.scope_choice == "property" %}checked{% endif %}><span>仅此房间</span></label>
+      <label class="checkbox"><input type="radio" name="scope_choice" value="global" required {% if values and values.scope_choice == "global" %}checked{% endif %}><span>全店</span></label>
       {% set chosen_room = values.property_id if values else referral.property_id %}
       <label>房间（选「仅此房间」时必填{% if referral.property_id is none %}；转交时房源未确定{% endif %}）<select name="property_id"><option value="">未选择</option>{% for room in properties %}<option value="{{ room.id }}" {% if chosen_room == room.id %}selected{% endif %}>{{ room.room_number }} · {{ room.title }}{% if not room.is_active %}（已停用）{% endif %}</option>{% endfor %}</select></label>
     </fieldset>
@@ -58,7 +59,7 @@
     <label>关键词（逗号分隔）<input name="keywords" value="{{ (values.keywords_list if values else draft.get('keywords', [])) | join(',') }}" maxlength="1000"></label>
     <label>生效日期（可不填）<input type="date" name="valid_from" value="{{ values.valid_from if values else '' }}"></label>
     <label>有效至（含当日，可不填）<input type="date" name="valid_until" value="{{ values.valid_until if values else '' }}"></label>
-    <label><input type="checkbox" name="reviewed" value="1" required {% if values and values.reviewed %}checked{% endif %}> 已核对中英答案与适用范围</label>
+    <label class="checkbox"><input type="checkbox" name="reviewed" value="1" required {% if values and values.reviewed %}checked{% endif %}><span>已核对中英答案与适用范围</span></label>
     <button type="submit">确认并入库</button>
   </form>
   {% endif %}

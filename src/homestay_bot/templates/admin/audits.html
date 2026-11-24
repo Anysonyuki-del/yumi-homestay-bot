@@ -5,7 +5,7 @@
 <section class="panel">
   <div class="panel__header"><div><p class="eyebrow">安全审计</p><h2>最近操作</h2></div><a href="/employee/admin/diagnostics">返回系统诊断</a></div>
   <p>这里只展示动作、对象类型与时间，不展示问题、回复、客户身份或原始详情。</p>
-  <div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>动作</th><th>对象类型</th></tr></thead><tbody>
+  <div class="table-scroll"><table class="data-table"><caption class="visually-hidden">最近操作记录</caption><thead><tr><th scope="col">时间</th><th scope="col">动作</th><th scope="col">对象类型</th></tr></thead><tbody>
     {% for item in audit_page.items %}<tr><td>{{ item.created_at|datetime_zh }}</td><td>{{ item.action }}</td><td>{{ item.target_type }}</td></tr>{% else %}<tr><td colspan="3">暂无操作记录</td></tr>{% endfor %}
   </tbody></table></div>
   <nav class="pagination" aria-label="操作记录分页">
@@ -18,7 +18,7 @@
   <div class="panel__header"><div><p class="eyebrow">排障依据</p><h2>外部接口调用</h2></div></div>
   <p>按端点汇总，只有调用结果，不含请求参数、密钥或客户正文。同步异常时先看这里最近一次是否成功。</p>
   {% if external_calls %}
-  <div class="table-scroll"><table class="data-table"><thead><tr><th>接口</th><th>最近一次</th><th>结果</th><th>累计</th><th>失败</th></tr></thead><tbody>
+  <div class="table-scroll"><table class="data-table"><caption class="visually-hidden">外部接口调用汇总</caption><thead><tr><th scope="col">接口</th><th scope="col">最近一次</th><th scope="col">结果</th><th scope="col">累计</th><th scope="col">失败</th></tr></thead><tbody>
     {% for call in external_calls %}
     <tr>
       <td>{{ call.provider }} {{ call.method }} {{ call.path }}</td>

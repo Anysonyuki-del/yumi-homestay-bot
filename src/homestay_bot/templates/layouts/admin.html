@@ -76,7 +76,8 @@
         <main class="page-content{% if active_nav == "operations" %} page-content--wide{% endif %}" id="main-content" tabindex="-1">
           {% if health_degraded %}<div class="alert alert--warning" role="status">{{ icons.icon("warning") }}<span>系统当前处于降级状态，部分自动化能力可能不可用。请查看<a href="/employee/admin/diagnostics">系统诊断</a>。</span></div>{% endif %}
           {% if page_error %}<div class="alert alert--danger" role="alert">{{ page_error }}</div>{% endif %}
-          {% if error %}<div class="alert alert--danger" role="alert">{{ error }}</div>{% endif %}
+          {# 子模板就地显示表单错误时设 layout_error_inline，同一条 error 只渲染一次；notice、page_error、flash 只由布局渲染。 #}
+          {% if error and not layout_error_inline %}<div class="alert alert--danger" role="alert">{{ error }}</div>{% endif %}
           {% if flash %}<div class="alert alert--success" role="status">{{ flash }}</div>{% endif %}
           {% if notice %}<div class="alert alert--success" role="status">{{ notice }}</div>{% endif %}
           {% block page_header %}<header class="content-header"><h1>{{ page_title }}</h1>{% block page_actions %}{% endblock %}</header>{% endblock %}

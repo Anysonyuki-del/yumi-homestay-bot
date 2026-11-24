@@ -27,7 +27,9 @@
     const controls = document.querySelectorAll("[data-theme-control]");
     controls.forEach((control) => {
       control.value = root.dataset.theme;
-      control.closest("[data-theme-selector]").hidden = false;
+      const selector = control.closest("[data-theme-selector]");
+      // 控件若被单独放在容器外，跳过显示而不是让整个主题脚本抛错。
+      if (selector instanceof HTMLElement) selector.hidden = false;
       // 控件在业务表单外，不派发业务 change 或提交事件。
       control.addEventListener("change", () => {
         const theme = applyTheme(control.value);

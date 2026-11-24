@@ -2,6 +2,10 @@
 {% import "components/ui.html" as ui %}
 {% from "knowledge/scope_fields.html" import scope_fields %}
 {% from "knowledge/entry_state.html" import entry_state %}
+{# 新增或候选转换失败时，提示就地显示在展开的表单上方；只有该表单确实会渲染时才接管顶层 error，否则仍由布局显示，避免提示丢失。 #}
+{% set _failed_kind = (failed_form or {}).get("kind") %}
+{% set layout_error_inline = (can_edit and view != "candidates" and _failed_kind == "create")
+  or (view == "candidates" and _failed_kind == "candidate" and (failed_form or {}).get("candidate_id") in (candidates | map(attribute="id") | list)) %}
 
 {% block content %}
 {% set failed = failed_form or {} %}

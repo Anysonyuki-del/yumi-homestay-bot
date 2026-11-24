@@ -240,16 +240,6 @@ def test_room_card_column_threshold_can_hold_the_default_calendar() -> None:
     assert ".room-operations-list--wide" in css
 
 
-def _relative_luminance(hex_color: str) -> float:
-    """按 WCAG 公式计算相对亮度，用于判断线条能否从背景里分辨出来。"""
-    channels = [int(hex_color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
-    linear = [
-        value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
-        for value in channels
-    ]
-    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-
 def test_calendar_grid_lines_stay_visible_against_the_white_track() -> None:
     """日历网格线必须能从白色轨道背景里分辨出来。
 
@@ -375,3 +365,82 @@ def test_calendar_bar_palette_stays_derived_from_the_primary_token() -> None:
             assert fallback.lower() == expected, (
                 f"{name} 回退值 {fallback} 与 color-mix 结果 {expected} 不一致"
             )
+
+
+# ---- 结构守卫（前端审查 2026-11-25）：同类问题已逐个修过，这里按类拦截，不再靠逐处复查。 ----
+
+_TEMPLATE_ROOT = ASSET_ROOT / "templates"
+
+
+def _templates() -> list[Path]:
+    return sorted(_TEMPLATE_ROOT.rglob("*.html"))
+
+
+def test_templates_format_times_through_the_wuhan_timezone_filters() -> None:
+    """模板直接 .strftime 会按 UTC 显示（F-02 的两处就是这样差了 8 小时）。"""
+    offenders = [
+        str(path.relative_to(_TEMPLATE_ROOT))
+        for path in _templates()
+        if ".strftime(" in path.read_text()
+    ]
+    assert not offenders, f"请改用 datetime_zh / date_zh：{offenders}"
+
+
+def test_checkbox_labels_declare_a_defined_layout_class() -> None:
+    """裸 <label> 包勾选框会套上文本框的块级标签样式，勾选框和文字错位（F-03）。"""
+    css = (ASSET_ROOT / "static/app.css").read_text()
+    label_with_choice = re.compile(
+        r"<label\b([^>]*)>(?:(?!</label>).)*?type=\"(?:checkbox|radio)\"", re.S
+    )
+    missing, undefined = [], set()
+    for path in _templates():
+        for match in label_with_choice.finditer(path.read_text()):
+            classes = re.search(r'class="([^"]*)"', match.group(1))
+            if not classes:
+                missing.append(str(path.relative_to(_TEMPLATE_ROOT)))
+                continue
+            if not any(
+                re.search(rf"\.{re.escape(name)}(?![\w-])", css)
+                for name in classes.group(1).split()
+            ):
+                undefined.add(classes.group(1))
+    assert not missing, f"勾选标签缺少布局类：{missing}"
+    assert not undefined, f"勾选标签用的类在 app.css 里没有样式：{undefined}"
+
+
+def test_every_css_custom_property_used_is_declared() -> None:
+    """var(--ink) 这类拼错的令牌不会报错，只会静默失效（F-07）。"""
+    css = (ASSET_ROOT / "static/app.css").read_text()
+    declared = set(re.findall(r"(--[\w-]+)\s*:", css))
+    # 由模板 style 属性或脚本运行时写入，CSS 侧不声明。
+    runtime = {"--days", "--rows", "--bulk-toolbar-height"}
+    ui = (ASSET_ROOT / "templates/components/ui.html").read_text()
+    script = (ASSET_ROOT / "static/admin.js").read_text()
+    assert "--days:" in ui and "--rows:" in ui
+    assert '"--bulk-toolbar-height"' in script
+    undeclared = set(re.findall(r"var\((--[\w-]+)", css)) - declared - runtime
+    assert not undeclared, f"引用了未声明的变量：{sorted(undeclared)}"
+
+
+def test_page_alerts_have_a_single_owner() -> None:
+    """同一条提示被布局和子模板各渲染一次，读屏会念两遍（F-04、N-02）。
+
+    notice、page_error、flash 只由布局渲染；子模板若就地显示 error，必须设
+    layout_error_inline 让布局跳过，否则同一条 error 出现两次。
+    """
+    layout_only = re.compile(r"\{\{\s*(notice|page_error|flash)\b")
+    inline_error = re.compile(r"\{\{\s*error\s*\}\}")
+    duplicated, unclaimed = [], []
+    for path in _templates():
+        name = str(path.relative_to(_TEMPLATE_ROOT))
+        if name.startswith("layouts/"):
+            continue
+        text = path.read_text()
+        if layout_only.search(text):
+            duplicated.append(name)
+        if inline_error.search(text) and "layout_error_inline" not in text:
+            unclaimed.append(name)
+    assert not duplicated, f"子模板不得再渲染布局提示：{duplicated}"
+    assert not unclaimed, f"就地显示 error 却没接管布局提示：{unclaimed}"
+    layout = (_TEMPLATE_ROOT / "layouts/admin.html").read_text()
+    assert "{% if error and not layout_error_inline %}" in layout

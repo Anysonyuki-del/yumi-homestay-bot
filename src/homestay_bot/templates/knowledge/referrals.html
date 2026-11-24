@@ -11,12 +11,11 @@
 <section class="panel panel--padded" id="knowledge-referrals">
   <div class="section-heading"><div><p class="eyebrow">仅管理员可见</p><h2>资料核实</h2></div>{{ ui.badge(open_count ~ " 条待处理", "warning" if open_count else "neutral") }}</div>
   <p>客人问到资料里没有的常识性问题时，机器人会提交管家核实。管家照常在企业微信里回复客人；你在这里点「整理草稿」，系统按管家回复整理中英文草稿，核对来源并选定适用范围后入库。</p>
-  {% if notice %}<p class="alert alert--success" role="status">{{ notice }}</p>{% endif %}
   <div class="entry-list">
     {% for item in items %}{% set referral = item.referral %}{% set label = status_labels[referral.status] %}
     <article class="entry-card">
       <div>
-        <p class="eyebrow">资料核实 #{{ referral.id }} · {{ referral.created_at.strftime("%m-%d %H:%M") }}</p>
+        <p class="eyebrow">资料核实 #{{ referral.id }} · {{ referral.created_at | datetime_zh }}</p>
         <h3><a href="/employee/knowledge-referrals/{{ referral.id }}">{{ referral.question or "（已清空）" }}</a></h3>
         <p class="muted">{{ referral.canonical_question or "" }}</p>
         <div class="button-row">{{ ui.badge(label[0], label[1]) }}{{ ui.badge("管家已回复 " ~ item.reply_count ~ " 条", "info" if item.reply_count else "neutral") }}</div>

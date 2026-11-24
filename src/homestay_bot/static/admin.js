@@ -126,8 +126,10 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key !== "Tab") return;
   // 抽屉打开时把键盘焦点限制在导航内，避免落到遮罩后的页面。
-  const focusable = [...drawer.querySelectorAll("a, button:not([disabled])")]
-    .filter((element) => element instanceof HTMLElement);
+  // 抽屉里还有主题选择等表单控件；隐藏元素无法获得焦点，排除后首尾判断才准确。
+  const focusable = [...drawer.querySelectorAll(
+    "a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]):not([type='hidden']), textarea:not([disabled])",
+  )].filter((element) => element instanceof HTMLElement && element.getClientRects().length > 0);
   if (focusable.length === 0) return;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
@@ -157,11 +159,12 @@ function fillConfirmPlaceholders(text, form) {
   // {reservation_code}：审批回填订单号时，确认框里重复显示所填订单号，填错一眼能看出。
   const code = form.querySelector('input[name="reservation_code"]');
   const codeText = code instanceof HTMLInputElement ? code.value.trim() : "";
+  // 用函数作替换值：正文里的 $&、$1 等不会被当成替换模式；replaceAll 覆盖同一占位符出现多次的文案。
   return text
-    .replace("{n}", String(selected.size))
-    .replace("{employee}", chosen)
-    .replace("{draft}", draftText)
-    .replace("{reservation_code}", codeText);
+    .replaceAll("{n}", () => String(selected.size))
+    .replaceAll("{employee}", () => chosen)
+    .replaceAll("{draft}", () => draftText)
+    .replaceAll("{reservation_code}", () => codeText);
 }
 
 // 确认文案必须跟随「这次点的是哪个动作」，而不是表单的默认动作。同一个表单上
@@ -233,13 +236,23 @@ document.querySelectorAll("[data-copy-target]").forEach((button) => {
     const targetId = button.getAttribute("data-copy-target");
     const target = targetId ? document.getElementById(targetId) : null;
     if (!(target instanceof HTMLTextAreaElement)) return;
+    // 反馈 2 秒后恢复原文案，避免按钮长期停在「已复制」让人误以为后续内容也复制过。
+    const original = button.dataset.copyLabel || button.textContent || "";
+    button.dataset.copyLabel = original;
+    let feedback;
     try {
       await navigator.clipboard.writeText(target.value);
-      button.textContent = "已复制";
+      feedback = "已复制";
     } catch {
       target.focus();
       target.select();
+      feedback = "复制失败，已选中内容，请手动复制";
     }
+    button.textContent = feedback;
+    window.clearTimeout(Number(button.dataset.copyTimer || 0));
+    button.dataset.copyTimer = String(window.setTimeout(() => {
+      button.textContent = original;
+    }, 2000));
   });
 });
 
@@ -288,6 +301,28 @@ document.querySelectorAll("form").forEach((form) => {
     window.setTimeout(() => {
       setSubmittingState(submitter);
     }, 0);
+  });
+});
+
+// 浏览器后退从往返缓存恢复页面时，脚本不会重跑，提交中的表单会一直锁着。
+// 恢复时解除锁定并还原按钮文案，让用户能再次提交。
+window.addEventListener("pageshow", (event) => {
+  if (!event.persisted) return;
+  document.querySelectorAll("form[data-submitting='true']").forEach((form) => {
+    delete form.dataset.submitting;
+    form.removeAttribute("aria-busy");
+  });
+  document.querySelectorAll(".is-submitting").forEach((submitter) => {
+    if (!(submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement)) return;
+    const label = submitter.dataset.originalLabel;
+    if (label !== undefined) {
+      if (submitter instanceof HTMLInputElement) submitter.value = label;
+      else submitter.textContent = label;
+    }
+    submitter.classList.remove("is-submitting");
+    submitter.removeAttribute("aria-busy");
+    submitter.removeAttribute("aria-disabled");
+    submitter.disabled = false;
   });
 });
 
@@ -398,7 +433,7 @@ selectionForms.forEach((form) => {
         keep.textContent = `只保留可${verbs[action]}的 ${eligible} 条`;
       }
     });
-    if (toolbar && enhanced) toolbar.toggleAttribute("data-fixed-bulk", count > 0 && window.innerWidth <= 768);
+    if (toolbar && enhanced) toolbar.toggleAttribute("data-fixed-bulk", count > 0 && window.matchMedia("(max-width: 767.98px)").matches);
     measureToolbar();
   };
   syncMirroredSelection(form);
@@ -589,6 +624,8 @@ typedForms.forEach((form) => {
     }
   }
 
+  const shanghaiDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" });
+
   function crossedSignature(now) {
     // 越过的节点数：所有目标里 now 已达到或超过的个数；再拼当地日期。
     let passed = 0;
@@ -596,13 +633,15 @@ typedForms.forEach((form) => {
       const t = Date.parse(cell.getAttribute("data-target"));
       if (!Number.isNaN(t) && now >= t) passed += 1;
     });
-    return new Date(now).toDateString() + "#" + passed;
+    // 午夜按民宿所在时区判断，不随员工设备时区变化。
+    return shanghaiDate.format(new Date(now)) + "#" + passed;
   }
 
   function hasUnsavedWork() {
     // 复用未保存表单集合；提交中的按钮也算进行中，不打断。
     if (typeof dirtyForms !== "undefined" && dirtyForms.size > 0) return true;
-    return document.querySelector("button[aria-busy='true']") !== null;
+    // 表单在 submit 事件里同步标记，按钮要等 0 ms 定时器才标记；两者都查，堵住这段空档。
+    return document.querySelector("form[data-submitting='true'], [aria-busy='true']") !== null;
   }
 
   function showStaleHint() {

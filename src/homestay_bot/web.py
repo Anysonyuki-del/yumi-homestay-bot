@@ -22,13 +22,17 @@ def complaint_risk_zh(value: object) -> str:
     return _COMPLAINT_RISK_LABELS.get(str(value or ""), "待核实")
 
 
-def datetime_zh(value: object) -> str:
-    """把时间统一转换为武汉本地时间，避免后台误读 UTC。"""
+def datetime_zh(value: object, seconds: bool = False) -> str:
+    """把时间统一转换为武汉本地时间，避免后台误读 UTC。
+
+    seconds=True 时保留秒，用于需要比对相近时间的场景（如资料核实里的原始消息时间）。
+    """
     if not isinstance(value, datetime):
         return "—"
     aware = value.replace(tzinfo=UTC) if value.tzinfo is None else value
     local = aware.astimezone(WUHAN_TIMEZONE)
-    return f"{local.year}年{local.month}月{local.day}日 {local:%H:%M}"
+    clock = f"{local:%H:%M:%S}" if seconds else f"{local:%H:%M}"
+    return f"{local.year}年{local.month}月{local.day}日 {clock}"
 
 
 def safe_external_url(value: object) -> str:

@@ -11,7 +11,6 @@
 </nav>
 
 {% if tab == "overview" %}
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}">
 <section class="detail-section panel panel--padded">
   <p class="eyebrow">百居易房间 #{{ property.id }}</p>
   <div class="section-heading"><h2>运营概览</h2>{{ ui.readiness_status_badge(overview.operational_status) }}</div>
@@ -59,7 +58,7 @@
 <section class="detail-section panel panel--padded" id="showcase-photos"><h2>房间照片</h2>
   <p class="help-text">最多 {{ max_showcase_photos }} 张，JPG 或 PNG，每张不超过 5MB；第一张作为列表封面。上传时会自动去掉照片里的拍摄地点等信息。</p>
   {% if showcase.photos %}
-  <form method="post" action="/employee/properties/{{ property.id }}/showcase/photos/order"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}">
+  <form method="post" action="/employee/properties/{{ property.id }}/showcase/photos/order" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="source" value="{{ return_to }}">
     <ul class="image-list">{% for photo in showcase.photos %}<li><a href="/employee/properties/{{ property.id }}/showcase/photos/{{ photo.id }}" target="_blank" rel="noopener"><img src="/employee/properties/{{ property.id }}/showcase/photos/{{ photo.id }}" alt="房间照片 {{ loop.index }}"></a><label>排序号<input name="order_{{ photo.id }}" type="number" min="0" max="9999" value="{{ photo.sort_order }}" required></label><button class="button button--danger" type="submit" form="showcase-photo-delete-{{ photo.id }}">删除</button></li>{% endfor %}</ul>
     <button type="submit">保存照片顺序</button>
   </form>

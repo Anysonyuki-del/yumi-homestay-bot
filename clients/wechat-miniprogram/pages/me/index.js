@@ -13,6 +13,10 @@ Page({
     this.authGeneration = 0
     this.restoreLogin()
   },
+  // 离开页面时作废在途的登录操作，迟到的结果不再写回已卸载的页面。
+  onUnload() {
+    this.authGeneration += 1
+  },
   // 每次登录相关操作领取新代次；结果返回时代次已变说明有更新的操作，丢弃旧结果，
   // 避免退出后迟到的恢复响应把页面改回已登录。
   beginAuthOperation(message) {

@@ -192,16 +192,23 @@
       }
 
       /** 把 [标签, 值] 列表渲染进表格；值为 null 时标成缺失而不是 0。 */
+      // 用 DOM 接口逐格写入文本：测得的值（如 UA 字符串）不会被当作 HTML 解析。
       function render(tableId, rows) {
-        var html = rows
-          .map(function (row) {
-            var val = row[1];
-            var cls = val === null || val === undefined || val === "" ? ' class="absent"' : "";
-            var shown = cls ? "未提供" : val;
-            return "<tr><td>" + row[0] + "</td><td" + cls + ">" + shown + "</td></tr>";
-          })
-          .join("");
-        document.getElementById(tableId).innerHTML = html;
+        var table = document.getElementById(tableId);
+        var cells = rows.map(function (row) {
+          var val = row[1];
+          var absent = val === null || val === undefined || val === "";
+          var tr = document.createElement("tr");
+          var label = document.createElement("td");
+          label.textContent = String(row[0]);
+          var value = document.createElement("td");
+          if (absent) value.className = "absent";
+          value.textContent = absent ? "未提供" : String(val);
+          tr.appendChild(label);
+          tr.appendChild(value);
+          return tr;
+        });
+        table.replaceChildren.apply(table, cells);
         return rows;
       }
 

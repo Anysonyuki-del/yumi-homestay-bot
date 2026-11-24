@@ -103,8 +103,8 @@ pub fn classify_url_against(origin: &Url, url: &Url) -> NavigationDecision {
     // 剩下的只可能作为外部链接处理，条件比业务来源更严：
     // 必须是 HTTPS、默认端口、可供用户辨认的域名主机。
     // 明文 HTTP、file、intent、javascript、自定义 scheme
-    // 以及 Tauri 本地协议都在这里落到拒绝分支；打包错误页不走本函数，
-    // 由原生控制层通过 is_exact_local_error_page 单独放行。
+    // 以及 Tauri 本地协议都在这里落到拒绝分支；打包错误页不走本函数
+    // （目前运行时也未接入该页，见 is_exact_local_error_page）。
     if url.scheme() != "https" || url.port().is_some() {
         return NavigationDecision::Block;
     }
@@ -119,6 +119,8 @@ pub fn classify_url_against(origin: &Url, url: &Url) -> NavigationDecision {
 
 /// 判断目标是否为本客户端打包的那一个连接错误页。
 ///
+/// 当前 `run()` 没有接入「加载失败跳本地错误页」，本函数只被单元测试使用，
+/// 用来固定「若以后接入，放行条件必须是精确资源」这条策略。
 /// 错误页只允许原生控制层在连接失败时自行进入，且必须是不带查询串、
 /// 不带片段的精确资源路径；来自远程页的任意本地协议导航仍由
 /// `classify_url` 拒绝。
@@ -288,14 +290,6 @@ fn confirm_and_open_external(app: &tauri::AppHandle, url: &Url) {
             }
             release_external_prompt();
         });
-}
-
-/// 把主视图导航回固定的工作台入口。
-///
-/// 供「重新打开工作台」菜单与连接错误页的重试使用。只发普通 GET 导航，
-/// 永远不重放上一次的 POST，也不接受调用方传入的任意地址。
-pub fn open_workstation(window: &tauri::WebviewWindow) -> tauri::Result<()> {
-    window.navigate(allowed_origin().clone())
 }
 
 /// Windows 与 Android 共享的应用启动流程。

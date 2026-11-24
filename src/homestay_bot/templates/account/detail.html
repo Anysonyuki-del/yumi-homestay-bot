@@ -3,7 +3,8 @@
 {% block heading %}账号安全{% endblock %}
 {% block content %}
 {# 该页继承登录布局，本身没有后台导航；正常已登录时给一个明确的出口，否则只能靠浏览器后退键离开。强制改密走的是 auth/change_password.html，不经过这里，门禁不受影响。 #}
-<p><a href="/employee/admin">返回工作台</a></p>
+{# 普通员工没有工作台权限（/employee/admin 返回 403），按角色回到各自首页。 #}
+<p>{% if request.session.get("employee_role") == "admin" %}<a href="/employee/admin">返回工作台</a>{% else %}<a href="/employee/tasks">返回任务中心</a>{% endif %}</p>
 <h2>修改密码</h2>
 <form method="post" action="/employee/account/password">
   <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}">

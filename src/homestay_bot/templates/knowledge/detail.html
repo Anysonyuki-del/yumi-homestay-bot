@@ -1,5 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
+{# 编辑失败提示就地显示在表单上方（带锚点），顶层布局不再重复渲染同一条 error。 #}
+{% set layout_error_inline = true %}
 {% from "knowledge/scope_fields.html" import scope_fields %}
 {% from "knowledge/entry_state.html" import entry_state %}
 

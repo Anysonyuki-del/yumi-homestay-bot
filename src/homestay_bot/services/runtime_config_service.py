@@ -240,6 +240,14 @@ class RuntimeConfigVersionView:
     is_previous: bool
     masked_summary: dict[str, object]
     provider_results: dict[str, dict[str, object]]
+    # 1.74.1 起企业微信只差可信 IP 时允许先生效；
+    # 历史页需标明该版本仍待配置，不能只显示「测试通过」。
+    wecom_trusted_ip_pending: bool = False
+
+
+def trusted_ip_pending(test_results: object) -> bool:
+    """判断持久化的测试结果是否带「企业微信待配可信 IP」放行标记；只认严格的 True。"""
+    return isinstance(test_results, dict) and test_results.get("wecom_trusted_ip_pending") is True
 
 
 def safe_provider_results(payload: object) -> dict[str, dict[str, object]]:
@@ -496,10 +504,7 @@ class RuntimeConfigService:
             active_version_id=state.active_version_id,
             previous_version_id=state.previous_version_id,
             source=source,
-            wecom_trusted_ip_pending=(
-                isinstance(test_results, dict)
-                and test_results.get("wecom_trusted_ip_pending") is True
-            ),
+            wecom_trusted_ip_pending=trusted_ip_pending(test_results),
         )
 
     async def list_version_views(self, *, limit: int = 20) -> list[RuntimeConfigVersionView]:
@@ -523,6 +528,7 @@ class RuntimeConfigService:
                 is_previous=version.id == state.previous_version_id,
                 masked_summary=dict(version.masked_summary),
                 provider_results=safe_provider_results(version.test_results),
+                wecom_trusted_ip_pending=trusted_ip_pending(version.test_results),
             )
             for version in versions
         ]

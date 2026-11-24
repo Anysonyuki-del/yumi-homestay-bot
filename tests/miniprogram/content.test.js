@@ -340,6 +340,16 @@ test('分类页：只显示该分类的问答；分类已不展示时显示 gone
   assert.ok(calls.includes('back'))
 })
 
+test('分类页：分类参数编码损坏时不崩溃，按分类不存在处理', async () => {
+  // 复现（前端审查 F-08）：外部链接带残缺的 %E4% 时，decodeURIComponent 抛错，onLoad 直接中断，页面停在加载态。
+  installWx({ '/api/miniprogram/guide': { statusCode: 200, data: { sections: [{ category: '入住', items: [{ question: '几点？', answer: '3 点' }] }] } } })
+  const page = loadPage('pages/services/category.js')
+  page.onLoad({ name: '%E4%' })
+  await new Promise(setImmediate)
+  await new Promise(setImmediate)
+  assert.equal(page.data.status, 'gone')
+})
+
 // 我的页用 auth 模块替身：只关心页面怎样根据登录结果切换状态。
 function loadMePage(auth) {
   const authPath = require.resolve(path.join(CLIENT_ROOT, 'utils/auth.js'))
@@ -380,6 +390,18 @@ test('我的页：登录、退出成功与失败、核验待确认，状态如�
   loginError = Object.assign(new Error('暂时无法确认登录状态，请稍后重试'), { code: 'verify_unknown' })
   await page.handleLogin()
   assert.equal(page.data.authStatus, 'unknown')
+})
+
+test('我的页：离开页面后迟到的登录核验结果被丢弃', async () => {
+  // 前端审查 F-19：页面卸载后不应再用旧请求的结果改写页面状态。
+  installWx()
+  let release
+  const page = loadMePage({ restore: () => new Promise((resolve) => { release = resolve }) })
+  page.onLoad()
+  page.onUnload()
+  release({ status: 'logged_in' })
+  await new Promise(setImmediate)
+  assert.equal(page.data.authStatus, 'checking')
 })
 
 test('关于页：位置行与首页同源——有坐标即使没地址也导航，只有地址复制，都没有问管家；拨号只留数字和加号', async () => {
