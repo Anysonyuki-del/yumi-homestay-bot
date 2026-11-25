@@ -230,7 +230,7 @@ README.md[SV5T]: F:规定逐版本发布记录的审计内容、更正与敏感�
 1.74.0.md[SV6T]: F:记录1.74.0消息链投递修复与小程序到店体验等改动的依据、改动清单、验证证据、风险与回滚。 | R:code:docs/specs/2026-11-19_message-chain-delivery-fixes-spec.md,code:docs/specs/2026-11-19_miniprogram-arrival-spec.md,code:docs/releases/1.74.1.md,code:CHANGELOG.md,code:pyproject.toml | A:依据；改动清单；验证证据；风险与未覆盖；回滚 | S:本版未单独部署，2026-11-23随1.74.1一起上线，部署结果记在1.74.1记录里；回滚到1.73.3后已登记的补匹配作业因无处理器以unknown_job_type失败。
 1.74.1.md[SV6T]: F:记录1.74.1运行配置在企业微信只差可信IP时放行生效的依据、改动清单、验证证据、风险、回滚与部署结果。 | R:code:docs/specs/2026-11-23_wecom-corp-migration-spec.md,code:docs/releases/1.74.0.md,code:CHANGELOG.md,code:pyproject.toml | A:依据；改动清单；验证证据；风险与未覆盖；回滚；部署记录 | S:生产此前停在1.73.3，本次部署一并上线1.74.0；真实企业微信与设置页提醒留给迁移第4–8步验证。
 1.75.0.md[SV6S]: F:记录1.75.0前端审查修复与后台内容安全策略收紧的依据、复核更正、改动清单、验证证据、风险回滚及生产部署、独立核对与登录后页面核对结果。 | R:code:CHANGELOG.md,code:pyproject.toml,code:docs/releases/1.74.1.md | A:依据；复核更正；改动清单；验证证据；风险与未覆盖、回滚；部署记录与登录后核对补记 | S:按用户授权跳过Spec分段确认；登录后核对只用管理员账号，普通员工返回链接与WebView2未覆盖；小程序与桌面客户端改动需另行上传或打包。
-1.76.0.md[SV6T]: F:记录1.76.0前端重构的依据、Claude复核结论与6项修正、改动清单、验证证据、风险与回滚。 | R:code:CHANGELOG.md,code:pyproject.toml,code:docs/releases/1.75.0.md,code:DESIGN.md | A:依据；复核结论；改动清单；验证证据；风险与未覆盖；回滚 | S:后端Python与CSP未改；小程序改动需另行上传，服务端部署不使其生效。
+1.76.0.md[SV6T]: F:记录1.76.0前端重构的依据、Claude复核结论与6项修正、改动清单、验证证据、风险回滚及生产部署与登录后只读核对结果。 | R:code:CHANGELOG.md,code:pyproject.toml,code:docs/releases/1.75.0.md,code:DESIGN.md | A:依据；复核结论；改动清单；验证证据；风险与未覆盖、回滚；部署记录 | S:后端Python与CSP未改；生产未点开确认弹窗以免误提交；小程序需另行上传，服务端部署不使其生效。
 
 ===/Volumes/02/obsidian/docs/reviews/2026-09-08-evidence/===
 pytest-output.txt[TQ3S]: F:保存离线回归原始输出、真实外部契约跳过原因与依赖及SQLite清理警告 | R:- | A:1406passed,15skipped,6warnings | S:历史结果含真实外部契约跳过，不能充当当前验收。

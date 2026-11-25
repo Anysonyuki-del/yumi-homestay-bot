@@ -14,7 +14,7 @@
 - [x] 更新 `DESIGN.md`、`PRODUCT.md`、`.impeccable/surfaces/src-homestay-bot-templates.md` 与前端浏览器/资产测试
 - [x] 最终离线验证：覆盖 458 项 pytest（含全部 `tests/browser/`、`test_admin_assets.py` 四条 1.75.0 结构守卫与 9 组路由集成测试；末次微调 `dashboard.html` 后重跑受影响 87 passed）、Node 小程序 25 passed、Ruff 通过、`git diff --check` 通过、`impeccable detect` 对 `app.css` 0 项问题、9 个本地预览页面 Playwright 实图 `status=200` 且零横向溢出
 - [x] Claude 复核（2026-11-25）：修正待办任务说明、已入住配色、详情右栏限高、无 showModal 兜底、弹窗单一结构、先处理分隔线 6 项，详见 `docs/releases/1.76.0.md`；用户回复「修完并发版」
-- [ ] 发版 1.76.0、部署、独立核对与部署记录
+- [x] 发版 1.76.0（`e691efd`，`v1.76.0`）、部署 DEPLOY_OK、独立核对与登录后只读核对，见发布记录
 - [ ] 用户另行：微信开发者工具构建 npm 并上传小程序
 
 # 前端审查修复（2026-11-25，1.75.0 候选）
