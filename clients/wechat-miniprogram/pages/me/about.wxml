@@ -9,7 +9,7 @@
     <view class="facts">
       <!-- 位置行（到店体验 Spec A2）：有坐标时即使没填地址也能导航；只有地址时点整行复制；都没有时改为问管家怎么到店。 -->
       <view wx:if="{{arrival !== 'ask'}}" class="fact" bindtap="openArrival" hover-class="fact--pressed" hover-stay-time="80" aria-role="button" aria-label="{{arrival === 'map' ? '导航到店' : '复制地址'}}">
-        <t-icon name="location" size="44rpx" color="#a9583e" />
+        <t-icon name="location" size="44rpx" color="#c24322" />
         <view class="fact__text">
           <text class="fact__label">地址</text>
           <text class="fact__value" user-select>{{store.address || '已在地图上标注门店位置'}}</text>
@@ -17,15 +17,15 @@
         <text class="fact__action">{{arrival === 'map' ? '导航' : '复制'}}</text>
       </view>
       <button wx:else class="contact-reset fact" open-type="contact" session-from="about" hover-class="fact--pressed" hover-stay-time="80" aria-label="问管家怎么到店">
-        <t-icon name="location" size="44rpx" color="#a9583e" />
+        <t-icon name="location" size="44rpx" color="#c24322" />
         <view class="fact__text">
           <text class="fact__label">到店路线</text>
           <text class="fact__value">问管家怎么到店</text>
         </view>
-        <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+        <t-icon name="chevron-right" size="40rpx" color="#58524a" />
       </button>
       <view wx:if="{{store.phone}}" class="fact" bindtap="callStore" hover-class="fact--pressed" hover-stay-time="80" aria-role="button">
-        <t-icon name="call" size="44rpx" color="#a9583e" />
+        <t-icon name="call" size="44rpx" color="#c24322" />
         <view class="fact__text">
           <text class="fact__label">电话</text>
           <text class="fact__value">{{store.phone}}</text>

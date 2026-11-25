@@ -10,6 +10,13 @@ ADMIN_SCRIPT = (PROJECT_ROOT / "src/homestay_bot/static/admin.js").read_text()
 ADMIN_CSS = (PROJECT_ROOT / "src/homestay_bot/static/app.css").read_text()
 
 
+def _confirm_dialog_html() -> str:
+    """渲染后台布局共用的确认弹窗片段；手写页面必须带上它，与真实布局保持同一份结构。"""
+    from homestay_bot.web import templates
+
+    return templates.env.get_template("components/confirm_dialog.html").render()
+
+
 def _admin_fixture() -> str:
     """返回包含真实后台选择器的最小页面。"""
     return """<!doctype html>
@@ -52,7 +59,7 @@ def _admin_fixture() -> str:
       </details>
       <div id="drawer-target"></div><div id="workspace-target"></div>
       <div id="fallback-target"></div>
-    </body></html>"""
+    """ + _confirm_dialog_html() + "</body></html>"
 
 
 def _load_admin_page(page: Page) -> None:
@@ -78,19 +85,10 @@ def browser(playwright_runtime: Playwright) -> Iterator[Browser]:
 
 
 def test_cross_form_submission(browser: Browser) -> None:
-    """取消跨表单提交不锁按钮，确认后清理状态并阻止重复提交。"""
+    """取消跨表单提交不锁按钮，页内确认弹窗确认后清理状态并阻止重复提交。"""
     page = browser.new_page(viewport={"width": 390, "height": 844})
     _load_admin_page(page)
     page.fill("#form-a input", "尚未保存")
-    page.evaluate(
-        """() => {
-          window.confirmCalls = [];
-          window.confirm = (message) => {
-            window.confirmCalls.push(message);
-            return false;
-          };
-        }"""
-    )
 
     current_form = page.evaluate(
         """async () => {
@@ -107,7 +105,7 @@ def test_cross_form_submission(browser: Browser) -> None:
             disabled: form.querySelector("button").disabled,
             motionClass: form.querySelector("button").classList.contains("is-submitting"),
             unloadPrevented: unload.defaultPrevented,
-            confirmCalls: window.confirmCalls.length,
+            dialogOpen: Boolean(document.querySelector("[data-confirm-dialog]")?.open),
           };
         }"""
     )
@@ -117,7 +115,7 @@ def test_cross_form_submission(browser: Browser) -> None:
         "disabled": True,
         "motionClass": True,
         "unloadPrevented": False,
-        "confirmCalls": 0,
+        "dialogOpen": False,
     }
 
     page.goto("about:blank")
@@ -125,55 +123,31 @@ def test_cross_form_submission(browser: Browser) -> None:
     page.fill("#form-a input", "尚未保存")
     page.evaluate(
         """() => {
-          window.confirmCalls = [];
-          window.confirm = (message) => {
-            window.confirmCalls.push(message);
-            return false;
-          };
+          document.querySelector("#form-b").addEventListener("submit", (e) => e.preventDefault());
         }"""
     )
-    cancelled = page.evaluate(
-        """async () => {
-          const form = document.querySelector("#form-b");
-          const accepted = form.dispatchEvent(
-            new Event("submit", { bubbles: true, cancelable: true })
-          );
-          await new Promise((resolve) => setTimeout(resolve, 10));
-          return {
-            accepted,
-            submitting: form.dataset.submitting || "",
-            disabled: form.querySelector("button").disabled,
-            confirmCalls: window.confirmCalls,
-          };
-        }"""
-    )
-    assert cancelled["accepted"] is False
-    assert cancelled["submitting"] == ""
-    assert cancelled["disabled"] is False
-    assert len(cancelled["confirmCalls"]) == 1
+    page.click("#form-b button")
+    dialog = page.locator("[data-confirm-dialog]")
+    assert dialog.is_visible()
+    assert "未保存" in dialog.locator("[data-confirm-message]").inner_text()
+    dialog.locator("[data-confirm-cancel]").click()
+    assert not dialog.is_visible()
+    assert page.locator("#form-b").get_attribute("data-submitting") is None
+    assert page.locator("#form-b button").is_enabled()
 
-    page.evaluate(
-        """() => {
-          window.confirm = (message) => {
-            window.confirmCalls.push(message);
-            return true;
-          };
-        }"""
-    )
+    page.click("#form-b button")
+    assert dialog.is_visible()
+    dialog.locator("[data-confirm-ok]").click()
+    page.wait_for_function("document.querySelector('#form-b button').disabled")
     confirmed = page.evaluate(
-        """async () => {
+        """() => {
           const form = document.querySelector("#form-b");
-          const first = form.dispatchEvent(
-            new Event("submit", { bubbles: true, cancelable: true })
-          );
           const second = form.dispatchEvent(
             new Event("submit", { bubbles: true, cancelable: true })
           );
-          await new Promise((resolve) => setTimeout(resolve, 10));
           const unload = new Event("beforeunload", { cancelable: true });
           window.dispatchEvent(unload);
           return {
-            first,
             second,
             submitting: form.dataset.submitting,
             disabled: form.querySelector("button").disabled,
@@ -182,7 +156,6 @@ def test_cross_form_submission(browser: Browser) -> None:
         }"""
     )
     assert confirmed == {
-        "first": True,
         "second": False,
         "submitting": "true",
         "disabled": True,
@@ -420,7 +393,7 @@ def _selection_fixture() -> str:
           <input type="hidden" name="confirm_count" value="0" data-confirm-count>
         </form>
       </main>
-    </body></html>"""
+    """ + _confirm_dialog_html() + "</body></html>"
 
 
 def _load_selection_page(page: Page) -> None:
@@ -430,9 +403,6 @@ def _load_selection_page(page: Page) -> None:
     page.add_script_tag(content=ADMIN_SCRIPT)
     page.evaluate(
         """() => {
-          window.confirmCalls = [];
-          window.promptCalls = [];
-          window.confirm = (message) => { window.confirmCalls.push(message); return true; };
           document.getElementById("selection-form")
             .addEventListener("submit", (event) => event.preventDefault());
         }"""
@@ -502,17 +472,15 @@ def test_typed_confirm_counts_what_the_user_can_see(browser: Browser) -> None:
     """手输确认的条数必须等于可见选择数，而不是两套布局的总和。"""
     page = browser.new_page(viewport={"width": 1280, "height": 900})
     _load_selection_page(page)
-    page.evaluate(
-        """() => {
-          window.prompt = (message) => { window.promptCalls.push(message); return "2"; };
-        }"""
-    )
 
     page.check("[data-select-all]")
     page.click("button[data-typed-confirm]")
-
-    assert len(page.evaluate("() => window.promptCalls")) == 1
-    assert "2 条" in page.evaluate("() => window.promptCalls[0]")
+    dialog = page.locator("[data-confirm-dialog]")
+    assert dialog.is_visible()
+    assert "2 条" in dialog.locator("[data-confirm-message]").inner_text()
+    dialog.locator("[data-confirm-input]").fill("2")
+    dialog.locator("[data-confirm-ok]").click()
+    assert not dialog.is_visible()
     assert page.input_value("[data-confirm-count]") == "2"
     page.close()
 
@@ -522,17 +490,20 @@ def test_permanent_delete_never_shows_the_archive_recoverable_wording(
 ) -> None:
     """永久删除不得沿用归档表单「可以恢复」的确认文案。
 
-    删除按钮借用归档表单提交，表单级确认写的是「可在「已归档」中恢复」；它在
-    专属确认之后弹出，等于用一句「可以恢复」盖住了不可逆的真相。
+    删除按钮借用归档表单提交，表单级确认写的是「可在「已归档」中恢复」；不得再弹出
+    归档文案盖住不可逆的真相。
     """
     page = browser.new_page(viewport={"width": 1280, "height": 900})
     _load_selection_page(page)
-    page.evaluate("""() => { window.prompt = () => "1"; }""")
 
     page.check('.responsive-table input[name="task_ids"][value="11"]')
     page.click("button[data-typed-confirm]")
-
-    assert page.evaluate("() => window.confirmCalls") == []
+    dialog = page.locator("[data-confirm-dialog]")
+    assert dialog.is_visible()
+    assert "移入归档" not in dialog.locator("[data-confirm-message]").inner_text()
+    dialog.locator("[data-confirm-input]").fill("1")
+    dialog.locator("[data-confirm-ok]").click()
+    assert not dialog.is_visible()
     page.close()
 
 
@@ -625,8 +596,10 @@ def test_timeline_fits_without_horizontal_scrolling(browser: Browser, width: int
     assert cells.count() == 18
     assert page.locator(".cal__scroll:visible").evaluate_all(
         "els => els.every(el => el.scrollWidth <= el.clientWidth)")
+    # 桌面日期格至少 70×44 且 18 天保持统一行高（A+E 纵排星期/日期标尺为 58px）。
     assert cells.evaluate_all(
-        "els => els.every(el => el.clientWidth >= 70 && el.clientHeight == 44)")
+        "els => els.every(el => el.clientWidth >= 70 && el.clientHeight >= 44)"
+        " && new Set(els.map(el => el.clientHeight)).size === 1")
     segment = page.locator(".cal__segment:visible").first
     assert segment.locator(".cal__bar:visible").count() == 3
     segment.locator("summary").press("Enter")
@@ -734,25 +707,21 @@ def test_timeline_segment_clipping_keeps_exact_endpoints(browser: Browser) -> No
 
 
 def test_confirm_text_follows_the_action_that_was_clicked(browser: Browser) -> None:
-    """确认文案必须跟随点下去的那个动作，而不是表单的默认动作。
-
-    同一个表单挂着归档、分派、取消、永久删除四个按钮，后三个靠 formaction 改写
-    目标。表单级 data-confirm 是写给默认动作（归档）的，被它们继承就会出现
-    「点分派，问你是否移入归档」——把人引向错误的心理模型，而他正要做的是一件
-    完全不同、且会真实改变任务归属的事。
-    """
+    """确认文案必须跟随点下去的那个动作，而不是表单的默认动作。"""
     page = browser.new_page(viewport={"width": 1280, "height": 900})
     _load_selection_page(page)
     page.check("[data-select-all]")
 
     page.click('button[formaction$="assign-selected"]')
-    assign_prompt = page.evaluate("() => window.confirmCalls.at(-1)")
+    dialog = page.locator("[data-confirm-dialog]")
+    assert dialog.is_visible()
+    assign_prompt = dialog.locator("[data-confirm-message]").inner_text()
 
     assert "分派" in assign_prompt
     assert "归档" not in assign_prompt
-    # 占位符换成本次提交的真实数值。
     assert "2 条" in assign_prompt
     assert "阿姨" in assign_prompt
+    dialog.locator("[data-confirm-cancel]").click()
     page.close()
 
 
@@ -763,8 +732,10 @@ def test_default_action_still_uses_the_form_level_confirm(browser: Browser) -> N
     page.check("[data-select-all]")
 
     page.click("button[type='submit']:not([formaction]):not([data-typed-confirm])")
-
-    assert "移入归档" in page.evaluate("() => window.confirmCalls.at(-1)")
+    dialog = page.locator("[data-confirm-dialog]")
+    assert dialog.is_visible()
+    assert "移入归档" in dialog.locator("[data-confirm-message]").inner_text()
+    dialog.locator("[data-confirm-cancel]").click()
     page.close()
 
 
@@ -778,7 +749,7 @@ def test_an_action_without_its_own_wording_asks_nothing_rather_than_the_wrong_th
 
     page.click('button[formaction$="other-action"]')
 
-    assert page.evaluate("() => window.confirmCalls") == []
+    assert page.locator("[data-confirm-dialog]:visible").count() == 0
     page.close()
 
 
@@ -1398,16 +1369,10 @@ def _complaint_page_html() -> str:
     )
 
 
-def _load_complaint_page(page: Page, *, accept: bool) -> None:
-    """载入真实模板与脚本；记录确认文案和最终提交的表单数据，不真正跳转。"""
+def _load_complaint_page(page: Page) -> None:
+    """载入真实模板与脚本；拦截最终提交并记录提交表单数据。"""
     page.set_content(_complaint_page_html())
-    page.evaluate(
-        """(accept) => {
-          window.confirmCalls = [];
-          window.confirm = (text) => { window.confirmCalls.push(text); return accept; };
-        }""",
-        accept,
-    )
+    page.add_style_tag(content=ADMIN_CSS)
     page.add_script_tag(content=ADMIN_SCRIPT)
     # 在后台脚本之后挂监听：拿到的是脚本处理过（含确认回写）的真实提交数据。
     page.evaluate(
@@ -1426,16 +1391,19 @@ def _load_complaint_page(page: Page, *, accept: bool) -> None:
 
 
 def test_complaint_send_confirm_shows_the_text_being_sent(browser: Browser) -> None:
-    """AC02：确认框显示回复框里的当前内容；确认后提交的正是这段内容并带确认标记。"""
+    """AC02：页内确认框显示回复框里的当前内容；确认后提交的正是这段内容并带确认标记。"""
     page = browser.new_page(viewport={"width": 1280, "height": 900})
-    _load_complaint_page(page, accept=True)
+    _load_complaint_page(page)
     page.fill('textarea[name="draft"]', "刚改好的新回复")
 
     page.click('button[formaction$="/send"]')
-
-    prompt = page.evaluate("() => window.confirmCalls.at(-1)")
+    dialog = page.locator("[data-confirm-dialog]")
+    assert dialog.is_visible()
+    prompt = dialog.locator("[data-confirm-message]").inner_text()
     assert "刚改好的新回复" in prompt
     assert "已保存的旧稿" not in prompt
+    dialog.locator("[data-confirm-ok]").click()
+    page.wait_for_function("window.submitted !== null")
     submitted = page.evaluate("() => window.submitted")
     assert submitted["draft"] == "刚改好的新回复"
     assert submitted["confirmed"] == "1"
@@ -1445,10 +1413,14 @@ def test_complaint_send_confirm_shows_the_text_being_sent(browser: Browser) -> N
 def test_cancelling_the_send_confirm_keeps_the_edit(browser: Browser) -> None:
     """取消确认不提交、不清空编辑内容，按钮仍可再次点击。"""
     page = browser.new_page(viewport={"width": 1280, "height": 900})
-    _load_complaint_page(page, accept=False)
+    _load_complaint_page(page)
     page.fill('textarea[name="draft"]', "还在斟酌的回复")
 
     page.click('button[formaction$="/send"]')
+    dialog = page.locator("[data-confirm-dialog]")
+    assert dialog.is_visible()
+    dialog.locator("[data-confirm-cancel]").click()
+    assert not dialog.is_visible()
 
     assert page.evaluate("() => window.submitted") is None
     assert page.input_value('textarea[name="draft"]') == "还在斟酌的回复"
@@ -1456,15 +1428,73 @@ def test_cancelling_the_send_confirm_keeps_the_edit(browser: Browser) -> None:
     page.close()
 
 
+@pytest.mark.parametrize("accept", [True, False])
+def test_browsers_without_dialog_fall_back_to_native_confirm(
+    browser: Browser, accept: bool,
+) -> None:
+    """不支持 showModal 的浏览器（iOS 15.4 以前）退回原生确认框：确认则带标记提交，取消则不提交。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_complaint_page(page)
+    page.evaluate("() => { delete HTMLDialogElement.prototype.showModal; }")
+    page.fill('textarea[name="draft"]', "老手机上的回复")
+    asked: list[str] = []
+
+    def answer(dialog) -> None:
+        asked.append(dialog.message)
+        dialog.accept() if accept else dialog.dismiss()
+
+    page.on("dialog", answer)
+    page.click('button[formaction$="/send"]')
+    page.wait_for_timeout(100)
+    assert len(asked) == 1 and "老手机上的回复" in asked[0]
+    assert page.locator("[data-confirm-dialog]").is_hidden()
+    submitted = page.evaluate("() => window.submitted")
+    if accept:
+        assert submitted["draft"] == "老手机上的回复" and submitted["confirmed"] == "1"
+    else:
+        assert submitted is None
+    page.close()
+
+
+def test_sticky_detail_aside_stays_reachable_on_short_screens(browser: Browser) -> None:
+    """矮屏桌面上右栏比视口高时，不得把底部操作压到左栏滚完才出现：右栏限高并可在栏内滚到最后一个按钮。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 560})
+    _load_complaint_page(page)
+    box = page.evaluate(
+        """() => {
+          const aside = document.querySelector('.detail-aside');
+          const buttons = aside.querySelectorAll('button');
+          const last = buttons[buttons.length - 1];
+          // 页面滚到右栏刚好吸顶的位置，再把栏内滚到底：这是员工操作底部表单的真实路径。
+          const stickyTop = parseFloat(getComputedStyle(aside).top);
+          // 后台开启了平滑滚动，必须指定 instant，否则测量发生在滚动动画之前。
+          const offset = aside.getBoundingClientRect().top - stickyTop;
+          window.scrollBy({ top: offset, behavior: 'instant' });
+          aside.scrollTop = aside.scrollHeight;
+          return {
+            asideHeight: aside.getBoundingClientRect().height,
+            overflowing: aside.scrollHeight > aside.clientHeight,
+            lastBottom: last.getBoundingClientRect().bottom,
+            viewport: window.innerHeight,
+          };
+        }"""
+    )
+    # 先确认场景成立：右栏内容确实比视口可用高度长，否则这条断言测不到吸顶问题。
+    assert box["overflowing"], box
+    assert box["asideHeight"] <= box["viewport"], box
+    assert box["lastBottom"] <= box["viewport"], box
+    page.close()
+
+
 def test_saving_a_complaint_draft_asks_no_send_question(browser: Browser) -> None:
     """保存草稿不弹发送确认，也不带确认标记。"""
     page = browser.new_page(viewport={"width": 1280, "height": 900})
-    _load_complaint_page(page, accept=True)
+    _load_complaint_page(page)
     page.fill('textarea[name="draft"]', "只是保存")
 
     page.click('button[formaction$="/save"]')
 
-    assert page.evaluate("() => window.confirmCalls") == []
+    assert page.locator("[data-confirm-dialog]:visible").count() == 0
     submitted = page.evaluate("() => window.submitted")
     assert submitted["draft"] == "只是保存"
     assert "confirmed" not in submitted
@@ -1553,7 +1583,7 @@ def test_a_bulk_action_with_nothing_selected_asks_no_confirmation(browser: Brows
 
     page.click('.selection-actions button[formaction$="assign-selected"]')
 
-    assert page.evaluate("() => window.confirmCalls") == []
+    assert page.locator("[data-confirm-dialog]:visible").count() == 0
     assert page.evaluate("() => window.submitted") == []
     assert _bar_count(page) == "请先勾选任务"
     page.close()
@@ -1619,16 +1649,13 @@ def test_backfill_confirm_repeats_the_entered_reservation_code(browser: Browser)
     )
     page = browser.new_page(viewport={"width": 1280, "height": 900})
     page.set_content(html)
-    page.evaluate(
-        """() => {
-          window.confirmCalls = [];
-          window.confirm = (text) => { window.confirmCalls.push(text); return false; };
-        }"""
-    )
+    page.add_style_tag(content=ADMIN_CSS)
     page.add_script_tag(content=ADMIN_SCRIPT)
     page.fill('input[name="reservation_code"]', "HX-20261010-01")
 
     page.click('form[action$="/backfill"] button[type="submit"]')
-
-    assert "HX-20261010-01" in page.evaluate("() => window.confirmCalls.at(-1)")
+    dialog = page.locator("[data-confirm-dialog]")
+    assert dialog.is_visible()
+    assert "HX-20261010-01" in dialog.locator("[data-confirm-message]").inner_text()
+    dialog.locator("[data-confirm-cancel]").click()
     page.close()

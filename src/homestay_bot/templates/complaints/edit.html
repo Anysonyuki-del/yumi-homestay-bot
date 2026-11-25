@@ -8,6 +8,21 @@
 {% set status_tone = {"sent": "success", "cancelled": "neutral", "delivery_failed": "danger", "analysis_failed": "danger", "send_queued": "info"}.get(status_value, "warning") %}
 {# 员工刚提交的正文优先：保存或发送被拒后原地还给他，不从数据库重新读，免得丢掉未保存的修改。 #}
 {% set draft_text = submitted_draft if submitted_draft is not none else (review.draft or '') %}
+{% if confirm_draft is not none %}
+<section class="decision-panel panel panel--padded" aria-labelledby="confirm-send-title">
+  <h2 id="confirm-send-title" tabindex="-1">确认发送</h2>
+  <p>以下内容将发送给客人，发送后无法撤回：</p>
+  <blockquote class="long-text">{{ confirm_draft }}</blockquote>
+  {% if actions.send %}
+  <form method="post" action="/employee/complaints/{{ review.id }}/send"><input type="hidden" name="version" value="{{ confirm_version if confirm_version is not none else review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="draft" value="{{ confirm_draft }}"><button type="submit" name="confirmed" value="1">确认发送</button></form>
+  {% else %}
+  <p class="field-help">当前状态已不允许发送，请核对下方最新状态。</p>
+  {% endif %}
+  <p class="field-help">需要修改时，在下方回复框改完后重新点发送。</p>
+</section>
+{% endif %}
+<div class="detail-layout">
+<div class="detail-main">
 <section class="detail-section panel panel--padded">
   <div class="section-heading"><div><p class="eyebrow">人工判断优先</p><h2>风险概览</h2></div><div>{{ ui.badge(review.status | status_zh, status_tone) }} {{ ui.badge("风险：" ~ (review.risk_level | complaint_risk_zh), "danger") }}</div></div>
   <div class="summary-grid">
@@ -40,21 +55,8 @@
 {% else %}<p>本页没有对话消息。</p>{% endfor %}
 {% if run.count %}{{ cleared_note(run.count, run.first, run.last) }}{% endif %}
 </div></section>
-
-{% if confirm_draft is not none %}
-<section class="decision-panel panel panel--padded" aria-labelledby="confirm-send-title">
-  <h2 id="confirm-send-title" tabindex="-1">确认发送</h2>
-  <p>以下内容将发送给客人，发送后无法撤回：</p>
-  <blockquote class="long-text">{{ confirm_draft }}</blockquote>
-  {% if actions.send %}
-  <form method="post" action="/employee/complaints/{{ review.id }}/send"><input type="hidden" name="version" value="{{ confirm_version if confirm_version is not none else review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="draft" value="{{ confirm_draft }}"><button type="submit" name="confirmed" value="1">确认发送</button></form>
-  {% else %}
-  <p class="field-help">当前状态已不允许发送，请核对下方最新状态。</p>
-  {% endif %}
-  <p class="field-help">需要修改时，在下方回复框改完后重新点发送。</p>
-</section>
-{% endif %}
-
+</div>
+<div class="detail-aside">
 <section class="detail-section panel panel--padded"><h2>回复客人</h2>
 {% if actions.edit %}
   {# 保存与发送在同一个表单：发送的就是回复框里的当前内容（D1-A），不再有第二份隐藏正文。 #}
@@ -86,4 +88,6 @@
   {% if actions.cancel %}<form method="post" action="/employee/complaints/{{ review.id }}/cancel" data-confirm="确定关闭当前客诉吗？关闭后将停止本次复核流程。"><input type="hidden" name="version" value="{{ review.version }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">关闭客诉</button></form>{% endif %}
 </div></section>
 {% endif %}
+</div>
+</div>
 {% endblock %}

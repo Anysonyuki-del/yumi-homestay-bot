@@ -2,20 +2,22 @@
 {% import "components/ui.html" as ui %}
 {% import "components/workbench.html" as workbench %}
 
-{% block page_actions %}{{ ui.badge("管理员调度" if is_admin else "员工执行", "info") }}{% endblock %}
+{% block page_actions %}<div class="header-actions">{% if is_admin %}{{ workbench.views("tasks") }}{% endif %}{{ ui.badge("管理员调度" if is_admin else "员工执行", "info") }}</div>{% endblock %}
 {% block content %}
-{% if is_admin %}{{ workbench.views("tasks") }}{% endif %}
 {# 管理动作随当前队列提供；员工执行页没有批量管理入口，也不显示对应资格提示。 #}
 {% set offered_actions = (["purge"] if filters.archived else ["assign", "cancel", "archive"]) if is_admin else [] %}
 <section class="panel panel--padded">
-  {# 队列只能亮一个：aria-current 由服务端算好的唯一队列决定，不再让每个条件各自判断。 #}
-  <nav class="tab-nav" aria-label="任务队列">
-    <a href="/employee/tasks" {% if queue == "open" %}aria-current="page"{% endif %}>开放任务</a>
-    <a href="/employee/tasks?overdue=true" {% if queue == "overdue" %}aria-current="page"{% endif %}>逾期</a>
-    <a href="/employee/tasks?status_filter=pending_confirmation" {% if queue == "pending_confirmation" %}aria-current="page"{% endif %}>待确认</a>
-    <a href="/employee/tasks?status_filter=pending_assignment" {% if queue == "pending_assignment" %}aria-current="page"{% endif %}>待分派</a>
-    {% if is_admin %}<a href="/employee/tasks?archived=true" {% if queue == "archived" %}aria-current="page"{% endif %}>已归档</a>{% endif %}
-  </nav>
+  <div class="list-toolbar">
+    {# 队列只能亮一个：aria-current 由服务端算好的唯一队列决定，不再让每个条件各自判断。 #}
+    <nav class="tab-nav" aria-label="任务队列">
+      <a href="/employee/tasks" {% if queue == "open" %}aria-current="page"{% endif %}>开放任务</a>
+      <a href="/employee/tasks?overdue=true" {% if queue == "overdue" %}aria-current="page"{% endif %}>逾期</a>
+      <a href="/employee/tasks?status_filter=pending_confirmation" {% if queue == "pending_confirmation" %}aria-current="page"{% endif %}>待确认</a>
+      <a href="/employee/tasks?status_filter=pending_assignment" {% if queue == "pending_assignment" %}aria-current="page"{% endif %}>待分派</a>
+      {% if is_admin %}<a href="/employee/tasks?archived=true" {% if queue == "archived" %}aria-current="page"{% endif %}>已归档</a>{% endif %}
+    </nav>
+    <span class="pill-meta">本页 {{ tasks | length }} 项</span>
+  </div>
   {% set filter_labels = {"status": "状态", "task_type": "任务类型", "service_date": "服务日期", "property_id": "房源", "assigned_employee_id": "执行员工", "overdue": "只看逾期", "archived": "含已归档"} %}
   {% if extra_filters %}<p class="filter-summary">在本队列内又加了 {{ extra_filters | length }} 项筛选：{% for key in extra_filters %}{{ filter_labels[key] }}{% if not loop.last %}、{% endif %}{% endfor %}。<a href="{{ queue_url }}">清除附加筛选</a></p>{% endif %}
   {# 有附加筛选就展开整套表单，会把手机首屏占满：从房间卡进来只加了一个房源

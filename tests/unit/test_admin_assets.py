@@ -55,8 +55,8 @@ def test_admin_css_keeps_contrast_and_avoids_blanket_rules() -> None:
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
 
-    assert _contrast_ratio("#2563eb", "#f7f8fa") >= 3
-    assert _contrast_ratio("#2563eb", "#ffffff") >= 3
+    assert _contrast_ratio("#c24322", "#f5f2ed") >= 4.5
+    assert _contrast_ratio("#c24322", "#ffffff") >= 4.5
     assert "transition: all" not in css
     assert "overflow-x: clip" not in css and "overflow-x: hidden" not in css
 
@@ -341,30 +341,27 @@ def test_room_card_colors_all_go_through_design_tokens() -> None:
 
 
 def test_calendar_bar_palette_stays_derived_from_the_primary_token() -> None:
-    """日历条配色必须跟着 --primary 走，回退值不得与 color-mix 脱钩。
+    """日历条配色必须跟着 --primary 与 --warning 走，回退值不得与 color-mix 脱钩。
 
     回退声明是给不支持 color-mix 的浏览器兜底的，两行写的必须是同一个颜色；只改
     其中一行，两类浏览器就会看到两套配色，而且没有任何地方会报错。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
-    classic, warm = css.split(':root[data-theme="warm"]', 1)
-    # 两套主题必须按各自根令牌计算；还用经典主色验算暖色会报错或漏掉真实回退偏差。
-    for theme_css in (classic, ":root" + warm):
-        root = _root_tokens(theme_css)
-        pairs = re.findall(
-            r"(--cal-[\w-]+):\s*(#[0-9A-Fa-f]{6});\s*\1:\s*"
-            r"color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\);",
-            theme_css,
+    root = _root_tokens(css)
+    pairs = re.findall(
+        r"(--cal-[\w-]+):\s*(#[0-9A-Fa-f]{6});\s*\1:\s*"
+        r"color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\);",
+        css,
+    )
+    assert len(pairs) >= 4, f"color-mix 与回退值没有成对声明：{pairs}"
+    for name, fallback, top, percent, bottom in pairs:
+        assert top in {"--primary", "--warning"}, (
+            f"{name} 挂在 {top} 上，既不是主色也不是告警色，换令牌时不会跟着走"
         )
-        assert len(pairs) >= 4, f"color-mix 与回退值没有成对声明：{pairs}"
-        for name, fallback, top, percent, bottom in pairs:
-            assert top in {"--primary", "--warning"}, (
-                f"{name} 挂在 {top} 上，既不是主色也不是告警色，换令牌时不会跟着走"
-            )
-            expected = _srgb_mix(root[top], root[bottom], float(percent))
-            assert fallback.lower() == expected, (
-                f"{name} 回退值 {fallback} 与 color-mix 结果 {expected} 不一致"
-            )
+        expected = _srgb_mix(root[top], root[bottom], float(percent))
+        assert fallback.lower() == expected, (
+            f"{name} 回退值 {fallback} 与 color-mix 结果 {expected} 不一致"
+        )
 
 
 # ---- 结构守卫（前端审查 2026-11-25）：同类问题已逐个修过，这里按类拦截，不再靠逐处复查。 ----
@@ -444,3 +441,16 @@ def test_page_alerts_have_a_single_owner() -> None:
     assert not unclaimed, f"就地显示 error 却没接管布局提示：{unclaimed}"
     layout = (_TEMPLATE_ROOT / "layouts/admin.html").read_text()
     assert "{% if error and not layout_error_inline %}" in layout
+
+
+def test_status_colors_never_borrow_the_action_color() -> None:
+    """房间状态的点和占比条不得使用主操作色。
+
+    陶红是「这里可以点」的唯一信号；状态色借用它，员工会把只读的状态当成可操作项，
+    或把「已入住」读成告警。状态只能用中性、成功、告警、危险这些语义色。
+    """
+    css = (ASSET_ROOT / "static/app.css").read_text()
+    rules = re.findall(r"([^{}]*\.(?:status-dot|readiness-bar__seg)--[\w-]+[^{}]*)\{([^}]*)\}", css)
+    assert rules, "没有找到状态色规则，选择器可能改名，需同步本守卫"
+    borrowed = [sel.strip() for sel, body in rules if "var(--primary" in body]
+    assert not borrowed, f"状态色借用了主操作色：{borrowed}"

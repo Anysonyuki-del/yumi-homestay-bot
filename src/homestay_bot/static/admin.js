@@ -167,35 +167,236 @@ function fillConfirmPlaceholders(text, form) {
     .replaceAll("{reservation_code}", () => codeText);
 }
 
-// 确认文案必须跟随「这次点的是哪个动作」，而不是表单的默认动作。同一个表单上
-// 挂着归档、分派、取消、永久删除四个按钮，后三个靠 formaction 改写目标；表单级
-// data-confirm 是写给默认动作（归档）的，被它们继承就会出现「点分派，问你是否
-// 移入归档」这种把人引向错误心理模型的提示。
-document.querySelectorAll("form[data-confirm], form[data-danger-confirm]").forEach((form) => {
-  form.addEventListener("submit", (event) => {
-    const submitter = event.submitter;
-    if (submitter instanceof HTMLElement) {
-      // 已经做过更强的手输确认，不再叠加一句更弱的。
-      if (submitter.hasAttribute("data-typed-confirm")) return;
-      const own = submitter.getAttribute("data-confirm");
-      if (own) {
-        if (!window.confirm(fillConfirmPlaceholders(own, form))) {
-          event.preventDefault();
+let toastHideTimer = null;
+
+/**
+ * 在页面右下角展示温和轻提示，纯文本写入并由 aria-live 播报。
+ * 提示区只在 layouts/admin.html 定义一份，脚本不再自建同构节点，避免两处结构漂移。
+ */
+function showToast(message) {
+  const region = document.querySelector("[data-toast-region]");
+  if (!message || !(region instanceof HTMLElement)) return;
+  region.textContent = message;
+  region.hidden = false;
+  window.clearTimeout(toastHideTimer);
+  toastHideTimer = window.setTimeout(() => {
+    region.hidden = true;
+    region.textContent = "";
+  }, 2600);
+}
+
+/**
+ * 浏览器不支持原生 <dialog>（如 iOS 15.4 以前的 Safari）或布局缺少弹窗时的兜底：
+ * 退回同步原生确认框，保证需要确认的提交不会因为打不开页内弹窗而无声失效。
+ */
+function nativeConfirmFallback({ title, message, typedExpected }) {
+  if (typeof typedExpected === "string" && typedExpected.length > 0) {
+    const answer = window.prompt(`${title}：${message}\n确认请输入数字 ${typedExpected}。`);
+    return answer !== null && answer.trim() === typedExpected;
+  }
+  return window.confirm(message);
+}
+
+/** 打开页内温和确认框，支持普通确认与不可逆手输数量校验，关闭后归还焦点。 */
+function openConfirmDialog({
+  title = "请确认本次操作",
+  message = "确定继续吗？",
+  confirmLabel = "确认继续",
+  danger = false,
+  typedExpected = null,
+}) {
+  // 弹窗结构只由 layouts/admin.html 提供；缺失或浏览器不支持 showModal 时走原生兜底。
+  const dialog = document.querySelector("[data-confirm-dialog]");
+  if (!(dialog instanceof HTMLElement) || typeof dialog.showModal !== "function") {
+    // 必须放到下一个任务再弹：当前仍处于 submit 事件派发中，浏览器会忽略此时的 requestSubmit，
+    // 确认后的重新提交会被静默丢弃。
+    return new Promise((resolve) => {
+      window.setTimeout(() => resolve(nativeConfirmFallback({ title, message, typedExpected })), 0);
+    });
+  }
+  if (dialog.open) return Promise.resolve(false);
+  const previousFocus = document.activeElement;
+  const titleEl = dialog.querySelector("[data-confirm-title]");
+  const messageEl = dialog.querySelector("[data-confirm-message]");
+  const typedBox = dialog.querySelector("[data-confirm-typed]");
+  const typedLabel = dialog.querySelector("[data-confirm-typed-label]");
+  const typedInput = dialog.querySelector("[data-confirm-input]");
+  const typedError = dialog.querySelector("[data-confirm-typed-error]");
+  const cancelBtn = dialog.querySelector("[data-confirm-cancel]");
+  const okBtn = dialog.querySelector("[data-confirm-ok]");
+  if (!(okBtn instanceof HTMLButtonElement) || !(cancelBtn instanceof HTMLButtonElement)) {
+    return Promise.resolve(false);
+  }
+  if (titleEl) titleEl.textContent = title;
+  if (messageEl) messageEl.textContent = message;
+  okBtn.textContent = confirmLabel;
+  okBtn.classList.toggle("button--danger", Boolean(danger));
+  const needsTyped = typeof typedExpected === "string" && typedExpected.length > 0;
+  if (typedBox instanceof HTMLElement) typedBox.hidden = !needsTyped;
+  if (typedLabel && needsTyped) typedLabel.textContent = `确认请输入数字 ${typedExpected}`;
+  if (typedInput instanceof HTMLInputElement) typedInput.value = "";
+  if (typedError instanceof HTMLElement) {
+    typedError.hidden = true;
+    typedError.textContent = "";
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (accepted) => {
+      if (settled) return;
+      settled = true;
+      okBtn.removeEventListener("click", handleOk);
+      cancelBtn.removeEventListener("click", handleCancel);
+      dialog.removeEventListener("cancel", handleCancel);
+      dialog.removeEventListener("click", handleBackdropClick);
+      typedInput?.removeEventListener("keydown", handleInputKeydown);
+      if (dialog.open) dialog.close();
+      if (!accepted && previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+        previousFocus.focus();
+      }
+      resolve(accepted);
+    };
+    const handleOk = () => {
+      if (needsTyped && typedInput instanceof HTMLInputElement) {
+        if (typedInput.value.trim() !== typedExpected) {
+          if (typedError instanceof HTMLElement) {
+            typedError.textContent = `请输入数字 ${typedExpected} 以确认`;
+            typedError.hidden = false;
+          }
+          typedInput.focus();
           return;
         }
-        // 确认通过后改写提交按钮的值，告诉服务端员工已经看过正文；没有脚本时
-        // 按钮保持原值，服务端会先渲染一个确认步骤，不会跳过确认直接发送。
-        const accepted = submitter.getAttribute("data-confirm-accept-value");
-        if (accepted !== null && submitter instanceof HTMLButtonElement) submitter.value = accepted;
-        return;
       }
-      // 改写了目标动作却没带自己的文案：表单级文案不属于它，宁可不问也不误导。
-      if (submitter.hasAttribute("formaction")) return;
+      finish(true);
+    };
+    const handleCancel = (event) => {
+      if (event) event.preventDefault();
+      finish(false);
+    };
+    const handleBackdropClick = (event) => {
+      if (event.target === dialog) finish(false);
+    };
+    const handleInputKeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        handleOk();
+      }
+    };
+
+    okBtn.addEventListener("click", handleOk);
+    cancelBtn.addEventListener("click", handleCancel);
+    dialog.addEventListener("cancel", handleCancel);
+    dialog.addEventListener("click", handleBackdropClick);
+    typedInput?.addEventListener("keydown", handleInputKeydown);
+
+    dialog.showModal();
+    if (needsTyped && typedInput instanceof HTMLInputElement) typedInput.focus();
+    else if (danger) cancelBtn.focus();
+    else okBtn.focus();
+  });
+}
+
+const dirtyForms = new Set();
+
+/** 解析本次提交动作对应的确认文案，避免按钮级 formaction 误继承表单级文案。 */
+function resolveActionConfirm(form, submitter) {
+  if (submitter instanceof HTMLElement) {
+    if (submitter.hasAttribute("data-typed-confirm")) return null;
+    const own = submitter.getAttribute("data-confirm");
+    if (own) {
+      return {
+        message: fillConfirmPlaceholders(own, form),
+        danger: submitter.classList.contains("button--danger") || form.hasAttribute("data-danger-confirm"),
+      };
     }
-    const prompt = form.getAttribute("data-confirm")
-      || form.getAttribute("data-danger-confirm")
-      || "确定继续吗？";
-    if (!window.confirm(fillConfirmPlaceholders(prompt, form))) event.preventDefault();
+    if (submitter.hasAttribute("formaction")) return null;
+  }
+  if (!form.hasAttribute("data-confirm") && !form.hasAttribute("data-danger-confirm")) return null;
+  const prompt = form.getAttribute("data-confirm")
+    || form.getAttribute("data-danger-confirm")
+    || "确定继续吗？";
+  const danger = form.hasAttribute("data-danger-confirm")
+    || (submitter instanceof HTMLElement && submitter.classList.contains("button--danger"));
+  return { message: fillConfirmPlaceholders(prompt, form), danger };
+}
+
+/** 统一拦截需要页内确认（含手输数量、动作确认、跨表单未保存提示）的提交。 */
+document.querySelectorAll("form").forEach((form) => {
+  form.addEventListener("submit", (event) => {
+    if (event.defaultPrevented) return;
+    if (form.dataset.submitting === "true") {
+      event.preventDefault();
+      return;
+    }
+    if (form.dataset.dialogConfirmed === "true") {
+      delete form.dataset.dialogConfirmed;
+      return;
+    }
+
+    const submitter = event.submitter instanceof HTMLElement ? event.submitter : null;
+    const isTyped = Boolean(submitter && submitter.hasAttribute("data-typed-confirm"));
+    const actionConfirm = isTyped ? null : resolveActionConfirm(form, submitter);
+    const hasOtherDirtyForm = [...dirtyForms].some((dirtyForm) => dirtyForm !== form);
+
+    if (!isTyped && !actionConfirm && !hasOtherDirtyForm) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    const runConfirmFlow = async () => {
+      if (isTyped && submitter) {
+        const selected = selectedTaskIds(form);
+        const field = form.querySelector("[data-confirm-count]");
+        if (field instanceof HTMLInputElement) field.value = "0";
+        if (!selected.size) {
+          showToast("请先勾选要处理的任务。");
+          return;
+        }
+        const detail = (submitter.getAttribute("data-typed-confirm-detail")
+          || "即将处理 {n} 条任务，此操作不可恢复。").replaceAll("{n}", () => String(selected.size));
+        const ok = await openConfirmDialog({
+          title: (submitter.getAttribute("data-typed-confirm") || "确认不可逆操作")
+            .replaceAll("{n}", () => String(selected.size)),
+          message: detail,
+          confirmLabel: "确认执行",
+          danger: true,
+          typedExpected: String(selected.size),
+        });
+        if (!ok) return;
+        if (field instanceof HTMLInputElement) field.value = String(selected.size);
+      } else if (actionConfirm) {
+        const ok = await openConfirmDialog({
+          title: actionConfirm.danger ? "请确认敏感操作" : "请确认本次操作",
+          message: actionConfirm.message,
+          confirmLabel: actionConfirm.danger ? "确认执行" : "确认继续",
+          danger: actionConfirm.danger,
+        });
+        if (!ok) return;
+      }
+
+      if (hasOtherDirtyForm) {
+        const discardOk = await openConfirmDialog({
+          title: "当前页面还有未保存内容",
+          message: "继续提交将丢弃本页其它表单尚未保存的修改。确定继续吗？",
+          confirmLabel: "丢弃并继续",
+          danger: true,
+        });
+        if (!discardOk) return;
+        dirtyForms.clear();
+      }
+
+      if (submitter instanceof HTMLButtonElement) {
+        const accepted = submitter.getAttribute("data-confirm-accept-value");
+        if (accepted !== null) submitter.value = accepted;
+      }
+
+      form.dataset.dialogConfirmed = "true";
+      form.requestSubmit(submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement
+        ? submitter
+        : undefined);
+    };
+
+    void runConfirmFlow();
   });
 });
 
@@ -213,23 +414,6 @@ document.querySelectorAll("form[data-filter-form]").forEach((form) => {
   form.addEventListener("formdata", removeEmptyFilterValues);
 });
 
-const dirtyForms = new Set();
-
-document.querySelectorAll("form").forEach((form) => {
-  form.addEventListener("submit", (event) => {
-    if (event.defaultPrevented) return;
-    // 提交一个表单前，必须明确处理同页其它表单尚未保存的内容。
-    const hasOtherDirtyForm = [...dirtyForms].some((dirtyForm) => dirtyForm !== form);
-    if (!hasOtherDirtyForm) return;
-    const discardConfirmed = window.confirm("当前页面还有其它未保存内容，继续提交将丢弃这些修改。确定继续吗？");
-    if (!discardConfirmed) {
-      event.preventDefault();
-      return;
-    }
-    dirtyForms.clear();
-  });
-});
-
 document.querySelectorAll("[data-copy-target]").forEach((button) => {
   button.addEventListener("click", async () => {
     // 服务端已生成脱敏纯文本；浏览器只复制，不读取或过滤任何 raw 对象。
@@ -243,10 +427,12 @@ document.querySelectorAll("[data-copy-target]").forEach((button) => {
     try {
       await navigator.clipboard.writeText(target.value);
       feedback = "已复制";
+      showToast("已复制到剪贴板");
     } catch {
       target.focus();
       target.select();
       feedback = "复制失败，已选中内容，请手动复制";
+      showToast("复制失败，已选中文本，请手动复制");
     }
     button.textContent = feedback;
     window.clearTimeout(Number(button.dataset.copyTimer || 0));
@@ -494,7 +680,7 @@ selectionForms.forEach((form) => {
       if (!count) hint.textContent = "请先勾选任务";
       else if (!actionHint) hint.textContent = `已选 ${count} 项，已选的任务都不能${verbs[action]}`;
       hint.focus();
-    } else window.alert("请先勾选任务。");
+    } else showToast("请先勾选任务。");
   };
   form.addEventListener("click", (event) => {
     const button = event.target.closest("button[type=submit]");
@@ -530,32 +716,7 @@ document.querySelectorAll("[data-select-all-reminders]").forEach((toggle) => {
   });
 });
 
-// 不可逆的批量操作要求手输条数：挡住「习惯性点确定」这一整类事故，
-// 提交者必须真的看过数量。脚本缺失时该按钮提交的确认数为 0，服务端会拒绝。
-const typedForms = new Set(Array.from(document.querySelectorAll("button[data-typed-confirm]"))
-  .map((button) => button.form).filter(Boolean));
-typedForms.forEach((form) => {
-  // 放在 submit 捕获阶段，键盘和 requestSubmit 同样必须确认；不能复用上次数字。
-  form.addEventListener("submit", (event) => {
-    const button = event.submitter;
-    if (!(button instanceof HTMLElement) || !button.hasAttribute("data-typed-confirm")) return;
-    const selected = selectedTaskIds(form);
-    const field = form.querySelector("[data-confirm-count]");
-    if (field) field.value = "0";
-    const detail = (button.getAttribute("data-typed-confirm-detail")
-      || "即将处理 {n} 条任务，此操作不可恢复。").replace("{n}", String(selected.size));
-    const answer = selected.size ? window.prompt(
-      `${button.getAttribute("data-typed-confirm")}：${detail}\n确认请输入数字 ${selected.size}。`,
-    ) : null;
-    if (!selected.size) window.alert("请先勾选要处理的任务。");
-    if (answer === null || answer.trim() !== String(selected.size)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      return;
-    }
-    if (field) field.value = String(selected.size);
-  }, true);
-});
+// 不可逆的批量手输确认已统一并入上方的页内 <dialog> 提交确认链，此处不再重复弹 window.prompt。
 
 // 入住安排倒计时与跨节点刷新（Spec §6/§9）。
 // 只建立一个页面级分钟定时器；倒计时按「服务器观察时刻 + 页面加载后经过的时间」

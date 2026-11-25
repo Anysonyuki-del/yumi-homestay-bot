@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-24T21:34:08Z",
+  "updated_at": "2026-11-25T01:48:17Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -77,15 +77,15 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "92af588ffad4238da6083e5fa74a20265da6e521b39924fb670bf783c57ffee9",
-      "size": 206740,
-      "normalized_sha256": "92af588ffad4238da6083e5fa74a20265da6e521b39924fb670bf783c57ffee9"
+      "sha256": "01e98f66bc3b97fe3354145f60cd33101deec273202e94300ac15e0601cc94d2",
+      "size": 208529,
+      "normalized_sha256": "01e98f66bc3b97fe3354145f60cd33101deec273202e94300ac15e0601cc94d2"
     },
     "DESIGN.md": {
       "role": "index",
-      "sha256": "6bded5ab5e4194a3467975e03a9fddce1ee844561ebad4435eb493ec3623c817",
-      "size": 6241,
-      "normalized_sha256": "6bded5ab5e4194a3467975e03a9fddce1ee844561ebad4435eb493ec3623c817"
+      "sha256": "bfeba051c91870d518e3cc78c3abeeb24360dc7480b3f8b981334b8a064054dd",
+      "size": 14409,
+      "normalized_sha256": "bfeba051c91870d518e3cc78c3abeeb24360dc7480b3f8b981334b8a064054dd"
     },
     "Dockerfile": {
       "role": "index",
@@ -125,9 +125,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "8448a4a9634dd37105afecd0a8b79009fa5d699d2ca2e92348f8e23807130d5c",
-      "size": 400030,
-      "normalized_sha256": "8448a4a9634dd37105afecd0a8b79009fa5d699d2ca2e92348f8e23807130d5c"
+      "sha256": "9f53f921e52530d8d6c97479edc81e4efb2934df306d7253ba06b3c34ca9660d",
+      "size": 400704,
+      "normalized_sha256": "9f53f921e52530d8d6c97479edc81e4efb2934df306d7253ba06b3c34ca9660d"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -149,15 +149,15 @@
     },
     "clients/wechat-miniprogram/app.json": {
       "role": "index",
-      "sha256": "6634ef7f6cc6eb5ac3fe11cadb31871d7ab01c7e579e4e9a37b007d4586b9dfe",
+      "sha256": "e7e488c3eacfe61edb18c584abcfe5f30570a23184fdf65c3f0ae722df34954b",
       "size": 1238,
-      "normalized_sha256": "6634ef7f6cc6eb5ac3fe11cadb31871d7ab01c7e579e4e9a37b007d4586b9dfe"
+      "normalized_sha256": "e7e488c3eacfe61edb18c584abcfe5f30570a23184fdf65c3f0ae722df34954b"
     },
     "clients/wechat-miniprogram/app.wxss": {
       "role": "index",
-      "sha256": "30cc76f80bbc535fc266e208ae42ae3397673139fcf873917de3dec738c1e41a",
-      "size": 5537,
-      "normalized_sha256": "30cc76f80bbc535fc266e208ae42ae3397673139fcf873917de3dec738c1e41a"
+      "sha256": "692d173bcc6047377740d36967314fe5bcfc9700175bee82593634a866ec0082",
+      "size": 5071,
+      "normalized_sha256": "692d173bcc6047377740d36967314fe5bcfc9700175bee82593634a866ec0082"
     },
     "clients/wechat-miniprogram/package-lock.json": {
       "role": "index",
@@ -185,15 +185,15 @@
     },
     "clients/wechat-miniprogram/pages/home/index.wxml": {
       "role": "index",
-      "sha256": "8d4040da46d49f4287739b831ced7edb739011804f3c8e79508762a76fdd1a75",
+      "sha256": "1af5f248808758eed024a285433d799a4343e0c1eee78ab934b1b4e6a4fe629c",
       "size": 6001,
-      "normalized_sha256": "8d4040da46d49f4287739b831ced7edb739011804f3c8e79508762a76fdd1a75"
+      "normalized_sha256": "1af5f248808758eed024a285433d799a4343e0c1eee78ab934b1b4e6a4fe629c"
     },
     "clients/wechat-miniprogram/pages/home/index.wxss": {
       "role": "index",
-      "sha256": "d96e45256930e8097f562917d8e62ff59acd8cf3d3c04971180853b5232031bb",
-      "size": 4759,
-      "normalized_sha256": "d96e45256930e8097f562917d8e62ff59acd8cf3d3c04971180853b5232031bb"
+      "sha256": "6faa01bcde2d3fac4653cb262df361d4c168134f2685bae5f52b96ebdb66e884",
+      "size": 4445,
+      "normalized_sha256": "6faa01bcde2d3fac4653cb262df361d4c168134f2685bae5f52b96ebdb66e884"
     },
     "clients/wechat-miniprogram/pages/me/about.js": {
       "role": "index",
@@ -209,15 +209,15 @@
     },
     "clients/wechat-miniprogram/pages/me/about.wxml": {
       "role": "index",
-      "sha256": "33440d43f966d4512b0d946229c6ec9c6110f839c04b2e89c0454085067732b9",
+      "sha256": "5c29aad9572527af78e45757b025f3d74296cd4887ef0d2d7871232dbc14ea48",
       "size": 2558,
-      "normalized_sha256": "33440d43f966d4512b0d946229c6ec9c6110f839c04b2e89c0454085067732b9"
+      "normalized_sha256": "5c29aad9572527af78e45757b025f3d74296cd4887ef0d2d7871232dbc14ea48"
     },
     "clients/wechat-miniprogram/pages/me/about.wxss": {
       "role": "index",
-      "sha256": "ea0c9ce125a2b05471294b6ffaa34adb57267564df3fab0ba1359810ffa3f880",
-      "size": 1174,
-      "normalized_sha256": "ea0c9ce125a2b05471294b6ffaa34adb57267564df3fab0ba1359810ffa3f880"
+      "sha256": "3f7d0172d2ec7e9b90eac095823a3ab4d4a35826d13edd50bda8185fb2a858c2",
+      "size": 1082,
+      "normalized_sha256": "3f7d0172d2ec7e9b90eac095823a3ab4d4a35826d13edd50bda8185fb2a858c2"
     },
     "clients/wechat-miniprogram/pages/me/index.js": {
       "role": "index",
@@ -233,15 +233,15 @@
     },
     "clients/wechat-miniprogram/pages/me/index.wxml": {
       "role": "index",
-      "sha256": "15a7f6356af5ceef9e9f1533e3ab32d54f945cd73a341931e426e28b3c5ce9fe",
+      "sha256": "ab667b9f9c6291e03a76a2ac1e18f6ca8e5321cb18377ab63a44044c124414da",
       "size": 3352,
-      "normalized_sha256": "15a7f6356af5ceef9e9f1533e3ab32d54f945cd73a341931e426e28b3c5ce9fe"
+      "normalized_sha256": "ab667b9f9c6291e03a76a2ac1e18f6ca8e5321cb18377ab63a44044c124414da"
     },
     "clients/wechat-miniprogram/pages/me/index.wxss": {
       "role": "index",
-      "sha256": "8834d0de382fed5878c93ec0ec94e81d503ba3e7e26052c13556c49df2027ab7",
-      "size": 1733,
-      "normalized_sha256": "8834d0de382fed5878c93ec0ec94e81d503ba3e7e26052c13556c49df2027ab7"
+      "sha256": "8892170fd389f0edfe595c76358f379b33b04aeef34e6896672946c7201d5822",
+      "size": 1520,
+      "normalized_sha256": "8892170fd389f0edfe595c76358f379b33b04aeef34e6896672946c7201d5822"
     },
     "clients/wechat-miniprogram/pages/rooms/detail.js": {
       "role": "index",
@@ -263,9 +263,9 @@
     },
     "clients/wechat-miniprogram/pages/rooms/detail.wxss": {
       "role": "index",
-      "sha256": "5e8176799b6871543a6b8581948cba6ef3df9bc596984974491f335cec2b1b77",
-      "size": 986,
-      "normalized_sha256": "5e8176799b6871543a6b8581948cba6ef3df9bc596984974491f335cec2b1b77"
+      "sha256": "ecca7fc3d66cb1de3189c6433f68048eaa3b1accfeaba92685db1f92eca5090b",
+      "size": 1031,
+      "normalized_sha256": "ecca7fc3d66cb1de3189c6433f68048eaa3b1accfeaba92685db1f92eca5090b"
     },
     "clients/wechat-miniprogram/pages/services/category.js": {
       "role": "index",
@@ -287,9 +287,9 @@
     },
     "clients/wechat-miniprogram/pages/services/category.wxss": {
       "role": "index",
-      "sha256": "d3d1f5515cce36c0ec7d3257be70fdbcc323667a0e9767778f0ee344ea12544c",
-      "size": 536,
-      "normalized_sha256": "d3d1f5515cce36c0ec7d3257be70fdbcc323667a0e9767778f0ee344ea12544c"
+      "sha256": "9035e7a67d2b0b69d40697284d29da62a6c4d18bea77148bf464275cecfb4d3d",
+      "size": 435,
+      "normalized_sha256": "9035e7a67d2b0b69d40697284d29da62a6c4d18bea77148bf464275cecfb4d3d"
     },
     "clients/wechat-miniprogram/pages/services/index.js": {
       "role": "index",
@@ -305,15 +305,15 @@
     },
     "clients/wechat-miniprogram/pages/services/index.wxml": {
       "role": "index",
-      "sha256": "57d7ba6580684fbeab604591f6bd6ea0122c7d9bd1f779b5f99ac1bb66e90652",
+      "sha256": "b8874216df92952bf123ff64baf907b99cca98cc27fd9d29ca4c2f8ce80038ca",
       "size": 2021,
-      "normalized_sha256": "57d7ba6580684fbeab604591f6bd6ea0122c7d9bd1f779b5f99ac1bb66e90652"
+      "normalized_sha256": "b8874216df92952bf123ff64baf907b99cca98cc27fd9d29ca4c2f8ce80038ca"
     },
     "clients/wechat-miniprogram/pages/services/index.wxss": {
       "role": "index",
-      "sha256": "b4bd3759278eabcffa3f8364171e39e5902a0b75e657a077497076badb502e49",
-      "size": 2089,
-      "normalized_sha256": "b4bd3759278eabcffa3f8364171e39e5902a0b75e657a077497076badb502e49"
+      "sha256": "192b24855acbc45c71a1429b644c27c2f302f85ee5abab5684b76a96b6521c18",
+      "size": 1753,
+      "normalized_sha256": "192b24855acbc45c71a1429b644c27c2f302f85ee5abab5684b76a96b6521c18"
     },
     "clients/wechat-miniprogram/project.config.json": {
       "role": "index",
@@ -1499,6 +1499,12 @@
       "sha256": "fa0fa8d135ae25653a705c1c16ff77885c410678e7e4cb7d81a53dcb6c7dedc5",
       "size": 14819,
       "normalized_sha256": "fa0fa8d135ae25653a705c1c16ff77885c410678e7e4cb7d81a53dcb6c7dedc5"
+    },
+    "docs/releases/1.76.0.md": {
+      "role": "index",
+      "sha256": "eb54e018934b0dc0b1f23e61e4fe0f5d2b9e1999bdbccd1218f520a873a19ac1",
+      "size": 8189,
+      "normalized_sha256": "eb54e018934b0dc0b1f23e61e4fe0f5d2b9e1999bdbccd1218f520a873a19ac1"
     },
     "docs/releases/README.md": {
       "role": "index",
@@ -3538,9 +3544,9 @@
     },
     "pyproject.toml": {
       "role": "index",
-      "sha256": "384ca4b41bb3349567aa829ae26e28d6aa1e466523ddf4d89fee07033c951d14",
+      "sha256": "45639a38e89cd188db746122ca6382bfefbf1fed910f9db4392173f46f06e7d3",
       "size": 1284,
-      "normalized_sha256": "384ca4b41bb3349567aa829ae26e28d6aa1e466523ddf4d89fee07033c951d14"
+      "normalized_sha256": "45639a38e89cd188db746122ca6382bfefbf1fed910f9db4392173f46f06e7d3"
     },
     "requirements.lock": {
       "role": "index",
@@ -4414,15 +4420,15 @@
     },
     "src/homestay_bot/static/admin.js": {
       "role": "index",
-      "sha256": "acf37651773577eaac2f4b76ac12166afcbf2fdfc08ee7a04e4ab07c6d91484d",
-      "size": 31199,
-      "normalized_sha256": "acf37651773577eaac2f4b76ac12166afcbf2fdfc08ee7a04e4ab07c6d91484d"
+      "sha256": "f0d3b3346162235a4d9d3baccdd60c04d0793f7839517204aa0818a66de4998b",
+      "size": 37113,
+      "normalized_sha256": "f0d3b3346162235a4d9d3baccdd60c04d0793f7839517204aa0818a66de4998b"
     },
     "src/homestay_bot/static/app.css": {
       "role": "index",
-      "sha256": "1598c942e2a215d4c55b06beea458b6751a5ef8ae69b66a212542f959c57b73f",
-      "size": 67830,
-      "normalized_sha256": "1598c942e2a215d4c55b06beea458b6751a5ef8ae69b66a212542f959c57b73f"
+      "sha256": "9125ba4adf8241de9776f9f038c3921bcd683e439ce5066cff756fa9f48eeac7",
+      "size": 66212,
+      "normalized_sha256": "9125ba4adf8241de9776f9f038c3921bcd683e439ce5066cff756fa9f48eeac7"
     },
     "src/homestay_bot/static/theme.js": {
       "role": "index",
@@ -4456,9 +4462,9 @@
     },
     "src/homestay_bot/templates/admin/dashboard.html": {
       "role": "index",
-      "sha256": "259785ac4282c567427dc938f8ebd9654777bfedf913d1e6077e3641ff9b8966",
-      "size": 6211,
-      "normalized_sha256": "259785ac4282c567427dc938f8ebd9654777bfedf913d1e6077e3641ff9b8966"
+      "sha256": "eedadfe05c778c19b0c45682dfc62b80150c81ba147e2597c9e156ca9e1fd05f",
+      "size": 7723,
+      "normalized_sha256": "eedadfe05c778c19b0c45682dfc62b80150c81ba147e2597c9e156ca9e1fd05f"
     },
     "src/homestay_bot/templates/admin/debug.html": {
       "role": "index",
@@ -4480,9 +4486,9 @@
     },
     "src/homestay_bot/templates/admin/operations.html": {
       "role": "index",
-      "sha256": "ac8235af439d684b9adee510225691eef390e0d4cf7a2bc2210f3fa7845e6dd4",
-      "size": 7657,
-      "normalized_sha256": "ac8235af439d684b9adee510225691eef390e0d4cf7a2bc2210f3fa7845e6dd4"
+      "sha256": "4d2dfb95b2265d18c3c7032b0facac5420d13581afc4a42cf94c29dfb898c44a",
+      "size": 8290,
+      "normalized_sha256": "4d2dfb95b2265d18c3c7032b0facac5420d13581afc4a42cf94c29dfb898c44a"
     },
     "src/homestay_bot/templates/admin/settings.html": {
       "role": "index",
@@ -4492,15 +4498,15 @@
     },
     "src/homestay_bot/templates/approvals/detail.html": {
       "role": "index",
-      "sha256": "525fb7b8b81fcc76772390a0897fb14728a43cec8a782e0c68b3063502bb1ecc",
-      "size": 9555,
-      "normalized_sha256": "525fb7b8b81fcc76772390a0897fb14728a43cec8a782e0c68b3063502bb1ecc"
+      "sha256": "d922f1107195f8a0fe5c67e54e8f9b665d6c40fa4d6d642f7059d15dfa8c3f8c",
+      "size": 9657,
+      "normalized_sha256": "d922f1107195f8a0fe5c67e54e8f9b665d6c40fa4d6d642f7059d15dfa8c3f8c"
     },
     "src/homestay_bot/templates/approvals/index.html": {
       "role": "index",
-      "sha256": "b88b4b51a398861f12650137b6c5b9a837486ac3779d44288a36b5ae48c8dd16",
-      "size": 1461,
-      "normalized_sha256": "b88b4b51a398861f12650137b6c5b9a837486ac3779d44288a36b5ae48c8dd16"
+      "sha256": "8b87c9a1c76f04fc406612daace5fae3e54257cc795b0f27f9aff975dde8c7d6",
+      "size": 1716,
+      "normalized_sha256": "8b87c9a1c76f04fc406612daace5fae3e54257cc795b0f27f9aff975dde8c7d6"
     },
     "src/homestay_bot/templates/auth/change_password.html": {
       "role": "index",
@@ -4516,9 +4522,9 @@
     },
     "src/homestay_bot/templates/complaints/edit.html": {
       "role": "index",
-      "sha256": "89bce1e951bf6f45dc14184fcfc8c954eabacf2923759355dbde30e2fdc392fd",
-      "size": 8632,
-      "normalized_sha256": "89bce1e951bf6f45dc14184fcfc8c954eabacf2923759355dbde30e2fdc392fd"
+      "sha256": "7f147d4d1f118176e13420ff769e0d880559e27eded65c0d5c3b49737355b481",
+      "size": 8732,
+      "normalized_sha256": "7f147d4d1f118176e13420ff769e0d880559e27eded65c0d5c3b49737355b481"
     },
     "src/homestay_bot/templates/complaints/index.html": {
       "role": "index",
@@ -4526,17 +4532,23 @@
       "size": 1880,
       "normalized_sha256": "759b906e0033b61328632dd67043184cea720941be2b4db8629148c7ff7d6e8f"
     },
+    "src/homestay_bot/templates/components/confirm_dialog.html": {
+      "role": "index",
+      "sha256": "e8570597fdfe0352b47a85b70b97cfd49a390006bf036300e472dc779e2ccfcc",
+      "size": 1328,
+      "normalized_sha256": "e8570597fdfe0352b47a85b70b97cfd49a390006bf036300e472dc779e2ccfcc"
+    },
     "src/homestay_bot/templates/components/icons.html": {
       "role": "index",
-      "sha256": "814d429f40267a8f3c447044524447e855d98212d3bfada54f38fa74b0f86a81",
-      "size": 1995,
-      "normalized_sha256": "814d429f40267a8f3c447044524447e855d98212d3bfada54f38fa74b0f86a81"
+      "sha256": "20372e1e4a0367e71130b9a97df05574225eadd2ab10870b436dabbcfc18ee71",
+      "size": 2238,
+      "normalized_sha256": "20372e1e4a0367e71130b9a97df05574225eadd2ab10870b436dabbcfc18ee71"
     },
     "src/homestay_bot/templates/components/ui.html": {
       "role": "index",
-      "sha256": "837ef63874d5d8f77b809ae8ceab6027300dc0ffe6fe738ecbf747b689169f87",
-      "size": 15966,
-      "normalized_sha256": "837ef63874d5d8f77b809ae8ceab6027300dc0ffe6fe738ecbf747b689169f87"
+      "sha256": "2685e66af0cc7a5bb5acb0e8503c30e859d6027a5195145275808e063bee0a82",
+      "size": 15389,
+      "normalized_sha256": "2685e66af0cc7a5bb5acb0e8503c30e859d6027a5195145275808e063bee0a82"
     },
     "src/homestay_bot/templates/components/workbench.html": {
       "role": "index",
@@ -4546,15 +4558,15 @@
     },
     "src/homestay_bot/templates/customers/detail.html": {
       "role": "index",
-      "sha256": "ba2f38ebc17b8baa913d98a35e36c85b364b80263e47470563739190162c2c67",
-      "size": 22427,
-      "normalized_sha256": "ba2f38ebc17b8baa913d98a35e36c85b364b80263e47470563739190162c2c67"
+      "sha256": "bb1330be87197e166c2ed051ec3dd70c3a5a89bd80bfb3bf27662ff63f66d943",
+      "size": 22839,
+      "normalized_sha256": "bb1330be87197e166c2ed051ec3dd70c3a5a89bd80bfb3bf27662ff63f66d943"
     },
     "src/homestay_bot/templates/customers/index.html": {
       "role": "index",
-      "sha256": "878ca0b440857035c6e3bb681838ee949a5d241236b056a0ad5702b95ff4f183",
-      "size": 4525,
-      "normalized_sha256": "878ca0b440857035c6e3bb681838ee949a5d241236b056a0ad5702b95ff4f183"
+      "sha256": "effaf534e6d3add1e2efa1697a0e68af5d2a5dba8ac62bfde4962884f4e3a31c",
+      "size": 4863,
+      "normalized_sha256": "effaf534e6d3add1e2efa1697a0e68af5d2a5dba8ac62bfde4962884f4e3a31c"
     },
     "src/homestay_bot/templates/customers/merge.html": {
       "role": "index",
@@ -4570,9 +4582,9 @@
     },
     "src/homestay_bot/templates/knowledge/detail.html": {
       "role": "index",
-      "sha256": "98b080ac01072b89c0c8d303c39d3809c078c1c21e8a6d3b7d93e5878e669103",
-      "size": 5215,
-      "normalized_sha256": "98b080ac01072b89c0c8d303c39d3809c078c1c21e8a6d3b7d93e5878e669103"
+      "sha256": "3d6cc2f083d3aebf6e9b05cea14ef273fd8f1ca892a2ffe7aa991939d9243e0c",
+      "size": 5451,
+      "normalized_sha256": "3d6cc2f083d3aebf6e9b05cea14ef273fd8f1ca892a2ffe7aa991939d9243e0c"
     },
     "src/homestay_bot/templates/knowledge/entry_state.html": {
       "role": "index",
@@ -4582,9 +4594,9 @@
     },
     "src/homestay_bot/templates/knowledge/index.html": {
       "role": "index",
-      "sha256": "7b162a72a842b41c1cc6d49098cb1829abcaed2627fae017d68e9104d13d4454",
-      "size": 9796,
-      "normalized_sha256": "7b162a72a842b41c1cc6d49098cb1829abcaed2627fae017d68e9104d13d4454"
+      "sha256": "0d671759a6ba726127bbcac6991567e7d1baf4e769249c94d342612d8b9a3a6c",
+      "size": 9836,
+      "normalized_sha256": "0d671759a6ba726127bbcac6991567e7d1baf4e769249c94d342612d8b9a3a6c"
     },
     "src/homestay_bot/templates/knowledge/referral_detail.html": {
       "role": "index",
@@ -4606,39 +4618,39 @@
     },
     "src/homestay_bot/templates/layouts/admin.html": {
       "role": "index",
-      "sha256": "fe4b111aa8e99cc04e6c7e79160dc2b2f38caa62964fe9c2cd3063ad9867411b",
-      "size": 7136,
-      "normalized_sha256": "fe4b111aa8e99cc04e6c7e79160dc2b2f38caa62964fe9c2cd3063ad9867411b"
+      "sha256": "4e5cab7474c3b075a1d1153c1705f1598c9e44f3ff180bcbd01a5b7a07b590e5",
+      "size": 7459,
+      "normalized_sha256": "4e5cab7474c3b075a1d1153c1705f1598c9e44f3ff180bcbd01a5b7a07b590e5"
     },
     "src/homestay_bot/templates/layouts/auth.html": {
       "role": "index",
-      "sha256": "bca1d57f6c912ffe53f61ee98b5de29641d8e0cc5faa47a5b711267e800800f9",
-      "size": 1222,
-      "normalized_sha256": "bca1d57f6c912ffe53f61ee98b5de29641d8e0cc5faa47a5b711267e800800f9"
+      "sha256": "701c72e2c5157fd845df1d650827bd9c9b63fa8d0221545688935eb9a11a1d65",
+      "size": 1071,
+      "normalized_sha256": "701c72e2c5157fd845df1d650827bd9c9b63fa8d0221545688935eb9a11a1d65"
     },
     "src/homestay_bot/templates/properties/detail.html": {
       "role": "index",
-      "sha256": "b354be7ffa70182fb2bd7e10f932a57bcf438628782f9504c3119d0cc6e7dbfc",
-      "size": 11299,
-      "normalized_sha256": "b354be7ffa70182fb2bd7e10f932a57bcf438628782f9504c3119d0cc6e7dbfc"
+      "sha256": "b28cb53cc640f64b7f0bf23a67e2dab257a8bd8ecc767ad2ef12e6099be7b3a8",
+      "size": 11604,
+      "normalized_sha256": "b28cb53cc640f64b7f0bf23a67e2dab257a8bd8ecc767ad2ef12e6099be7b3a8"
     },
     "src/homestay_bot/templates/properties/index.html": {
       "role": "index",
-      "sha256": "abc34b642ea4bc7c917e93a048e1efa2027a130399bf3b7ee1565362c9ad6c3f",
-      "size": 3631,
-      "normalized_sha256": "abc34b642ea4bc7c917e93a048e1efa2027a130399bf3b7ee1565362c9ad6c3f"
+      "sha256": "427d07c035ffe44837acf95e146762b9b62a81f5dcadc0d818a2140939205489",
+      "size": 3912,
+      "normalized_sha256": "427d07c035ffe44837acf95e146762b9b62a81f5dcadc0d818a2140939205489"
     },
     "src/homestay_bot/templates/tasks/detail.html": {
       "role": "index",
-      "sha256": "30a59da5d2de6971d1349822691767bdff115a82723cc0b4bea4915c04353355",
-      "size": 10342,
-      "normalized_sha256": "30a59da5d2de6971d1349822691767bdff115a82723cc0b4bea4915c04353355"
+      "sha256": "9fa9b99ac8d80c55a88fdbabdd46ab9e3b6f06bbdc31442790a8cb5966ef531f",
+      "size": 10444,
+      "normalized_sha256": "9fa9b99ac8d80c55a88fdbabdd46ab9e3b6f06bbdc31442790a8cb5966ef531f"
     },
     "src/homestay_bot/templates/tasks/index.html": {
       "role": "index",
-      "sha256": "1a95a967aed88e4282cb18aa8f3f2d87fd9c7980bde8fd967576098f29845205",
-      "size": 15209,
-      "normalized_sha256": "1a95a967aed88e4282cb18aa8f3f2d87fd9c7980bde8fd967576098f29845205"
+      "sha256": "8d0992f244bb71a310001438e7822718ad3d642b505046b7b1fbe66cac3b05f0",
+      "size": 15363,
+      "normalized_sha256": "8d0992f244bb71a310001438e7822718ad3d642b505046b7b1fbe66cac3b05f0"
     },
     "src/homestay_bot/tools/__init__.py": {
       "role": "index",
@@ -4702,9 +4714,9 @@
     },
     "tasks/todo.md": {
       "role": "index",
-      "sha256": "9894caaf38190e0a66224a79197a717a7f95a5fed0cc10d5311dc388902a3204",
-      "size": 161734,
-      "normalized_sha256": "9894caaf38190e0a66224a79197a717a7f95a5fed0cc10d5311dc388902a3204"
+      "sha256": "5cbc2cb2a2cf5e564a9c6bf45f0e0080b8c291da06de9012c9026c880652ef83",
+      "size": 165745,
+      "normalized_sha256": "5cbc2cb2a2cf5e564a9c6bf45f0e0080b8c291da06de9012c9026c880652ef83"
     },
     "tests/__init__.py": {
       "role": "observe",
@@ -4720,21 +4732,21 @@
     },
     "tests/browser/test_admin_batch_workbench.py": {
       "role": "observe",
-      "sha256": "f8250fcd0e342bc4efa037b402982dc49f2506bd9ae29e86a52e4f68a53ab4de",
-      "size": 34028,
-      "normalized_sha256": "f8250fcd0e342bc4efa037b402982dc49f2506bd9ae29e86a52e4f68a53ab4de"
+      "sha256": "20085f540ed4ea141c843be71783d810f3cdb230f68996ac1a09d5db2c326679",
+      "size": 34228,
+      "normalized_sha256": "20085f540ed4ea141c843be71783d810f3cdb230f68996ac1a09d5db2c326679"
     },
     "tests/browser/test_admin_interactions.py": {
       "role": "observe",
-      "sha256": "85e810b5f5909366e05c29e2b764cf5dbe0c13f586a0ee20d91abaa06e42e14c",
-      "size": 68720,
-      "normalized_sha256": "85e810b5f5909366e05c29e2b764cf5dbe0c13f586a0ee20d91abaa06e42e14c"
+      "sha256": "01da78c6a4278b524961273bb30ebdc5d3146bd3214fada3d0df6ec73ebe7061",
+      "size": 71218,
+      "normalized_sha256": "01da78c6a4278b524961273bb30ebdc5d3146bd3214fada3d0df6ec73ebe7061"
     },
     "tests/browser/test_admin_theme.py": {
       "role": "observe",
-      "sha256": "28d4fc2b7b74d344f09734f3147021b874eab8779c767103e13510600e5aeac0",
-      "size": 35006,
-      "normalized_sha256": "28d4fc2b7b74d344f09734f3147021b874eab8779c767103e13510600e5aeac0"
+      "sha256": "7554f4cfd554e5773936ccc3441dcc8fe4766b41dac951e67aa5a6f91cf45762",
+      "size": 25312,
+      "normalized_sha256": "7554f4cfd554e5773936ccc3441dcc8fe4766b41dac951e67aa5a6f91cf45762"
     },
     "tests/browser/test_approval_late_results.py": {
       "role": "observe",
@@ -4750,9 +4762,9 @@
     },
     "tests/browser/test_miniprogram_home_page.py": {
       "role": "observe",
-      "sha256": "51745adab360674b0d9bef7f83bf7cc97c2ade2c793410637839e3b83735294e",
-      "size": 3327,
-      "normalized_sha256": "51745adab360674b0d9bef7f83bf7cc97c2ade2c793410637839e3b83735294e"
+      "sha256": "888f34630b953d67defdd9fd0427f9bbe264bbb74c61b3b587f7cc20c1bf0374",
+      "size": 3580,
+      "normalized_sha256": "888f34630b953d67defdd9fd0427f9bbe264bbb74c61b3b587f7cc20c1bf0374"
     },
     "tests/conftest.py": {
       "role": "observe",
@@ -5212,9 +5224,9 @@
     },
     "tests/unit/test_admin_assets.py": {
       "role": "observe",
-      "sha256": "74601b21a0707d1a497d85e995d1d0afb0762233101f0ba6b9a462925b9b80bd",
-      "size": 20536,
-      "normalized_sha256": "74601b21a0707d1a497d85e995d1d0afb0762233101f0ba6b9a462925b9b80bd"
+      "sha256": "00ce101e4a305b64e4db4a417af05f9be9b61d005dd26334d16f9ed0a9cd1d9f",
+      "size": 21020,
+      "normalized_sha256": "00ce101e4a305b64e4db4a417af05f9be9b61d005dd26334d16f9ed0a9cd1d9f"
     },
     "tests/unit/test_admin_auth_service.py": {
       "role": "observe",

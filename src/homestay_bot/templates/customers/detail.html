@@ -3,21 +3,34 @@
 
 {% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">{{ "返回合并复核" if return_to.startswith("/employee/customers/merge/") else "返回客户列表" }}</a>{% endblock %}
 {% block content %}
-<nav class="tab-nav" aria-label="客户档案页签">
-  <a href="/employee/customers/{{ customer.id }}?tab=overview&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "overview" %}aria-current="page"{% endif %}>客户概览</a>
-  <a href="/employee/customers/{{ customer.id }}?tab=stays&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "stays" %}aria-current="page"{% endif %}>住宿记录</a>
-  <a href="/employee/customers/{{ customer.id }}?tab=chat&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "chat" %}aria-current="page"{% endif %}>对话记录</a>
-  <a href="/employee/customers/{{ customer.id }}?tab=service&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "service" %}aria-current="page"{% endif %}>服务记录</a>
-  <a href="/employee/customers/{{ customer.id }}?tab=memory&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "memory" %}aria-current="page"{% endif %}>客户记忆</a>
-  <a href="/employee/customers/{{ customer.id }}?tab=governance&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "governance" %}aria-current="page"{% endif %}>档案治理</a>
-</nav>
-
-<section class="detail-section panel panel--padded"><p class="eyebrow">客户 #{{ customer.id }}</p><h2>基础信息</h2><dl class="detail-grid"><dt>显示名称</dt><dd>{{ customer.display_name }}</dd><dt>电话</dt><dd>{{ masked_phone }}</dd></dl></section>
+<section class="panel panel--padded profile-hero">
+  <div class="profile-hero__main">
+    <span class="profile-hero__avatar" aria-hidden="true">{{ (customer.display_name or "客")[:1] }}</span>
+    <div class="profile-hero__meta">
+      <div class="profile-hero__title"><h2>{{ customer.display_name }}</h2><span class="room-code-pill">#{{ customer.id }}</span></div>
+      <p class="muted">电话：{{ masked_phone }}</p>
+    </div>
+  </div>
+  <nav class="tab-nav" aria-label="客户档案页签">
+    <a href="/employee/customers/{{ customer.id }}?tab=overview&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "overview" %}aria-current="page"{% endif %}>客户概览</a>
+    <a href="/employee/customers/{{ customer.id }}?tab=stays&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "stays" %}aria-current="page"{% endif %}>住宿记录</a>
+    <a href="/employee/customers/{{ customer.id }}?tab=chat&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "chat" %}aria-current="page"{% endif %}>对话记录</a>
+    <a href="/employee/customers/{{ customer.id }}?tab=service&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "service" %}aria-current="page"{% endif %}>服务记录</a>
+    <a href="/employee/customers/{{ customer.id }}?tab=memory&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "memory" %}aria-current="page"{% endif %}>客户记忆</a>
+    <a href="/employee/customers/{{ customer.id }}?tab=governance&amp;return_to={{ return_to | urlencode }}" {% if active_tab == "governance" %}aria-current="page"{% endif %}>档案治理</a>
+  </nav>
+</section>
 
 {% if active_tab == "overview" %}
+<div class="detail-layout">
+<div class="detail-main">
 <section class="detail-section panel panel--padded"><h2>最新入住备注</h2><p class="long-text">{{ customer.latest_stay_note or "暂无入住记录" }}</p><p class="field-help">该内容按入住订单自动计算，不会覆盖员工备注。</p></section>
-<section class="detail-section panel panel--padded"><h2>客户标签</h2><form method="post" action="/employee/customers/{{ customer.id }}/tags" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="{{ return_to }}"><div class="tag-grid">{% for tag in tags|default([]) %}<label class="checkbox"><input type="checkbox" name="tag_ids" value="{{ tag.id }}" {% if tag.id in selected_tag_ids|default([]) %}checked{% endif %}><span>{{ tag.name }}</span></label>{% else %}<p>尚未配置客户标签。</p>{% endfor %}</div><button type="submit">保存标签</button></form></section>
 <section class="detail-section panel panel--padded"><h2>员工备注</h2><form method="post" action="/employee/customers/{{ customer.id }}/note" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="{{ return_to }}"><label>备注<textarea name="note" maxlength="2000">{{ customer.note }}</textarea></label><button type="submit">保存备注</button></form></section>
+</div>
+<div class="detail-aside">
+<section class="detail-section panel panel--padded"><h2>客户标签</h2><form method="post" action="/employee/customers/{{ customer.id }}/tags" data-unsaved-warning><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="{{ return_to }}"><div class="tag-grid">{% for tag in tags|default([]) %}<label class="checkbox"><input type="checkbox" name="tag_ids" value="{{ tag.id }}" {% if tag.id in selected_tag_ids|default([]) %}checked{% endif %}><span>{{ tag.name }}</span></label>{% else %}<p>尚未配置客户标签。</p>{% endfor %}</div><button type="submit">保存标签</button></form></section>
+</div>
+</div>
 {% endif %}
 
 {% if active_tab == "chat" %}
@@ -90,6 +103,8 @@
 {% set placeholder_summaries = ["", "无需关注事项", "无新增摘要"] %}
 {% set short_text = (summary.short_summary if summary else "")|trim %}
 {% set long_text = (summary.long_summary if summary else "")|trim %}
+<div class="detail-layout">
+<div class="detail-main">
 <section class="detail-section panel panel--padded" id="handover">
   <div class="section-heading"><h2>接手要点</h2>{% if summary %}<span class="field-help">更新于 {{ summary.updated_at | datetime_zh }}</span>{% endif %}</div>
   {% if short_text not in placeholder_summaries %}<ul class="handover-list">{% for line in short_text.split("\n") if line|trim %}<li>{{ line|trim|replace("- ", "", 1) }}</li>{% endfor %}</ul>
@@ -116,6 +131,8 @@
   <p class="field-help" id="context-refresh-status">最近一次手动整理：{% if refresh_job %}{{ ui.badge(refresh_job.status | status_zh, {"completed": "success", "failed": "danger"}.get(refresh_job.status.value, "info")) }} 排队于 {{ refresh_job.created_at | datetime_zh }}{% if refresh_job.status.value in ("completed", "failed") %}，结束于 {{ refresh_job.updated_at | datetime_zh }}{% endif %}{% if refresh_job.status.value == "failed" %}。整理失败，可稍后再点「重新整理」。{% endif %}{% else %}暂无本次作业状态{% endif %}</p>
   {% endif %}
 </section>
+</div>
+<div class="detail-aside">
 {% set active_memories = memories|default([])|selectattr("status.value", "equalto", "active")|list %}
 {% set review_memories = memories|default([])|selectattr("status.value", "in", ["candidate", "disputed"])|list %}
 {% set closed_count = (memories|default([])|length) - (active_memories|length) - (review_memories|length) %}
@@ -127,6 +144,8 @@
   {% if review_memories %}<h3>待你确认</h3><p class="field-help">同一件事客人前后说法不一致，或是旧版本留下的待审核记录。确认后才会被参考。</p><ul class="memory-list">{% for memory in review_memories %}<li><div><strong>{{ memory.statement }}</strong><small>{% if memory.source_excerpt %}原话：「{{ memory.source_excerpt }}」 · {% endif %}{{ memory.status_label }}</small></div><div class="button-row"><form method="post" action="/employee/customers/{{ customer.id }}/memories/{{ memory.id }}/approve"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="expected_version" value="{{ memory.version }}"><button type="submit">确认</button></form><form method="post" action="/employee/customers/{{ customer.id }}/memories/{{ memory.id }}/reject"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="expected_version" value="{{ memory.version }}"><button class="button button--secondary" type="submit">不对</button></form></div></li>{% endfor %}</ul>{% endif %}
   {% if memories|default([]) %}<details class="memory-edit"><summary>技术详情{% if closed_count %}（含已失效 {{ closed_count }} 条）{% endif %}</summary><div class="table-scroll"><table class="data-table"><caption class="visually-hidden">记忆技术详情</caption><thead><tr><th scope="col">内容</th><th scope="col">状态</th><th scope="col">主题</th><th scope="col">证据</th><th scope="col">置信度</th><th scope="col">状态原因</th></tr></thead><tbody>{% for memory in memories %}<tr><td>{{ memory.statement }}</td><td>{{ memory.status_label }}</td><td>{{ memory.subject_key }}</td><td>{{ memory.evidence_label }}</td><td>{{ "%.2f"|format(memory.confidence) }}</td><td>{{ memory.status_reason or "—" }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
 </section>
+</div>
+</div>
 {% endif %}
 {% if active_tab == "governance" %}
 {% if merge_suggestions|default([]) %}<section class="detail-section panel panel--padded"><h2>待审核合并</h2><ul class="clean-list">{% for suggestion in merge_suggestions %}<li><a class="record-link" href="/employee/customers/merge/{{ suggestion.id }}">复核合并建议 #{{ suggestion.id }}</a></li>{% endfor %}</ul></section>{% endif %}

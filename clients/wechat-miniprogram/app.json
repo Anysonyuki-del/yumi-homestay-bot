@@ -10,15 +10,15 @@
   "window": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "YuMi 民宿",
-    "navigationBarBackgroundColor": "#faf9f5",
-    "backgroundColor": "#faf9f5",
+    "navigationBarBackgroundColor": "#f5f2ed",
+    "backgroundColor": "#f5f2ed",
     "backgroundTextStyle": "dark"
   },
   "tabBar": {
-    "color": "#6c6a64",
-    "selectedColor": "#a9583e",
-    "backgroundColor": "#faf9f5",
-    "borderStyle": "white",
+    "color": "#58524a",
+    "selectedColor": "#c24322",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
     "list": [
       {
         "pagePath": "pages/home/index",

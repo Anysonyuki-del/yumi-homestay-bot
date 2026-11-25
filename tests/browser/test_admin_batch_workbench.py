@@ -308,12 +308,13 @@ def test_assign_requires_employee_before_confirmation(admin_client, browser, ent
     try:
         posts = load_page(page, admin_client, "/employee/tasks")
         form = page.locator('[data-default-action]')
+        dialog = page.locator("[data-confirm-dialog]")
         form.locator('.responsive-table input[value="12"]').check()
         if entry == "click":
             form.locator('[data-requires=assign]').click()
         else:
             form.evaluate("f => f.requestSubmit(f.querySelector('[data-requires=assign]'))")
-        assert page.evaluate("window.dialogs") == [] and posts == []
+        assert not dialog.is_visible() and posts == []
         assert form.get_attribute('data-submitting') is None
         assert submitted_ids(page) == ["12"]
         assert "选择" in form.locator('[data-bulk-hint=assign]').inner_text()
@@ -323,18 +324,21 @@ def test_assign_requires_employee_before_confirmation(admin_client, browser, ent
         form.locator('#bulk-assign-employee').select_option("2")
         assert form.locator('[data-bulk-hint=assign]').inner_text() == ""
         form.locator('[data-requires=assign]').click()
-        assert "合成员工" in page.evaluate("window.dialogs[0]")
+        assert dialog.is_visible()
+        assert "合成员工" in dialog.locator("[data-confirm-message]").inner_text()
+        dialog.locator("[data-confirm-cancel]").click()
+        assert not dialog.is_visible()
         form.locator('#bulk-assign-employee').select_option("")
         form.locator('[data-requires=cancel]').click()
-        assert len(page.evaluate("window.dialogs")) == 2
-        assert "取消" in page.evaluate("window.dialogs[1]")
+        assert dialog.is_visible()
+        assert "取消" in dialog.locator("[data-confirm-message]").inner_text()
+        dialog.locator("[data-confirm-cancel]").click()
     finally:
         page.close()
 
 
-@pytest.mark.parametrize("theme", ["classic", "warm"])
-def test_approval_price_groups_remain_readable_on_phone(admin_client, browser, theme):  # noqa: F811
-    """两主题真实审批页保留房价归属、直订默认说明与空房提示，不撑破手机。"""
+def test_approval_price_groups_remain_readable_on_phone(admin_client, browser):  # noqa: F811
+    """统一主题真实审批页保留房价归属、直订默认说明与空房提示，不撑破手机。"""
     from homestay_bot.integrations.hostex_client import IncomeMethod, ListingCalendarDay, Property
 
     factory = admin_client.app.state.customer_admin_service._factory
@@ -391,8 +395,6 @@ def test_approval_price_groups_remain_readable_on_phone(admin_client, browser, t
     page = browser.new_page(viewport={"width": 320, "height": 900})
     try:
         load_page(page, admin_client, "/employee/approvals/1")
-        # 这里只检查币种说明的两主题布局；切换与存储由既有同源主题测试覆盖。
-        page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
         section = page.locator('section').filter(
             has=page.get_by_role('heading', name="渠道日历参考价")
         )
@@ -414,7 +416,7 @@ def test_approval_price_groups_remain_readable_on_phone(admin_client, browser, t
         )
         preview = Path("/tmp/yumi-frontend-audit-fixes")
         preview.mkdir(exist_ok=True)
-        page.screenshot(path=str(preview / f"approval-currency-{theme}-320.png"),
+        page.screenshot(path=str(preview / "approval-currency-320.png"),
                         full_page=True, animations="disabled")
     finally:
         page.close()
@@ -452,7 +454,8 @@ def test_mixed_selection_blocks_before_dialog_or_request(admin_client, browser, 
               f.requestSubmit(f.querySelector(`[data-requires="${action}"]`));
             }""", blocked)
         page.evaluate("document.querySelector('[data-default-action]').requestSubmit()")
-        assert page.evaluate("window.dialogs") == []
+        dialog = page.locator("[data-confirm-dialog]")
+        assert not dialog.is_visible()
         assert posts == []
         assert form.get_attribute("data-submitting") is None
         keep_action = "assign" if task_page else "cancel"
@@ -462,8 +465,10 @@ def test_mixed_selection_blocks_before_dialog_or_request(admin_client, browser, 
           const f = document.querySelector('[data-default-action]');
           f.requestSubmit(f.querySelector('[data-requires="cancel"]'));
         }""")
-        assert len(page.evaluate("window.dialogs")) == 1
-        assert "1 条" in page.evaluate("window.dialogs[0]")
+        assert dialog.is_visible()
+        assert "1 条" in dialog.locator("[data-confirm-message]").inner_text()
+        dialog.locator("[data-confirm-cancel]").click()
+        assert not dialog.is_visible()
         assert form.locator("[data-confirm-count]").input_value() == "0"
         if not task_page:
             form.locator('.responsive-table input[value="11"]').check()
@@ -598,16 +603,19 @@ def test_resize_preserves_submitting_button_and_blocks_repeated_confirmation(
         form = page.locator("[data-default-action]")
         form.locator('.responsive-table input[value="12"]').check()
         page.evaluate("""() => {
-          window.prompt = (text) => { dialogs.push(text); return '1'; };
           const form = document.querySelector('[data-default-action]');
           // 在正式忙态监听之后阻止导航，保留节点检查提交中的交互状态。
           form.addEventListener('submit', (event) => event.preventDefault());
           form.requestSubmit(form.querySelector('[data-requires="cancel"]'));
         }""")
+        dialog = page.locator("[data-confirm-dialog]")
+        assert dialog.is_visible()
+        dialog.locator("[data-confirm-input]").fill("1")
+        dialog.locator("[data-confirm-ok]").click()
         button = form.locator('[data-requires="cancel"]')
         page.wait_for_function("document.querySelector('[data-requires=cancel]').disabled")
         assert button.inner_text() == "正在处理…"
-        assert len(page.evaluate("window.dialogs")) == 1
+        assert not dialog.is_visible()
         page.set_viewport_size({"width": 390, "height": 844})
         page.wait_for_function("document.querySelector('.selection-actions').hasAttribute('data-fixed-bulk')")
         assert button.is_disabled()
@@ -619,7 +627,7 @@ def test_resize_preserves_submitting_button_and_blocks_repeated_confirmation(
           form.requestSubmit(form.querySelector('[data-requires="cancel"]'));
           form.requestSubmit();
         }""")
-        assert len(page.evaluate("window.dialogs")) == 1
+        assert not dialog.is_visible()
         assert posts == []
         page.set_viewport_size({"width": 1280, "height": 900})
         page.wait_for_function("!document.querySelector('.selection-actions').hasAttribute('data-fixed-bulk')")

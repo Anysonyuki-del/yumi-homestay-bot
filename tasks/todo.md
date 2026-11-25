@@ -1,3 +1,22 @@
+# 前端 UI/UX 全面重设计（2026-11-25，基于 b26faa9 / 1.75.0）
+
+采用用户确认的 **A+E 暖调精工 SaaS（Warm Precision Hospitality）** 视觉方向（暖白亚麻画布 `#f5f2ed` + 纯白轻盈侧栏与卡片 `#ffffff` + 唯一 WCAG AA 深陶红动作色 `#c24322` + 中文系统无衬线与等宽数字），保持零构建原生态架构与严格 `EMPLOYEE_CSP`、1.75.0 四项结构守卫全部不变；只做本地实现、视觉自审与离线验收，不提交、不推送、不部署、不上传小程序或打包桌面端。
+
+- [x] 单一统一主题落地（第一轮）：删除 `src/homestay_bot/static/theme.js`、`ui.theme_selector` 宏及双主题切换，重写 `src/homestay_bot/static/app.css` 与 `templates/layouts/admin.html` / `auth.html`（`auth.html` 保持不加载 `admin.js`）
+- [x] 页内温和确认弹窗与操作轻提示：`templates/layouts/admin.html` 挂载共享原生 `<dialog data-confirm-dialog>` 与 `[data-toast-region]`，`static/admin.js` 替代原生 `window.confirm` / `window.prompt`，保留所有占位符、危险确认、手输条数校验及无脚本服务端回退
+- [x] 微信小程序 A+E 视觉统一：更新 `app.json`、`app.wxss`、6 个页面 `.wxss`、15 处 `<t-icon color>` 与 6 枚 81×81 标签栏 PNG 图标（`#c24322` / `#58524a`），完整保留原生 `<button open-type="contact">`
+- [x] 全站深度 UI/UX 页面架构重构（第二轮）：
+  - 外壳与图标：`icons.html` 新增 `arrow-right`/`clock`/`check-circle`；`layouts/admin.html` 升级 `224px` 侧栏左指示条与 `52px` 桌面顶栏功能分组面包屑（不重复 `page_title`）+ 药丸账号按钮
+  - 工作台与入住安排：`dashboard.html` / `operations.html` 视图页签迁入复合页头，工作台升级独立浮起 KPI 卡片、柔红风险高亮、`.stay-pane` 双子卡与纯 CSS `.readiness-bar` 占比条；房卡新增 `.room-code-pill`、时钟周转胶囊与 `.room-card-footer`
+  - 全站列表与工具栏：`tasks/index.html`、`properties/index.html`、`customers/index.html`、`knowledge/index.html`、`approvals/index.html` 统一复合页头计数胶囊、`.list-toolbar`、`.table-action` 按钮化操作与沉降 `.selection-actions` 坞
+  - 全站 6 个详情页双栏吸顶工作台：`tasks/detail.html`、`properties/detail.html`、`approvals/detail.html`、`complaints/edit.html`、`knowledge/detail.html`、`customers/detail.html`（含 `.profile-hero` 单字头像横幅）全部落地桌面 `1.55fr / 0.95fr` 吸顶操作区与移动单列自适应
+- [x] 两轮自审与视觉修复：第一轮修复 7 项（弹窗 `role="alert"` 冲突、`.skip-link:hover` 对比度、`.panel__header` 折行、`.first-list` 按钮层级、`.cal-m__day` 360px/44px 平衡、`--shadow-overlay` 收紧、`{n}` 标题替换）；第二轮修复 5 项（顶栏不重复 `{{ page_title }}`、房源表保留 `房号 · 房型` 同行契约、`dashboard.html` 保持 `>去处理</a>` 文本契约、清除 `.workbench-first` 顶条 / `.metric-item--risk` 侧条 / `3px` 非刻度圆角 3 项 Impeccable 告警）
+- [x] 更新 `DESIGN.md`、`PRODUCT.md`、`.impeccable/surfaces/src-homestay-bot-templates.md` 与前端浏览器/资产测试
+- [x] 最终离线验证：覆盖 458 项 pytest（含全部 `tests/browser/`、`test_admin_assets.py` 四条 1.75.0 结构守卫与 9 组路由集成测试；末次微调 `dashboard.html` 后重跑受影响 87 passed）、Node 小程序 25 passed、Ruff 通过、`git diff --check` 通过、`impeccable detect` 对 `app.css` 0 项问题、9 个本地预览页面 Playwright 实图 `status=200` 且零横向溢出
+- [x] Claude 复核（2026-11-25）：修正待办任务说明、已入住配色、详情右栏限高、无 showModal 兜底、弹窗单一结构、先处理分隔线 6 项，详见 `docs/releases/1.76.0.md`；用户回复「修完并发版」
+- [ ] 发版 1.76.0、部署、独立核对与部署记录
+- [ ] 用户另行：微信开发者工具构建 npm 并上传小程序
+
 # 前端审查修复（2026-11-25，1.75.0 候选）
 
 依据 Gemini 前端审查报告 v1（F-01–F-21）与 v2（N-01–N-06）及 Claude 复核更正。用户 2026-11-25 指示「直接做完…包括部署上线，全程不需要我确认」，按此跳过 Spec 分段确认，提交、发版、部署均已授权。

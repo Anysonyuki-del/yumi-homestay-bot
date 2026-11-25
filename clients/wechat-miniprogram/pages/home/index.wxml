@@ -34,11 +34,11 @@
   <view class="quick-nav" aria-role="navigation" aria-label="快捷导航">
     <block wx:for="{{quickNav}}" wx:key="key">
       <button wx:if="{{item.contact}}" class="contact-reset quick-nav__item" open-type="contact" session-from="home" hover-class="quick-nav__item--pressed" hover-stay-time="80" aria-label="{{item.label}}">
-        <view class="quick-nav__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#a9583e" /></view>
+        <view class="quick-nav__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#c24322" /></view>
         <text class="quick-nav__label">{{item.label}}</text>
       </button>
       <view wx:else class="quick-nav__item" data-key="{{item.key}}" bindtap="openQuickNav" hover-class="quick-nav__item--pressed" hover-stay-time="80" aria-role="button" aria-label="{{item.label}}">
-        <view class="quick-nav__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#a9583e" /></view>
+        <view class="quick-nav__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#c24322" /></view>
         <text class="quick-nav__label">{{item.label}}</text>
       </view>
     </block>
@@ -76,7 +76,7 @@
         <text class="contact__title">还有问题？直接问管家</text>
         <text class="contact__body">房型、入住安排都可以问。</text>
       </view>
-      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+      <t-icon name="chevron-right" size="40rpx" color="#58524a" />
     </button>
   </block>
 </view>

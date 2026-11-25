@@ -1,6 +1,7 @@
 {% import "components/icons.html" as icons %}
 {% import "components/ui.html" as ui %}
 {% set nav_is_admin = request.session.get("employee_role") == "admin" %}
+{% set nav_group_name = "客户与内容" if active_nav in ("customers", "complaints", "knowledge", "miniprogram") else ("系统管理" if active_nav in ("debug", "diagnostics", "settings") else "运营") %}
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -8,9 +9,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow">
     <meta name="color-scheme" content="light">
-    <meta name="theme-color" content="#f4f6fa">
+    <meta name="theme-color" content="#f5f2ed">
     <title>{% block title %}{{ page_title }} · {{ app_name }}{% endblock %}</title>
-    <script src="/static/theme.js?v={{ app_version }}"></script>
     <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
     <script src="/static/admin.js?v={{ app_version }}" defer></script>
   </head>
@@ -56,7 +56,6 @@
           {% endif %}
         </nav>
         <div class="sidebar-footer">
-          {{ ui.theme_selector("theme-drawer") }}
           <a class="account-link" href="/employee/account">{{ icons.icon("user") }}<span>账号安全</span></a>
           <span class="app-version" title="应用发布版本 {{ app_version }}">{{ app_version_label }}</span>
         </div>
@@ -65,9 +64,11 @@
       <div class="admin-workspace">
         <header class="topbar">
           <button class="icon-button drawer-trigger" type="button" aria-controls="admin-drawer" aria-expanded="false" aria-label="打开导航" data-drawer-open>{{ icons.icon("menu") }}</button>
-          <span class="topbar__brand">YuMi 民宿运营台</span>
-          {{ ui.theme_selector("theme-topbar") }}
-          <a class="topbar__account" href="/employee/account" aria-label="账号安全">{{ icons.icon("user") }}<span>账号安全</span></a>
+          <div class="topbar__title-slot">
+            <span class="topbar__brand">YuMi 民宿运营台</span>
+            <div class="topbar__crumb" aria-hidden="true"><span>YuMi 运营台</span><span class="topbar__sep">/</span><strong>{{ nav_group_name }}</strong></div>
+          </div>
+          <a class="topbar__account" href="/employee/account" aria-label="账号安全">{{ icons.icon("user", 17) }}<span>账号安全</span></a>
         </header>
         <details class="no-script-nav">
           <summary>打开页面导航</summary>
@@ -85,5 +86,6 @@
         </main>
       </div>
     </div>
+    {% include "components/confirm_dialog.html" %}
   </body>
 </html>

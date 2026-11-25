@@ -1,0 +1,18 @@
+{# 共用页内确认弹窗与操作轻提示，全站唯一结构：后台布局 include 本片段，admin.js 只查找不自建。
+   无脚本时浏览器直接走表单提交与服务端二次确认页。 #}
+<dialog class="confirm-dialog" id="yumi-confirm-dialog" aria-labelledby="yumi-confirm-title" aria-describedby="yumi-confirm-message" data-confirm-dialog>
+  <div class="confirm-dialog__body">
+    <h2 class="confirm-dialog__title" id="yumi-confirm-title" data-confirm-title>请确认本次操作</h2>
+    <p class="confirm-dialog__message" id="yumi-confirm-message" data-confirm-message></p>
+    <div class="confirm-dialog__typed" data-confirm-typed hidden>
+      <label for="yumi-confirm-input" data-confirm-typed-label>确认请输入数量</label>
+      <input id="yumi-confirm-input" type="text" inputmode="numeric" autocomplete="off" data-confirm-input>
+      <p class="field-error" data-confirm-typed-error aria-live="assertive" hidden></p>
+    </div>
+    <div class="confirm-dialog__actions">
+      <button class="button button--secondary" type="button" data-confirm-cancel>取消</button>
+      <button class="button" type="button" data-confirm-ok>确认继续</button>
+    </div>
+  </div>
+</dialog>
+<div class="toast-region" data-toast-region role="status" aria-live="polite" aria-atomic="true" hidden></div>

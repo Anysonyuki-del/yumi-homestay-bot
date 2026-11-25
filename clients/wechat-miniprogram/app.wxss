@@ -1,61 +1,65 @@
 /**
- * 全局样式：沿用后台暖色主题（DESIGN.md 暖色 v6）——奶油纸底、暖奶油分层、珊瑚动作、宋体标题。
- * 色值与后台令牌一一对应；珊瑚按钮配深墨字（白字对比度不足 4.5:1）。
- * 宋体在没有中文衬线字体的手机上回落为系统黑体，按 DESIGN.md 接受这种差异，不下载字体。
+ * 全局样式：与 Web 后台共享 A+E 暖调精工融合体系（Warm Precision Hospitality）——
+ * 清透暖白画布（#f5f2ed）、纯白细描边卡片（#ffffff / #dcd4c8）、深炭暖墨与唯一陶红动作色（#c24322）。
+ * 陶红主按钮配纯白字（对比度 5.2:1，满足 WCAG AA）；统一采用系统无衬线字栈与五档字号。
  */
 page {
-  --yumi-canvas: #faf9f5;
-  --yumi-surface: #efe9de;
-  --yumi-surface-soft: #f5f0e8;
-  --yumi-ink: #141413;
-  --yumi-body: #3d3d3a;
-  --yumi-muted: #6c6a64;
-  --yumi-hairline: #e6dfd8;
-  --yumi-primary: #cc785c;
-  --yumi-primary-pressed: #b8664b;
-  --yumi-primary-deep: #a9583e;
-  --yumi-serif: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
-  /* 五档字号（质感 Spec T4）：页面只用这五档，不再直接写数字。
-     安卓多半没有宋体、会退回黑体，标题层级主要靠这几档的字号差撑住。 */
+  --yumi-canvas: #f5f2ed;
+  --yumi-surface: #ffffff;
+  --yumi-surface-soft: #faf8f5;
+  --yumi-surface-well: #f2ede6;
+  --yumi-ink: #1e1b18;
+  --yumi-body: #2a2622;
+  --yumi-muted: #58524a;
+  --yumi-hairline: #dcd4c8;
+  --yumi-hairline-strong: #c5baa9;
+  --yumi-primary: #c24322;
+  --yumi-primary-pressed: #a73619;
+  --yumi-primary-deep: #b53a1b;
+  --yumi-primary-soft: #fbede8;
+  --yumi-primary-border: #eabeb0;
+  --yumi-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* 五档字号：各页统一沿用这五档，靠字号与字重建立清晰阅读层次。 */
   --yumi-text-caption: 24rpx;
   --yumi-text-body: 28rpx;
   --yumi-text-emphasis: 32rpx;
   --yumi-text-title: 40rpx;
-  --yumi-text-display: 52rpx;
-  /* 可点卡片按下时的反馈：轻微缩小加变淡，比单纯变淡更有触感。 */
-  --yumi-press-scale: 0.98;
+  --yumi-text-display: 48rpx;
+  /* 可点卡片按下时的克制触感反馈。 */
+  --yumi-press-scale: 0.985;
 
-  /* TDesign 主色阶换成珊瑚：7 为主色，8 为按下，1/2 为浅底。 */
-  --td-primary-color-1: #faf1ec;
-  --td-primary-color-2: #f3ddd2;
-  --td-primary-color-3: #e9c0ad;
-  --td-primary-color-4: #dda186;
-  --td-primary-color-5: #d48a6d;
-  --td-primary-color-6: #d07f63;
-  --td-primary-color-7: #cc785c;
-  --td-primary-color-8: #b8664b;
-  --td-primary-color-9: #a9583e;
-  --td-primary-color-10: #5e2f21;
-  --td-brand-color: #cc785c;
-  --td-brand-color-active: #b8664b;
-  --td-brand-color-light: #faf1ec;
-  --td-button-primary-color: #141413;
-  --td-button-primary-outline-color: #a9583e;
-  --td-button-primary-outline-border-color: #a9583e;
-  --td-bg-color-page: #faf9f5;
-  --td-text-color-primary: #141413;
-  --td-text-color-secondary: #3d3d3a;
-  --td-text-color-placeholder: #6c6a64;
-  --td-skeleton-bg-color: #efe9de;
-  --td-collapse-panel-bg-color: #f5f0e8;
-  --td-collapse-border-color: #e6dfd8;
-  --td-collapse-header-text-color: #141413;
-  --td-collapse-content-text-color: #3d3d3a;
-  --td-collapse-icon-color: #6c6a64;
-  --td-swiper-nav-fraction-bg-color: rgba(20, 20, 19, 0.55);
+  /* TDesign 主色阶统一映射至 A+E 陶红体系：7 为主色，8 为按下，1/2 为浅底。 */
+  --td-primary-color-1: #fbede8;
+  --td-primary-color-2: #f5d6cc;
+  --td-primary-color-3: #eabeb0;
+  --td-primary-color-4: #df9e89;
+  --td-primary-color-5: #d47d62;
+  --td-primary-color-6: #cb5f3e;
+  --td-primary-color-7: #c24322;
+  --td-primary-color-8: #a73619;
+  --td-primary-color-9: #8f2d14;
+  --td-primary-color-10: #5c1c0b;
+  --td-brand-color: #c24322;
+  --td-brand-color-active: #a73619;
+  --td-brand-color-light: #fbede8;
+  --td-button-primary-color: #ffffff;
+  --td-button-primary-outline-color: #b53a1b;
+  --td-button-primary-outline-border-color: #c24322;
+  --td-bg-color-page: #f5f2ed;
+  --td-text-color-primary: #1e1b18;
+  --td-text-color-secondary: #2a2622;
+  --td-text-color-placeholder: #58524a;
+  --td-skeleton-bg-color: #ebe4da;
+  --td-collapse-panel-bg-color: #ffffff;
+  --td-collapse-border-color: #dcd4c8;
+  --td-collapse-header-text-color: #1e1b18;
+  --td-collapse-content-text-color: #2a2622;
+  --td-collapse-icon-color: #58524a;
+  --td-swiper-nav-fraction-bg-color: rgba(30, 27, 24, 0.58);
 
   background: var(--yumi-canvas);
   color: var(--yumi-body);
+  font-family: var(--yumi-sans);
   font-size: var(--yumi-text-body);
   line-height: 1.6;
 }
@@ -64,33 +68,30 @@ page {
 .page { padding: 32rpx 32rpx 200rpx; box-sizing: border-box; }
 .page--with-bar { padding-bottom: 220rpx; }
 
-.serif { font-family: var(--yumi-serif); font-weight: 400; }
-.section-title { display: block; font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-title); line-height: 1.3; color: var(--yumi-ink); margin-bottom: 24rpx; }
+.serif { font-family: var(--yumi-sans); font-weight: 600; }
+.section-title { display: block; font-weight: 700; font-size: var(--yumi-text-title); line-height: 1.3; letter-spacing: -0.5rpx; color: var(--yumi-ink); margin-bottom: 24rpx; }
 .body-text { font-size: var(--yumi-text-body); line-height: 1.85; color: var(--yumi-body); white-space: pre-wrap; }
-.spec-line { font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); letter-spacing: 1rpx; }
+.spec-line { font-size: var(--yumi-text-caption); line-height: 1.5; color: var(--yumi-muted); letter-spacing: 0.5rpx; }
 
-/* 可点卡片的按下态：缩小加变淡，160ms 过渡；各页卡片加 pressable 类、hover-class 用 is-pressed。 */
-.pressable { transition: transform 160ms ease-out, opacity 160ms ease-out; }
-.pressable.is-pressed { transform: scale(var(--yumi-press-scale)); opacity: 0.85; }
+/* 可点卡片的按下态：克制缩小加轻淡，140ms 过渡。 */
+.pressable { transition: transform 140ms ease-out, opacity 140ms ease-out; }
+.pressable.is-pressed { transform: scale(var(--yumi-press-scale)); opacity: 0.88; }
 
 /* 加载、空、出错、下架共用的状态块：标题 + 说明 + 一个动作，居中排在首屏上半部。 */
-.state { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 160rpx 48rpx 0; }
-/* 嵌在页面区块里的紧凑版（如首页房间区为空），不再与上方标题隔出一大段。 */
-.state--compact { padding-top: 48rpx; }
-.state__mark { width: 96rpx; height: 2rpx; background: var(--yumi-primary); margin-bottom: 48rpx; }
-.state__title { font-family: var(--yumi-serif); font-weight: 400; font-size: var(--yumi-text-title); line-height: 1.35; color: var(--yumi-ink); }
-.state__body { margin-top: 20rpx; font-size: var(--yumi-text-body); line-height: 1.7; color: var(--yumi-muted); max-width: 520rpx; }
-.state__action { margin-top: 56rpx; }
+.state { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 140rpx 48rpx 0; }
+.state--compact { padding-top: 44rpx; }
+.state__mark { width: 72rpx; height: 4rpx; border-radius: 999rpx; background: var(--yumi-primary); margin-bottom: 36rpx; }
+.state__title { font-weight: 700; font-size: var(--yumi-text-title); line-height: 1.35; color: var(--yumi-ink); }
+.state__body { margin-top: 18rpx; font-size: var(--yumi-text-body); line-height: 1.7; color: var(--yumi-muted); max-width: 520rpx; }
+.state__action { margin-top: 48rpx; }
 
 /* 「问管家」悬浮按钮：紧凑胶囊，靠右下；只在有内容时出现。 */
-.ask-host { position: fixed; right: 32rpx; bottom: calc(40rpx + env(safe-area-inset-bottom)); z-index: 10; border-radius: 999rpx; box-shadow: 0 8rpx 28rpx rgba(20, 20, 19, 0.16); }
+.ask-host { position: fixed; right: 32rpx; bottom: calc(40rpx + env(safe-area-inset-bottom)); z-index: 10; border-radius: 999rpx; box-shadow: 0 8rpx 24rpx rgba(30, 27, 24, 0.16); }
 
-/* 原生客服按钮（open-type="contact"）去掉微信按钮的默认外观，让自绘的格子、行和条看起来与改前一致（客服按钮 Spec C1）。
-   这里只用单个类名，权重与页面类相同；页面样式表在全局之后加载，页面类写的内边距、底色和圆角会覆盖这里。
-   微信自带的 button:not([size=mini]) 会设宽度和左右 auto 外边距，权重更高，所以宽度和外边距要用同等权重单独清掉。 */
+/* 原生客服按钮（open-type="contact"）去掉微信按钮的默认外观，权重与页面类一致。 */
 .contact-reset { padding: 0; border-radius: 0; background: transparent; font-size: inherit; font-weight: inherit; line-height: inherit; text-align: left; color: inherit; }
 .contact-reset::after { border: none; }
 button.contact-reset:not([size=mini]) { width: auto; margin: 0; }
 
-/* 详情页底部操作栏：奶油底 + 细分隔线，不加阴影。 */
-.bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom)); background: var(--yumi-canvas); border-top: 1rpx solid var(--yumi-hairline); z-index: 10; }
+/* 详情页底部操作栏：纯白底 + 清晰暖石顶边。 */
+.bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom)); background: var(--yumi-surface); border-top: 1rpx solid var(--yumi-hairline); z-index: 10; }

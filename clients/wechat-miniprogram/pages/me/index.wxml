@@ -1,7 +1,7 @@
 <view class="page">
   <!-- 头部用问候开头，登录状态降为一行小字（质感 Spec T6）。 -->
   <view class="account">
-    <view class="account__avatar" aria-hidden="true"><t-icon name="user" size="56rpx" color="#a9583e" /></view>
+    <view class="account__avatar" aria-hidden="true"><t-icon name="user" size="56rpx" color="#c24322" /></view>
     <view class="account__main">
       <text class="account__title">你好，欢迎入住</text>
       <text class="account__status">{{authStatus === 'logged_in' ? '已用微信登录' : authStatus === 'unknown' ? '登录状态待确认' : authStatus === 'checking' ? '正在确认登录状态' : '微信未登录'}}</text>
@@ -21,22 +21,22 @@
   <view class="menu">
     <!-- 原生客服按钮：客服会话只能由客人点按钮直接打开（客服按钮 Spec C1）。 -->
     <button class="contact-reset menu__row" open-type="contact" session-from="me" hover-class="menu__row--pressed" hover-stay-time="80" aria-label="联系管家">
-      <t-icon name="chat" size="44rpx" color="#a9583e" />
+      <t-icon name="chat" size="44rpx" color="#c24322" />
       <text class="menu__label">联系管家</text>
-      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+      <t-icon name="chevron-right" size="40rpx" color="#58524a" />
     </button>
     <!-- 订单咨询（到店体验 Spec R4）：原来的「我的订单 · 即将开放」只弹提示，客人还要再找客服；
          改为原生客服按钮，登录前后都一次点击问管家。自助查单另议：展示订单前必须核实归属，
          不能按微信登录或客人自报手机号自动关联（三标签 Spec D1）。 -->
     <button class="contact-reset menu__row" open-type="contact" session-from="orders" hover-class="menu__row--pressed" hover-stay-time="80" aria-label="向管家查订单">
-      <t-icon name="order" size="44rpx" color="#a9583e" />
+      <t-icon name="order" size="44rpx" color="#c24322" />
       <text class="menu__label">向管家查订单</text>
-      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+      <t-icon name="chevron-right" size="40rpx" color="#58524a" />
     </button>
     <view class="menu__row" bindtap="openAbout" hover-class="menu__row--pressed" hover-stay-time="80" aria-role="button">
-      <t-icon name="shop" size="44rpx" color="#a9583e" />
+      <t-icon name="shop" size="44rpx" color="#c24322" />
       <text class="menu__label">关于本店</text>
-      <t-icon name="chevron-right" size="40rpx" color="#6c6a64" />
+      <t-icon name="chevron-right" size="40rpx" color="#58524a" />
     </view>
   </view>
 

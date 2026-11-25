@@ -5,6 +5,8 @@
    进来，处理完却被丢回全部待办，等于每处理一条就要把筛选重设一遍。 #}
 {% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">{{ "返回客户档案" if return_to.startswith("/employee/customers/") else "返回任务列表" }}</a>{% endblock %}
 {% block content %}
+<div class="detail-layout">
+<div class="detail-main">
 <section class="detail-section panel panel--padded">
   <div class="section-heading"><h2>{{ task.task_type | status_zh }}</h2>{{ ui.task_status_badge(task.status) }}</div>
   <dl class="detail-grid">
@@ -24,19 +26,6 @@
 <section class="detail-section panel panel--padded"><h2>现场照片</h2><div class="photo-list">{% for attachment in attachments %}<a href="/employee/private-files/{{ attachment.private_file_id }}" target="_blank" rel="noopener">查看照片 {{ loop.index }}</a>{% endfor %}</div></section>
 {% endif %}
 
-{% if is_admin and task.status.value in ["pending_confirmation", "pending_assignment"] %}
-<section class="detail-section panel panel--padded"><h2>确认并分派</h2><p>请核对房间、日期和执行员工后再提交；任务已有的房间与员工已回填，缺失项需要主动选择。</p>
-  <form method="post" action="/employee/tasks/{{ task.id }}/assign" data-unsaved-warning>
-    <input type="hidden" name="return_to" value="{{ return_to }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>房间<select name="property_id" required><option value="">请选择房间…</option>{% for property in properties %}<option value="{{ property.id }}"{% if task.property_id == property.id %} selected{% endif %}>{{ property.title }}</option>{% endfor %}</select></label>
-    <label>服务日期<input type="date" name="service_date" value="{{ task.service_date or '' }}" required></label>
-    <label>执行员工<select name="assigned_employee_id" required><option value="">请选择员工…</option>{% for employee in employees %}<option value="{{ employee.id }}"{% if task.assigned_employee_id == employee.id %} selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select></label>
-    <button type="submit">确认并分派任务</button>
-  </form>
-</section>
-{% endif %}
-
 {# 待检查阶段原本同时摆着保存清单、上传照片、确认可入住、标记完成四个并列提交
    入口，两个「完成」含义还不同：确认可入住改的是房态并触发凭证评估，标记完成改
    的是任务状态。这里先把「还缺什么」提到动作之前说清楚，再突出当前唯一主动作，
@@ -47,6 +36,21 @@
   <ul class="plain-list">{% for item in missing_evidence %}<li>{{ item }}</li>{% endfor %}</ul>
   <p class="field-help">补齐后「确认房间可入住」才会被接受；服务端仍会独立复核，页面提示不替代校验。</p>
   <p><a class="button button--secondary" href="#execution-evidence">去补齐检查清单／上传照片</a></p>
+</section>
+{% endif %}
+</div>
+
+<div class="detail-aside">
+{% if is_admin and task.status.value in ["pending_confirmation", "pending_assignment"] %}
+<section class="detail-section panel panel--padded"><h2>确认并分派</h2><p>请核对房间、日期和执行员工后再提交；任务已有的房间与员工已回填，缺失项需要主动选择。</p>
+  <form method="post" action="/employee/tasks/{{ task.id }}/assign" data-unsaved-warning>
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>房间<select name="property_id" required><option value="">请选择房间…</option>{% for property in properties %}<option value="{{ property.id }}"{% if task.property_id == property.id %} selected{% endif %}>{{ property.title }}</option>{% endfor %}</select></label>
+    <label>服务日期<input type="date" name="service_date" value="{{ task.service_date or '' }}" required></label>
+    <label>执行员工<select name="assigned_employee_id" required><option value="">请选择员工…</option>{% for employee in employees %}<option value="{{ employee.id }}"{% if task.assigned_employee_id == employee.id %} selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select></label>
+    <button type="submit">确认并分派任务</button>
+  </form>
 </section>
 {% endif %}
 
@@ -84,4 +88,6 @@
   {% endif %}
   {% if is_admin and task.status not in archivable_statuses %}<form method="post" action="/employee/tasks/{{ task.id }}/transition" data-confirm="确定取消这项任务吗？取消后不可撤回，任务会停止处理。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target" value="cancelled"><button class="button button--danger" type="submit">取消任务</button></form>{% endif %}
 </div></section>
+</div>
+</div>
 {% endblock %}

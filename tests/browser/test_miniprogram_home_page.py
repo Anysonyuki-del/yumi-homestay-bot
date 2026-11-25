@@ -67,9 +67,13 @@ def test_admin_page_on_phone_links_delete_to_confirmed_form(
         assert form.get_attribute("action", timeout=1000).endswith("/delete")
         assert form.get_attribute("data-confirm") == "确定删除这张横幅吗？"
 
-        # 管理员在确认框点取消：不发出删除请求。
-        page.once("dialog", lambda dialog: dialog.dismiss())
+        # 管理员在页内确认弹窗点取消：弹窗关闭且不发出删除请求。
         delete.click()
+        dialog = page.locator("[data-confirm-dialog]")
+        assert dialog.is_visible()
+        assert "确定删除这张横幅吗？" in dialog.locator("[data-confirm-message]").inner_text()
+        dialog.locator("[data-confirm-cancel]").click()
+        assert not dialog.is_visible()
         assert "POST" not in submitted
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     finally:
