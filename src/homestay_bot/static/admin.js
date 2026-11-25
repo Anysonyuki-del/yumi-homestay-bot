@@ -126,7 +126,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key !== "Tab") return;
   // 抽屉打开时把键盘焦点限制在导航内，避免落到遮罩后的页面。
-  // 抽屉里还有主题选择等表单控件；隐藏元素无法获得焦点，排除后首尾判断才准确。
+  // 隐藏元素无法获得焦点，排除后首尾判断才准确。
   const focusable = [...drawer.querySelectorAll(
     "a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]):not([type='hidden']), textarea:not([disabled])",
   )].filter((element) => element instanceof HTMLElement && element.getClientRects().length > 0);
@@ -171,7 +171,7 @@ let toastHideTimer = null;
 
 /**
  * 在页面右下角展示温和轻提示，纯文本写入并由 aria-live 播报。
- * 提示区只在 layouts/admin.html 定义一份，脚本不再自建同构节点，避免两处结构漂移。
+ * 提示区只在 components/confirm_dialog.html 定义一份，脚本不再自建同构节点，避免两处结构漂移。
  */
 function showToast(message) {
   const region = document.querySelector("[data-toast-region]");
@@ -186,8 +186,19 @@ function showToast(message) {
 }
 
 /**
- * 浏览器不支持原生 <dialog>（如 iOS 15.4 以前的 Safari）或布局缺少弹窗时的兜底：
- * 退回同步原生确认框，保证需要确认的提交不会因为打不开页内弹窗而无声失效。
+ * 页内弹窗确认后要靠 form.requestSubmit 重新提交：showModal 自 Safari 15.4、requestSubmit 自
+ * Safari 16.0 才有。缺任一项（或布局缺少弹窗）都不能走页内弹窗，否则确认后表单提交不出去。
+ */
+function canUseConfirmDialog(form) {
+  const dialog = document.querySelector("[data-confirm-dialog]");
+  return dialog instanceof HTMLElement
+    && typeof dialog.showModal === "function"
+    && typeof form.requestSubmit === "function";
+}
+
+/**
+ * 老浏览器的同步原生确认：在提交事件里直接弹出，确认即放行本次提交，不依赖 requestSubmit。
+ * 需要手输数量时用 prompt，输入必须与应处理条数一致。
  */
 function nativeConfirmFallback({ title, message, typedExpected }) {
   if (typeof typedExpected === "string" && typedExpected.length > 0) {
@@ -205,16 +216,9 @@ function openConfirmDialog({
   danger = false,
   typedExpected = null,
 }) {
-  // 弹窗结构只由 layouts/admin.html 提供；缺失或浏览器不支持 showModal 时走原生兜底。
+  // 弹窗结构只由 components/confirm_dialog.html 提供；调用方已用 canUseConfirmDialog 确认可用。
   const dialog = document.querySelector("[data-confirm-dialog]");
-  if (!(dialog instanceof HTMLElement) || typeof dialog.showModal !== "function") {
-    // 必须放到下一个任务再弹：当前仍处于 submit 事件派发中，浏览器会忽略此时的 requestSubmit，
-    // 确认后的重新提交会被静默丢弃。
-    return new Promise((resolve) => {
-      window.setTimeout(() => resolve(nativeConfirmFallback({ title, message, typedExpected })), 0);
-    });
-  }
-  if (dialog.open) return Promise.resolve(false);
+  if (!(dialog instanceof HTMLElement) || dialog.open) return Promise.resolve(false);
   const previousFocus = document.activeElement;
   const titleEl = dialog.querySelector("[data-confirm-title]");
   const messageEl = dialog.querySelector("[data-confirm-message]");
@@ -340,60 +344,88 @@ document.querySelectorAll("form").forEach((form) => {
 
     if (!isTyped && !actionConfirm && !hasOtherDirtyForm) return;
 
-    event.preventDefault();
-    event.stopImmediatePropagation();
-
-    const runConfirmFlow = async () => {
-      if (isTyped && submitter) {
-        const selected = selectedTaskIds(form);
-        const field = form.querySelector("[data-confirm-count]");
-        if (field instanceof HTMLInputElement) field.value = "0";
-        if (!selected.size) {
-          showToast("请先勾选要处理的任务。");
-          return;
-        }
-        const detail = (submitter.getAttribute("data-typed-confirm-detail")
-          || "即将处理 {n} 条任务，此操作不可恢复。").replaceAll("{n}", () => String(selected.size));
-        const ok = await openConfirmDialog({
-          title: (submitter.getAttribute("data-typed-confirm") || "确认不可逆操作")
-            .replaceAll("{n}", () => String(selected.size)),
-          message: detail,
-          confirmLabel: "确认执行",
-          danger: true,
-          typedExpected: String(selected.size),
-        });
-        if (!ok) return;
-        if (field instanceof HTMLInputElement) field.value = String(selected.size);
-      } else if (actionConfirm) {
-        const ok = await openConfirmDialog({
-          title: actionConfirm.danger ? "请确认敏感操作" : "请确认本次操作",
-          message: actionConfirm.message,
-          confirmLabel: actionConfirm.danger ? "确认执行" : "确认继续",
-          danger: actionConfirm.danger,
-        });
-        if (!ok) return;
+    // 先收齐本次提交需要的确认步骤，再按浏览器能力选择页内弹窗或同步原生确认，两条路径共用一份步骤。
+    const steps = [];
+    const countField = form.querySelector("[data-confirm-count]");
+    let typedCount = null;
+    if (isTyped && submitter) {
+      const selected = selectedTaskIds(form);
+      // 每次都先清零，取消或失败时绝不沿用上次确认过的数字。
+      if (countField instanceof HTMLInputElement) countField.value = "0";
+      if (!selected.size) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        showToast("请先勾选要处理的任务。");
+        return;
       }
+      typedCount = selected.size;
+      const detail = (submitter.getAttribute("data-typed-confirm-detail")
+        || "即将处理 {n} 条任务，此操作不可恢复。").replaceAll("{n}", () => String(typedCount));
+      steps.push({
+        title: (submitter.getAttribute("data-typed-confirm") || "确认不可逆操作")
+          .replaceAll("{n}", () => String(typedCount)),
+        message: detail,
+        confirmLabel: "确认执行",
+        danger: true,
+        typedExpected: String(typedCount),
+      });
+    } else if (actionConfirm) {
+      steps.push({
+        title: actionConfirm.danger ? "请确认敏感操作" : "请确认本次操作",
+        message: actionConfirm.message,
+        confirmLabel: actionConfirm.danger ? "确认执行" : "确认继续",
+        danger: actionConfirm.danger,
+      });
+    }
+    if (hasOtherDirtyForm) {
+      steps.push({
+        title: "当前页面还有未保存内容",
+        message: "继续提交将丢弃本页其它表单尚未保存的修改。确定继续吗？",
+        confirmLabel: "丢弃并继续",
+        danger: true,
+      });
+    }
 
-      if (hasOtherDirtyForm) {
-        const discardOk = await openConfirmDialog({
-          title: "当前页面还有未保存内容",
-          message: "继续提交将丢弃本页其它表单尚未保存的修改。确定继续吗？",
-          confirmLabel: "丢弃并继续",
-          danger: true,
-        });
-        if (!discardOk) return;
-        dirtyForms.clear();
+    // 全部确认通过后才回写确认数量与按钮确认值；任何一步取消都保持未确认状态。
+    const applyConfirmed = () => {
+      if (typedCount !== null && countField instanceof HTMLInputElement) {
+        countField.value = String(typedCount);
       }
-
+      if (hasOtherDirtyForm) dirtyForms.clear();
       if (submitter instanceof HTMLButtonElement) {
         const accepted = submitter.getAttribute("data-confirm-accept-value");
         if (accepted !== null) submitter.value = accepted;
       }
+    };
 
+    if (!canUseConfirmDialog(form)) {
+      // 同步确认后直接放行本次提交事件：浏览器在事件结束后才收集表单数据，回写的值会被提交。
+      if (steps.every((step) => nativeConfirmFallback(step))) {
+        applyConfirmed();
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    const runConfirmFlow = async () => {
+      for (const step of steps) {
+        if (!(await openConfirmDialog(step))) return;
+      }
+      applyConfirmed();
       form.dataset.dialogConfirmed = "true";
-      form.requestSubmit(submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement
-        ? submitter
-        : undefined);
+      try {
+        form.requestSubmit(submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement
+          ? submitter
+          : undefined);
+      } finally {
+        // requestSubmit 同步派发提交事件；无论成功、抛错还是被约束校验拦下，都不能把放行标记留到下一次。
+        delete form.dataset.dialogConfirmed;
+      }
     };
 
     void runConfirmFlow();

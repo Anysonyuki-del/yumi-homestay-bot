@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-25T01:51:29Z",
+  "updated_at": "2026-11-25T02:27:29Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -77,9 +77,9 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "01e98f66bc3b97fe3354145f60cd33101deec273202e94300ac15e0601cc94d2",
-      "size": 208529,
-      "normalized_sha256": "01e98f66bc3b97fe3354145f60cd33101deec273202e94300ac15e0601cc94d2"
+      "sha256": "a42fc926670ae211e32ddf0a27c5764d8fe21a84d96e407a36d64e7d373bc931",
+      "size": 209644,
+      "normalized_sha256": "a42fc926670ae211e32ddf0a27c5764d8fe21a84d96e407a36d64e7d373bc931"
     },
     "DESIGN.md": {
       "role": "index",
@@ -125,9 +125,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "90c416bb54a4f26c8d13d273af23fc96b42b8aea2e6cdd98f18b3914e19f52ba",
-      "size": 400800,
-      "normalized_sha256": "90c416bb54a4f26c8d13d273af23fc96b42b8aea2e6cdd98f18b3914e19f52ba"
+      "sha256": "8337575525c63898aa34cbab6eb52cb2e79e2222dcff35be33905dbba8d44354",
+      "size": 402418,
+      "normalized_sha256": "8337575525c63898aa34cbab6eb52cb2e79e2222dcff35be33905dbba8d44354"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1502,9 +1502,15 @@
     },
     "docs/releases/1.76.0.md": {
       "role": "index",
-      "sha256": "64d5071c1938d8fdb41039ae165a61eeefa43fd59f400f5fd86610a8e3d7233c",
-      "size": 10163,
-      "normalized_sha256": "64d5071c1938d8fdb41039ae165a61eeefa43fd59f400f5fd86610a8e3d7233c"
+      "sha256": "7480b61a45db14228c29a049d2ec01ae032cc5b9f10ce952593fe32b1580b411",
+      "size": 10812,
+      "normalized_sha256": "7480b61a45db14228c29a049d2ec01ae032cc5b9f10ce952593fe32b1580b411"
+    },
+    "docs/releases/1.76.1.md": {
+      "role": "index",
+      "sha256": "ce306fbb3589dfc0fedc8b954ba84b130e0021fe59b5740cb58797d80b60b34a",
+      "size": 6575,
+      "normalized_sha256": "ce306fbb3589dfc0fedc8b954ba84b130e0021fe59b5740cb58797d80b60b34a"
     },
     "docs/releases/README.md": {
       "role": "index",
@@ -2808,11 +2814,23 @@
       "size": 7991,
       "normalized_sha256": "4b54083fa0e2290072e767e1bb77257801711e8ea6cfe7a85d426efe50d3ba6d"
     },
+    "docs/reviews/2026-11-25_claude-to-gemini-1.76.0-review-handoff.md": {
+      "role": "index",
+      "sha256": "326ca90b9733a0afb3f7652690e6e6977b98eaa1147bf3391c26fab68f01d382",
+      "size": 8704,
+      "normalized_sha256": "326ca90b9733a0afb3f7652690e6e6977b98eaa1147bf3391c26fab68f01d382"
+    },
+    "docs/reviews/2026-11-25_gemini-to-claude-1.76.0-review.md": {
+      "role": "index",
+      "sha256": "d0b6fe367e94b06398b25f05d0b66118276adcb110f4c253901eb6c27664ba8f",
+      "size": 14622,
+      "normalized_sha256": "d0b6fe367e94b06398b25f05d0b66118276adcb110f4c253901eb6c27664ba8f"
+    },
     "docs/reviews/README.md": {
       "role": "index",
-      "sha256": "686dc7f61e2742f50f8b4434cb467a16fb320bce20b27aea210f0897702548f5",
-      "size": 3679,
-      "normalized_sha256": "686dc7f61e2742f50f8b4434cb467a16fb320bce20b27aea210f0897702548f5"
+      "sha256": "a3a53b90704a10645dd81d965c70b6b31fc9e6f1eff39d310e03e9582c343bac",
+      "size": 3973,
+      "normalized_sha256": "a3a53b90704a10645dd81d965c70b6b31fc9e6f1eff39d310e03e9582c343bac"
     },
     "docs/specs/2026-09-09_room-calendar-visual-optimization-spec.md": {
       "role": "index",
@@ -3544,9 +3562,9 @@
     },
     "pyproject.toml": {
       "role": "index",
-      "sha256": "45639a38e89cd188db746122ca6382bfefbf1fed910f9db4392173f46f06e7d3",
+      "sha256": "7fabe680f5699f566be0ead58a3cdf5234f8ace30b147ff4f134b4802af39f87",
       "size": 1284,
-      "normalized_sha256": "45639a38e89cd188db746122ca6382bfefbf1fed910f9db4392173f46f06e7d3"
+      "normalized_sha256": "7fabe680f5699f566be0ead58a3cdf5234f8ace30b147ff4f134b4802af39f87"
     },
     "requirements.lock": {
       "role": "index",
@@ -4420,15 +4438,15 @@
     },
     "src/homestay_bot/static/admin.js": {
       "role": "index",
-      "sha256": "f0d3b3346162235a4d9d3baccdd60c04d0793f7839517204aa0818a66de4998b",
-      "size": 37113,
-      "normalized_sha256": "f0d3b3346162235a4d9d3baccdd60c04d0793f7839517204aa0818a66de4998b"
+      "sha256": "a2754143defac007242bbddb19c23ca39956a3535f1418408c251a17d48f5803",
+      "size": 38305,
+      "normalized_sha256": "a2754143defac007242bbddb19c23ca39956a3535f1418408c251a17d48f5803"
     },
     "src/homestay_bot/static/app.css": {
       "role": "index",
-      "sha256": "9125ba4adf8241de9776f9f038c3921bcd683e439ce5066cff756fa9f48eeac7",
-      "size": 66212,
-      "normalized_sha256": "9125ba4adf8241de9776f9f038c3921bcd683e439ce5066cff756fa9f48eeac7"
+      "sha256": "94e7018b9b5b7f67025a1b3d034ea54ed1fae2896206c2e2115e0cb27d2d41e8",
+      "size": 66548,
+      "normalized_sha256": "94e7018b9b5b7f67025a1b3d034ea54ed1fae2896206c2e2115e0cb27d2d41e8"
     },
     "src/homestay_bot/static/theme.js": {
       "role": "index",
@@ -4714,9 +4732,9 @@
     },
     "tasks/todo.md": {
       "role": "index",
-      "sha256": "3f3829c14bf68104395349870f6a6ddc833ff730a8fa9bf61b65e283f3bde3f3",
-      "size": 165809,
-      "normalized_sha256": "3f3829c14bf68104395349870f6a6ddc833ff730a8fa9bf61b65e283f3bde3f3"
+      "sha256": "35a2c5ad371d6165cd579dac83c2cc82421bcf52b01f8149e3f07d7b24c7fcf1",
+      "size": 166213,
+      "normalized_sha256": "35a2c5ad371d6165cd579dac83c2cc82421bcf52b01f8149e3f07d7b24c7fcf1"
     },
     "tests/__init__.py": {
       "role": "observe",
@@ -4738,9 +4756,9 @@
     },
     "tests/browser/test_admin_interactions.py": {
       "role": "observe",
-      "sha256": "01da78c6a4278b524961273bb30ebdc5d3146bd3214fada3d0df6ec73ebe7061",
-      "size": 71218,
-      "normalized_sha256": "01da78c6a4278b524961273bb30ebdc5d3146bd3214fada3d0df6ec73ebe7061"
+      "sha256": "466e1c2cb8e8f5bf49cfd18a8c1724d125086868702ede099694ee25f680a5a2",
+      "size": 74401,
+      "normalized_sha256": "466e1c2cb8e8f5bf49cfd18a8c1724d125086868702ede099694ee25f680a5a2"
     },
     "tests/browser/test_admin_theme.py": {
       "role": "observe",
@@ -5224,9 +5242,9 @@
     },
     "tests/unit/test_admin_assets.py": {
       "role": "observe",
-      "sha256": "00ce101e4a305b64e4db4a417af05f9be9b61d005dd26334d16f9ed0a9cd1d9f",
-      "size": 21020,
-      "normalized_sha256": "00ce101e4a305b64e4db4a417af05f9be9b61d005dd26334d16f9ed0a9cd1d9f"
+      "sha256": "d40a84f4527217c7ba7fad72da96990302ddb08fe9c2826244f5bc31b30cb817",
+      "size": 21217,
+      "normalized_sha256": "d40a84f4527217c7ba7fad72da96990302ddb08fe9c2826244f5bc31b30cb817"
     },
     "tests/unit/test_admin_auth_service.py": {
       "role": "observe",

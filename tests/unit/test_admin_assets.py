@@ -452,5 +452,9 @@ def test_status_colors_never_borrow_the_action_color() -> None:
     css = (ASSET_ROOT / "static/app.css").read_text()
     rules = re.findall(r"([^{}]*\.(?:status-dot|readiness-bar__seg)--[\w-]+[^{}]*)\{([^}]*)\}", css)
     assert rules, "没有找到状态色规则，选择器可能改名，需同步本守卫"
-    borrowed = [sel.strip() for sel, body in rules if "var(--primary" in body]
+    # --focus 与主色同值、--link 是同色系，借用它们等于换名借用主色。
+    action_tokens = ("var(--primary", "var(--focus", "var(--link")
+    borrowed = [
+        sel.strip() for sel, body in rules if any(token in body for token in action_tokens)
+    ]
     assert not borrowed, f"状态色借用了主操作色：{borrowed}"

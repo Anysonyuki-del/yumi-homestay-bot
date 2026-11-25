@@ -368,7 +368,8 @@ tbody tr:last-child td { border-bottom: 0; }
 .first-list__why--urgent { color: var(--danger); font-weight: 650; }
 .first-list .button { padding: 6px 14px; min-height: 36px; border-color: var(--primary); color: var(--on-primary); background: var(--primary); box-shadow: none; white-space: nowrap; }
 .first-list .button:hover { border-color: var(--primary-hover); color: var(--on-primary-hover); background: var(--primary-hover); }
-@media (max-width: 620px) { .first-list li { grid-template-columns: minmax(0, 1fr); margin-inline: 0; padding: 12px 0; } }
+/* 手机端行贴齐卡片内容边；逾期行有淡红底色，补左右内边距，底色才不会紧贴文字。 */
+@media (max-width: 620px) { .first-list li { grid-template-columns: minmax(0, 1fr); margin-inline: 0; padding: 12px 0; } .first-list li.first-list__item--urgent { padding-inline: 10px; } }
 
 .filter-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 10px; color: var(--muted); font-size: var(--t-sm); }
 .filter-disclosure { margin-bottom: 14px; }
@@ -619,8 +620,8 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   .topbar__crumb { display: inline-flex; }
   .dashboard-grid { grid-template-columns: minmax(0, 1.65fr) minmax(290px, .78fr); }
   .detail-layout { grid-template-columns: minmax(0, 1.55fr) minmax(300px, .95fr); align-items: start; gap: 20px; }
-  /* 右栏比视口高时，吸顶会把下半部分压到左栏滚完才露出；限高后在栏内滚动，矮屏也能直接操作到底部表单。 */
-  .detail-aside { position: sticky; top: calc(var(--topbar-height) + 18px); max-height: calc(100vh - var(--topbar-height) - 28px); padding: 4px; margin: -4px; overflow-y: auto; overscroll-behavior: contain; }
+  /* 右栏比视口高时，吸顶会把下半部分压到左栏滚完才露出；限高后在栏内滚动，矮屏也能直接操作到底部表单。dvh 随平板地址栏伸缩取可见高度，不认识 dvh 的浏览器沿用前一行 vh。 */
+  .detail-aside { position: sticky; top: calc(var(--topbar-height) + 18px); max-height: calc(100vh - var(--topbar-height) - 28px); max-height: calc(100dvh - var(--topbar-height) - 28px); padding: 4px; margin: -4px; overflow-y: auto; overscroll-behavior: contain; }
   .filter-toolbar { grid-template-columns: repeat(5, minmax(120px, 1fr)) auto; }
   .filter-toolbar--compact { grid-template-columns: minmax(180px, 260px) auto; justify-content: start; }
 }

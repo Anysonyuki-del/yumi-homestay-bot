@@ -1428,14 +1428,30 @@ def test_cancelling_the_send_confirm_keeps_the_edit(browser: Browser) -> None:
     page.close()
 
 
+# Safari < 15.4 两样都缺；Safari 15.4–15.6 有 showModal 但没有 requestSubmit。
+_OLD_SAFARI_GAPS = {
+    "no-dialog-no-requestsubmit": (
+        "delete HTMLDialogElement.prototype.showModal;"
+        "delete HTMLFormElement.prototype.requestSubmit;"
+    ),
+    "no-requestsubmit": "delete HTMLFormElement.prototype.requestSubmit;",
+}
+
+
+@pytest.mark.parametrize("gap", sorted(_OLD_SAFARI_GAPS))
 @pytest.mark.parametrize("accept", [True, False])
 def test_browsers_without_dialog_fall_back_to_native_confirm(
-    browser: Browser, accept: bool,
+    browser: Browser, accept: bool, gap: str,
 ) -> None:
-    """不支持 showModal 的浏览器（iOS 15.4 以前）退回原生确认框：确认则带标记提交，取消则不提交。"""
+    """页内弹窗所需 API 不全的老 Safari 退回同步原生确认框。
+
+    确认则当场带标记提交，取消则不提交，并且不得留下放行状态：再点一次必须重新确认。
+    """
     page = browser.new_page(viewport={"width": 1280, "height": 900})
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
     _load_complaint_page(page)
-    page.evaluate("() => { delete HTMLDialogElement.prototype.showModal; }")
+    page.evaluate(f"() => {{ {_OLD_SAFARI_GAPS[gap]} }}")
     page.fill('textarea[name="draft"]', "老手机上的回复")
     asked: list[str] = []
 
@@ -1445,7 +1461,6 @@ def test_browsers_without_dialog_fall_back_to_native_confirm(
 
     page.on("dialog", answer)
     page.click('button[formaction$="/send"]')
-    page.wait_for_timeout(100)
     assert len(asked) == 1 and "老手机上的回复" in asked[0]
     assert page.locator("[data-confirm-dialog]").is_hidden()
     submitted = page.evaluate("() => window.submitted")
@@ -1453,6 +1468,68 @@ def test_browsers_without_dialog_fall_back_to_native_confirm(
         assert submitted["draft"] == "老手机上的回复" and submitted["confirmed"] == "1"
     else:
         assert submitted is None
+        page.click('button[formaction$="/send"]')
+        assert len(asked) == 2, "取消后再次提交必须重新确认"
+        assert page.evaluate("() => window.submitted") is None
+    assert errors == []
+    page.close()
+
+
+def test_failed_resubmit_never_leaves_the_form_pre_confirmed(browser: Browser) -> None:
+    """页内弹窗确认后若重新提交没发出去，表单不得留着放行标记：下次提交必须重新弹确认。"""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_complaint_page(page)
+    page.evaluate(
+        """() => {
+          HTMLFormElement.prototype.requestSubmit = () => { throw new Error("模拟提交失败"); };
+        }"""
+    )
+    page.fill('textarea[name="draft"]', "第一次没发出去")
+    dialog = page.locator("[data-confirm-dialog]")
+    page.click('button[formaction$="/send"]')
+    dialog.locator("[data-confirm-ok]").click()
+    assert page.evaluate("() => window.submitted") is None
+    page.fill('textarea[name="draft"]', "改过的内容")
+    page.click('button[formaction$="/send"]')
+    assert dialog.is_visible(), "改过内容再提交必须重新确认"
+    assert "改过的内容" in dialog.locator("[data-confirm-message]").inner_text()
+    assert page.evaluate("() => window.submitted") is None
+    page.close()
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected_count", "passes"),
+    [("1", "1", True), ("2", "0", False), (None, "0", False)],
+)
+def test_old_browser_typed_confirm_uses_native_prompt(
+    browser: Browser, typed: str | None, expected_count: str, passes: bool,
+) -> None:
+    """老 Safari 上不可逆批量操作改用原生输入框手输数量。
+
+    输对才放行并回写数量；输错或取消都不提交，数量保持 0。
+    """
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _load_selection_page(page)
+    page.evaluate(
+        f"""() => {{
+          {_OLD_SAFARI_GAPS["no-dialog-no-requestsubmit"]}
+          window.passed = null;
+          document.getElementById("selection-form").addEventListener(
+            "submit", () => {{ window.passed = true; }});
+        }}"""
+    )
+    prompts: list[str] = []
+
+    def answer(dialog) -> None:
+        prompts.append(dialog.type)
+        dialog.accept(typed) if typed is not None else dialog.dismiss()
+
+    page.on("dialog", answer)
+    page.check('.responsive-table input[name="task_ids"][value="11"]')
+    page.click("button[data-typed-confirm]")
+    assert prompts == ["prompt"]
+    assert page.input_value("[data-confirm-count]") == expected_count
+    assert page.evaluate("() => window.passed") is (True if passes else None)
     page.close()
 
 
