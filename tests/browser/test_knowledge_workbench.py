@@ -168,9 +168,13 @@ class _Probe:
     def __init__(self, instance, site, *, width: int = 1440, java_script_enabled: bool = True):
         origin, cookies, _, _ = site
         self.origin = origin
+        # 启用减动效偏好（匹配 app.css 的 prefers-reduced-motion 规则，关闭 smooth 滚动）：
+        # 在 Linux CI 无中文字体环境下，无脚本新建页表单更高、提交按钮落到视口下方，
+        # scroll-behavior: smooth 会让 Playwright 点击前的稳定性检测与无脚本滚动竞态并超时。
         self.context = instance.new_context(
             viewport={"width": width, "height": 900},
             java_script_enabled=java_script_enabled,
+            reduced_motion="reduce",
         )
         self.context.add_cookies(cookies)
         self.context.add_init_script(_CSP_PROBE)
