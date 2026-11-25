@@ -143,7 +143,8 @@ class RuntimeConfigTester:
         if snapshot.embedding_enabled:
             providers = (*providers, await self._test_embedding(snapshot))
         others_succeeded = all(item.succeeded for item in providers if item is not wecom)
-        if others_succeeded and self._only_trusted_ip_missing(wecom):
+        same_secret = snapshot.wecom_kf_secret == snapshot.wecom_agent_secret
+        if others_succeeded and self._only_trusted_ip_missing(wecom, same_secret=same_secret):
             # 新建的企业微信应用要先有回调地址才能配可信 IP，而回调地址校验只认已生效配置；
             # 不放行就永远换不过去（企业微信迁移 Spec M1）。企业微信分项仍如实记为失败。
             # ponytail: 60020 可能在获取 token 时就返回，此时 Secret 未被验证；填错要等配好
@@ -161,20 +162,34 @@ class RuntimeConfigTester:
         )
 
     @staticmethod
-    def _only_trusted_ip_missing(wecom: RuntimeConfigProviderTestResult) -> bool:
-        """企业微信回调自检通过，且每一项接口检查都只因可信 IP 未配置而失败。"""
+    def _only_trusted_ip_missing(
+        wecom: RuntimeConfigProviderTestResult, *, same_secret: bool
+    ) -> bool:
+        """企业微信回调自检通过，且每一项接口检查都只因可信 IP 未配置而失败。
+
+        例外：客服与应用用同一个 Secret、应用检查只差可信 IP 时，客服检查的一般接口错误
+        也视为待配。企业微信要求应用先配好可信 IP 才能设为「微信客服可调用接口的应用」，
+        授权前客服接口必然报无权限，而不是 60020（2026-11-26 迁移实测）。
+        """
         api_checks = [item for item in wecom.checks if item.check != "callback"]
         callback_ok = any(
             item.check == "callback" and item.succeeded for item in wecom.checks
         )
+
+        def pending(item: RuntimeConfigCheckTestResult) -> bool:
+            """单项检查是否属于「配好可信 IP 后才可能通过」的失败。"""
+            if item.error_code == "wecom_trusted_ip_required":
+                return True
+            # ponytail: 不区分「未授权客服接口」与其他一般接口错误，因为测试结果只存映射后的
+            # 错误码；若改为保留企业微信原始 errcode，可收紧到具体的无权限错误码。
+            # 客服检查走到接口层才报错，说明这个 Secret 已换到 token；应用检查仍须只差可信 IP。
+            return same_secret and item.check == "kf" and item.error_code == "wecom_api_failed"
+
         return (
             not wecom.succeeded
             and callback_ok
             and bool(api_checks)
-            and all(
-                not item.succeeded and item.error_code == "wecom_trusted_ip_required"
-                for item in api_checks
-            )
+            and all(not item.succeeded and pending(item) for item in api_checks)
         )
 
     async def _test_deepseek(

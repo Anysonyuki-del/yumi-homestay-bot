@@ -765,6 +765,26 @@ async def test_wecom_failing_only_on_trusted_ip_is_allowed_to_activate_with_mark
     assert safe["providers"]["wecom"]["succeeded"] is False
 
 
+def _kf_not_authorized_error() -> WeComApiError:
+    """应用还不是「微信客服可调用接口的应用」时客服接口的返回（非可信 IP、非认证错误码）。"""
+    return WeComApiError(95000, "api forbidden")
+
+
+@pytest.mark.asyncio
+async def test_kf_not_yet_authorized_with_same_secret_is_treated_as_ip_pending() -> None:
+    """同一个 Secret 下应用只差 IP、客服还没授权接口时放行（企业微信要求先配 IP 才能授权客服）。"""
+    tester, *_ = build_tester(
+        wecom=PerCheckWeComClientStub(_kf_not_authorized_error(), _ip_error())
+    )
+
+    result = await tester.test(
+        build_snapshot(wecom_kf_secret="app-secret", wecom_agent_secret="app-secret")
+    )
+
+    assert result.succeeded is True
+    assert result.to_safe_dict()["wecom_trusted_ip_pending"] is True
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("wecom", "snapshot_overrides"),
@@ -775,6 +795,8 @@ async def test_wecom_failing_only_on_trusted_ip_is_allowed_to_activate_with_mark
         (PerCheckWeComClientStub(None, _ip_error()), {}),
         # 只差 IP，但回调参数本地自检失败：回调地址校验必然失败，不能放行。
         (WeComClientStub(_ip_error()), {"wecom_encoding_aes_key": "!" * 43}),
+        # 客服接口报一般错误，但客服与应用用的不是同一个 Secret：客服 Secret 未经任何验证。
+        (PerCheckWeComClientStub(_kf_not_authorized_error(), _ip_error()), {}),
     ],
 )
 async def test_trusted_ip_allowance_rejects_any_other_wecom_problem(
