@@ -1,0 +1,23 @@
+{% extends "layouts/admin.html" %}
+{% import "components/ui.html" as ui %}
+{% from "knowledge/scope_fields.html" import knowledge_fields %}
+{% from "knowledge/nav.html" import category_datalist %}
+{# 独立新建页（2026-11-25 知识库重构 Spec F4.1）：提交失败时原地重绘并保留全部输入与多房间勾选，
+   错误就地显示在表单上方，顶层布局不重复渲染同一条 error。 #}
+{% set layout_error_inline = true %}
+
+{% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">返回知识列表</a>{% endblock %}
+{% block content %}
+<section class="panel panel--padded detail-section kb-form-panel" aria-labelledby="knowledge-new-title">
+  <div class="section-heading"><div><p class="eyebrow">仅管理员</p><h2 id="knowledge-new-title">填写知识内容</h2></div></div>
+  <p class="help-text">先选这条知识归谁：全店通用、指定房间（可多选）或店外周边。英文可以先不填，会保存为停用草稿，补全英文后再启用。</p>
+  {% if error %}<p class="alert alert--danger" role="alert" id="knowledge-create-error" tabindex="-1">{{ error }}（已保留你刚才填写的内容，改正后重新提交即可。）</p>{% endif %}
+  {{ category_datalist(categories) }}
+  <form method="post" action="/employee/knowledge" data-unsaved-warning data-kb-scope-form>
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {{ knowledge_fields(values, properties, "new") }}
+    <button type="submit">保存知识</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,21 +1,35 @@
 {% import "components/ui.html" as ui %}
+{% from "knowledge/nav.html" import room_label %}
 {# 知识条目的真实适用状态（F04）：启停、审核范围、有效期和条件词分开展示。
    只读已持久化字段，不重算检索逻辑；是否用于某次回答仍由 KnowledgeService 按
-   客人问的日期、房间和条件词判断，这里的有效期文字因此写成「按所问日期判断」。 #}
-{% macro entry_state(entry, properties) %}
-{% set scope_labels = {"unreviewed": "范围待审核", "global": "本店通用", "property": "指定房间", "public": "店外公开知识"} %}
+   客人问的日期、房间和条件词判断，这里的有效期文字因此写成「按所问日期判断」。
+   范围徽章用独立语义色（知识库重构 Spec F3），不借用主操作色。 #}
+{% macro entry_state(entry, properties, image_count=0) %}
 <div class="entry-state">
   {% if not entry.is_enabled %}{{ ui.badge("已停用", "neutral") }}
   {% elif entry.scope == "unreviewed" %}{{ ui.badge("已启用 · 范围待审核，暂不参与回答", "warning") }}
   {% else %}{{ ui.badge("已启用", "success") }}{% endif %}
-  {% if entry.scope != "unreviewed" %}
-    {% if entry.scope == "property" %}{% set owner = properties | selectattr("id", "equalto", entry.property_id) | first %}
-      {{ ui.badge("指定房间：" ~ (owner.title if owner else "房间 " ~ entry.property_id), "info") }}
-    {% else %}{{ ui.badge(scope_labels.get(entry.scope, entry.scope), "info") }}{% endif %}
-  {% endif %}
-  {% if entry.show_in_miniprogram %}{{ ui.badge("小程序展示", "info") }}{% endif %}
+  {% if entry.scope == "unreviewed" %}{% if not entry.is_enabled %}{{ ui.badge("范围待审核", "warning") }}{% endif %}
+  {% elif entry.scope == "property" %}{% set owner = properties | selectattr("id", "equalto", entry.property_id) | first %}
+    {{ ui.badge(room_label(owner) if owner else "房间 " ~ entry.property_id, "scope-room") }}
+  {% elif entry.scope == "global" %}{{ ui.badge("全店通用", "scope-global") }}
+  {% elif entry.scope == "public" %}{{ ui.badge("店外周边", "scope-public") }}{% endif %}
+  {% if entry.show_in_miniprogram %}{{ ui.badge("小程序指南", "scope-mini") }}{% endif %}
+  {% if not (entry.question_en or "").strip() or not (entry.answer_en or "").strip() %}{{ ui.badge("缺英文", "warning") }}{% endif %}
+  {% if image_count %}{{ ui.badge("配图 " ~ image_count ~ " 张", "neutral") }}{% endif %}
 </div>
 {% if entry.valid_from or entry.valid_until %}<p class="field-help">有效期：{{ entry.valid_from or "不限" }} 至 {{ entry.valid_until or "不限" }}（按客人所问的日期判断是否适用）</p>{% endif %}
 {% if entry.trigger_any %}<p class="field-help">附加条件词：{{ entry.trigger_any | join("、") }}</p>{% endif %}
 {% if entry.trigger_exclude %}<p class="field-help">排除词：{{ entry.trigger_exclude | join("、") }}</p>{% endif %}
+{% endmacro %}
+
+{# 快捷定界（Spec §3.2(3)）：只给范围待审核的条目。启用中的条目定界后会立即参与回答，
+   确认文案按目标范围与是否勾选小程序区分；停用条目定界不影响客人，不弹确认。 #}
+{% macro scope_shortcuts(entry, csrf_token, return_to) %}
+{% if entry.scope == "unreviewed" %}
+{% if entry.show_in_miniprogram %}{% set global_confirm = "这条知识处于启用状态且已勾选小程序展示，设为全店通用后会立即参与机器人回答并显示在小程序入住指南，确认继续吗？" %}
+{% else %}{% set global_confirm = "这条知识处于启用状态，设为全店通用后会立即参与机器人回答，确认继续吗？" %}{% endif %}
+<form method="post" action="/employee/knowledge/{{ entry.id }}/scope"{% if entry.is_enabled %} data-confirm="{{ global_confirm }}"{% endif %}><input type="hidden" name="scope" value="global"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">设为全店通用</button></form>
+<form method="post" action="/employee/knowledge/{{ entry.id }}/scope"{% if entry.is_enabled %} data-confirm="这条知识处于启用状态，设为店外周边后会立即参与机器人回答，确认继续吗？"{% endif %}><input type="hidden" name="scope" value="public"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">设为店外周边</button></form>
+{% endif %}
 {% endmacro %}

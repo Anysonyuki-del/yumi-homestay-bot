@@ -106,7 +106,9 @@ from homestay_bot.routes.health import OperationalHealthService
 from homestay_bot.routes.knowledge import (
     KNOWLEDGE_IMAGE_MAX_BYTES,
     KNOWLEDGE_IMAGE_TYPES,
+    CopyResult,
     KnowledgeAdminService,
+    KnowledgeFormError,
 )
 from homestay_bot.services.admin_auth_service import (
     AdminAuthService,
@@ -3162,7 +3164,7 @@ class SessionKnowledgeAdminService:
         stream: BinaryIO,
         content_type: str,
     ) -> Any:
-        """先校验格式再保存文件；登记失败（如已满 3 张）时删除刚存的文件。"""
+        """先校验格式再保存文件；登记失败（如配图已满）时删除刚存的文件。"""
         if content_type.lower() not in KNOWLEDGE_IMAGE_TYPES:
             raise ValueError("只支持 JPG 或 PNG 图片")
         storage = self._require_storage()
@@ -3216,6 +3218,7 @@ class SessionKnowledgeAdminService:
         enabled: bool | None = None,
         category: str | None = None,
         room: str | None = None,
+        section: str | None = None,
     ) -> list[Any]:
         """按分页边界返回知识条目。"""
         async with self._factory() as session:
@@ -3226,7 +3229,48 @@ class SessionKnowledgeAdminService:
                 enabled=enabled,
                 category=category,
                 room=room,
+                section=section,
             )
+
+    async def section_counts(
+        self,
+        *,
+        query: str | None = None,
+        enabled: bool | None = None,
+        category: str | None = None,
+    ) -> dict[str, int]:
+        """当前筛选下各分区命中数与全库待审核总数。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).section_counts(
+                query=query, enabled=enabled, category=category
+            )
+
+    async def room_entry_counts(
+        self,
+        *,
+        query: str | None = None,
+        enabled: bool | None = None,
+        category: str | None = None,
+    ) -> dict[int, int]:
+        """当前筛选下各房间的专属知识条数。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).room_entry_counts(
+                query=query, enabled=enabled, category=category
+            )
+
+    async def list_categories(
+        self, *, section: str | None = None, room: str | None = None
+    ) -> list[tuple[str, int]]:
+        """已有分类及条数。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).list_categories(
+                section=section, room=room
+            )
+
+    async def image_counts_for_entries(self, entry_ids: list[int]) -> dict[int, int]:
+        """一次查询本页条目的配图数量。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).image_counts_for_entries(entry_ids)
 
     async def get_detail(self, entry_id: int) -> Any:
         """在独立只读会话中返回知识详情。"""
@@ -3237,6 +3281,97 @@ class SessionKnowledgeAdminService:
         """创建知识并由底层服务提交审计。"""
         async with self._factory() as session:
             return await KnowledgeAdminService(session).create(employee_id, **fields)
+
+    async def create_for_rooms(
+        self, employee_id: int, property_ids: list[int], **fields: Any
+    ) -> list[Any]:
+        """在一个事务里为多个房间各建一条知识，失败整批回滚。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).create_for_rooms(
+                employee_id, property_ids, **fields
+            )
+
+    async def set_scope(self, entry_id: int, employee_id: int, target_scope: str) -> Any:
+        """把范围待审核的条目快捷定界。"""
+        async with self._factory() as session:
+            return await KnowledgeAdminService(session).set_scope(
+                entry_id, employee_id, target_scope
+            )
+
+    async def copy_to_rooms(
+        self,
+        entry_id: int,
+        employee_id: int,
+        property_ids: list[int],
+        *,
+        copy_images: bool,
+    ) -> CopyResult:
+        """跨房复制的四步状态机（知识库重构 Spec §3.2(4)）。
+
+        1. 短会话只读校验源条目、目标房间并记下源配图快照；
+        2. 事务外为每个目标房物理拷贝每张源图，任一失败即删掉已拷出的全部文件；
+        3. 新会话锁住源条目复核快照并写入停用草稿与配图记录，提交前任何异常都回滚
+           并删除拷出的文件；
+        4. 提交本身失败时不删文件：此时无法判断是否已落库，宁可留下孤儿文件也不
+           制造指向不存在文件的配图记录。
+        """
+        async with self._factory() as session:
+            snapshot = await KnowledgeAdminService(session).copy_snapshot(
+                entry_id, property_ids, copy_images=copy_images
+            )
+        created: list[str] = []
+        copied: list[list[str]] = [[] for _ in snapshot.property_ids]
+        if snapshot.images:
+            storage = self._require_storage()
+            try:
+                for files in copied:
+                    for image in snapshot.images:
+                        stored = storage.copy_image(image.file_id)
+                        created.append(stored.file_id)
+                        files.append(stored.file_id)
+            except Exception as error:
+                self._discard_files(created)
+                raise KnowledgeFormError(
+                    "复制配图失败（源图片可能已被删除），请刷新页面后重试；"
+                    "也可以取消「同时复制配图」只复制文字"
+                ) from error
+        async with self._factory() as session:
+            try:
+                result = await KnowledgeAdminService(session).prepare_copies(
+                    snapshot, copied, employee_id
+                )
+            except BaseException:
+                await session.rollback()
+                self._discard_files(created)
+                raise
+            try:
+                await session.commit()
+            except BaseException as error:
+                logger.warning(
+                    "知识跨房复制提交失败，保留已拷贝的配图文件：entry_id=%s file_count=%s "
+                    "error_type=%s",
+                    entry_id,
+                    len(created),
+                    type(error).__name__,
+                    exc_info=error,
+                )
+                raise
+        return result
+
+    def _discard_files(self, file_ids: list[str]) -> None:
+        """删除跨房复制中途拷出的文件；单个删除失败只记日志，不掩盖原始错误。"""
+        if not file_ids:
+            return
+        storage = self._require_storage()
+        for file_id in file_ids:
+            try:
+                storage.delete(file_id)
+            except Exception as error:
+                logger.warning(
+                    "清理跨房复制的配图副本失败：error_type=%s",
+                    type(error).__name__,
+                    exc_info=error,
+                )
 
     async def update(self, entry_id: int, employee_id: int, **fields: Any) -> Any:
         """更新知识并由底层服务提交审计。"""

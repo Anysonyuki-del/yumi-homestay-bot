@@ -101,6 +101,7 @@ async def test_credential_submissions_keep_their_own_global_cap() -> None:
         "/employee/customers",
         "/employee/complaints/1",
         "/employee/knowledge",
+        "/employee/knowledge/new",
         "/employee/approvals",
         "/employee/account",
     ],

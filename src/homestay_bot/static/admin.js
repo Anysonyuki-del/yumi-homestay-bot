@@ -870,3 +870,41 @@ document.querySelectorAll("[data-select-all-reminders]").forEach((toggle) => {
     hiddenAt = null;
   });
 })();
+
+/**
+ * 知识表单归属联动（2026-11-25 知识库重构 Spec F4.2）：按所选归属显隐房间区与小程序勾选，
+ * 并停用隐藏区里的控件，避免切换归属后残留的房间值随表单提交。无脚本时全部字段可见，
+ * 由服务端校验矩阵兜底。
+ */
+document.querySelectorAll("form[data-kb-scope-form]").forEach((form) => {
+  const sections = [...form.querySelectorAll("[data-kb-scope-section]")];
+  const sync = () => {
+    const checked = form.querySelector('input[name="scope"]:checked');
+    const scope = checked instanceof HTMLInputElement ? checked.value : "";
+    sections.forEach((section) => {
+      const visible = (section.getAttribute("data-kb-scope-section") || "").split(/\s+/).includes(scope);
+      section.hidden = !visible;
+      const controls = section.matches("input, select, textarea")
+        ? [section]
+        : [...section.querySelectorAll("input, select, textarea")];
+      controls.forEach((control) => { control.disabled = !visible; });
+    });
+  };
+  form.querySelectorAll('input[name="scope"]').forEach((radio) => radio.addEventListener("change", sync));
+  sync();
+});
+
+/** 房间多选的「全选在用房 / 清空」：按钮只在有脚本时出现，改动计入未保存提醒。 */
+document.querySelectorAll("[data-kb-room-actions]").forEach((actions) => {
+  const group = actions.closest("fieldset");
+  if (!group) return;
+  const setAll = (checked) => {
+    group.querySelectorAll('input[type="checkbox"][name="property_ids"]').forEach((box) => {
+      if (box instanceof HTMLInputElement && !box.disabled) box.checked = checked;
+    });
+    group.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  actions.querySelector("[data-kb-select-all]")?.addEventListener("click", () => setAll(true));
+  actions.querySelector("[data-kb-select-none]")?.addEventListener("click", () => setAll(false));
+  actions.hidden = false;
+});

@@ -1,0 +1,21 @@
+{# 知识库共用宏（2026-11-25 知识库重构 Spec F1、F2）：房间名称统一写法与页头页签。 #}
+
+{# 全站统一「房号 · 房名」；房号为空或与房名相同时只显示房名，避免「A101 · A101」。 #}
+{% macro room_label(room) -%}
+{%- if room.room_number and room.room_number != room.title -%}{{ room.room_number }} · {{ room.title }}{%- else -%}{{ room.title }}{%- endif -%}
+{%- endmacro %}
+
+{# 5 个平级页签：前三个按范围分区并显示当前筛选下的命中数；候选与资料核实仅管理员可见。
+   active 取 "candidates" / "referrals" 表示当前在这两页。 #}
+{% macro knowledge_tabs(tabs, can_edit, candidates_url, referral_open_count, active="") %}
+<nav class="tab-nav kb-tabs" aria-label="知识库分区">
+  {% for tab in tabs %}<a href="{{ tab.url }}"{% if tab.current %} aria-current="page"{% endif %}>{{ tab.label }}<span class="kb-tab-count">{{ tab.count }}<span class="visually-hidden"> 条</span></span></a>{% endfor %}
+  {% if can_edit %}<a href="{{ candidates_url }}"{% if active == "candidates" %} aria-current="page"{% endif %}>待审核候选</a>
+  <a href="/employee/knowledge-referrals"{% if active == "referrals" %} aria-current="page"{% endif %}>资料核实{% if referral_open_count %}<span class="kb-tab-count kb-tab-count--pending">{{ referral_open_count }}<span class="visually-hidden"> 条待处理</span></span>{% endif %}</a>{% endif %}
+</nav>
+{% endmacro %}
+
+{# 分类补全选项，每页只渲染一次，表单里的分类输入框用 list 属性引用。 #}
+{% macro category_datalist(categories) %}
+<datalist id="kb-category-options">{% for name, count in categories %}<option value="{{ name }}"></option>{% endfor %}</datalist>
+{% endmacro %}

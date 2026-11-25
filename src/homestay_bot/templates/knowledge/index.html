@@ -1,19 +1,13 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
-{% from "knowledge/scope_fields.html" import scope_fields %}
-{% from "knowledge/entry_state.html" import entry_state %}
-{# 新增或候选转换失败时，提示就地显示在展开的表单上方；只有该表单确实会渲染时才接管顶层 error，否则仍由布局显示，避免提示丢失。 #}
+{% from "knowledge/scope_fields.html" import knowledge_fields %}
+{% from "knowledge/entry_state.html" import entry_state, scope_shortcuts %}
+{% from "knowledge/nav.html" import room_label, knowledge_tabs, category_datalist %}
+{# 候选转换失败时，提示就地显示在展开的表单上方；只有该表单确实会渲染时才接管顶层 error，否则仍由布局显示，避免提示丢失。 #}
 {% set _failed_kind = (failed_form or {}).get("kind") %}
-{% set layout_error_inline = (can_edit and view != "candidates" and _failed_kind == "create")
-  or (view == "candidates" and _failed_kind == "candidate" and (failed_form or {}).get("candidate_id") in (candidates | map(attribute="id") | list)) %}
+{% set layout_error_inline = (view == "candidates" and _failed_kind == "candidate" and (failed_form or {}).get("candidate_id") in (candidates | map(attribute="id") | list)) %}
 
-{% block page_actions %}
-<nav class="tab-nav" aria-label="知识库分区">
-  <a href="{{ entries_url }}"{% if view == 'entries' %} aria-current="page"{% endif %}>现有知识</a>
-  {% if can_edit %}<a href="{{ candidates_url }}"{% if view == 'candidates' %} aria-current="page"{% endif %}>待审核候选</a>
-  <a href="/employee/knowledge-referrals">资料核实{% if referral_open_count %}（{{ referral_open_count }} 待处理）{% endif %}</a>{% endif %}
-</nav>
-{% endblock %}
+{% block page_actions %}{{ knowledge_tabs(tabs, can_edit, candidates_url, referral_open_count, "candidates" if view == "candidates" else "") }}{% endblock %}
 {% block content %}
 {% set failed = failed_form or {} %}
 {% set failed_values = failed.get("values") %}
@@ -22,19 +16,30 @@
 <section class="panel panel--padded" id="knowledge-candidates">
   <div class="section-heading"><div><p class="eyebrow">仅管理员可见</p><h2>待审核候选</h2></div>{{ ui.badge("本页 " ~ (candidates | length) ~ " 项", "warning") }}</div>
   <p>以下草稿由模型生成，仅供核实和修改，不会自动回复客人。展开一项即可编辑并转为知识。</p>
+  {{ category_datalist(categories) }}
   <div class="candidate-list">
     {% for candidate in candidates %}{% set draft = candidate.draft_payload or {} %}
     {% set restoring = failed.get("kind") == "candidate" and failed.get("candidate_id") == candidate.id %}
-    {% set values = failed_values if restoring else none %}
+    {% set values = failed_values if restoring else {
+      "scope": "unreviewed",
+      "category": draft.get("category", candidate.category),
+      "question_zh": draft.get("question_zh", candidate.canonical_question),
+      "answer_zh": draft.get("answer_zh", ""),
+      "question_en": draft.get("question_en", ""),
+      "answer_en": draft.get("answer_en", ""),
+      "keywords": draft.get("keywords", []),
+    } %}
     <article class="candidate-card" id="candidate-{{ candidate.id }}">
       <div class="section-heading"><h3>{{ candidate.category }} · {{ candidate.canonical_question }}</h3>{{ ui.badge("累计 " ~ candidate.total_occurrences ~ " 次", "info") }}</div>
       {% if candidate.examples %}<h4>脱敏参考问法</h4><ul>{% for example in candidate.examples %}<li class="long-text">{{ example }}</li>{% endfor %}</ul>{% endif %}
       {% if draft.get("verification_items") %}<h4>待管理员核实</h4><ul class="verification-list">{% for item in draft.get("verification_items", []) %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
       <details class="collapsible-section"{% if restoring %} open{% endif %}><summary>编辑并转为知识</summary><div class="collapsible-section__content">
       {% if restoring and error %}<p class="alert alert--danger" role="alert" id="candidate-{{ candidate.id }}-error" tabindex="-1">{{ error }}</p>{% endif %}
-      <form method="post" action="/employee/knowledge/candidates/{{ candidate.id }}/convert" data-unsaved-warning>
+      <form method="post" action="/employee/knowledge/candidates/{{ candidate.id }}/convert" data-unsaved-warning data-kb-scope-form>
         <input type="hidden" name="return_to" value="{{ current_view }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties, values) }}<label>分类<input name="category" value="{{ values.category if values else draft.get('category', candidate.category) }}" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required>{{ values.question_zh if values else draft.get("question_zh", candidate.canonical_question) }}</textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ values.answer_zh if values else draft.get("answer_zh", "") }}</textarea></label><label>English question<textarea name="question_en" maxlength="500" required>{{ values.question_en if values else draft.get("question_en", "") }}</textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required>{{ values.answer_en if values else draft.get("answer_en", "") }}</textarea></label><label>关键词（逗号分隔）<input name="keywords" value="{{ (values.keywords if values else draft.get('keywords', [])) | join(',') }}" maxlength="1000"></label><button type="submit">确认并转为知识</button>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {{ knowledge_fields(values, properties, "candidate") }}
+        <button type="submit">确认并转为知识</button>
       </form>
       </div></details>
       <form method="post" action="/employee/knowledge/candidates/{{ candidate.id }}/snooze" data-confirm="确定暂不收录该候选并关闭统计 30 天吗？"><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">暂不收录（30 天）</button></form>
@@ -44,23 +49,89 @@
   <nav class="pagination" aria-label="候选分页">{% if previous_candidate_url %}<a class="button button--secondary" href="{{ previous_candidate_url }}">上一页</a>{% endif %}<span>候选第 {{ candidate_page }} 页</span>{% if next_candidate_url %}<a class="button button--secondary" href="{{ next_candidate_url }}">下一页</a>{% endif %}</nav>
 </section>
 {% else %}
+
+{% if section != "unreviewed" and section_counts.get("unreviewed_total") %}
+<div class="kb-banner" role="status">
+  <p><strong>有 {{ section_counts.unreviewed_total }} 条知识的范围还没审核，暂不参与机器人回答。</strong>逐条确认是全店通用、店外周边还是指定房间后才会生效。</p>
+  <a class="button button--secondary" href="{{ unreviewed_url }}">去集中定界</a>
+</div>
+{% endif %}
+
 <section class="panel panel--padded knowledge-filter" aria-labelledby="knowledge-filter-title">
   <div class="section-heading"><div><p class="eyebrow">内容边界</p><h2 id="knowledge-filter-title">知识筛选</h2></div></div>
-  <p>机器人只会使用已启用且范围已审核的双语条目。筛选只影响管理页面，不改变模型使用范围。</p>
-  <form class="filter-toolbar" method="get" action="/employee/knowledge" data-filter-form><label>搜索内容<input type="search" name="query" value="{{ query }}" maxlength="100" placeholder="问题或答案"></label><label>启用状态<select name="enabled"><option value="">全部状态</option><option value="enabled" {% if enabled_filter == "enabled" %}selected{% endif %}>已启用</option><option value="disabled" {% if enabled_filter == "disabled" %}selected{% endif %}>已停用</option></select></label><label>分类<input name="category" value="{{ category_filter }}" maxlength="64" placeholder="精确分类"></label><label>房间<select name="room"><option value="">全部房间</option><option value="shared" {% if room_filter == "shared" %}selected{% endif %}>不限房间（通用与店外）</option>{% for item in properties %}<option value="{{ item.id }}" {% if room_filter == item.id|string %}selected{% endif %}>{{ item.title }}</option>{% endfor %}</select></label><div class="button-row"><button type="submit">筛选</button><a class="button button--secondary" href="/employee/knowledge">重置</a></div></form>
+  <p>机器人只会使用已启用、范围已审核且中英文齐全的条目。筛选只影响管理页面，不改变模型使用范围；带关键词筛选时，各页签数字是该分区的命中数。</p>
+  <form class="filter-toolbar" method="get" action="/employee/knowledge" data-filter-form>
+    {% if section != "global" %}<input type="hidden" name="section" value="{{ section }}">{% endif %}
+    {% if room_filter %}<input type="hidden" name="room" value="{{ room_filter }}">{% endif %}
+    <label>搜索内容<input type="search" name="query" value="{{ query }}" maxlength="100" placeholder="问题或答案"></label>
+    <label>启用状态<select name="enabled"><option value="">全部状态</option><option value="enabled" {% if enabled_filter == "enabled" %}selected{% endif %}>已启用</option><option value="disabled" {% if enabled_filter == "disabled" %}selected{% endif %}>已停用</option></select></label>
+    {% set category_names = categories | map("first") | list %}
+    <label>分类<select name="category"><option value="">全部分类</option>{% if category_filter and category_filter not in category_names %}<option value="{{ category_filter }}" selected>{{ category_filter }}（0）</option>{% endif %}{% for name, count in categories %}<option value="{{ name }}" {% if category_filter == name %}selected{% endif %}>{{ name }}（{{ count }}）</option>{% endfor %}</select></label>
+    <div class="button-row"><button type="submit">筛选</button><a class="button button--secondary" href="/employee/knowledge{% if section != 'global' %}?section={{ section }}{% if room_filter %}&amp;room={{ room_filter }}{% endif %}{% endif %}">重置</a></div>
+  </form>
 </section>
 
-{% if can_edit %}
-{% set creating = failed.get("kind") == "create" %}
-<details class="panel collapsible-section" id="knowledge-create"{% if creating %} open{% endif %}><summary>新增知识条目</summary><div class="collapsible-section__content"><p class="muted">展开后填写中英文问答，保存后启用；适用范围审核完成后才用于回复。</p>
-{% if creating and error %}<p class="alert alert--danger" role="alert" id="knowledge-create-error" tabindex="-1">{{ error }}</p>{% endif %}
-{% set values = failed_values if creating else none %}
-<form method="post" action="/employee/knowledge" data-unsaved-warning><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties, values) }}<label>分类<input name="category" value="{{ values.category if values else '' }}" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required>{{ values.question_zh if values else '' }}</textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ values.answer_zh if values else '' }}</textarea></label><label>English question<textarea name="question_en" maxlength="500" required>{{ values.question_en if values else '' }}</textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required>{{ values.answer_en if values else '' }}</textarea></label><label>关键词（逗号分隔）<input name="keywords" value="{{ (values.keywords if values else []) | join(',') }}" maxlength="1000"></label><button type="submit">新增并启用</button></form></div></details>
+{% if section == "rooms" %}
+<div class="kb-workbench">
+  <nav class="kb-room-directory" aria-label="房间目录">
+    <a class="kb-room-link" href="{{ rooms_url }}"{% if selected_room is none %} aria-current="page"{% endif %}><span class="kb-room-name">全部房间知识</span><span class="kb-count">{{ section_counts.get("rooms", 0) }}</span></a>
+    {% for room in properties %}{% set count = room_counts.get(room.id, 0) %}
+    <a class="kb-room-link{% if not count %} kb-room-link--empty{% endif %}" href="{{ room_url[room.id] }}"{% if selected_room == room.id %} aria-current="page"{% endif %}>
+      {% if room.room_number and room.room_number != room.title %}<span class="kb-room-no">{{ room.room_number }}</span>{% endif %}<span class="kb-room-name">{{ room.title }}</span>{% if not room.is_active %}<span class="kb-room-flag">已停用</span>{% endif %}<span class="kb-count">{{ count }}<span class="visually-hidden"> 条</span></span>
+    </a>{% endfor %}
+  </nav>
+  <div class="kb-workbench__main">
+    {% if selected_property %}
+    <section class="panel panel--padded kb-property-card" aria-labelledby="kb-property-title">
+      <div class="section-heading"><div><p class="eyebrow">本房常驻房源资料 · 机器人回答时同样会参考</p><h2 id="kb-property-title">{{ room_label(selected_property) }}</h2></div>{% if can_edit %}<a class="button button--secondary" href="/employee/properties/{{ selected_property.id }}">去房源页编辑 →</a>{% endif %}</div>
+      {% if selected_property.room_type or selected_property.district or selected_property.address_hint or selected_property.parking_instructions %}
+      <dl class="detail-grid kb-property-facts">
+        <dt>房型</dt><dd>{{ selected_property.room_type or "—" }}</dd>
+        <dt>区域</dt><dd>{{ selected_property.district or "—" }}</dd>
+        <dt>位置提示</dt><dd class="long-text">{{ selected_property.address_hint or "—" }}</dd>
+        <dt>停车</dt><dd class="long-text">{{ selected_property.parking_instructions or "—" }}</dd>
+      </dl>
+      {% else %}<p class="muted">这间房还没有填写房型、区域、位置提示或停车说明。</p>{% endif %}
+    </section>
+    {% endif %}
+    {{ entries_panel() }}
+  </div>
+</div>
+{% else %}
+{{ entries_panel() }}
 {% endif %}
-
-<section class="panel panel--padded" id="knowledge-entries"><div class="section-heading"><h2>现有知识</h2>{{ ui.badge("本页 " ~ (entries | length) ~ " 项", "neutral") }}</div>
-  <div class="entry-list">{% for entry in entries %}<article class="entry-card"><div><p class="eyebrow">{{ entry.category }} · 条目 #{{ entry.id }}</p><h3><a href="/employee/knowledge/{{ entry.id }}?return_to={{ current_view | urlencode }}">{{ entry.question_zh }}</a></h3><p class="long-text">{{ entry.answer_zh }}</p>{{ entry_state(entry, properties) }}</div><div class="entry-card__actions">{% if can_edit %}<form method="post" action="/employee/knowledge/{{ entry.id }}/{{ 'disable' if entry.is_enabled else 'enable' }}" {% if entry.is_enabled %}data-confirm="确定停用该知识吗？机器人将立即停止使用。"{% endif %}><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">{{ "停用" if entry.is_enabled else "启用" }}</button></form>{% endif %}</div></article>{% else %}{{ ui.empty("暂无知识条目") }}{% endfor %}</div>
-  <nav class="pagination" aria-label="知识条目分页">{% if previous_url %}<a class="button button--secondary" href="{{ previous_url }}">上一页</a>{% endif %}<span>第 {{ page }} 页</span>{% if next_url %}<a class="button button--secondary" href="{{ next_url }}">下一页</a>{% endif %}</nav>
-</section>
 {% endif %}
 {% endblock %}
+
+{% macro entries_panel() %}
+{% if section == "rooms" %}{% set heading = room_label(selected_property) ~ " 的专属知识" if selected_property else "房间专属知识" %}
+{% set new_label = "+ 为【" ~ room_label(selected_property) ~ "】新增知识" if selected_property else "+ 新增房间知识" %}
+{% elif section == "public" %}{% set heading = "店外周边知识" %}{% set new_label = "+ 新增店外周边知识" %}
+{% elif section == "unreviewed" %}{% set heading = "范围待审核的知识" %}{% set new_label = "" %}
+{% else %}{% set heading = "全店通用知识" %}{% set new_label = "+ 新增全店通用知识" %}{% endif %}
+<section class="panel panel--padded" id="knowledge-entries">
+  <div class="section-heading kb-entries-heading"><div><p class="eyebrow">{{ section_label }} · 本页 {{ entries | length }} 项</p><h2>{{ heading }}</h2></div>{% if can_edit and new_label %}<a class="button" href="{{ new_url }}">{{ new_label }}</a>{% endif %}</div>
+  {% if section == "unreviewed" %}<p class="help-text">这些条目暂不参与回答。确认适用范围后，用「设为全店通用」或「设为店外周边」一键定界；属于某个房间的，请进详情页改为指定房间。</p>{% endif %}
+  <div class="entry-list">{% for entry in entries %}{% set missing_en = not (entry.question_en or "").strip() or not (entry.answer_en or "").strip() %}
+    <article class="entry-card kb-entry kb-entry--{{ entry.scope }}">
+      <div>
+        <p class="eyebrow">{{ entry.category }} · 条目 #{{ entry.id }}</p>
+        <h3><a href="/employee/knowledge/{{ entry.id }}?return_to={{ current_view | urlencode }}">{{ entry.question_zh }}</a></h3>
+        <p class="long-text kb-entry__answer">{{ entry.answer_zh }}</p>
+        {{ entry_state(entry, properties, image_counts.get(entry.id, 0)) }}
+      </div>
+      {% if can_edit %}<div class="entry-card__actions">
+        <a class="button button--secondary" href="/employee/knowledge/{{ entry.id }}?return_to={{ current_view | urlencode }}">编辑</a>
+        {% if entry.is_enabled %}<form method="post" action="/employee/knowledge/{{ entry.id }}/disable" data-confirm="确定停用该知识吗？机器人将立即停止使用。"><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">停用</button></form>
+        {% elif missing_en and entry.scope != "unreviewed" %}<span class="field-help">补全英文后可启用</span>
+        {% else %}<form method="post" action="/employee/knowledge/{{ entry.id }}/enable"><input type="hidden" name="return_to" value="{{ current_view }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">启用</button></form>{% endif %}
+        {{ scope_shortcuts(entry, csrf_token, current_view) }}
+      </div>{% endif %}
+    </article>
+  {% else %}
+    {% if other_hits %}<div class="empty-state"><strong>{{ section_label }}{% if query or category_filter or enabled_filter %}暂无匹配{% else %}暂无知识条目{% endif %}</strong><p>{% for hit in other_hits %}<a href="{{ hit.url }}">{{ hit.label }}中有 {{ hit.count }} 条{% if query or category_filter or enabled_filter %}匹配{% endif %} → 去查看</a>{% if not loop.last %}；{% endif %}{% endfor %}</p></div>
+    {% else %}{{ ui.empty("暂无知识条目") }}{% endif %}
+  {% endfor %}</div>
+  <nav class="pagination" aria-label="知识条目分页">{% if previous_url %}<a class="button button--secondary" href="{{ previous_url }}">上一页</a>{% endif %}<span>第 {{ page }} 页</span>{% if next_url %}<a class="button button--secondary" href="{{ next_url }}">下一页</a>{% endif %}</nav>
+</section>
+{% endmacro %}

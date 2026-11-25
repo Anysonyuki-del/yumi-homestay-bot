@@ -25,8 +25,11 @@ from homestay_bot.domain.models import (
 from homestay_bot.repositories.employees import SQLAlchemyEmployeeRepository
 from homestay_bot.repositories.faq_candidates import SQLAlchemyFaqCandidateRepository
 from homestay_bot.routes.knowledge import (
+    _SECTION_SCOPES,
+    CopyResult,
     KnowledgeAdminService,
     KnowledgeFormError,
+    _initially_enabled,
 )
 from homestay_bot.routes.knowledge import (
     router as knowledge_router,
@@ -115,18 +118,67 @@ class KnowledgeAdminStub:
         enabled: bool | None = None,
         category: str | None = None,
         room: str | None = None,
+        section: str | None = None,
     ) -> list[EntryStub]:
         """按管理页筛选返回条目并记录分页边界。"""
         self.list_all_calls.append((offset, limit))
         entries = [
             entry
+            for entry in self._filtered(query, enabled, category)
+            if (not room or str(getattr(entry, "property_id", None)) == room)
+            and (section is None or entry.scope == _SECTION_SCOPES[section])
+        ]
+        return entries * (limit if offset == 50 else 1)
+
+    def _filtered(
+        self, query: str | None, enabled: bool | None, category: str | None
+    ) -> list[EntryStub]:
+        """与真实服务同一组关键词、启用状态、分类过滤。"""
+        return [
+            entry
             for entry in self.entries
             if (enabled is None or entry.is_enabled is enabled)
             and (not category or entry.category == category)
-            and (not room or str(getattr(entry, "property_id", None)) == room)
             and (not query or query in entry.question_zh or query in entry.answer_zh)
         ]
-        return entries * (limit if offset == 50 else 1)
+
+    async def section_counts(
+        self,
+        *,
+        query: str | None = None,
+        enabled: bool | None = None,
+        category: str | None = None,
+    ) -> dict[str, int]:
+        """各分区命中数与全库待审核总数。"""
+        matched = self._filtered(query, enabled, category)
+        counts = {
+            section: sum(entry.scope == scope for entry in matched)
+            for section, scope in _SECTION_SCOPES.items()
+        }
+        counts["unreviewed_total"] = sum(entry.scope == "unreviewed" for entry in self.entries)
+        return counts
+
+    async def room_entry_counts(self, **filters) -> dict[int, int]:
+        """各房间专属知识条数。"""
+        counts: dict[int, int] = {}
+        for entry in self._filtered(**filters):
+            if entry.scope == "property" and entry.property_id is not None:
+                counts[entry.property_id] = counts.get(entry.property_id, 0) + 1
+        return counts
+
+    async def list_categories(
+        self, *, section: str | None = None, room: str | None = None
+    ) -> list[tuple[str, int]]:
+        """已有分类及条数。"""
+        counts: dict[str, int] = {}
+        for entry in self.entries:
+            if section is None or entry.scope == _SECTION_SCOPES[section]:
+                counts[entry.category] = counts.get(entry.category, 0) + 1
+        return sorted(counts.items())
+
+    async def image_counts_for_entries(self, entry_ids: list[int]) -> dict[int, int]:
+        """存根条目没有配图。"""
+        return {}
 
     async def list_active(self) -> list[EntryStub]:
         """只返回启用条目供机器人使用。"""
@@ -148,10 +200,44 @@ class KnowledgeAdminStub:
         return []
 
     async def create(self, employee_id: int, **fields) -> EntryStub:
-        """新增双语条目。"""
-        entry = EntryStub(id=len(self.entries) + 1, **fields)
+        """新增双语条目；缺英文时与真实服务一样存为停用草稿。"""
+        entry = EntryStub(
+            id=len(self.entries) + 1,
+            **fields,
+            is_enabled=_initially_enabled(fields),
+        )
         self.entries.append(entry)
         return entry
+
+    async def create_for_rooms(
+        self, employee_id: int, property_ids: list[int], **fields
+    ) -> list[EntryStub]:
+        """为每个房间各建一条。"""
+        self.created_rooms = list(property_ids)
+        return [
+            await self.create(employee_id, **{**fields, "property_id": room_id})
+            for room_id in property_ids
+        ]
+
+    async def set_scope(self, entry_id: int, employee_id: int, target_scope: str) -> EntryStub:
+        """记录快捷定界。"""
+        entry = await self.get_detail(entry_id)
+        entry.scope = target_scope
+        return entry
+
+    async def copy_to_rooms(
+        self,
+        entry_id: int,
+        employee_id: int,
+        property_ids: list[int],
+        *,
+        copy_images: bool,
+    ) -> CopyResult:
+        """记录复制请求。"""
+        await self.get_detail(entry_id)
+        self.copied = (entry_id, list(property_ids), copy_images)
+        return CopyResult(entry_ids=[100 + index for index in range(len(property_ids))],
+                          duplicate_rooms=0)
 
     async def update(self, entry_id: int, employee_id: int, **fields) -> EntryStub:
         """更新指定条目。"""
@@ -256,9 +342,12 @@ def test_knowledge_pages_use_admin_shell_and_detail_respects_role() -> None:
     assert 'href="/employee/knowledge" aria-current="page"' in detail.text
     assert 'action="/employee/knowledge/1/edit"' in detail.text
     assert "data-unsaved-warning" in detail.text
-    assert 'action="/employee/knowledge/1/disable"' not in detail.text
+    # 详情页右侧状态区直接启停（知识库重构 Spec F4.4），回到本页状态区；员工仍只读。
+    assert 'action="/employee/knowledge/1/disable"' in detail.text
+    assert 'value="/employee/knowledge/1#entry-status"' in detail.text
     assert 'action="/employee/knowledge/1/disable"' in index.text
     assert 'action="/employee/knowledge/1/edit"' not in staff_detail.text
+    assert 'action="/employee/knowledge/1/disable"' not in staff_detail.text
     assert "下午三点后" in staff_detail.text
     assert missing.status_code == 404
 
@@ -434,7 +523,9 @@ def test_knowledge_index_defaults_to_entries_and_splits_candidates() -> None:
     entries_page = client.get("/employee/knowledge")
     assert entries_page.status_code == 200
     assert 'id="knowledge-entries"' in entries_page.text
-    assert "新增知识条目" in entries_page.text
+    # 列表不再内嵌新建表单，改为跳转独立新建页并按当前分区预设范围（Spec F4.1）。
+    assert 'href="/employee/knowledge/new?scope=global&amp;return_to=' in entries_page.text
+    assert 'id="knowledge-create"' not in entries_page.text
     assert "能停车吗" not in entries_page.text
     assert service.list_candidate_calls == []
     assert 'action="/employee/knowledge/1/disable" data-confirm=' in entries_page.text
@@ -926,9 +1017,10 @@ def test_knowledge_actions_return_to_the_view_they_came_from() -> None:
     """
     client, _ = build_client(EmployeeRole.ADMIN)
     page = client.get(KNOWLEDGE_SOURCE)
-    assert 'name="return_to"' in page.text
+    # 筛选无命中时页面上唯一的写入口是新建链接，它同样带着来源视图。
+    assert "return_to=%2Femployee%2Fknowledge%3Fpage%3D3" in page.text
 
-    token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    token = _token(client.get("/employee/knowledge/new").text)
     response = client.post(
         "/employee/knowledge/1/disable",
         data={"csrf_token": token, "return_to": KNOWLEDGE_SOURCE},
@@ -1008,7 +1100,7 @@ def test_knowledge_scope_dates_survive_form_save_and_edit_render():
     assert service.entries[0].valid_from == date(2026, 9, 25)
     assert service.entries[0].valid_until == date(2026, 9, 30)
     rendered = client.get("/employee/knowledge/1").text
-    assert 'value="global" selected' in rendered
+    assert 'value="global" checked' in rendered
     assert 'name="valid_from" value="2026-09-25"' in rendered
     assert 'name="valid_until" value="2026-09-30"' in rendered
 
@@ -1057,10 +1149,10 @@ _BAD_CREATE = {
 }
 
 
-def test_create_error_rerenders_list_with_input_and_a_fresh_token() -> None:
-    """AC03：新建时范围填错，页面原地显示错误并保留已填内容；新令牌可纠正后成功。"""
+def test_create_error_rerenders_new_page_with_input_and_a_fresh_token() -> None:
+    """AC03：新建时范围填错，独立新建页原地显示错误并保留已填内容；新令牌可纠正后成功。"""
     client, service = build_client(EmployeeRole.ADMIN)
-    token = _token(client.get("/employee/knowledge?page=1").text)
+    token = _token(client.get("/employee/knowledge/new").text)
 
     failed = client.post(
         "/employee/knowledge",
@@ -1070,9 +1162,11 @@ def test_create_error_rerenders_list_with_input_and_a_fresh_token() -> None:
 
     assert failed.status_code == 422
     assert failed.headers["content-type"].startswith("text/html")
-    assert "知识适用范围或日期有误" in failed.text
+    assert "请至少勾选一个房间" in failed.text
     assert "七点到九点，餐厅在一楼。" in failed.text
-    assert 'id="knowledge-create" open' in failed.text
+    assert 'id="knowledge-create-error"' in failed.text
+    assert 'value="property" checked' in failed.text
+    assert _token(failed.text) != token
     assert len(service.entries) == 1
     # 旧令牌已被消费，重放仍被拒。
     replay = client.post(
@@ -1182,7 +1276,8 @@ def test_staff_cannot_delete_and_missing_entry_is_404() -> None:
     admin, _ = build_client(EmployeeRole.ADMIN)
     first = _token(admin.get("/employee/knowledge").text)
     admin.post("/employee/knowledge/1/delete", data={"csrf_token": first})
-    second = _token(admin.get("/employee/knowledge").text)
+    # 列表空了就没有表单可取令牌，改从新建页取（Spec §5.1(4)）。
+    second = _token(admin.get("/employee/knowledge/new").text)
     again = admin.post("/employee/knowledge/1/delete", data={"csrf_token": second})
     assert again.status_code == 404
 
@@ -1208,6 +1303,10 @@ def test_unreviewed_enabled_entry_is_not_shown_as_plain_enabled() -> None:
     client, service = build_client(EmployeeRole.ADMIN)
     service.entries[0].scope = "unreviewed"
 
+    # 默认分区不列待审核条目，但顶部提醒条指向集中定界视图（Spec F1）。
     text = client.get("/employee/knowledge").text
+    assert "有 1 条知识的范围还没审核" in text
+    assert 'href="/employee/knowledge?page=1&amp;candidate_page=1&amp;section=unreviewed"' in text
 
-    assert "范围待审核，暂不参与回答" in text
+    section = client.get("/employee/knowledge?section=unreviewed").text
+    assert "范围待审核，暂不参与回答" in section

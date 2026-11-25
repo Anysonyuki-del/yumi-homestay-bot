@@ -50,6 +50,17 @@
   --info: #1c4c70;
   --info-soft: #eff5fb;
   --info-border: #bed6eb;
+  /* 知识范围语义色（2026-11-25 知识库重构 Spec F3）：只表示「这条知识归谁」，不可点击，
+     因此绝不借用主操作色；前景色对各自底色的对比度均 ≥ 4.5:1。 */
+  --scope-global-bg: #e7f3ee;
+  --scope-global-fg: #1d5c46;
+  --scope-global-bd: #b9ddd0;
+  --scope-room-bg: #ebeef8;
+  --scope-room-fg: #2f3f7a;
+  --scope-room-bd: #c6cfe9;
+  --scope-public-bg: #f0ece6;
+  --scope-public-fg: #544e46;
+  --scope-public-bd: #d8d0c5;
 
   /* 浏览器表面与遮罩色阶，全部随暖调精工色板统一。 */
   --selection-bg: #fbede8;
@@ -836,4 +847,74 @@ span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
   .countdown strong { font-size: 18px; }
   .room-operation-card .room-next-action { grid-template-columns: minmax(0, 1fr); }
   .room-operation-card .room-next-action > span { grid-column: 1 / -1; }
+}
+
+/* ---- 知识库工作区（2026-11-25 知识库重构 Spec F1–F4） ---- */
+.badge--scope-global { border-color: var(--scope-global-bd); color: var(--scope-global-fg); background: var(--scope-global-bg); }
+.badge--scope-room { border-color: var(--scope-room-bd); color: var(--scope-room-fg); background: var(--scope-room-bg); }
+.badge--scope-public { border-color: var(--scope-public-bd); color: var(--scope-public-fg); background: var(--scope-public-bg); }
+/* 小程序指南是全店通用的附加展示位：同色系描边、白底，与范围徽章区分又不抢色。 */
+.badge--scope-mini { border-color: var(--scope-global-bd); color: var(--scope-global-fg); background: var(--surface); }
+/* 详情页状态徽章下紧接编辑表单的「知识归属」分组框，留出间距避免徽章贴住分组标题。 */
+.detail-section > .entry-state { margin-bottom: 16px; }
+/* 页签与房间链接里有读屏用的隐藏文字（绝对定位）；链接自身作定位祖先，隐藏文字才会被
+   横向滚动容器裁住，不把整页撑出水平滚动。 */
+.kb-tabs a, .kb-room-link { position: relative; }
+.kb-tab-count { display: inline-flex; min-width: 22px; justify-content: center; margin-left: 6px; padding: 0 6px; border-radius: 999px; color: var(--ink-soft); background: var(--surface-well); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.kb-tab-count--pending { color: var(--warning); background: var(--warning-soft); }
+.kb-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 16px; padding: 12px 16px; border: 1px solid var(--warning-border); border-radius: var(--radius); color: var(--warning); background: var(--warning-soft); }
+.kb-banner p { flex: 1 1 22rem; min-width: 0; margin: 0; }
+.kb-entries-heading { flex-wrap: wrap; }
+.kb-entries-heading > :first-child { flex: 1 1 16rem; min-width: 0; }
+.kb-entries-heading > .button { flex: none; }
+.kb-entry { border-left: 4px solid var(--line); }
+.kb-entry--global { border-left-color: var(--scope-global-bd); }
+.kb-entry--property { border-left-color: var(--scope-room-bd); }
+.kb-entry--public { border-left-color: var(--scope-public-bd); }
+.kb-entry--unreviewed { border-left-color: var(--warning-border); }
+.kb-entry__answer { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.kb-workbench { display: grid; gap: 16px; min-width: 0; }
+.kb-workbench__main { display: grid; gap: 16px; min-width: 0; align-content: start; }
+/* 窄屏：房间目录是一条横向滚动的切换栏，只在自身容器内滚动，页面不出现水平溢出。 */
+.kb-room-directory { display: flex; gap: 6px; min-width: 0; padding: 6px; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.kb-room-link { display: inline-flex; flex: none; align-items: center; gap: 6px; min-height: 40px; padding: 6px 10px; border: 1px solid transparent; border-radius: var(--r-xs); color: var(--ink-mid); text-decoration: none; white-space: nowrap; }
+.kb-room-link:hover { background: var(--surface-well); }
+.kb-room-link[aria-current="page"] { border-color: var(--primary-border); color: var(--link); background: var(--primary-soft); }
+.kb-room-link--empty { color: var(--muted); }
+.kb-room-no { padding: 0 5px; border: 1px solid var(--scope-room-bd); border-radius: 4px; color: var(--scope-room-fg); background: var(--scope-room-bg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--t-xs); }
+.kb-room-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.kb-room-flag { color: var(--muted); font-size: var(--t-xs); }
+.kb-count { margin-left: auto; padding: 0 7px; border-radius: 999px; color: var(--ink-soft); background: var(--surface-well); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.kb-room-link--empty .kb-count { color: var(--disabled-ink); }
+.kb-property-facts { margin: 0; }
+.kb-scope-picker { padding: 12px; }
+.kb-segmented { display: grid; gap: 8px; }
+.kb-segmented__option { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); cursor: pointer; }
+.kb-segmented__option input { width: 18px; min-height: 18px; margin-top: 2px; }
+.kb-segmented__option span { display: grid; gap: 2px; }
+.kb-segmented__option small { color: var(--muted); font-weight: 400; }
+.kb-segmented__option:has(input:checked) { border-color: var(--control-border); background: var(--surface-sunk); }
+.kb-segmented__option--global:has(input:checked) { border-color: var(--scope-global-fg); background: var(--scope-global-bg); }
+.kb-segmented__option--property:has(input:checked) { border-color: var(--scope-room-fg); background: var(--scope-room-bg); }
+.kb-segmented__option--public:has(input:checked) { border-color: var(--scope-public-fg); background: var(--scope-public-bg); }
+.kb-segmented__option--unreviewed:has(input:checked) { border-color: var(--warning); background: var(--warning-soft); }
+.kb-scope-section[hidden], .kb-room-actions[hidden] { display: none; }
+.kb-room-picker { padding: 12px; }
+.kb-room-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); gap: 6px 12px; max-height: 18rem; overflow-y: auto; }
+.kb-room-grid .checkbox { margin: 0; }
+.kb-disclosure { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
+.kb-disclosure > summary { padding: 10px 12px; color: var(--ink-strong); font-weight: 650; cursor: pointer; }
+.kb-disclosure[open] > summary { border-bottom: 1px solid var(--line); }
+.kb-disclosure__body { display: grid; gap: 12px; padding: 12px; }
+.kb-status-row { align-items: center; }
+.kb-status-hint { margin: 0; color: var(--warning); }
+.kb-subheading { margin: 16px 0 8px; font-size: var(--t-md); }
+@media (min-width: 768px) {
+  .kb-segmented { grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); }
+}
+/* 桌面：左侧 240px 房间目录 + 右侧列表面板；目录吸顶并在自身内部滚动。 */
+@media (min-width: 1024px) {
+  .kb-workbench { grid-template-columns: 240px minmax(0, 1fr); align-items: start; }
+  .kb-room-directory { position: sticky; top: calc(var(--topbar-height) + 18px); flex-direction: column; max-height: calc(100vh - var(--topbar-height) - 28px); max-height: calc(100dvh - var(--topbar-height) - 28px); overflow-y: auto; }
+  .kb-room-link { flex: none; white-space: normal; }
 }

@@ -2,27 +2,47 @@
 {% import "components/ui.html" as ui %}
 {# 编辑失败提示就地显示在表单上方（带锚点），顶层布局不再重复渲染同一条 error。 #}
 {% set layout_error_inline = true %}
-{% from "knowledge/scope_fields.html" import scope_fields %}
-{% from "knowledge/entry_state.html" import entry_state %}
+{% from "knowledge/scope_fields.html" import knowledge_fields %}
+{% from "knowledge/entry_state.html" import entry_state, scope_shortcuts %}
+{% from "knowledge/nav.html" import room_label, category_datalist %}
 
 {% block page_actions %}<a class="button button--secondary" href="{{ return_to }}">返回知识列表</a>{% endblock %}
 {% block content %}
+{% set missing_en = not (entry.question_en or "").strip() or not (entry.answer_en or "").strip() %}
 <div class="detail-layout">
 <div class="detail-main">
 <section class="panel panel--padded detail-section">
   <div class="section-heading"><div><p class="eyebrow">{{ entry.category }} · 条目 #{{ entry.id }}</p><h2>{{ entry.question_zh }}</h2></div></div>
-  {{ entry_state(entry, properties) }}
+  {{ entry_state(entry, properties, images | length) }}
   {% if error %}<p class="alert alert--danger" role="alert" id="knowledge-edit-error" tabindex="-1">{{ error }}（已保留你刚才填写的内容，改正后重新保存即可。）</p>{% endif %}
   {% if can_edit %}
-  <form method="post" action="/employee/knowledge/{{ entry.id }}/edit" data-unsaved-warning><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{{ scope_fields(properties, form_entry) }}<label>分类<input name="category" value="{{ form_entry.category }}" maxlength="64" required></label><label>中文问题<textarea name="question_zh" maxlength="500" required>{{ form_entry.question_zh }}</textarea></label><label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ form_entry.answer_zh }}</textarea></label><label>English question<textarea name="question_en" maxlength="500" required>{{ form_entry.question_en }}</textarea></label><label>English answer<textarea name="answer_en" maxlength="10000" required>{{ form_entry.answer_en }}</textarea></label><label>关键词（逗号分隔）<input name="keywords" value="{{ form_entry.keywords | join(',') }}" maxlength="1000"></label><button type="submit">保存知识条目</button></form>
+  {{ category_datalist(categories) }}
+  <form method="post" action="/employee/knowledge/{{ entry.id }}/edit" data-unsaved-warning data-kb-scope-form><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {{ knowledge_fields(form_entry, properties, "edit") }}
+    <button type="submit">保存知识条目</button>
+  </form>
   {% else %}
-  <dl class="detail-grid"><dt>中文答案</dt><dd class="long-text">{{ entry.answer_zh }}</dd><dt>English question</dt><dd class="long-text" lang="en">{{ entry.question_en }}</dd><dt>English answer</dt><dd class="long-text" lang="en">{{ entry.answer_en }}</dd><dt>关键词</dt><dd>{{ entry.keywords | join('、') or "—" }}</dd></dl>
+  <dl class="detail-grid"><dt>中文答案</dt><dd class="long-text">{{ entry.answer_zh }}</dd><dt>English question</dt><dd class="long-text" lang="en">{{ entry.question_en or "—" }}</dd><dt>English answer</dt><dd class="long-text" lang="en">{{ entry.answer_en or "—" }}</dd><dt>关键词</dt><dd>{{ entry.keywords | join('、') or "—" }}</dd></dl>
   {% endif %}
 </section>
 </div>
 <div class="detail-aside">
+{% if can_edit %}
+<section class="panel panel--padded detail-section" id="entry-status">
+  <h2>启用状态</h2>
+  {% if entry.is_enabled %}
+  <p class="help-text">{% if entry.scope == "unreviewed" %}已启用，但范围待审核，暂不参与机器人回答。{% else %}已启用，机器人会按范围、有效期和条件词使用这条知识。{% endif %}</p>
+  <form method="post" action="/employee/knowledge/{{ entry.id }}/disable" data-confirm="确定停用该知识吗？机器人将立即停止使用。"><input type="hidden" name="return_to" value="{{ status_return }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">立即停用</button></form>
+  {% else %}
+  <p class="help-text">已停用，机器人不会使用这条知识。</p>
+  <div class="button-row kb-status-row"><form method="post" action="/employee/knowledge/{{ entry.id }}/enable"><input type="hidden" name="return_to" value="{{ status_return }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--secondary" type="submit">立即启用</button></form>
+  {% if missing_en and entry.scope != "unreviewed" %}<p class="field-help kb-status-hint">请先补全英文问答后再启用</p>{% endif %}</div>
+  {% endif %}
+  {% if entry.scope == "unreviewed" %}<h3 class="kb-subheading">快捷定界</h3><div class="button-row">{{ scope_shortcuts(entry, csrf_token, status_return) }}</div>{% endif %}
+</section>
+{% endif %}
 <section class="panel panel--padded detail-section" id="knowledge-images"><h2>配图</h2>
-  <p class="help-text">这条知识作为固定回答发给客人时，文字之后按顺序发这些图；模型自由作答时不发。每条最多 {{ max_images }} 张，JPG 或 PNG，单张不超过 5MB。</p>
+  <p class="help-text">每条最多 {{ max_images }} 张（JPG 或 PNG，单张不超过 5MB）。这条知识作为固定回答发给客人时，文字之后按顺序发这些图；机器人每轮回复最多发 4 张图，有欢迎图或一次回答多个问题时会少发几张，排在前面的优先发送；模型自由作答时不发。</p>
   {% if images %}
   <ol class="image-list">{% for image in images %}<li><a href="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}" target="_blank" rel="noopener"><img src="/employee/knowledge/{{ entry.id }}/images/{{ image.id }}" alt="配图 {{ loop.index }}"></a>
     {% if can_edit %}<div class="button-row">
@@ -35,11 +55,32 @@
   <form class="inline-form" method="post" enctype="multipart/form-data" action="/employee/knowledge/{{ entry.id }}/images/upload"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>添加配图<input type="file" name="image" accept="image/png,image/jpeg" required></label><button type="submit">上传配图</button></form>
   {% endif %}
 </section>
+{% if can_copy %}
+<section class="panel panel--padded detail-section" id="entry-copy">
+  <details class="kb-disclosure">
+    <summary>复制到其他房间…</summary>
+    <div class="kb-disclosure__body">
+      <p class="help-text">复制出的条目都是停用草稿，不进小程序，问答、分类、关键词、有效期和条件词原样带过去。到目标房间核对后再启用。</p>
+      {% if copy_targets %}
+      <form method="post" action="/employee/knowledge/{{ entry.id }}/copy">
+        <input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <fieldset class="kb-room-picker">
+          <legend>目标房间（只列在用房间）</legend>
+          <div class="button-row kb-room-actions" data-kb-room-actions hidden><button class="button button--secondary" type="button" data-kb-select-all>全选在用房</button><button class="button button--secondary" type="button" data-kb-select-none>清空</button></div>
+          <div class="kb-room-grid">{% for room in copy_targets %}<label class="checkbox"><input type="checkbox" name="property_ids" value="{{ room.id }}"><span>{{ room_label(room) }}</span></label>{% endfor %}</div>
+        </fieldset>
+        {% if images %}<label class="checkbox"><input type="checkbox" name="copy_images" value="1" checked><span>同时复制配图（{{ images | length }} 张，每间房各存一份独立副本）</span></label>{% endif %}
+        <button class="button button--secondary" type="submit">复制为停用草稿</button>
+      </form>
+      {% else %}<p class="muted">没有其他在用房间可以复制。</p>{% endif %}
+    </div>
+  </details>
+</section>
+{% endif %}
 {% if can_edit %}
 <section class="panel panel--padded detail-section danger-panel">
-  <h2>状态与删除</h2>
-  <p class="help-text">启用或停用操作请返回知识列表执行，避免复用已提交的一次性表单令牌。</p>
-  <form method="post" action="/employee/knowledge/{{ entry.id }}/delete" data-confirm="确定永久删除知识 #{{ entry.id }}{% if images %}及其 {{ images | length }} 张配图{% endif %}吗？条目、配图和检索数据都会删除，无法恢复。只想暂停使用请回列表选择停用。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">永久删除这条知识</button></form>
+  <h2>删除</h2>
+  <form method="post" action="/employee/knowledge/{{ entry.id }}/delete" data-confirm="确定永久删除知识 #{{ entry.id }}{% if images %}及其 {{ images | length }} 张配图{% endif %}吗？条目、配图和检索数据都会删除，无法恢复。只想暂停使用请改为停用。"><input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button--danger" type="submit">永久删除这条知识</button></form>
 </section>
 {% endif %}
 </div>

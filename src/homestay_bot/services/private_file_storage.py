@@ -108,6 +108,36 @@ class PrivateFileStorage:
             size=path.stat().st_size,
         )
 
+    def copy_image(self, file_id: str) -> StoredPrivateFile:
+        """把已有私有图片复制成一份新随机编号的独立文件。
+
+        用于知识跨房复制：副本与源文件互不引用，删掉源条目（及其清理任务删源文件）
+        不会影响副本。源文件不存在时抛 LookupError；写入中途失败会删掉半成品副本。
+        """
+        source = self.open_for_read(file_id)
+        extension = file_id.rsplit(".", 1)[1]
+        content = source.path.read_bytes()
+        new_id = f"{uuid4().hex}.{extension}"
+        path = self._safe_path(new_id)
+        # 与 save_image 一致：独占创建、0600，绝不覆盖已有文件。
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as target:
+                target.write(content)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        return StoredPrivateFile(
+            file_id=new_id,
+            path=path,
+            content_type=source.content_type,
+            size=len(content),
+        )
+
     def delete(self, file_id: str) -> None:
         """只删除根目录内满足随机编号格式的文件。"""
         self._safe_path(file_id).unlink(missing_ok=True)

@@ -1,10 +1,58 @@
-{% macro scope_fields(properties, entry=none) %}
-<label>适用范围<select name="scope" required>{% for value, label in [('unreviewed', '范围待审核'), ('global', '本店通用'), ('property', '指定房间'), ('public', '店外公开知识')] %}<option value="{{ value }}" {% if (entry.scope if entry else 'unreviewed') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-<label>适用房间（仅指定房间时选择）<select name="property_id"><option value="">不指定房间</option>{% for room in properties %}<option value="{{ room.id }}" {% if entry and entry.property_id == room.id %}selected{% endif %}>{{ room.room_number }} · {{ room.title }}{% if not room.is_active %}（已停用）{% endif %}</option>{% endfor %}</select></label>
-<label>生效日期（可不填）<input type="date" name="valid_from" value="{{ entry.valid_from or '' if entry else '' }}"></label>
-<label>有效至（含当日，可不填）<input type="date" name="valid_until" value="{{ entry.valid_until or '' if entry else '' }}"></label>
-<label>附加条件词（逗号分隔，可不填：客人问题里出现其中一个才用这条）<input name="trigger_any" value="{{ (entry.trigger_any or []) | join(',') if entry else '' }}" maxlength="1000"></label>
-<label>排除词（逗号分隔，可不填：客人问题里出现任一个就不用这条）<input name="trigger_exclude" value="{{ (entry.trigger_exclude or []) | join(',') if entry else '' }}" maxlength="1000"></label>
-<label class="checkbox"><input type="checkbox" name="show_in_miniprogram" value="1" {% if entry and entry.show_in_miniprogram %}checked{% endif %}>在小程序入住指南展示（只有「本店通用」且已启用、在有效期内的条目会出现）</label>
-<p class="muted">范围待审核的知识不会用于客人回复；日期为空表示未另设期限。附加条件词和排除词改了立即生效，比如「停车」条目加排除词「黄鹤楼」，客人问景区停车时就不会拿本店停车答案作答。</p>
+{% from "knowledge/nav.html" import room_label %}
+{# 知识分层表单（2026-11-25 知识库重构 Spec F4）：新建页、详情编辑与候选转换共用。
+   mode：new（独立新建页，多房间勾选、默认全店通用）、edit（详情编辑）、candidate（候选转换）。
+   entry 可以是知识条目、失败回填的 SimpleNamespace 或候选草稿字典，只按属性读取。
+   归属切换由 admin.js 的 data-kb-scope-form 联动显隐；无脚本时全部字段可见可提交，由服务端校验。 #}
+{% macro knowledge_fields(entry, properties, mode="edit") %}
+{% set scope = entry.scope or ("global" if mode == "new" else "unreviewed") %}
+{% set options = [
+  ("global", "全店通用", "所有房间的客人都适用"),
+  ("property", "指定房间", "只对所选房间的客人生效"),
+  ("public", "店外周边", "景点、交通、餐饮等店外信息"),
+] %}
+{% if mode != "new" %}{% set options = options + [("unreviewed", "范围待审核", "暂不参与机器人回答")] %}{% endif %}
+<fieldset class="kb-scope-picker">
+  <legend>知识归属</legend>
+  <div class="kb-segmented">{% for value, label, hint in options %}<label class="kb-segmented__option kb-segmented__option--{{ value }}"><input type="radio" name="scope" value="{{ value }}"{% if scope == value %} checked{% endif %} required><span><strong>{{ label }}</strong><small>{{ hint }}</small></span></label>{% endfor %}</div>
+</fieldset>
+<div class="kb-scope-section" data-kb-scope-section="property">
+  {% if mode == "new" %}
+  {% set chosen = entry.property_ids or [] %}
+  <fieldset class="kb-room-picker">
+    <legend>适用房间（可多选，只列在用房间）</legend>
+    <div class="button-row kb-room-actions" data-kb-room-actions hidden><button class="button button--secondary" type="button" data-kb-select-all>全选在用房</button><button class="button button--secondary" type="button" data-kb-select-none>清空</button></div>
+    <div class="kb-room-grid">{% for room in properties if room.is_active %}<label class="checkbox"><input type="checkbox" name="property_ids" value="{{ room.id }}"{% if room.id in chosen %} checked{% endif %}><span>{{ room_label(room) }}</span></label>{% else %}<p class="muted">还没有在用房间。</p>{% endfor %}</div>
+    <p class="field-help">选多间房时会为每间房各建一条独立知识，之后可以分别修改。</p>
+  </fieldset>
+  {% else %}
+  <label>适用房间<select name="property_id"><option value="">请选择房间</option>{% for room in properties %}<option value="{{ room.id }}"{% if entry.property_id == room.id %} selected{% endif %}>{{ room_label(room) }}{% if not room.is_active %}（已停用）{% endif %}</option>{% endfor %}</select></label>
+  {% endif %}
+</div>
+<label class="checkbox kb-scope-section" data-kb-scope-section="global unreviewed"><input type="checkbox" name="show_in_miniprogram" value="1"{% if entry.show_in_miniprogram %} checked{% endif %}><span>在小程序入住指南展示（只有「全店通用」且已启用、在有效期内的条目会出现）</span></label>
+<label>分类<input name="category" value="{{ entry.category or '' }}" maxlength="64" list="kb-category-options" autocomplete="off" required></label>
+<label>中文问题<textarea name="question_zh" maxlength="500" required>{{ entry.question_zh or '' }}</textarea></label>
+<label>中文答案<textarea name="answer_zh" maxlength="10000" required>{{ entry.answer_zh or '' }}</textarea></label>
+{% set has_en = (entry.question_en or '').strip() and (entry.answer_en or '').strip() %}
+{% set any_en = (entry.question_en or '').strip() or (entry.answer_en or '').strip() %}
+{# 新建页默认折叠（已填过英文的失败回填除外）；编辑与候选转换缺英文时默认展开。 #}
+<details class="kb-disclosure"{% if (mode == "new" and any_en) or (mode != "new" and not has_en) %} open{% endif %}>
+  <summary>英文问答（启用时必填）</summary>
+  <div class="kb-disclosure__body">
+    <p class="field-help">外国客人会收到英文答案。新建时可以先留空，会保存为停用草稿，补全英文后才能启用。</p>
+    <label>English question<textarea name="question_en" maxlength="500" lang="en">{{ entry.question_en or '' }}</textarea></label>
+    <label>English answer<textarea name="answer_en" maxlength="10000" lang="en">{{ entry.answer_en or '' }}</textarea></label>
+  </div>
+</details>
+{% set any_advanced = (entry.keywords or []) or entry.valid_from or entry.valid_until or (entry.trigger_any or []) or (entry.trigger_exclude or []) %}
+<details class="kb-disclosure"{% if any_advanced %} open{% endif %}>
+  <summary>关键词、有效期与触发条件（可不填）</summary>
+  <div class="kb-disclosure__body">
+    <label>关键词（逗号分隔）<input name="keywords" value="{{ (entry.keywords or []) | join(',') }}" maxlength="1000"></label>
+    <label>生效日期（可不填）<input type="date" name="valid_from" value="{{ entry.valid_from or '' }}"></label>
+    <label>有效至（含当日，可不填）<input type="date" name="valid_until" value="{{ entry.valid_until or '' }}"></label>
+    <label>附加条件词（逗号分隔，可不填：客人问题里出现其中一个才用这条）<input name="trigger_any" value="{{ (entry.trigger_any or []) | join(',') }}" maxlength="1000"></label>
+    <label>排除词（逗号分隔，可不填：客人问题里出现任一个就不用这条）<input name="trigger_exclude" value="{{ (entry.trigger_exclude or []) | join(',') }}" maxlength="1000"></label>
+    <p class="muted">日期为空表示未另设期限。附加条件词和排除词改了立即生效，比如「停车」条目加排除词「黄鹤楼」，客人问景区停车时就不会拿本店停车答案作答。</p>
+  </div>
+</details>
 {% endmacro %}

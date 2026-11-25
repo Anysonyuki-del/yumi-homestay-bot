@@ -94,8 +94,8 @@ def _token(client) -> str:
     return re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
 
 
-def test_admin_uploads_up_to_three_images_and_bad_files_leave_nothing_behind(tmp_path) -> None:
-    """管理员可传 3 张 JPG/PNG（含 3MB 的大图）；webp、超 5MB、第 4 张都被拒，且不留下孤儿文件。"""
+def test_admin_uploads_up_to_four_images_and_bad_files_leave_nothing_behind(tmp_path) -> None:
+    """管理员可传 4 张 JPG/PNG（含 3MB 的大图）；webp、超 5MB、第 5 张都被拒，且不留下孤儿文件。"""
     engine, factory, storage = _world(tmp_path)
     client, _ = build_client(EmployeeRole.ADMIN)
     client.app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory, storage)
@@ -103,23 +103,23 @@ def test_admin_uploads_up_to_three_images_and_bad_files_leave_nothing_behind(tmp
     # 3MB 在旧的 2MB 上限下会被拒，用来确认上限已放宽到 5MB。
     three_mb = PNG[:-12] + b"\x00" * (3 * 1024 * 1024) + PNG[-12:]
     assert _upload(client, _token(client), three_mb).status_code == 303
-    # 超限和 webp 要在还没满 3 张时上传，否则会被张数上限挡下，测不到大小和格式检查。
+    # 超限和 webp 要在还没满 4 张时上传，否则会被张数上限挡下，测不到大小和格式检查。
     webp = _upload(client, _token(client), WEBP, "image/webp")
     too_big = _upload(
         client, _token(client), PNG[:-12] + b"\x00" * (5 * 1024 * 1024) + PNG[-12:]
     )
-    for _ in range(2):
+    for _ in range(3):
         assert _upload(client, _token(client), PNG).status_code == 303
-    assert len(_files(tmp_path)) == 3
-    fourth = _upload(client, _token(client), PNG)
+    assert len(_files(tmp_path)) == 4
+    fifth = _upload(client, _token(client), PNG)
 
     assert webp.status_code == 400 and "JPG 或 PNG" in webp.json()["detail"]
     assert too_big.status_code == 400 and "大小" in too_big.json()["detail"]
-    assert fourth.status_code == 400 and "最多 3 张" in fourth.json()["detail"]
-    assert len(_files(tmp_path)) == 3
+    assert fifth.status_code == 400 and "最多 4 张" in fifth.json()["detail"]
+    assert len(_files(tmp_path)) == 4
     detail = client.get("/employee/knowledge/1")
-    assert detail.text.count('src="/employee/knowledge/1/images/') == 3
-    # 满 3 张后不再显示上传表单。
+    assert detail.text.count('src="/employee/knowledge/1/images/') == 4
+    # 满 4 张后不再显示上传表单。
     assert 'action="/employee/knowledge/1/images/upload"' not in detail.text
     audits = _query(
         factory, select(AuditLog.details).where(AuditLog.action == "knowledge.image_add")
@@ -383,8 +383,9 @@ def test_reused_entry_number_still_registers_its_own_cleanup(tmp_path, old_job_s
     client.app.state.knowledge_admin_service = SessionKnowledgeAdminService(factory, storage)
 
     def create_entry() -> int:
+        # 列表可能为空，新建令牌从独立新建页取（知识库重构 Spec §5.1(4)）。
         token = re.search(
-            r'name="csrf_token" value="([^"]+)"', client.get("/employee/knowledge").text
+            r'name="csrf_token" value="([^"]+)"', client.get("/employee/knowledge/new").text
         ).group(1)
         client.post("/employee/knowledge", data={
             "csrf_token": token, "category": "早餐", "question_zh": "早餐？", "answer_zh": "7点",

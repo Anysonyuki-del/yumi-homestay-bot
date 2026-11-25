@@ -36,6 +36,9 @@ CI 在 `ruff check .` 上挂掉。纳入版本库后，出处稳定，门禁也�
 | `2026-10-02_codex-to-claude-approval-review-round3-handoff.md` | 第三轮审查：无新 P1，AR8–AR9 测试判别力缺口（Codex → Claude） |
 | `2026-11-25_claude-to-gemini-1.76.0-review-handoff.md` | 1.76.0 前端重构复核修正 6 项的审查请求（Claude → Gemini） |
 | `2026-11-25_gemini-to-claude-1.76.0-review.md` | 1.76.0 审查：老 Safari 缺 `requestSubmit` 的 P1 等，已在 1.76.1 修复（Gemini → Claude） |
+| `2026-11-25_gemini-knowledge-base-refactor-spec-review-handoff.md` | 知识库页面重构三段 Spec 交接审查请求（Gemini → Claude） |
+| `2026-11-25_claude-to-gemini-knowledge-base-refactor-spec-review.md` | 知识库页面重构 Spec 审查意见及用户裁决（英文策略 P1=B、配图上限 4 张）（Claude → Gemini） |
+| `2026-11-25_claude-to-gemini-knowledge-base-refactor-implementation-handoff.md` | 知识库页面重构本地实施交接与验收请求，已在 1.77.0 发布（Claude → Gemini） |
 
 ## 这些文件的性质
 

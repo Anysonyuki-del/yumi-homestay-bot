@@ -20,6 +20,7 @@ from homestay_bot.routes.knowledge import (
     _issue_csrf,
     _require_admin,
     _word_list,
+    section_tabs,
 )
 from homestay_bot.web import pop_page_notice, set_page_notice, templates
 
@@ -51,6 +52,7 @@ async def referral_index(
     await _require_admin(request)
     service = _get_service(request)
     items = await service.list_referrals(limit=51, offset=(page - 1) * 50)
+    open_count = await service.count_open_referrals()
     return templates.TemplateResponse(
         request=request,
         name="knowledge/referrals.html",
@@ -59,7 +61,16 @@ async def referral_index(
             "page": page,
             "previous_page": page - 1 if page > 1 else None,
             "next_page": page + 1 if len(items) > 50 and page < 10000 else None,
-            "open_count": await service.count_open_referrals(),
+            "open_count": open_count,
+            # 与知识列表同一组页头页签（知识库重构 Spec F1）。
+            "tabs": section_tabs(
+                await service.section_counts(),
+                lambda key: "/employee/knowledge"
+                + ("" if key == "global" else f"?section={key}"),
+                None,
+            ),
+            "candidates_url": "/employee/knowledge?view=candidates",
+            "referral_open_count": open_count,
             "status_labels": STATUS_LABELS,
             "notice": pop_page_notice(request) or None,
             "page_title": "资料核实",
@@ -147,8 +158,10 @@ async def convert(
     category: str = Form(min_length=1, max_length=64),
     question_zh: str = Form(min_length=1, max_length=500),
     answer_zh: str = Form(min_length=1, max_length=10_000),
-    question_en: str = Form(min_length=1, max_length=500),
-    answer_en: str = Form(min_length=1, max_length=10_000),
+    # 英文不在表单层强制非空：缺英文由服务层 `_validate_active_english` 统一拒绝，
+    # 页面得到可读 422 并保留已填内容，而不是一坨字段校验 JSON（知识库重构 Spec §3.2(1)）。
+    question_en: str = Form("", max_length=500),
+    answer_en: str = Form("", max_length=10_000),
     keywords: str = Form("", max_length=1000),
     valid_from: str = Form("", max_length=10),
     valid_until: str = Form("", max_length=10),

@@ -103,3 +103,32 @@ def test_private_storage_write_probe_propagates_permission_failure(
         storage.verify_writable()
 
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_copy_image_creates_independent_private_file(tmp_path) -> None:
+    """副本须是新编号的独立文件：删除源文件后副本仍可读，权限同样收紧。"""
+    storage = PrivateFileStorage(tmp_path)
+    source = await storage.save_image(
+        BytesIO(PNG_BYTES), content_type="image/png", size_limit=1024
+    )
+
+    copied = storage.copy_image(source.file_id)
+    storage.delete(source.file_id)
+
+    assert copied.file_id != source.file_id
+    assert copied.file_id.endswith(".png")
+    assert copied.content_type == "image/png"
+    assert storage.open_for_read(copied.file_id).path.read_bytes() == PNG_BYTES
+    assert copied.path.stat().st_mode & 0o777 == 0o600
+
+
+def test_copy_image_of_missing_or_unsafe_source_is_refused(tmp_path) -> None:
+    """源文件不存在或编号不合规时拒绝复制，且不留下任何文件。"""
+    storage = PrivateFileStorage(tmp_path)
+
+    with pytest.raises(LookupError):
+        storage.copy_image(f"{'a' * 32}.png")
+    with pytest.raises(InvalidPrivateFile):
+        storage.copy_image("../escape.png")
+    assert list(tmp_path.iterdir()) == []

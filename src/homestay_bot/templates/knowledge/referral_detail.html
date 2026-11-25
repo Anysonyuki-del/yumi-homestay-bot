@@ -1,5 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% import "components/ui.html" as ui %}
+{% from "knowledge/nav.html" import room_label %}
 {# 失败提示就地显示在摘要卡里并附「已保留填写内容」，顶层布局不再重复渲染同一条 error。 #}
 {% set layout_error_inline = true %}
 
@@ -14,7 +15,7 @@
     <dt>客人原问（已脱敏）</dt><dd class="long-text">{{ referral.question or "—" }}</dd>
     <dt>标准问题</dt><dd class="long-text">{{ referral.canonical_question or "—" }}</dd>
     <dt>分类</dt><dd>{{ referral.category or "—" }}</dd>
-    <dt>房源</dt><dd>{% if detail.property %}{{ detail.property.room_number or "" }} · {{ detail.property.title }}{% else %}未确定{% endif %}</dd>
+    <dt>房源</dt><dd>{% if detail.property %}{{ room_label(detail.property) }}{% else %}未确定{% endif %}</dd>
   </dl>
 </section>
 
@@ -49,7 +50,7 @@
       <label class="checkbox"><input type="radio" name="scope_choice" value="property" required {% if values and values.scope_choice == "property" %}checked{% endif %}><span>仅此房间</span></label>
       <label class="checkbox"><input type="radio" name="scope_choice" value="global" required {% if values and values.scope_choice == "global" %}checked{% endif %}><span>全店</span></label>
       {% set chosen_room = values.property_id if values else referral.property_id %}
-      <label>房间（选「仅此房间」时必填{% if referral.property_id is none %}；转交时房源未确定{% endif %}）<select name="property_id"><option value="">未选择</option>{% for room in properties %}<option value="{{ room.id }}" {% if chosen_room == room.id %}selected{% endif %}>{{ room.room_number }} · {{ room.title }}{% if not room.is_active %}（已停用）{% endif %}</option>{% endfor %}</select></label>
+      <label>房间（选「仅此房间」时必填{% if referral.property_id is none %}；转交时房源未确定{% endif %}）<select name="property_id"><option value="">未选择</option>{% for room in properties %}<option value="{{ room.id }}" {% if chosen_room == room.id %}selected{% endif %}>{{ room_label(room) }}{% if not room.is_active %}（已停用）{% endif %}</option>{% endfor %}</select></label>
     </fieldset>
     <label>分类<input name="category" value="{{ values.category if values else draft.get('category') or referral.category or '' }}" maxlength="64" required></label>
     <label>中文问题<textarea name="question_zh" maxlength="500" required>{{ values.question_zh if values else draft.get("question_zh", "") }}</textarea></label>
