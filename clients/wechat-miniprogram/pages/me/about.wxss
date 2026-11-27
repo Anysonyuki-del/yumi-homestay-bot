@@ -1,11 +1,11 @@
-/* 关于本店：清晰店名与简介 + 纯白细描边事实卡，可操作行右侧给出陶红动作词。 */
+/* 关于本店：清晰店名与简介 + 细描边切面事实卡，行首图标与右侧动作词用前景强调色。 */
 .about__name { display: block; font-weight: 700; font-size: var(--yumi-text-display); line-height: 1.25; color: var(--yumi-ink); margin-bottom: 20rpx; }
 .about__intro { display: block; margin-bottom: 40rpx; }
 .facts {
   border-radius: 24rpx; border: 1rpx solid var(--yumi-hairline);
-  background: var(--yumi-surface); overflow: hidden;
+  background: var(--yumi-surface); box-shadow: var(--yumi-shadow-card); overflow: hidden;
 }
-.fact { display: flex; align-items: center; gap: 24rpx; padding: 30rpx 32rpx; transition: background-color 140ms ease-out; }
+.fact { display: flex; align-items: center; gap: 24rpx; padding: 30rpx 32rpx; color: var(--yumi-primary-deep); transition: background-color 140ms ease-out; }
 .fact + .fact { border-top: 1rpx solid var(--yumi-hairline); }
 .fact--pressed { background: var(--yumi-surface-well); }
 .fact__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4rpx; }

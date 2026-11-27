@@ -1,4 +1,4 @@
-/* 房间详情：照片满宽置顶，正文区块使用清晰暖石细线分隔，设施采用纯白细描边胶囊。 */
+/* 房间详情：照片满宽置顶，正文区块使用清晰暖石细线分隔，设施采用带顶边高光的细描边胶囊。 */
 .detail { padding-bottom: 220rpx; }
 .hero { display: block; --td-swiper-radius: 0; }
 .hero--placeholder { height: 600rpx; background: var(--yumi-surface-well); }
@@ -12,4 +12,5 @@
   padding: 12rpx 24rpx; border-radius: 999rpx;
   border: 1rpx solid var(--yumi-hairline); background: var(--yumi-surface);
   font-size: var(--yumi-text-caption); line-height: 1.4; color: var(--yumi-body);
+  box-shadow: var(--yumi-facet-highlight);
 }

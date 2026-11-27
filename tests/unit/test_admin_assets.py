@@ -1,3 +1,4 @@
+import math
 import re
 from pathlib import Path
 
@@ -47,18 +48,125 @@ def test_no_javascript_navigation_reaches_every_core_admin_page() -> None:
         assert label in fallback
 
 
-def test_admin_css_keeps_contrast_and_avoids_blanket_rules() -> None:
-    """主色对比度够用，不用 transition: all，页面不靠隐藏横向溢出掩盖排版问题。
+# 双态前景/背景配对与下限：正文、按钮字、链接、状态与知识范围走 4.5:1，
+# 控件边框、焦点环和主按钮相对卡片的边界走 3:1。禁用态属 WCAG 1.4.3 豁免，不列入。
+_INK = ("--ink-strong", "--text", "--ink-mid", "--ink-soft", "--muted")
+_CONTRAST_PAIRS = (
+    *[(ink, surface, 4.5) for ink in _INK
+      for surface in ("--surface", "--page", "--surface-sunk", "--sidebar-bg")],
+    ("--ink-soft", "--surface-well", 4.5),
+    ("--on-primary", "--primary", 4.5),
+    ("--on-primary-hover", "--primary-hover", 4.5),
+    ("--on-primary", "--primary-active", 4.5),
+    *[(ink, surface, 4.5) for ink in ("--link", "--link-hover")
+      for surface in ("--surface", "--page", "--surface-sunk", "--sidebar-bg", "--primary-soft")],
+    ("--toast-ink", "--toast-bg", 4.5),
+    ("--on-ink-strong", "--ink-strong", 4.5),
+    ("--on-danger", "--danger", 4.5),
+    *[(f"--{tone}", f"--{tone}-soft", 4.5) for tone in ("success", "warning", "danger", "info")],
+    *[(f"--{tone}", "--surface", 4.5) for tone in ("success", "warning", "danger", "info")],
+    *[(f"--scope-{scope}-fg", f"--scope-{scope}-bg", 4.5)
+      for scope in ("global", "room", "public")],
+    ("--control-border", "--surface", 3.0),
+    ("--control-border", "--page", 3.0),
+    ("--focus", "--surface", 3.0),
+    ("--focus", "--page", 3.0),
+    ("--primary", "--surface", 3.0),
+)
 
-    抽屉、提交状态、减少动效等交互由 tests/browser 在真实浏览器里验证；这里只留
-    浏览器测不到的计算与全局约束，不再逐条复述样式源码。
+
+def test_both_color_schemes_meet_wcag_contrast_on_their_own_tokens() -> None:
+    """浅色与系统暗色两套令牌各自达到 WCAG 阈值。
+
+    暗色曾隐式依赖「--surface 是白色」：轻提示、跳转链接和危险按钮悬停都拿
+    --surface 当白字，暗色下直接融进底色。这里按配对表逐项实算，新增专属前景令牌
+    （--toast-ink / --on-ink-strong / --on-danger）也一并纳入。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
+    for mode in ("light", "dark"):
+        tokens = _mode_tokens(css, mode)
+        for foreground, background, minimum in _CONTRAST_PAIRS:
+            ratio = _contrast_ratio(
+                _expand_hex(tokens[foreground]), _expand_hex(tokens[background])
+            )
+            assert ratio >= minimum, (
+                f"{mode}: {foreground} 在 {background} 上仅 {ratio:.2f}:1，低于 {minimum}:1"
+            )
 
-    assert _contrast_ratio("#c24322", "#f5f2ed") >= 4.5
-    assert _contrast_ratio("#c24322", "#ffffff") >= 4.5
+
+def test_admin_css_declares_dual_scheme_once_and_avoids_blanket_rules() -> None:
+    """color-scheme 只在 :root 声明一次；两套外壳成对声明 theme-color；不用全局粗放规则。"""
+    css = (ASSET_ROOT / "static/app.css").read_text()
+    assert len(re.findall(r"(?<![\w-])color-scheme:", _strip_comments(css))) == 1
+    assert "color-scheme: light dark;" in _root_block(css)
+    for relative_path in ("layouts/admin.html", "layouts/auth.html"):
+        source = (ASSET_ROOT / "templates" / relative_path).read_text()
+        assert '<meta name="color-scheme" content="light dark">' in source
+        light = _mode_tokens(css, "light")["--page"]
+        dark = _mode_tokens(css, "dark")["--page"]
+        assert (f'<meta name="theme-color" media="(prefers-color-scheme: light)" '
+                f'content="{light}">') in source
+        assert (f'<meta name="theme-color" media="(prefers-color-scheme: dark)" '
+                f'content="{dark}">') in source
     assert "transition: all" not in css
     assert "overflow-x: clip" not in css and "overflow-x: hidden" not in css
+
+
+def test_action_fill_tokens_never_paint_foreground() -> None:
+    """--primary 系只作填充与描边，绝不作文字或图标前景。
+
+    暗色主色 #b84018 在暖炭卡片上只有约 3:1，拿它写字必然不达标；前景一律走
+    --link / --link-hover。caret-color 与 accent-color 是明确例外，不在拦截范围。
+    """
+    css = (ASSET_ROOT / "static/app.css").read_text()
+    offenders = re.findall(
+        r"[^{};]*(?<![\w-])color:\s*var\(--primary(?:-hover|-active)?\)", css
+    )
+    assert not offenders, f"前景色引用了填充用主色：{offenders}"
+
+
+def test_spring_easings_follow_the_damped_oscillator_formula() -> None:
+    """两条弹簧曲线必须是二阶欠阻尼振子单位阶跃响应的 20 点采样。
+
+    手填的关键点无从核对，改一个点就悄悄变成另一条曲线；这里按公式复算。
+    linear() 只能出现在 @supports 包裹里：同名变量双写不是回退，不认识 linear()
+    的浏览器会让整条过渡失效，:root 主块必须保留 cubic-bezier 默认值。
+    """
+    css = _strip_comments((ASSET_ROOT / "static/app.css").read_text())
+    condition = "@supports (transition-timing-function: linear(0, 1)) {"
+    start = css.index(condition)
+    end = css.index("\n}\n", start)
+    block = css[start:end]
+    for position in (match.start() for match in re.finditer(r"(?<![\w-])linear\(", css)):
+        assert start <= position < end, "linear() 必须只出现在 @supports 包裹里"
+    root = _root_block(css)
+    for name, (zeta, omega) in {
+        "--ease-spring-ui": (0.79, 7.5), "--ease-spring-panel": (0.93, 6.8),
+    }.items():
+        assert re.search(rf"{name}:\s*cubic-bezier\(", root), f"{name} 缺少旧浏览器默认值"
+        match = re.search(rf"{name}:\s*linear\(([^)]*)\);", block)
+        assert match, f"{name} 没有在 @supports 里升级"
+        points = [float(value) for value in match.group(1).split(",")]
+        assert points == _spring_points(zeta, omega), f"{name} 与公式采样不一致"
+
+
+def _strip_comments(css: str) -> str:
+    """去掉 CSS 注释，避免注释里提到的语法被当成真实声明。"""
+    return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+
+def _spring_points(zeta: float, omega: float, count: int = 20) -> list[float]:
+    """按 y(t)=1-e^(-ζωt)(cos ωd·t + ζ/√(1-ζ²)·sin ωd·t) 在 t=i/(n-1) 采样，首尾钳制 0/1。"""
+    damped = omega * math.sqrt(1 - zeta ** 2)
+    points = []
+    for index in range(count):
+        t = index / (count - 1)
+        value = 1 - math.exp(-zeta * omega * t) * (
+            math.cos(damped * t) + zeta / math.sqrt(1 - zeta ** 2) * math.sin(damped * t)
+        )
+        points.append(round(value, 3))
+    points[0], points[-1] = 0.0, 1.0
+    return points
 
 
 def test_narrow_room_cards_switch_to_the_mobile_timeline() -> None:
@@ -240,16 +348,14 @@ def test_room_card_column_threshold_can_hold_the_default_calendar() -> None:
     assert ".room-operations-list--wide" in css
 
 
-def test_calendar_grid_lines_stay_visible_against_the_white_track() -> None:
-    """日历网格线必须能从白色轨道背景里分辨出来。
+def test_calendar_grid_lines_stay_visible_against_the_track() -> None:
+    """日历网格线与迷你轨未来段在浅、暗两套轨道底上都必须能分辨出来。
 
     这个问题出现过两次：表头竖线与行程分隔线都用过 #F1F5F9，在白底上对比度只有
     约 1.10:1，肉眼等同于没有线，网格结构因此读不出来（用户原话「边框和背景融在
-    一起了」）。这里对日历自己的线条变量设下限：相对白色至少 1.2:1。
+    一起了」）。暗色轨道换成暖炭后同样要守住 1.2:1；迷你轨未来段曾经只有约 1.1:1。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
-
-    root = _root_tokens(css)
     block = _room_card_block(css)
 
     # 线条现在直接引用全局中性令牌，因此连令牌本身一起校验：--line 调浅，
@@ -264,15 +370,20 @@ def test_calendar_grid_lines_stay_visible_against_the_white_track() -> None:
             used |= set(re.findall(r"var\((--[\w-]+)\)", gradient))
     # 竖线渐变里同时有 --days 这类几何变量，按「能解析成颜色」筛掉；令牌是否存在
     # 由 test_room_card_colors_all_go_through_design_tokens 单独守。
-    used = {name for name in used if name in root}
+    used = {name for name in used if name in _root_tokens(css)}
     assert used, "日历网格线没有走令牌，改一次要翻遍全表"
 
-    white = _relative_luminance("#FFFFFF")
-    for name in sorted(used):
-        value = root.get(name)
-        assert value, f"{name} 不在 :root 里，var() 会静默失效"
-        ratio = (white + 0.05) / (_relative_luminance(_expand_hex(value)) + 0.05)
-        assert ratio >= 1.2, f"{name}={value} 相对白底仅 {ratio:.2f}:1，线条会融进背景"
+    fill = re.search(r"\.cal-m__fill--future \{[^}]*background: var\((--[\w-]+)\)", block)
+    lane = re.search(r"\.cal-m__lane \{[^}]*background: var\((--[\w-]+)\)", block)
+    assert fill and lane, "找不到迷你轨未来段或轨道底规则"
+    for mode in ("light", "dark"):
+        tokens = {**_mode_tokens(css, mode), **_calendar_tokens(css, mode)}
+        track = _expand_hex(tokens["--surface"])
+        for name in sorted(used):
+            ratio = _contrast_ratio(_expand_hex(tokens[name]), track)
+            assert ratio >= 1.2, f"{mode}: {name} 相对轨道仅 {ratio:.2f}:1，线条会融进背景"
+        ratio = _contrast_ratio(tokens[fill.group(1)], _expand_hex(tokens[lane.group(1)]))
+        assert ratio >= 1.2, f"{mode}: 迷你轨未来段相对轨道仅 {ratio:.2f}:1"
 
 
 def _root_tokens(css: str) -> dict[str, str]:
@@ -282,6 +393,54 @@ def _root_tokens(css: str) -> dict[str, str]:
 
 def _root_block(css: str) -> str:
     return css[css.index(":root {"):css.index("\n}", css.index(":root {"))]
+
+
+def _dark_root_block(css: str) -> str:
+    """系统暗色下覆盖 :root 的那一块（@media (prefers-color-scheme: dark) 内的 :root）。"""
+    start = css.index("@media (prefers-color-scheme: dark) {\n  :root {")
+    return css[start:css.index("\n  }\n}", start)]
+
+
+def _mode_tokens(css: str, mode: str) -> dict[str, str]:
+    """浅色取 :root 字面色；暗色在其上叠加暗色块，未覆盖的令牌沿用浅色值。"""
+    tokens = _root_tokens(css)
+    if mode == "dark":
+        tokens.update(re.findall(r"(--[\w-]+):\s*(#[0-9A-Fa-f]{3,6})", _dark_root_block(css)))
+    return tokens
+
+
+def _calendar_main_block(css: str) -> str:
+    """日历主块 `.cal { ... }`：只允许 var() 与 color-mix()。"""
+    start = css.index("\n.cal {\n")
+    return css[start:css.index("\n}\n", start)]
+
+
+def _calendar_fallbacks(css: str) -> tuple[int, dict[str, str], dict[str, str]]:
+    """解析 @supports not (color-mix) 回退块，返回块位置与浅/暗两组静态值。"""
+    start = css.index("@supports not (color: color-mix(in srgb, red 50%, blue)) {")
+    block = css[start:css.index("\n}\n", start)]
+    light, dark = block.split("@media (prefers-color-scheme: dark) {", 1)
+    pattern = r"(--cal-[\w-]+):\s*(#[0-9A-Fa-f]{6});"
+    return start, dict(re.findall(pattern, light)), dict(re.findall(pattern, dark))
+
+
+def _calendar_tokens(css: str, mode: str) -> dict[str, str]:
+    """按日历主块的 var() / color-mix() 把 --cal-* 解析成该模式下的实际颜色。"""
+    tokens = _mode_tokens(css, mode)
+    resolved = {}
+    for name, value in re.findall(r"(--cal-[\w-]+):\s*([^;]+);", _calendar_main_block(css)):
+        mix = re.fullmatch(
+            r"color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\)", value
+        )
+        alias = re.fullmatch(r"var\((--[\w-]+)\)", value)
+        if mix:
+            top, percent, bottom = mix.groups()
+            resolved[name] = _srgb_mix(tokens[top], tokens[bottom], float(percent))
+        elif alias:
+            resolved[name] = _expand_hex(tokens[alias.group(1)])
+        else:
+            raise AssertionError(f"{name} 不是 var() 或 color-mix()：{value}")
+    return resolved
 
 
 def _room_card_block(css: str) -> str:
@@ -315,14 +474,15 @@ def test_room_card_colors_all_go_through_design_tokens() -> None:
 
     v1.23.0 重设计时这一段把 --primary、--muted 等换成了邻近的字面色，页面因此
     长出了第二套强调色：控制台其它页面按 --primary 走，这一页按 #3448a5 走，换主
-    色要逐处翻。唯一允许出现字面色的地方是 `.cal` 里的 color-mix 回退声明——那是
-    一个可枚举的声明缝，不是散落的用法。
+    色要逐处翻。唯一允许出现字面色的地方是 `@supports not (color-mix)` 回退块——
+    那是一个可枚举的声明缝，不是散落的用法；`.cal` 主块本身也不许写字面色。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
     block = _room_card_block(css)
 
-    # 先摘掉 --cal-* 声明行，剩下的任何字面色都是绕过令牌的用法。
-    without_seam = re.sub(r"\s*--cal-[\w-]+:[^;]*;", "", block)
+    seam = re.search(r"@supports not \(color: color-mix\([^)]*\)\) \{.*?\n\}\n", block, re.S)
+    assert seam, "找不到日历的 @supports not 回退块"
+    without_seam = block.replace(seam.group(0), "")
     leaked = re.findall(r"#[0-9A-Fa-f]{3,6}|\brgba?\(", without_seam)
     assert not leaked, f"房间卡片里仍有绕过令牌的字面色：{leaked}"
     assert "color: white" not in without_seam, "白色也要走 --surface，否则暗色方案无从下手"
@@ -341,27 +501,44 @@ def test_room_card_colors_all_go_through_design_tokens() -> None:
 
 
 def test_calendar_bar_palette_stays_derived_from_the_primary_token() -> None:
-    """日历条配色必须跟着 --primary 与 --warning 走，回退值不得与 color-mix 脱钩。
+    """日历条配色跟着 --primary 与 --warning 走，旧浏览器回退值在浅/暗两态都与 color-mix 等价。
 
-    回退声明是给不支持 color-mix 的浏览器兜底的，两行写的必须是同一个颜色；只改
-    其中一行，两类浏览器就会看到两套配色，而且没有任何地方会报错。
+    早先「同名属性先写字面色、再写 color-mix」的双写回退从未生效：自定义属性不在
+    解析期校验，后一条恒覆盖前一条，不认识 color-mix 的 Safari 15.4–16.1 在计算期
+    整条失效。回退改放 @supports not 块，并为暗色嵌套一组；只改其中一处，两类
+    浏览器就会看到两套配色，而且没有任何地方会报错。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
-    root = _root_tokens(css)
-    pairs = re.findall(
-        r"(--cal-[\w-]+):\s*(#[0-9A-Fa-f]{6});\s*\1:\s*"
-        r"color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\);",
-        css,
+    main = _calendar_main_block(css)
+    assert not re.findall(r"#[0-9A-Fa-f]{3,6}|\brgba?\(", main), "日历主块不得写字面色"
+    mixes = re.findall(
+        r"(--cal-[\w-]+):\s*color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\);",
+        main,
     )
-    assert len(pairs) >= 4, f"color-mix 与回退值没有成对声明：{pairs}"
-    for name, fallback, top, percent, bottom in pairs:
-        assert top in {"--primary", "--warning"}, (
-            f"{name} 挂在 {top} 上，既不是主色也不是告警色，换令牌时不会跟着走"
-        )
-        expected = _srgb_mix(root[top], root[bottom], float(percent))
-        assert fallback.lower() == expected, (
-            f"{name} 回退值 {fallback} 与 color-mix 结果 {expected} 不一致"
-        )
+    assert len(mixes) >= 4, f"日历主块缺少 color-mix 派生：{mixes}"
+
+    position, light, dark = _calendar_fallbacks(css)
+    anchor = css.index("@media (max-width: 520px) {\n  .room-operation-card { padding")
+    assert css.index("\n.cal {\n") < position < anchor, "回退块必须紧跟日历主块、位于房间卡片段内"
+    names = {name for name, *_ in mixes}
+    assert set(light) == names and set(dark) == names, (
+        "回退块必须覆盖每个 color-mix 令牌，浅暗各一组"
+    )
+    for mode, fallbacks in (("light", light), ("dark", dark)):
+        tokens = _mode_tokens(css, mode)
+        for name, top, percent, bottom in mixes:
+            assert top in {"--primary", "--warning"}, (
+                f"{name} 挂在 {top} 上，既不是主色也不是告警色，换令牌时不会跟着走"
+            )
+            expected = _srgb_mix(tokens[top], tokens[bottom], float(percent))
+            assert fallbacks[name].lower() == expected, (
+                f"{mode}: {name} 回退值 {fallbacks[name]} 与 color-mix 结果 {expected} 不一致"
+            )
+        resolved = {**tokens, **_calendar_tokens(css, mode)}
+        for ink, surface in (("--cal-current-ink", "--cal-current-bg"),
+                             ("--cal-future-ink", "--cal-future-bg")):
+            ratio = _contrast_ratio(_expand_hex(resolved[ink]), _expand_hex(resolved[surface]))
+            assert ratio >= 4.5, f"{mode}: {ink} 在 {surface} 上仅 {ratio:.2f}:1"
 
 
 # ---- 结构守卫（前端审查 2026-11-25）：同类问题已逐个修过，这里按类拦截，不再靠逐处复查。 ----

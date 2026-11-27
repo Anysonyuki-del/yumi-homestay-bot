@@ -8,38 +8,40 @@
     "pages/me/about"
   ],
   "window": {
-    "navigationBarTextStyle": "black",
+    "navigationBarTextStyle": "@navTxtStyle",
     "navigationBarTitleText": "YuMi 民宿",
-    "navigationBarBackgroundColor": "#f5f2ed",
-    "backgroundColor": "#f5f2ed",
-    "backgroundTextStyle": "dark"
+    "navigationBarBackgroundColor": "@navBgColor",
+    "backgroundColor": "@bgColor",
+    "backgroundTextStyle": "@bgTxtStyle"
   },
   "tabBar": {
-    "color": "#58524a",
-    "selectedColor": "#c24322",
-    "backgroundColor": "#ffffff",
-    "borderStyle": "black",
+    "color": "@tabColor",
+    "selectedColor": "@tabSelectedColor",
+    "backgroundColor": "@tabBgColor",
+    "borderStyle": "@tabBorderStyle",
     "list": [
       {
         "pagePath": "pages/home/index",
         "text": "首页",
-        "iconPath": "assets/tab/home.png",
-        "selectedIconPath": "assets/tab/home-active.png"
+        "iconPath": "@homeIcon",
+        "selectedIconPath": "@homeActiveIcon"
       },
       {
         "pagePath": "pages/services/index",
         "text": "服务",
-        "iconPath": "assets/tab/services.png",
-        "selectedIconPath": "assets/tab/services-active.png"
+        "iconPath": "@servicesIcon",
+        "selectedIconPath": "@servicesActiveIcon"
       },
       {
         "pagePath": "pages/me/index",
         "text": "我的",
-        "iconPath": "assets/tab/me.png",
-        "selectedIconPath": "assets/tab/me-active.png"
+        "iconPath": "@meIcon",
+        "selectedIconPath": "@meActiveIcon"
       }
     ]
   },
+  "darkmode": true,
+  "themeLocation": "theme.json",
   "style": "v2",
   "componentFramework": "glass-easel",
   "sitemapLocation": "sitemap.json",

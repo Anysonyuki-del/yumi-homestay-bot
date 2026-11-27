@@ -586,3 +586,174 @@ test('详情轮播项带读屏文字（房名、图序、放大提示），放�
   page.previewPhoto({ detail: { index: 1 } })
   assert.ok(calls.includes(`preview:${API_BASE_URL}${photos[1]}|2`))
 })
+
+// ---- 双态光学视觉（2026-11-28 光学重设计 Spec F5）：theme.json、标签栏图标、WXML 零硬编码色、TDesign 暗色基座 ----
+const fs = require('node:fs')
+const zlib = require('node:zlib')
+
+// 解码 8 位 RGBA、非隔行 PNG，返回宽高与逐像素 [r, g, b, a]；只为核对标签栏图标，不支持其他格式。
+function decodePng(file) {
+  const data = fs.readFileSync(file)
+  let offset = 8
+  let header = null
+  const idat = []
+  while (offset < data.length) {
+    const length = data.readUInt32BE(offset)
+    const type = data.toString('latin1', offset + 4, offset + 8)
+    const body = data.subarray(offset + 8, offset + 8 + length)
+    if (type === 'IHDR') header = { width: body.readUInt32BE(0), height: body.readUInt32BE(4), depth: body[8], colorType: body[9], interlace: body[12] }
+    if (type === 'IDAT') idat.push(body)
+    offset += 12 + length
+  }
+  assert.deepEqual([header.depth, header.colorType, header.interlace], [8, 6, 0], `${file} 不是 8 位 RGBA 非隔行 PNG`)
+  const raw = zlib.inflateSync(Buffer.concat(idat))
+  const stride = header.width * 4
+  const pixels = []
+  let previous = Buffer.alloc(stride)
+  for (let y = 0; y < header.height; y += 1) {
+    const filter = raw[y * (stride + 1)]
+    const line = Buffer.from(raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)))
+    for (let x = 0; x < stride; x += 1) {
+      const left = x >= 4 ? line[x - 4] : 0
+      const up = previous[x]
+      const corner = x >= 4 ? previous[x - 4] : 0
+      let predictor = 0
+      if (filter === 1) predictor = left
+      else if (filter === 2) predictor = up
+      else if (filter === 3) predictor = (left + up) >> 1
+      else if (filter === 4) {
+        const p = left + up - corner
+        const [pa, pb, pc] = [Math.abs(p - left), Math.abs(p - up), Math.abs(p - corner)]
+        predictor = pa <= pb && pa <= pc ? left : pb <= pc ? up : corner
+      }
+      line[x] = (line[x] + predictor) & 255
+    }
+    for (let x = 0; x < stride; x += 4) pixels.push([line[x], line[x + 1], line[x + 2], line[x + 3]])
+    previous = line
+  }
+  return { width: header.width, height: header.height, pixels }
+}
+
+const hex = ([r, g, b]) => '#' + [r, g, b].map((value) => value.toString(16).padStart(2, '0')).join('')
+const readClient = (relative) => fs.readFileSync(path.join(CLIENT_ROOT, relative), 'utf8')
+
+// app.wxss 里 @media (prefers-color-scheme: dark) { page { ... } } 那一块（注释里提到的同名文字不算）。
+function darkPageBlock() {
+  const css = readClient('app.wxss')
+  const start = css.indexOf('@media (prefers-color-scheme: dark) {')
+  assert.ok(start >= 0, 'app.wxss 缺少暗色块')
+  return css.slice(start, css.indexOf('\n}\n', start))
+}
+
+test('app.json 开启 darkmode，窗口与标签栏的颜色和图标全部引用 theme.json 中浅暗两态都定义的变量', () => {
+  const app = JSON.parse(readClient('app.json'))
+  const theme = JSON.parse(readClient('theme.json'))
+  assert.equal(app.darkmode, true)
+  assert.equal(app.themeLocation, 'theme.json')
+  const values = [
+    ...Object.values(app.window).filter((value) => value !== app.window.navigationBarTitleText),
+    app.tabBar.color, app.tabBar.selectedColor, app.tabBar.backgroundColor, app.tabBar.borderStyle,
+    ...app.tabBar.list.flatMap((item) => [item.iconPath, item.selectedIconPath]),
+  ]
+  assert.equal(values.length, 14)
+  for (const value of values) {
+    assert.match(value, /^@\w+$/, `${value} 仍是写死的字面量`)
+    for (const mode of ['light', 'dark']) assert.ok(theme[mode][value.slice(1)], `${mode} 缺少 ${value}`)
+  }
+  assert.deepEqual(Object.keys(theme.light).sort(), Object.keys(theme.dark).sort())
+  assert.deepEqual(
+    [theme.light.navBgColor, theme.light.tabBgColor, theme.light.tabSelectedColor],
+    ['#f6f4ee', '#ffffff', '#c24322'],
+  )
+  assert.deepEqual(
+    [theme.dark.navBgColor, theme.dark.tabBgColor, theme.dark.tabSelectedColor, theme.dark.navTxtStyle],
+    ['#151413', '#100f0e', '#f09a5e', 'white'],
+  )
+})
+
+test('12 枚标签栏图标都是 81×81 单色剪影：浅色沿用原色，暗色与 theme.json 同色且轮廓与浅色逐像素一致', () => {
+  const theme = JSON.parse(readClient('theme.json'))
+  const lightColor = { Icon: '#58524a', ActiveIcon: '#c24322' }
+  const darkColor = { Icon: theme.dark.tabColor, ActiveIcon: theme.dark.tabSelectedColor }
+  let checked = 0
+  for (const name of ['home', 'services', 'me']) {
+    for (const kind of ['Icon', 'ActiveIcon']) {
+      const light = decodePng(path.join(CLIENT_ROOT, theme.light[`${name}${kind}`]))
+      const dark = decodePng(path.join(CLIENT_ROOT, theme.dark[`${name}${kind}`]))
+      for (const [image, color] of [[light, lightColor[kind]], [dark, darkColor[kind]]]) {
+        assert.deepEqual([image.width, image.height], [81, 81])
+        const colors = new Set(image.pixels.filter((pixel) => pixel[3]).map(hex))
+        assert.deepEqual([...colors], [color], `${name}${kind} 图标颜色应为 ${color}`)
+        checked += 1
+      }
+      assert.deepEqual(dark.pixels.map((pixel) => pixel[3]), light.pixels.map((pixel) => pixel[3]), `${name}${kind} 暗色轮廓走样`)
+    }
+  }
+  assert.equal(checked, 12)
+})
+
+test('页面 WXML 不再写死颜色：t-icon 颜色由父容器或 t-class 继承，暗色才能整体切换', () => {
+  const files = []
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(path.join(CLIENT_ROOT, dir), { withFileTypes: true })) {
+      const relative = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(relative)
+      else if (entry.name.endsWith('.wxml')) files.push(relative)
+    }
+  }
+  walk('pages')
+  walk('templates')
+  assert.ok(files.length >= 6)
+  for (const file of files) {
+    const source = readClient(file)
+    assert.doesNotMatch(source, /#[0-9a-fA-F]{3,8}\b|rgba?\(/, `${file} 写死了颜色`)
+    assert.doesNotMatch(source, /<t-icon\b[^>]*\scolor=/, `${file} 的 t-icon 仍传 color 属性`)
+  }
+})
+
+// TDesign 1.17.0 公共样式没有引入 theme/_dark.wxss：这套语义基座必须在 app.wxss 暗色块里整套显式写出。
+const TDESIGN_DARK_BASE = [
+  ...['page', 'container', 'container-active', 'secondarycontainer', 'secondarycontainer-active', 'component',
+    'component-active', 'component-disabled', 'secondarycomponent', 'secondarycomponent-active', 'specialcomponent']
+    .map((name) => `--td-bg-color-${name}`),
+  ...['primary', 'secondary', 'placeholder', 'disabled', 'anti', 'brand', 'link'].map((name) => `--td-text-color-${name}`),
+  ...Array.from({ length: 14 }, (_, index) => `--td-gray-color-${index + 1}`),
+  ...[1, 2, 3, 4].flatMap((index) => [`--td-font-white-${index}`, `--td-font-gray-${index}`]),
+  '--td-component-stroke', '--td-component-border', '--td-border-level-1-color', '--td-border-level-2-color',
+  '--td-mask-active', '--td-mask-disabled',
+  ...['', '-active', '-disabled', '-focus', '-light', '-light-active'].map((suffix) => `--td-brand-color${suffix}`),
+  ...Array.from({ length: 10 }, (_, index) => `--td-primary-color-${index + 1}`),
+  ...['error', 'warning', 'success'].flatMap((tone) => [
+    `--td-${tone}-color`,
+    ...Array.from({ length: 10 }, (_, index) => `--td-${tone}-color-${index + 1}`),
+    ...['focus', 'active', 'disabled', 'light', 'light-active'].map((suffix) => `--td-${tone}-color-${suffix}`),
+  ]),
+  '--td-button-primary-text-color', '--td-button-primary-outline-color', '--td-button-default-color',
+  '--td-collapse-panel-bg-color', '--td-collapse-header-text-color', '--td-skeleton-bg-color',
+  '--td-swiper-nav-fraction-bg-color', '--td-loading-color',
+]
+
+test('app.wxss 暗色块完整覆写 TDesign 暗色语义基座与在用组件令牌，并同步全部 --yumi-* 令牌', () => {
+  const block = darkPageBlock()
+  const declared = new Set([...block.matchAll(/(--[\w-]+):/g)].map((match) => match[1]))
+  const missing = TDESIGN_DARK_BASE.filter((name) => !declared.has(name))
+  assert.deepEqual(missing, [])
+  const css = readClient('app.wxss')
+  const light = css.slice(css.indexOf('page {'), css.indexOf('\n}\n', css.indexOf('page {')))
+  const yumi = [...light.matchAll(/(--yumi-[\w-]+):\s*(#|rgba|inset|0 )/g)].map((match) => match[1])
+  assert.ok(yumi.length >= 16)
+  assert.deepEqual(yumi.filter((name) => !declared.has(name)), [], '浅色块的颜色/阴影令牌暗色块必须逐一覆写')
+})
+
+const TDESIGN_ROOT = path.join(CLIENT_ROOT, 'miniprogram_npm/tdesign-miniprogram')
+test('本机装了 miniprogram_npm 时：在用组件里所有带浅色字面兜底的 --td-* 都已在暗色块声明', { skip: !fs.existsSync(TDESIGN_ROOT) && 'miniprogram_npm 未构建（CI 不装），只跑上一条基座清单' }, () => {
+  const declared = new Set([...darkPageBlock().matchAll(/(--td-[\w-]+):/g)].map((match) => match[1]))
+  const fallback = /var\((--td-[\w-]+),\s*(?:#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)|white|black|transparent)\)/g
+  const needed = new Set()
+  for (const component of ['button', 'swiper', 'swiper-nav', 'icon', 'collapse', 'collapse-panel', 'skeleton', 'loading']) {
+    const source = fs.readFileSync(path.join(TDESIGN_ROOT, component, `${component}.wxss`), 'utf8')
+    for (const match of source.matchAll(fallback)) needed.add(match[1])
+  }
+  assert.ok(needed.size >= 10)
+  assert.deepEqual([...needed].filter((name) => !declared.has(name)), [])
+})

@@ -1,8 +1,9 @@
-/* 服务分类：纯白细描边折叠问答面板，标题用清晰加粗无衬线，答案留足呼吸感。 */
+/* 服务分类：细描边切面折叠问答面板（底色走 TDesign 折叠令牌，随暗色切换），标题用清晰加粗无衬线，答案留足呼吸感。 */
 .qa {
   border-radius: 24rpx;
   overflow: hidden;
   border: 1rpx solid var(--yumi-hairline);
+  box-shadow: var(--yumi-shadow-card);
   --td-cell-title-font: 600 32rpx / 1.5 var(--yumi-sans);
   --td-collapse-content-padding: 8rpx 32rpx 36rpx;
 }

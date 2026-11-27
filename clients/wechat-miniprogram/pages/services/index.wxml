@@ -13,7 +13,7 @@
     <!-- 导航栏已写「服务」，页内不再重复标题（质感 Spec T5）。 -->
     <view class="cards">
       <view class="card pressable" wx:for="{{categories}}" wx:key="name" data-name="{{item.name}}" bindtap="openCategory" hover-class="is-pressed" hover-stay-time="80" aria-role="button" aria-label="{{item.name}}，{{item.count}} 条">
-        <view class="card__icon"><t-icon name="{{item.icon}}" size="44rpx" color="#c24322" /></view>
+        <view class="card__icon"><t-icon name="{{item.icon}}" size="44rpx" /></view>
         <text class="card__name">{{item.name}}</text>
         <text class="card__meta">{{item.count}} 条 · {{item.preview}}</text>
       </view>
@@ -24,7 +24,7 @@
         <text class="contact__title">联系管家</text>
         <text class="contact__body">没找到想问的，直接问管家。</text>
       </view>
-      <t-icon name="chevron-right" size="40rpx" color="#58524a" />
+      <t-icon name="chevron-right" size="40rpx" t-class="yumi-chevron" />
     </button>
   </block>
 </view>

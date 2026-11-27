@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-25T15:31:09Z",
+  "updated_at": "2026-11-27T20:17:56Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -77,15 +77,15 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "875bbb1a5ea47a3e76a133a0895dd71587acf44874c0eb559f5455e8c1dd4848",
-      "size": 211546,
-      "normalized_sha256": "875bbb1a5ea47a3e76a133a0895dd71587acf44874c0eb559f5455e8c1dd4848"
+      "sha256": "accb709c19f69584db9e65090f464440f89ab5773fcafaba5fca69a71896b7b2",
+      "size": 213404,
+      "normalized_sha256": "accb709c19f69584db9e65090f464440f89ab5773fcafaba5fca69a71896b7b2"
     },
     "DESIGN.md": {
       "role": "index",
-      "sha256": "bfeba051c91870d518e3cc78c3abeeb24360dc7480b3f8b981334b8a064054dd",
-      "size": 14409,
-      "normalized_sha256": "bfeba051c91870d518e3cc78c3abeeb24360dc7480b3f8b981334b8a064054dd"
+      "sha256": "def7771ada56298a27d4d73f9c720d1636c626ad43c368cd8c448f1d0f67e31b",
+      "size": 18491,
+      "normalized_sha256": "def7771ada56298a27d4d73f9c720d1636c626ad43c368cd8c448f1d0f67e31b"
     },
     "Dockerfile": {
       "role": "index",
@@ -125,9 +125,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "29e5eac6ebb8a44d2acefe520053bbe899e3f1644213fb16b9c92a8c2646c5ba",
-      "size": 408885,
-      "normalized_sha256": "29e5eac6ebb8a44d2acefe520053bbe899e3f1644213fb16b9c92a8c2646c5ba"
+      "sha256": "0f62f661440ca8a6590a441c392bc38b80156734357244bee4d2b798cfb691eb",
+      "size": 414602,
+      "normalized_sha256": "0f62f661440ca8a6590a441c392bc38b80156734357244bee4d2b798cfb691eb"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -149,15 +149,15 @@
     },
     "clients/wechat-miniprogram/app.json": {
       "role": "index",
-      "sha256": "e7e488c3eacfe61edb18c584abcfe5f30570a23184fdf65c3f0ae722df34954b",
-      "size": 1238,
-      "normalized_sha256": "e7e488c3eacfe61edb18c584abcfe5f30570a23184fdf65c3f0ae722df34954b"
+      "sha256": "2f0f49356bbca717e5eecbf5c3358a9c502fc52379604737b88b165c41fcf46a",
+      "size": 1273,
+      "normalized_sha256": "2f0f49356bbca717e5eecbf5c3358a9c502fc52379604737b88b165c41fcf46a"
     },
     "clients/wechat-miniprogram/app.wxss": {
       "role": "index",
-      "sha256": "692d173bcc6047377740d36967314fe5bcfc9700175bee82593634a866ec0082",
-      "size": 5071,
-      "normalized_sha256": "692d173bcc6047377740d36967314fe5bcfc9700175bee82593634a866ec0082"
+      "sha256": "beca6ec50a006ae379013faec24b2887c87b8eb067532cb5fc2fe6ecfa3ad29c",
+      "size": 13547,
+      "normalized_sha256": "beca6ec50a006ae379013faec24b2887c87b8eb067532cb5fc2fe6ecfa3ad29c"
     },
     "clients/wechat-miniprogram/package-lock.json": {
       "role": "index",
@@ -185,15 +185,15 @@
     },
     "clients/wechat-miniprogram/pages/home/index.wxml": {
       "role": "index",
-      "sha256": "1af5f248808758eed024a285433d799a4343e0c1eee78ab934b1b4e6a4fe629c",
-      "size": 6001,
-      "normalized_sha256": "1af5f248808758eed024a285433d799a4343e0c1eee78ab934b1b4e6a4fe629c"
+      "sha256": "6d7bf4af09f00df288dd5b1b529cabd0fb3c0c0e721cc4e13269a8e15d6aa990",
+      "size": 5976,
+      "normalized_sha256": "6d7bf4af09f00df288dd5b1b529cabd0fb3c0c0e721cc4e13269a8e15d6aa990"
     },
     "clients/wechat-miniprogram/pages/home/index.wxss": {
       "role": "index",
-      "sha256": "6faa01bcde2d3fac4653cb262df361d4c168134f2685bae5f52b96ebdb66e884",
-      "size": 4445,
-      "normalized_sha256": "6faa01bcde2d3fac4653cb262df361d4c168134f2685bae5f52b96ebdb66e884"
+      "sha256": "4d3121a3dde928f26c59d9100d321967ee8913eb00a74b9c3d13c2234f25bd13",
+      "size": 4736,
+      "normalized_sha256": "4d3121a3dde928f26c59d9100d321967ee8913eb00a74b9c3d13c2234f25bd13"
     },
     "clients/wechat-miniprogram/pages/me/about.js": {
       "role": "index",
@@ -209,15 +209,15 @@
     },
     "clients/wechat-miniprogram/pages/me/about.wxml": {
       "role": "index",
-      "sha256": "5c29aad9572527af78e45757b025f3d74296cd4887ef0d2d7871232dbc14ea48",
-      "size": 2558,
-      "normalized_sha256": "5c29aad9572527af78e45757b025f3d74296cd4887ef0d2d7871232dbc14ea48"
+      "sha256": "91fd2c7157d66e09cacdd213ae7371bddbd024c411f259ebd14d4f680946a9bb",
+      "size": 2517,
+      "normalized_sha256": "91fd2c7157d66e09cacdd213ae7371bddbd024c411f259ebd14d4f680946a9bb"
     },
     "clients/wechat-miniprogram/pages/me/about.wxss": {
       "role": "index",
-      "sha256": "3f7d0172d2ec7e9b90eac095823a3ab4d4a35826d13edd50bda8185fb2a858c2",
-      "size": 1082,
-      "normalized_sha256": "3f7d0172d2ec7e9b90eac095823a3ab4d4a35826d13edd50bda8185fb2a858c2"
+      "sha256": "569998edf6a95d6f2830573d86f514bb447de20745dadfeb52ebd4aadc800483",
+      "size": 1161,
+      "normalized_sha256": "569998edf6a95d6f2830573d86f514bb447de20745dadfeb52ebd4aadc800483"
     },
     "clients/wechat-miniprogram/pages/me/index.js": {
       "role": "index",
@@ -233,15 +233,15 @@
     },
     "clients/wechat-miniprogram/pages/me/index.wxml": {
       "role": "index",
-      "sha256": "ab667b9f9c6291e03a76a2ac1e18f6ca8e5321cb18377ab63a44044c124414da",
-      "size": 3352,
-      "normalized_sha256": "ab667b9f9c6291e03a76a2ac1e18f6ca8e5321cb18377ab63a44044c124414da"
+      "sha256": "724897a664e726ef873f78daaa7ee316938f60569205c4c3e7279d1c662ea058",
+      "size": 3309,
+      "normalized_sha256": "724897a664e726ef873f78daaa7ee316938f60569205c4c3e7279d1c662ea058"
     },
     "clients/wechat-miniprogram/pages/me/index.wxss": {
       "role": "index",
-      "sha256": "8892170fd389f0edfe595c76358f379b33b04aeef34e6896672946c7201d5822",
-      "size": 1520,
-      "normalized_sha256": "8892170fd389f0edfe595c76358f379b33b04aeef34e6896672946c7201d5822"
+      "sha256": "160b60194bf891472e608f7cdd9f785571ed312da9de6d33013e382c4f871f1c",
+      "size": 1704,
+      "normalized_sha256": "160b60194bf891472e608f7cdd9f785571ed312da9de6d33013e382c4f871f1c"
     },
     "clients/wechat-miniprogram/pages/rooms/detail.js": {
       "role": "index",
@@ -263,9 +263,9 @@
     },
     "clients/wechat-miniprogram/pages/rooms/detail.wxss": {
       "role": "index",
-      "sha256": "ecca7fc3d66cb1de3189c6433f68048eaa3b1accfeaba92685db1f92eca5090b",
-      "size": 1031,
-      "normalized_sha256": "ecca7fc3d66cb1de3189c6433f68048eaa3b1accfeaba92685db1f92eca5090b"
+      "sha256": "bab995488ee689cb76647a5427372c0b5f38bd0c4144f5a5e6bbcdda82429b24",
+      "size": 1086,
+      "normalized_sha256": "bab995488ee689cb76647a5427372c0b5f38bd0c4144f5a5e6bbcdda82429b24"
     },
     "clients/wechat-miniprogram/pages/services/category.js": {
       "role": "index",
@@ -287,9 +287,9 @@
     },
     "clients/wechat-miniprogram/pages/services/category.wxss": {
       "role": "index",
-      "sha256": "9035e7a67d2b0b69d40697284d29da62a6c4d18bea77148bf464275cecfb4d3d",
-      "size": 435,
-      "normalized_sha256": "9035e7a67d2b0b69d40697284d29da62a6c4d18bea77148bf464275cecfb4d3d"
+      "sha256": "a164b17e0d481d46849dabb4ebda02caa26fef947c462c22cb8a5f4a28eb0ed7",
+      "size": 528,
+      "normalized_sha256": "a164b17e0d481d46849dabb4ebda02caa26fef947c462c22cb8a5f4a28eb0ed7"
     },
     "clients/wechat-miniprogram/pages/services/index.js": {
       "role": "index",
@@ -305,15 +305,15 @@
     },
     "clients/wechat-miniprogram/pages/services/index.wxml": {
       "role": "index",
-      "sha256": "b8874216df92952bf123ff64baf907b99cca98cc27fd9d29ca4c2f8ce80038ca",
-      "size": 2021,
-      "normalized_sha256": "b8874216df92952bf123ff64baf907b99cca98cc27fd9d29ca4c2f8ce80038ca"
+      "sha256": "f2ea4e9c968ac96dddb2ca3be4d4e2ada0bc52fa06cfe16c6454da7f11eafd9b",
+      "size": 2012,
+      "normalized_sha256": "f2ea4e9c968ac96dddb2ca3be4d4e2ada0bc52fa06cfe16c6454da7f11eafd9b"
     },
     "clients/wechat-miniprogram/pages/services/index.wxss": {
       "role": "index",
-      "sha256": "192b24855acbc45c71a1429b644c27c2f302f85ee5abab5684b76a96b6521c18",
-      "size": 1753,
-      "normalized_sha256": "192b24855acbc45c71a1429b644c27c2f302f85ee5abab5684b76a96b6521c18"
+      "sha256": "05a673002869f52b3dcb81059daf0a7e541209f19de505d38888681d860c9154",
+      "size": 1934,
+      "normalized_sha256": "05a673002869f52b3dcb81059daf0a7e541209f19de505d38888681d860c9154"
     },
     "clients/wechat-miniprogram/project.config.json": {
       "role": "index",
@@ -332,6 +332,12 @@
       "sha256": "eb4be2d24f5c8e4f822ded8f2bec696d48581f4e83657907d282cbf441642208",
       "size": 1224,
       "normalized_sha256": "eb4be2d24f5c8e4f822ded8f2bec696d48581f4e83657907d282cbf441642208"
+    },
+    "clients/wechat-miniprogram/theme.json": {
+      "role": "index",
+      "sha256": "291007bd468272b4dc5a0b1297dbadf6c4ff0f28f478a362dbdfa691327833a0",
+      "size": 1091,
+      "normalized_sha256": "291007bd468272b4dc5a0b1297dbadf6c4ff0f28f478a362dbdfa691327833a0"
     },
     "clients/wechat-miniprogram/utils/auth.js": {
       "role": "index",
@@ -1517,6 +1523,18 @@
       "sha256": "7741c586c44d6ad6b9bd47a5b3101d99a9fe9770f104dd412210c58a69cc7a5f",
       "size": 11695,
       "normalized_sha256": "7741c586c44d6ad6b9bd47a5b3101d99a9fe9770f104dd412210c58a69cc7a5f"
+    },
+    "docs/releases/1.77.1.md": {
+      "role": "index",
+      "sha256": "a9dd77694acfbdc1dc3747613a13b8bd5902d33b57ec7cdd24315c6d771433c1",
+      "size": 4569,
+      "normalized_sha256": "a9dd77694acfbdc1dc3747613a13b8bd5902d33b57ec7cdd24315c6d771433c1"
+    },
+    "docs/releases/1.78.0.md": {
+      "role": "index",
+      "sha256": "115e0b59436c8233cb613d11c050c3fcbeaf52768f287eaeea5f2c4f5fe96059",
+      "size": 7592,
+      "normalized_sha256": "115e0b59436c8233cb613d11c050c3fcbeaf52768f287eaeea5f2c4f5fe96059"
     },
     "docs/releases/README.md": {
       "role": "index",
@@ -2826,6 +2844,12 @@
       "size": 8704,
       "normalized_sha256": "326ca90b9733a0afb3f7652690e6e6977b98eaa1147bf3391c26fab68f01d382"
     },
+    "docs/reviews/2026-11-25_claude-to-gemini-1.77.0-delivery-review.md": {
+      "role": "index",
+      "sha256": "afee883eb55bf93940bb1cde6de4045f43817ce23a23d2fa56685bc39f923a93",
+      "size": 6401,
+      "normalized_sha256": "afee883eb55bf93940bb1cde6de4045f43817ce23a23d2fa56685bc39f923a93"
+    },
     "docs/reviews/2026-11-25_claude-to-gemini-knowledge-base-refactor-implementation-handoff.md": {
       "role": "index",
       "sha256": "9fb0df9753a09b122312faf66739c134fa40627bca88a9b28f64c4ca1c080d59",
@@ -2849,6 +2873,24 @@
       "sha256": "d0b6fe367e94b06398b25f05d0b66118276adcb110f4c253901eb6c27664ba8f",
       "size": 14622,
       "normalized_sha256": "d0b6fe367e94b06398b25f05d0b66118276adcb110f4c253901eb6c27664ba8f"
+    },
+    "docs/reviews/2026-11-25_gemini-to-claude-1.77.0-delivery-review-handoff.md": {
+      "role": "index",
+      "sha256": "af4b8d55d75f21f2b6009f1ebd5614536d8b2ff7ab8b8ebbf89b055cd5c614f1",
+      "size": 14423,
+      "normalized_sha256": "af4b8d55d75f21f2b6009f1ebd5614536d8b2ff7ab8b8ebbf89b055cd5c614f1"
+    },
+    "docs/reviews/2026-11-28_claude-to-gemini-optical-prism-spec-review.md": {
+      "role": "index",
+      "sha256": "233753e891d139cc0a877c0d02409e8d51631d13ecf8e339611c03dcc2aa08aa",
+      "size": 18558,
+      "normalized_sha256": "233753e891d139cc0a877c0d02409e8d51631d13ecf8e339611c03dcc2aa08aa"
+    },
+    "docs/reviews/2026-11-28_gemini-to-claude-optical-prism-spec-review-handoff.md": {
+      "role": "index",
+      "sha256": "e8a07711da2574b5fb1d5ecdb94cca6db3ca61f4e735819302aae4da60d81170",
+      "size": 4421,
+      "normalized_sha256": "e8a07711da2574b5fb1d5ecdb94cca6db3ca61f4e735819302aae4da60d81170"
     },
     "docs/reviews/README.md": {
       "role": "index",
@@ -3278,15 +3320,21 @@
     },
     "docs/specs/2026-11-23_wecom-corp-migration-spec.md": {
       "role": "index",
-      "sha256": "44ba640642630630ab160ed60621114575b72b097ea64ec3650f4a47b0dad9a5",
-      "size": 9335,
-      "normalized_sha256": "44ba640642630630ab160ed60621114575b72b097ea64ec3650f4a47b0dad9a5"
+      "sha256": "669b0a7b5c91242364556e39ce11ce1c04ce077401d478d1c006cc0fccb8496d",
+      "size": 11103,
+      "normalized_sha256": "669b0a7b5c91242364556e39ce11ce1c04ce077401d478d1c006cc0fccb8496d"
     },
     "docs/specs/2026-11-25_knowledge-base-refactor-spec.md": {
       "role": "index",
       "sha256": "692e1bd7e9f7ed42d8d4f96a77f93685399857297705aecae22781673cfcca64",
       "size": 29183,
       "normalized_sha256": "692e1bd7e9f7ed42d8d4f96a77f93685399857297705aecae22781673cfcca64"
+    },
+    "docs/specs/2026-11-28_optical-prism-visual-redesign-spec.md": {
+      "role": "index",
+      "sha256": "964a714dd9f01478a4d86069b31c5cd121a5b0120f603f817ba8ca4daec6a6f4",
+      "size": 43120,
+      "normalized_sha256": "964a714dd9f01478a4d86069b31c5cd121a5b0120f603f817ba8ca4daec6a6f4"
     },
     "docs/specs/assets/2026-09-16_room-timeline-mobile-proto.html": {
       "role": "index",
@@ -3592,9 +3640,9 @@
     },
     "pyproject.toml": {
       "role": "index",
-      "sha256": "0c211ae9957418ef7616c5dd2e98be27c40cacdb8319fe190611defa30e38e5f",
+      "sha256": "29d7878547f5c5399d0573fa84bc8570961570695c45a6cde21a6e4019dbf368",
       "size": 1284,
-      "normalized_sha256": "0c211ae9957418ef7616c5dd2e98be27c40cacdb8319fe190611defa30e38e5f"
+      "normalized_sha256": "29d7878547f5c5399d0573fa84bc8570961570695c45a6cde21a6e4019dbf368"
     },
     "requirements.lock": {
       "role": "index",
@@ -4426,9 +4474,9 @@
     },
     "src/homestay_bot/services/runtime_config_tester.py": {
       "role": "index",
-      "sha256": "53c7f20a70f20b76051c20d1305a71b6ca06938a1fea785e695ef4c3d28e70a8",
-      "size": 23542,
-      "normalized_sha256": "53c7f20a70f20b76051c20d1305a71b6ca06938a1fea785e695ef4c3d28e70a8"
+      "sha256": "ea972e73e01858df158dfd49f9ffd4a34985a09a7228e18288086f2c8ab48d2a",
+      "size": 24676,
+      "normalized_sha256": "ea972e73e01858df158dfd49f9ffd4a34985a09a7228e18288086f2c8ab48d2a"
     },
     "src/homestay_bot/services/sensitive_data.py": {
       "role": "index",
@@ -4474,9 +4522,9 @@
     },
     "src/homestay_bot/static/app.css": {
       "role": "index",
-      "sha256": "2b2c49d218f5d30de85b5bda5d2b65d9f1945ca1e6e98e1e238b21ee1361003b",
-      "size": 73573,
-      "normalized_sha256": "2b2c49d218f5d30de85b5bda5d2b65d9f1945ca1e6e98e1e238b21ee1361003b"
+      "sha256": "7db62822ebf453d72014eb9cf861c9fa99a2a79a07c1d999cc120f10cc495a22",
+      "size": 82243,
+      "normalized_sha256": "7db62822ebf453d72014eb9cf861c9fa99a2a79a07c1d999cc120f10cc495a22"
     },
     "src/homestay_bot/static/theme.js": {
       "role": "index",
@@ -4678,15 +4726,15 @@
     },
     "src/homestay_bot/templates/layouts/admin.html": {
       "role": "index",
-      "sha256": "4e5cab7474c3b075a1d1153c1705f1598c9e44f3ff180bcbd01a5b7a07b590e5",
-      "size": 7459,
-      "normalized_sha256": "4e5cab7474c3b075a1d1153c1705f1598c9e44f3ff180bcbd01a5b7a07b590e5"
+      "sha256": "1f242e88ff6efe84e79a7b8344ff8097471faa3b0a4533c82a6f11313fd42995",
+      "size": 7587,
+      "normalized_sha256": "1f242e88ff6efe84e79a7b8344ff8097471faa3b0a4533c82a6f11313fd42995"
     },
     "src/homestay_bot/templates/layouts/auth.html": {
       "role": "index",
-      "sha256": "701c72e2c5157fd845df1d650827bd9c9b63fa8d0221545688935eb9a11a1d65",
-      "size": 1071,
-      "normalized_sha256": "701c72e2c5157fd845df1d650827bd9c9b63fa8d0221545688935eb9a11a1d65"
+      "sha256": "00568a83933cb57a69a68026e1c812ef7aa98e76e552a83e811a5939da9ce0a2",
+      "size": 1199,
+      "normalized_sha256": "00568a83933cb57a69a68026e1c812ef7aa98e76e552a83e811a5939da9ce0a2"
     },
     "src/homestay_bot/templates/properties/detail.html": {
       "role": "index",
@@ -4774,9 +4822,9 @@
     },
     "tasks/todo.md": {
       "role": "index",
-      "sha256": "13ff2ffb0a3645df1f3e33bc8712476147f24dc8e556e733f12eda023b33a107",
-      "size": 166336,
-      "normalized_sha256": "13ff2ffb0a3645df1f3e33bc8712476147f24dc8e556e733f12eda023b33a107"
+      "sha256": "6c0386d119272018b3f3dc97755a9f93a02bdb4aab7bda4a8fe7b9a5c2e5e21d",
+      "size": 167328,
+      "normalized_sha256": "6c0386d119272018b3f3dc97755a9f93a02bdb4aab7bda4a8fe7b9a5c2e5e21d"
     },
     "tests/__init__.py": {
       "role": "observe",
@@ -4804,9 +4852,9 @@
     },
     "tests/browser/test_admin_theme.py": {
       "role": "observe",
-      "sha256": "7554f4cfd554e5773936ccc3441dcc8fe4766b41dac951e67aa5a6f91cf45762",
-      "size": 25312,
-      "normalized_sha256": "7554f4cfd554e5773936ccc3441dcc8fe4766b41dac951e67aa5a6f91cf45762"
+      "sha256": "1f45ec5459ac3c736cc5c47142ef45602b2966472ba477791af888be26c33b67",
+      "size": 31669,
+      "normalized_sha256": "1f45ec5459ac3c736cc5c47142ef45602b2966472ba477791af888be26c33b67"
     },
     "tests/browser/test_approval_late_results.py": {
       "role": "observe",
@@ -4822,9 +4870,9 @@
     },
     "tests/browser/test_knowledge_workbench.py": {
       "role": "observe",
-      "sha256": "0e6559bfdf161fe75167b3393dd114664b0fc73315247970ef5251437b9f9f70",
-      "size": 17888,
-      "normalized_sha256": "0e6559bfdf161fe75167b3393dd114664b0fc73315247970ef5251437b9f9f70"
+      "sha256": "d2ea26070660ccf178831995b08bb81de1c3e6a75c299e5e3e27ea0ac773946d",
+      "size": 18270,
+      "normalized_sha256": "d2ea26070660ccf178831995b08bb81de1c3e6a75c299e5e3e27ea0ac773946d"
     },
     "tests/browser/test_miniprogram_home_page.py": {
       "role": "observe",
@@ -5278,9 +5326,9 @@
     },
     "tests/miniprogram/content.test.js": {
       "role": "observe",
-      "sha256": "a53003016b48e953d3634430816ff198822db644016b6327c1256f0b70e41f35",
-      "size": 29714,
-      "normalized_sha256": "a53003016b48e953d3634430816ff198822db644016b6327c1256f0b70e41f35"
+      "sha256": "f495d8bce76a10fbd7ea523047897a54e6557853a1a6f93303b30d342dd1ce26",
+      "size": 39022,
+      "normalized_sha256": "f495d8bce76a10fbd7ea523047897a54e6557853a1a6f93303b30d342dd1ce26"
     },
     "tests/plan_helpers.py": {
       "role": "observe",
@@ -5296,9 +5344,9 @@
     },
     "tests/unit/test_admin_assets.py": {
       "role": "observe",
-      "sha256": "d40a84f4527217c7ba7fad72da96990302ddb08fe9c2826244f5bc31b30cb817",
-      "size": 21217,
-      "normalized_sha256": "d40a84f4527217c7ba7fad72da96990302ddb08fe9c2826244f5bc31b30cb817"
+      "sha256": "1f72b7210d90c87cc1919e90032ce22368da63d13d2297e35d4db0515865b6b0",
+      "size": 30759,
+      "normalized_sha256": "1f72b7210d90c87cc1919e90032ce22368da63d13d2297e35d4db0515865b6b0"
     },
     "tests/unit/test_admin_auth_service.py": {
       "role": "observe",
@@ -5830,9 +5878,9 @@
     },
     "tests/unit/test_runtime_config_tester.py": {
       "role": "observe",
-      "sha256": "8d6a2e7ae3b153ab65c970aba510f0346e2007178191a9aca6ec20a21a06f5b9",
-      "size": 29079,
-      "normalized_sha256": "8d6a2e7ae3b153ab65c970aba510f0346e2007178191a9aca6ec20a21a06f5b9"
+      "sha256": "be64053fe0c5ead475afc79b8f74a7d127e3d48da8ad41a375c7e5f742fbc71e",
+      "size": 30115,
+      "normalized_sha256": "be64053fe0c5ead475afc79b8f74a7d127e3d48da8ad41a375c7e5f742fbc71e"
     },
     "tests/unit/test_runtime_consumers.py": {
       "role": "observe",

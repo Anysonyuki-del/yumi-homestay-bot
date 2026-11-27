@@ -1,23 +1,28 @@
 /**
- * 全局样式：与 Web 后台共享 A+E 暖调精工融合体系（Warm Precision Hospitality）——
- * 清透暖白画布（#f5f2ed）、纯白细描边卡片（#ffffff / #dcd4c8）、深炭暖墨与唯一陶红动作色（#c24322）。
- * 陶红主按钮配纯白字（对比度 5.2:1，满足 WCAG AA）；统一采用系统无衬线字栈与五档字号。
+ * 全局样式：与 Web 后台共享「暖纸光学 × 暖炭光学」双态体系——浅色为主，系统暗色时由下方
+ * @media (prefers-color-scheme: dark) 整套切换（app.json 开启 darkmode，导航栏与标签栏走 theme.json）。
+ * --yumi-primary 只作填充与描边；图标和强调文字用前景强调色 --yumi-primary-deep（暗色为暖琥珀）。
  */
 page {
-  --yumi-canvas: #f5f2ed;
+  --yumi-canvas: #f6f4ee;
   --yumi-surface: #ffffff;
-  --yumi-surface-soft: #faf8f5;
-  --yumi-surface-well: #f2ede6;
-  --yumi-ink: #1e1b18;
-  --yumi-body: #2a2622;
-  --yumi-muted: #58524a;
-  --yumi-hairline: #dcd4c8;
-  --yumi-hairline-strong: #c5baa9;
+  --yumi-surface-soft: #f2eee6;
+  --yumi-surface-well: #e8e2d7;
+  --yumi-ink: #1c1916;
+  --yumi-body: #282420;
+  --yumi-muted: #575048;
+  --yumi-hairline: #dad2c5;
+  --yumi-hairline-strong: #c2b7a6;
   --yumi-primary: #c24322;
   --yumi-primary-pressed: #a73619;
   --yumi-primary-deep: #b53a1b;
   --yumi-primary-soft: #fbede8;
   --yumi-primary-border: #eabeb0;
+  /* 光学材质：卡片顶边 1rpx 镜面高光、图标底托内凹、卡片轻切面阴影。 */
+  --yumi-facet-highlight: inset 0 1rpx 0 rgba(255, 255, 255, 0.92);
+  --yumi-well-inset: inset 0 2rpx 4rpx rgba(28, 25, 22, 0.06);
+  --yumi-shadow-card: 0 4rpx 12rpx rgba(28, 25, 22, 0.04), var(--yumi-facet-highlight);
+  --yumi-shadow-float: 0 8rpx 24rpx rgba(28, 25, 22, 0.16);
   --yumi-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   /* 五档字号：各页统一沿用这五档，靠字号与字重建立清晰阅读层次。 */
   --yumi-text-caption: 24rpx;
@@ -28,7 +33,7 @@ page {
   /* 可点卡片按下时的克制触感反馈。 */
   --yumi-press-scale: 0.985;
 
-  /* TDesign 主色阶统一映射至 A+E 陶红体系：7 为主色，8 为按下，1/2 为浅底。 */
+  /* TDesign 主色阶统一映射至晶陶红体系：7 为主色，8 为按下，1/2 为浅底。 */
   --td-primary-color-1: #fbede8;
   --td-primary-color-2: #f5d6cc;
   --td-primary-color-3: #eabeb0;
@@ -45,23 +50,214 @@ page {
   --td-button-primary-color: #ffffff;
   --td-button-primary-outline-color: #b53a1b;
   --td-button-primary-outline-border-color: #c24322;
-  --td-bg-color-page: #f5f2ed;
-  --td-text-color-primary: #1e1b18;
-  --td-text-color-secondary: #2a2622;
-  --td-text-color-placeholder: #58524a;
-  --td-skeleton-bg-color: #ebe4da;
+  --td-bg-color-page: #f6f4ee;
+  --td-text-color-primary: #1c1916;
+  --td-text-color-secondary: #282420;
+  --td-text-color-placeholder: #575048;
+  --td-skeleton-bg-color: #e8e2d7;
   --td-collapse-panel-bg-color: #ffffff;
-  --td-collapse-border-color: #dcd4c8;
-  --td-collapse-header-text-color: #1e1b18;
-  --td-collapse-content-text-color: #2a2622;
-  --td-collapse-icon-color: #58524a;
-  --td-swiper-nav-fraction-bg-color: rgba(30, 27, 24, 0.58);
+  --td-collapse-border-color: #dad2c5;
+  --td-collapse-header-text-color: #1c1916;
+  --td-collapse-content-text-color: #282420;
+  --td-collapse-icon-color: #575048;
+  --td-swiper-nav-fraction-bg-color: rgba(28, 25, 22, 0.58);
 
   background: var(--yumi-canvas);
   color: var(--yumi-body);
   font-family: var(--yumi-sans);
   font-size: var(--yumi-text-body);
   line-height: 1.6;
+}
+
+/*
+ * 暖炭光学暗色：覆写全部 --yumi-* 与 TDesign 暗色语义基座。TDesign 1.17.0 的公共样式没有引入
+ * theme/_dark.wxss，组件里大量 var(--td-*, 浅色字面量) 会退回白底，所以基座必须在这里整套显式写出
+ * （tests/miniprogram/content.test.js 核对清单；本机装了 miniprogram_npm 时还会扫组件源码）。
+ */
+@media (prefers-color-scheme: dark) {
+  page {
+    --yumi-canvas: #151413;
+    --yumi-surface: #1d1b19;
+    --yumi-surface-soft: #181614;
+    --yumi-surface-well: #272420;
+    --yumi-ink: #f5f1ea;
+    --yumi-body: #e4ded4;
+    --yumi-muted: #afa69a;
+    --yumi-hairline: #36312c;
+    --yumi-hairline-strong: #4a443c;
+    --yumi-primary: #b84018;
+    --yumi-primary-pressed: #9e3512;
+    --yumi-primary-deep: #f09a5e;
+    --yumi-primary-soft: #2c1b14;
+    --yumi-primary-border: #663924;
+    --yumi-facet-highlight: inset 0 1rpx 0 rgba(255, 248, 240, 0.08);
+    --yumi-well-inset: inset 0 2rpx 6rpx rgba(0, 0, 0, 0.38);
+    --yumi-shadow-card: 0 4rpx 16rpx rgba(0, 0, 0, 0.32), var(--yumi-facet-highlight);
+    --yumi-shadow-float: 0 8rpx 28rpx rgba(0, 0, 0, 0.56);
+
+    /* 背景层级 */
+    --td-bg-color-page: #151413;
+    --td-bg-color-container: #1d1b19;
+    --td-bg-color-container-active: #272420;
+    --td-bg-color-secondarycontainer: #272420;
+    --td-bg-color-secondarycontainer-active: #36312c;
+    --td-bg-color-component: #36312c;
+    --td-bg-color-component-active: #4a443c;
+    --td-bg-color-component-disabled: #22201d;
+    --td-bg-color-secondarycomponent: #4a443c;
+    --td-bg-color-secondarycomponent-active: #665e55;
+    --td-bg-color-specialcomponent: transparent;
+    /* 文字层级：品牌色文字与链接走暖琥珀前景，不用填充用的晶陶红。 */
+    --td-text-color-primary: #f5f1ea;
+    --td-text-color-secondary: #e4ded4;
+    --td-text-color-placeholder: #afa69a;
+    --td-text-color-disabled: #857d73;
+    --td-text-color-anti: #ffffff;
+    --td-text-color-brand: #f09a5e;
+    --td-text-color-link: #f09a5e;
+    /* 暖炭灰阶：1 最亮、14 最暗。 */
+    --td-gray-color-1: #f5f1ea;
+    --td-gray-color-2: #ece6dc;
+    --td-gray-color-3: #e4ded4;
+    --td-gray-color-4: #d6cfc4;
+    --td-gray-color-5: #ccc4b8;
+    --td-gray-color-6: #afa69a;
+    --td-gray-color-7: #9f968a;
+    --td-gray-color-8: #857d73;
+    --td-gray-color-9: #665e55;
+    --td-gray-color-10: #4a443c;
+    --td-gray-color-11: #36312c;
+    --td-gray-color-12: #272420;
+    --td-gray-color-13: #1d1b19;
+    --td-gray-color-14: #151413;
+    --td-font-white-1: rgba(245, 241, 234, 0.9);
+    --td-font-white-2: rgba(245, 241, 234, 0.55);
+    --td-font-white-3: rgba(245, 241, 234, 0.35);
+    --td-font-white-4: rgba(245, 241, 234, 0.22);
+    --td-font-gray-1: rgba(28, 25, 22, 0.9);
+    --td-font-gray-2: rgba(28, 25, 22, 0.6);
+    --td-font-gray-3: rgba(28, 25, 22, 0.4);
+    --td-font-gray-4: rgba(28, 25, 22, 0.26);
+    /* 描边与遮罩 */
+    --td-component-stroke: #36312c;
+    --td-component-border: #4a443c;
+    --td-border-level-1-color: #36312c;
+    --td-border-level-2-color: #4a443c;
+    --td-mask-active: rgba(8, 7, 6, 0.6);
+    --td-mask-disabled: rgba(8, 7, 6, 0.68);
+    /* 品牌与主色阶：7 为填充主色，8 为悬停，9/10 为暗底上的前景色。 */
+    --td-brand-color: #b84018;
+    --td-brand-color-active: #9e3512;
+    --td-brand-color-disabled: #3a2218;
+    --td-brand-color-focus: #2c1b14;
+    --td-brand-color-light: #2c1b14;
+    --td-brand-color-light-active: #3a2218;
+    --td-primary-color-1: #2c1b14;
+    --td-primary-color-2: #3a2218;
+    --td-primary-color-3: #663924;
+    --td-primary-color-4: #84391c;
+    --td-primary-color-5: #9e3512;
+    --td-primary-color-6: #ab3b15;
+    --td-primary-color-7: #b84018;
+    --td-primary-color-8: #c74a1f;
+    --td-primary-color-9: #f09a5e;
+    --td-primary-color-10: #f7b887;
+    /* 状态色阶 */
+    --td-error-color: #f28b82;
+    --td-error-color-1: #2d1616;
+    --td-error-color-2: #3d1c1c;
+    --td-error-color-3: #662c2c;
+    --td-error-color-4: #8a3a37;
+    --td-error-color-5: #b04c46;
+    --td-error-color-6: #d0645c;
+    --td-error-color-7: #f28b82;
+    --td-error-color-8: #f5a39c;
+    --td-error-color-9: #f8c1bc;
+    --td-error-color-10: #fbe0dd;
+    --td-error-color-focus: #3d1c1c;
+    --td-error-color-active: #d0645c;
+    --td-error-color-disabled: #662c2c;
+    --td-error-color-light: #2d1616;
+    --td-error-color-light-active: #3d1c1c;
+    --td-warning-color: #f0b85c;
+    --td-warning-color-1: #292012;
+    --td-warning-color-2: #3a2d17;
+    --td-warning-color-3: #5f461d;
+    --td-warning-color-4: #8a6526;
+    --td-warning-color-5: #b3842f;
+    --td-warning-color-6: #d69f42;
+    --td-warning-color-7: #f0b85c;
+    --td-warning-color-8: #f4c97f;
+    --td-warning-color-9: #f8dba7;
+    --td-warning-color-10: #fbedd3;
+    --td-warning-color-focus: #3a2d17;
+    --td-warning-color-active: #d69f42;
+    --td-warning-color-disabled: #5f461d;
+    --td-warning-color-light: #292012;
+    --td-warning-color-light-active: #3a2d17;
+    --td-success-color: #63d297;
+    --td-success-color-1: #13271e;
+    --td-success-color-2: #183427;
+    --td-success-color-3: #24543d;
+    --td-success-color-4: #2f7553;
+    --td-success-color-5: #3b9669;
+    --td-success-color-6: #4cb580;
+    --td-success-color-7: #63d297;
+    --td-success-color-8: #86ddae;
+    --td-success-color-9: #ade9c8;
+    --td-success-color-10: #d6f4e3;
+    --td-success-color-focus: #183427;
+    --td-success-color-active: #4cb580;
+    --td-success-color-disabled: #24543d;
+    --td-success-color-light: #13271e;
+    --td-success-color-light-active: #183427;
+
+    /* 在用组件特化令牌：按钮（主色实心/描边/文字、默认文字）、折叠面板、骨架、轮播导航、加载。 */
+    --td-button-primary-color: #ffffff;
+    --td-button-primary-bg-color: #b84018;
+    --td-button-primary-border-color: #b84018;
+    --td-button-primary-active-bg-color: #9e3512;
+    --td-button-primary-active-border-color: #9e3512;
+    --td-button-primary-disabled-color: #857d73;
+    --td-button-primary-disabled-bg: #3a2218;
+    --td-button-primary-disabled-border-color: #3a2218;
+    --td-button-primary-outline-color: #f09a5e;
+    --td-button-primary-outline-border-color: #b84018;
+    --td-button-primary-outline-active-bg-color: #2c1b14;
+    --td-button-primary-outline-active-border-color: #c74a1f;
+    --td-button-primary-outline-disabled-color: #857d73;
+    --td-button-primary-text-color: #f09a5e;
+    --td-button-primary-text-active-bg-color: #2c1b14;
+    --td-button-primary-text-disabled-color: #857d73;
+    --td-button-default-color: #e4ded4;
+    --td-button-default-bg-color: #272420;
+    --td-button-default-border-color: #36312c;
+    --td-button-default-active-bg-color: #36312c;
+    --td-button-default-active-border-color: #4a443c;
+    --td-button-default-disabled-color: #857d73;
+    --td-button-default-disabled-bg: #22201d;
+    --td-button-default-disabled-border-color: #22201d;
+    --td-button-default-text-active-bg-color: #272420;
+    --td-collapse-panel-bg-color: #1d1b19;
+    --td-collapse-border-color: #36312c;
+    --td-collapse-header-text-color: #f5f1ea;
+    --td-collapse-content-text-color: #e4ded4;
+    --td-collapse-icon-color: #afa69a;
+    --td-collapse-left-icon-color: #afa69a;
+    --td-collapse-disabled-color: #857d73;
+    --td-skeleton-bg-color: #272420;
+    --td-skeleton-animation-gradient: rgba(255, 248, 240, 0.06);
+    --td-skeleton-animation-flashed: rgba(255, 248, 240, 0.08);
+    --td-swiper-nav-dot-color: rgba(245, 241, 234, 0.55);
+    --td-swiper-nav-dot-active-color: #f5f1ea;
+    --td-swiper-nav-fraction-color: #f5f1ea;
+    --td-swiper-nav-fraction-bg-color: rgba(8, 7, 6, 0.62);
+    --td-swiper-nav-btn-color: #f5f1ea;
+    --td-swiper-nav-btn-bg-color: rgba(8, 7, 6, 0.5);
+    --td-loading-color: #f09a5e;
+    --td-loading-text-color: #e4ded4;
+    --td-loading-full-bg-color: rgba(21, 20, 19, 0.8);
+  }
 }
 
 /* 页面内容区；底部为悬浮按钮或固定操作栏留出空间，避免遮住最后一项。 */
@@ -86,7 +282,7 @@ page {
 .state__action { margin-top: 48rpx; }
 
 /* 「问管家」悬浮按钮：紧凑胶囊，靠右下；只在有内容时出现。 */
-.ask-host { position: fixed; right: 32rpx; bottom: calc(40rpx + env(safe-area-inset-bottom)); z-index: 10; border-radius: 999rpx; box-shadow: 0 8rpx 24rpx rgba(30, 27, 24, 0.16); }
+.ask-host { position: fixed; right: 32rpx; bottom: calc(40rpx + env(safe-area-inset-bottom)); z-index: 10; border-radius: 999rpx; box-shadow: var(--yumi-shadow-float); }
 
 /* 原生客服按钮（open-type="contact"）去掉微信按钮的默认外观，权重与页面类一致。 */
 .contact-reset { padding: 0; border-radius: 0; background: transparent; font-size: inherit; font-weight: inherit; line-height: inherit; text-align: left; color: inherit; }
@@ -95,3 +291,6 @@ button.contact-reset:not([size=mini]) { width: auto; margin: 0; }
 
 /* 详情页底部操作栏：纯白底 + 清晰暖石顶边。 */
 .bottom-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom)); background: var(--yumi-surface); border-top: 1rpx solid var(--yumi-hairline); z-index: 10; }
+
+/* 行尾箭头（t-icon 的 t-class 外部类）：与左侧强调图标同在一行，靠这个类单独压成弱化色。 */
+.yumi-chevron { color: var(--yumi-muted); }

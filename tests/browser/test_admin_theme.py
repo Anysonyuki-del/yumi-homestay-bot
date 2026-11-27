@@ -19,6 +19,20 @@ from homestay_bot.web import templates
 
 STATIC_ROOT = Path(__file__).resolve().parents[2] / "src/homestay_bot/static"
 PREVIEW_ROOT = Path("/tmp/yumi-ae-theme-preview")
+# 两套配色方案下的画布色（app.css 的 --page），首帧与无脚本页面都必须直接落在这里。
+PAGE_BACKGROUND = {"light": "rgb(246, 244, 238)", "dark": "rgb(21, 20, 19)"}
+THEME_COLOR = {"light": "#f6f4ee", "dark": "#151413"}
+# 页面内计算 WCAG 对比度的脚本片段：rgb/rgba 字符串 → 相对亮度 → 对比度。
+_CONTRAST_JS = """
+  const rgb = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
+  const luminance = value => rgb(value).map(x => x / 255)
+    .map(x => x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4)
+    .reduce((sum, x, i) => sum + x * [.2126, .7152, .0722][i], 0);
+  const contrast = (fg, bg) => {
+    const values = [luminance(fg), luminance(bg)].sort((a, b) => a - b);
+    return (values[1] + .05) / (values[0] + .05);
+  };
+"""
 
 
 @pytest.fixture
@@ -51,12 +65,15 @@ def theme_site(admin_client):  # noqa: F811
 
 
 def _context(instance, site, *, width=1280, script="", java_script_enabled=True,
-             has_touch=False):
-    """隔离浏览器上下文，只允许本地读请求，记录并阻断任何写请求和外网访问。"""
+             has_touch=False, color_scheme="light", reduced_motion="no-preference"):
+    """隔离浏览器上下文，只允许本地读请求，记录并阻断任何写请求和外网访问。
+
+    color_scheme 模拟系统明暗偏好（页面纯 CSS 跟随，无切换器）；reduced_motion 模拟减少动态。
+    """
     origin, cookies = site
     context = instance.new_context(
         viewport={"width": width, "height": 840}, java_script_enabled=java_script_enabled,
-        has_touch=has_touch,
+        has_touch=has_touch, color_scheme=color_scheme, reduced_motion=reduced_motion,
     )
     context.add_cookies(cookies)
     if script:
@@ -78,9 +95,10 @@ def _context(instance, site, *, width=1280, script="", java_script_enabled=True,
     return context, context.new_page(), writes
 
 
+@pytest.mark.parametrize("scheme", ["light", "dark"])
 @pytest.mark.parametrize("path", ["/employee/login", "/employee/admin"])
-def test_unified_theme_renders_on_first_content_frame(theme_site, browser, path):  # noqa: F811
-    """冷加载与跨认证/后台页面均在首个内容帧渲染统一暖白画布，不再暴露旧双主题切换器。"""
+def test_unified_theme_renders_on_first_content_frame(theme_site, browser, path, scheme):  # noqa: F811
+    """冷加载与跨认证/后台页面在首个内容帧就落在系统明暗对应的画布色，无闪屏、无切换器。"""
     script = """
       function observeContent() {
         const heading = document.querySelector('h1');
@@ -92,7 +110,7 @@ def test_unified_theme_renders_on_first_content_frame(theme_site, browser, path)
       }
       requestAnimationFrame(observeContent);
     """
-    context, page, writes = _context(browser, theme_site, script=script)
+    context, page, writes = _context(browser, theme_site, script=script, color_scheme=scheme)
     try:
         origin = theme_site[0]
         other = "/employee/admin" if path.endswith("login") else "/employee/login"
@@ -100,23 +118,30 @@ def test_unified_theme_renders_on_first_content_frame(theme_site, browser, path)
             page.goto(origin + target)
             page.wait_for_function("window.firstContentFrame !== undefined")
             frame = page.evaluate("window.firstContentFrame")
-            assert frame == {"background": "rgb(245, 242, 237)"}
-            assert page.locator('meta[name="theme-color"]').get_attribute("content") == "#f5f2ed"
+            assert frame == {"background": PAGE_BACKGROUND[scheme]}
+            # 浏览器按 media 挑选生效的那条 theme-color，两条都必须存在且与画布同色。
+            for mode, color in THEME_COLOR.items():
+                assert page.locator(
+                    f'meta[name="theme-color"][media="(prefers-color-scheme: {mode})"]'
+                ).get_attribute("content") == color
             assert page.locator("[data-theme-control]").count() == 0
         assert writes == []
     finally:
         context.close()
 
 
-def test_no_javascript_keeps_unified_theme_and_core_pages_usable(theme_site, browser):  # noqa: F811
-    """禁用 JavaScript 时，认证页与任务页仍保持统一外观且核心控件完全可操作。"""
-    context, page, writes = _context(browser, theme_site, java_script_enabled=False)
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_no_javascript_keeps_unified_theme_and_core_pages_usable(theme_site, browser, scheme):  # noqa: F811
+    """禁用 JavaScript 时，认证页与任务页在两种系统明暗下都保持统一外观且核心控件可操作。"""
+    context, page, writes = _context(
+        browser, theme_site, java_script_enabled=False, color_scheme=scheme,
+    )
     try:
         for path in ("/employee/login", "/employee/tasks"):
             page.goto(theme_site[0] + path)
             assert page.locator("body").evaluate(
                 "node => getComputedStyle(node).backgroundColor"
-            ) == "rgb(245, 242, 237)"
+            ) == PAGE_BACKGROUND[scheme]
             assert page.locator("h1").is_visible()
             if path.endswith("login"):
                 page.locator("#username").fill("合成草稿")
@@ -130,14 +155,18 @@ def test_no_javascript_keeps_unified_theme_and_core_pages_usable(theme_site, bro
         context.close()
 
 
+@pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_theme_pages_fit_scrollbar_width_without_overflow(
-    theme_site, playwright_runtime,  # noqa: F811
+    theme_site, playwright_runtime, scheme,  # noqa: F811
 ):
-    """两套外壳、核心业务页在真实滚动条槽位下从 320px 到 1440px 均不产生横向溢出。"""
+    """两套外壳、核心业务页在浅暗两态、真实滚动条槽位下从 320px 到 1440px 均不产生横向溢出。
+
+    同时按明暗各导出 390px / 1440px 代表页截图，供人工复核光学视觉。
+    """
     instance = playwright_runtime.chromium.launch(
         headless=True, ignore_default_args=["--hide-scrollbars"],
     )
-    context, page, writes = _context(instance, theme_site)
+    context, page, writes = _context(instance, theme_site, color_scheme=scheme)
     try:
         paths = (
             "/employee/login",
@@ -168,7 +197,7 @@ def test_theme_pages_fit_scrollbar_width_without_overflow(
                     PREVIEW_ROOT.mkdir(exist_ok=True)
                     slug = path.strip("/").replace("/", "-")
                     page.screenshot(
-                        path=str(PREVIEW_ROOT / f"{slug}-{width}.png"), full_page=True,
+                        path=str(PREVIEW_ROOT / f"{slug}-{scheme}-{width}.png"), full_page=True,
                         animations="disabled",
                     )
         assert writes == []
@@ -177,9 +206,10 @@ def test_theme_pages_fit_scrollbar_width_without_overflow(
         instance.close()
 
 
-def test_text_and_action_contrast_uses_actual_computed_surfaces(theme_site, browser):  # noqa: F811
-    """实际浏览器背景、徽标、按钮、禁用态与焦点环全部达到 WCAG AA 阈值。"""
-    context, page, writes = _context(browser, theme_site)
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_text_and_action_contrast_uses_actual_computed_surfaces(theme_site, browser, scheme):  # noqa: F811
+    """浅暗两态下实际浏览器背景、徽标、按钮、禁用态与焦点环全部达到 WCAG AA 阈值。"""
+    context, page, writes = _context(browser, theme_site, color_scheme=scheme)
     try:
         page.goto(theme_site[0] + "/employee/admin")
         badge = templates.env.get_template("components/ui.html").module.badge
@@ -237,7 +267,7 @@ def test_text_and_action_contrast_uses_actual_computed_surfaces(theme_site, brow
                 "document.activeElement.blur(); window.scrollTo({top: 0, behavior: 'instant'});",
             )
             page.screenshot(
-                path=str(PREVIEW_ROOT / f"ae-{vision}.png"),
+                path=str(PREVIEW_ROOT / f"ae-{scheme}-{vision}.png"),
                 animations="disabled", full_page=True,
             )
         session.send("Emulation.setEmulatedVisionDeficiency", {"type": "none"})
@@ -246,9 +276,10 @@ def test_text_and_action_contrast_uses_actual_computed_surfaces(theme_site, brow
         context.close()
 
 
-def test_visible_control_boundaries_and_focus_have_sufficient_contrast(theme_site, browser):  # noqa: F811
-    """真实页面的空控件在普通、焦点和无效状态均能辨认，禁用状态保持不可操作且褪去主色。"""
-    context, page, writes = _context(browser, theme_site)
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_visible_control_boundaries_and_focus_have_sufficient_contrast(theme_site, browser, scheme):  # noqa: F811
+    """浅暗两态下空控件在普通、焦点和无效状态均能辨认，禁用状态保持不可操作且褪去主色。"""
+    context, page, writes = _context(browser, theme_site, color_scheme=scheme)
     try:
         for path, selector in [
             ("/employee/tasks", '.create-task input[type=date]'),
@@ -290,6 +321,96 @@ def test_visible_control_boundaries_and_focus_have_sufficient_contrast(theme_sit
                     assert ratios["focus"] is not None and ratios["focus"] >= 3
             control.evaluate("node => { node.disabled = true; }")
             assert control.is_disabled()
+        assert writes == []
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_optical_surfaces_stay_readable_in_both_schemes(theme_site, browser, scheme):  # noqa: F811
+    """暗色曾隐式依赖白色 --surface：轻提示、跳转链接与图片预览改用专属令牌；占比条顶光不压低分段。
+
+    分项阈值：
+
+    - 轻提示前景与底色、跳转链接前景与底色 >= 4.5:1；
+    - 图片预览底在两态都是固定浅中性色，深色线条的透明 PNG 才看得见；
+    - 占比条每个分段叠上 ::after 顶光最亮处后，相对槽底仍 >= 3:1。
+    """
+    context, page, writes = _context(browser, theme_site, color_scheme=scheme)
+    try:
+        page.goto(theme_site[0] + "/employee/admin")
+        # 只核对规格列出的语义色分段（成功/中性已入住/告警/危险）；
+        # 逐一注入，不依赖种子数据的房态分布。
+        page.locator(".readiness-bar").evaluate("""node => {
+          node.replaceChildren(...['ready', 'occupied', 'cleaning', 'maintenance'].map(status => {
+            const span = document.createElement('span');
+            span.className = `readiness-bar__seg readiness-bar__seg--${status}`;
+            span.style.flexGrow = '1';
+            return span;
+          }));
+        }""")
+        page.locator(".dashboard-grid .panel").first.evaluate(
+            "node => node.insertAdjacentHTML('beforeend',"
+            " '<ul class=\"image-list\"><li><img alt=\"合成预览\"></li></ul>')"
+        )
+        page.locator("[data-toast-region]").evaluate(
+            "node => { node.textContent = '合成提示'; node.hidden = false; }"
+        )
+        result = page.evaluate("() => {" + _CONTRAST_JS + """
+          const toast = getComputedStyle(document.querySelector('[data-toast-region]'));
+          const skip = getComputedStyle(document.querySelector('.skip-link'));
+          const bar = document.querySelector('.readiness-bar');
+          const well = getComputedStyle(bar).backgroundColor;
+          const sheen = getComputedStyle(bar, '::after').backgroundImage;
+          const alpha = Number(sheen.match(/rgba\\(255, 255, 255, ([\\d.]+)\\)/)[1]);
+          const lit = value => 'rgb(' + rgb(value)
+            .map(x => Math.round(x * (1 - alpha) + 255 * alpha)).join(', ') + ')';
+          const segments = [...bar.querySelectorAll('.readiness-bar__seg')].map(node => {
+            const color = getComputedStyle(node).backgroundColor;
+            return { className: node.className, ratio: contrast(lit(color), well) };
+          });
+          return {
+            toast: contrast(toast.color, toast.backgroundColor),
+            skip: contrast(skip.color, skip.backgroundColor),
+            media: getComputedStyle(document.querySelector('.image-list img')).backgroundColor,
+            alpha, segments,
+          };
+        }""")
+        assert result["toast"] >= 4.5, result
+        assert result["skip"] >= 4.5, result
+        assert result["media"] == "rgb(236, 232, 225)", result
+        assert result["alpha"] <= 0.16, result
+        for segment in result["segments"]:
+            assert segment["ratio"] >= 3, (scheme, segment)
+        assert len(result["segments"]) == 4
+        assert writes == []
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("reduced", [False, True])
+def test_dark_dialog_enters_with_spring_unless_motion_is_reduced(theme_site, browser, reduced):  # noqa: F811
+    """暗色下确认弹窗按 panel 弹簧入场；减少动态时弹窗与 ::backdrop 都不再有任何动画。"""
+    context, page, writes = _context(
+        browser, theme_site, color_scheme="dark",
+        reduced_motion="reduce" if reduced else "no-preference",
+    )
+    try:
+        page.goto(theme_site[0] + "/employee/admin")
+        state = page.evaluate("""() => {
+          const dialog = document.querySelector('.confirm-dialog');
+          dialog.showModal();
+          const own = getComputedStyle(dialog);
+          const backdrop = getComputedStyle(dialog, '::backdrop');
+          const snapshot = { animation: own.animationName,
+                             backdropTransition: backdrop.transitionDuration };
+          dialog.close();
+          return snapshot;
+        }""")
+        if reduced:
+            assert state == {"animation": "none", "backdropTransition": "0s"}, state
+        else:
+            assert state["animation"] == "dialog-enter", state
         assert writes == []
     finally:
         context.close()
