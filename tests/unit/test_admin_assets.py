@@ -95,21 +95,48 @@ def test_both_color_schemes_meet_wcag_contrast_on_their_own_tokens() -> None:
 
 
 def test_admin_css_declares_dual_scheme_once_and_avoids_blanket_rules() -> None:
-    """color-scheme 只在 :root 声明一次；两套外壳成对声明 theme-color；不用全局粗放规则。"""
+    """color-scheme 仅在 :root 及其显式外观态声明；两套外壳成对声明 theme-color 与 theme.js。"""
     css = (ASSET_ROOT / "static/app.css").read_text()
-    assert len(re.findall(r"(?<![\w-])color-scheme:", _strip_comments(css))) == 1
+    stripped = _strip_comments(css)
+    assert len(re.findall(r"(?<![\w-])color-scheme:", stripped)) == 3
     assert "color-scheme: light dark;" in _root_block(css)
+    assert ':root[data-appearance="light"] {\n  color-scheme: light;\n}' in stripped
+    assert ':root[data-appearance="dark"] {\n  color-scheme: dark;' in stripped
     for relative_path in ("layouts/admin.html", "layouts/auth.html"):
         source = (ASSET_ROOT / "templates" / relative_path).read_text()
         assert '<meta name="color-scheme" content="light dark">' in source
+        assert 'src="/static/theme.js?v={{ app_version }}"' in source
+        assert 'data-theme-control' in source
         light = _mode_tokens(css, "light")["--page"]
         dark = _mode_tokens(css, "dark")["--page"]
         assert (f'<meta name="theme-color" media="(prefers-color-scheme: light)" '
                 f'content="{light}">') in source
         assert (f'<meta name="theme-color" media="(prefers-color-scheme: dark)" '
                 f'content="{dark}">') in source
+    # 认证页只加载极轻量的同源 theme.js，绝不引入后台交互脚本 admin.js。
+    auth_layout = (ASSET_ROOT / "templates/layouts/auth.html").read_text()
+    assert "admin.js" not in auth_layout
     assert "transition: all" not in css
     assert "overflow-x: clip" not in css and "overflow-x: hidden" not in css
+
+
+def test_manual_and_system_dark_blocks_stay_in_sync() -> None:
+    """手动深色块与系统暗色块的自定义属性和日历回退必须 100% 同步，防止改一漏一。"""
+    css = (ASSET_ROOT / "static/app.css").read_text()
+    prop_pattern = r"(--[\w-]+):\s*([^;]+);"
+    system_props = {
+        k: " ".join(v.split()) for k, v in re.findall(prop_pattern, _dark_root_block(css))
+    }
+    manual_props = {
+        k: " ".join(v.split()) for k, v in re.findall(prop_pattern, _manual_dark_root_block(css))
+    }
+    assert manual_props == system_props, (
+        "手动深色与系统暗色令牌不一致："
+        f"diff={set(manual_props.items()) ^ set(system_props.items())}"
+    )
+
+    _, _, system_cal_dark, manual_cal_dark = _calendar_fallbacks_all(css)
+    assert manual_cal_dark == system_cal_dark, "手动深色与系统暗色的日历回退色不一致"
 
 
 def test_action_fill_tokens_never_paint_foreground() -> None:
@@ -251,6 +278,8 @@ def test_every_layout_busts_static_asset_cache_with_release_version() -> None:
         source = (template_root / relative_path).read_text()
         assert 'href="/static/app.css?v={{ app_version }}"' in source
         assert 'href="/static/app.css"' not in source
+        assert 'src="/static/theme.js?v={{ app_version }}"' in source
+        assert 'src="/static/theme.js"' not in source
 
 
 def test_admin_template_context_exposes_one_release_version(monkeypatch) -> None:
@@ -423,8 +452,17 @@ def _root_block(css: str) -> str:
 
 def _dark_root_block(css: str) -> str:
     """系统暗色下覆盖 :root 的那一块（@media (prefers-color-scheme: dark) 内的 :root）。"""
-    start = css.index("@media (prefers-color-scheme: dark) {\n  :root {")
+    start = css.index(
+        '@media (prefers-color-scheme: dark) {\n  :root:not([data-appearance="light"]) {'
+    )
     return css[start:css.index("\n  }\n}", start)]
+
+
+def _manual_dark_root_block(css: str) -> str:
+    """手动锁定深色时覆盖 :root 的那一块（:root[data-appearance="dark"]）。"""
+    marker = ':root[data-appearance="dark"] {'
+    start = css.index(marker)
+    return css[start:css.index("\n}\n", start)]
 
 
 def _mode_tokens(css: str, mode: str) -> dict[str, str]:
@@ -441,13 +479,27 @@ def _calendar_main_block(css: str) -> str:
     return css[start:css.index("\n}\n", start)]
 
 
-def _calendar_fallbacks(css: str) -> tuple[int, dict[str, str], dict[str, str]]:
-    """解析 @supports not (color-mix) 回退块，返回块位置与浅/暗两组静态值。"""
+def _calendar_fallbacks_all(
+    css: str,
+) -> tuple[int, dict[str, str], dict[str, str], dict[str, str]]:
+    """解析 @supports not (color-mix) 回退块，返回位置与浅/系统暗/手动暗三组静态值。"""
     start = css.index("@supports not (color: color-mix(in srgb, red 50%, blue)) {")
     block = css[start:css.index("\n}\n", start)]
-    light, dark = block.split("@media (prefers-color-scheme: dark) {", 1)
+    light, rest = block.split("@media (prefers-color-scheme: dark) {", 1)
+    system_dark, manual_dark = rest.split(':root[data-appearance="dark"] .cal {', 1)
     pattern = r"(--cal-[\w-]+):\s*(#[0-9A-Fa-f]{6});"
-    return start, dict(re.findall(pattern, light)), dict(re.findall(pattern, dark))
+    return (
+        start,
+        dict(re.findall(pattern, light)),
+        dict(re.findall(pattern, system_dark)),
+        dict(re.findall(pattern, manual_dark)),
+    )
+
+
+def _calendar_fallbacks(css: str) -> tuple[int, dict[str, str], dict[str, str]]:
+    """解析 @supports not (color-mix) 回退块，返回块位置与浅/暗两组静态值。"""
+    start, light, system_dark, _ = _calendar_fallbacks_all(css)
+    return start, light, system_dark
 
 
 def _calendar_tokens(css: str, mode: str) -> dict[str, str]:

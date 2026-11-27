@@ -1,3 +1,4 @@
+{% import "components/icons.html" as icons %}
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -8,9 +9,18 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f4f0">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#08080b">
     <title>{% block title %}YuMi 管理后台{% endblock %}</title>
+    <script src="/static/theme.js?v={{ app_version }}"></script>
     <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
   </head>
   <body>
+    <div class="auth-toolbar">
+      <button class="appearance-toggle auth-theme" type="button" data-theme-control data-appearance-mode="auto" aria-label="外观：跟随系统，点击切换">
+        <span class="appearance-icon" data-theme-icon="auto">{{ icons.icon("monitor", 16) }}</span>
+        <span class="appearance-icon" data-theme-icon="light" hidden>{{ icons.icon("sun", 16) }}</span>
+        <span class="appearance-icon" data-theme-icon="dark" hidden>{{ icons.icon("moon", 16) }}</span>
+        <span data-theme-label>跟随系统</span>
+      </button>
+    </div>
     <main class="card">
       <header class="page-header">
         <span class="brand__mark" aria-hidden="true">Y</span>

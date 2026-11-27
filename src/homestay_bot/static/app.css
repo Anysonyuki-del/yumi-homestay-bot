@@ -1,6 +1,7 @@
 /* YuMi 管理后台与认证页统一样式（象牙瓷白 × 曜黑银刃 · Ivory Porcelain × Obsidian Platinum）。
-   浅色为主，纯 CSS 跟随系统暗色（无切换器、零闪屏）；按 L0 外壳 / L1 光学切面卡 / L2 悬浮玻璃三层建立景深；
-   暗色主动作采用 1A 刀锋银刃曜石键，浅色采用钢琴黑曜键；环境光晕、微噪点与菲涅尔锐边全部为 0fps 静态层。
+   默认跟随系统暗色，支持经同源 theme.js 三态手动切换（跟随系统 / 浅色 / 深色，零闪屏、无脚本降级）；
+   按 L0 外壳 / L1 光学切面卡 / L2 悬浮玻璃三层建立景深；暗色主动作采用 1A 刀锋银刃曜石键，浅色采用钢琴黑曜键；
+   环境光晕、微噪点与菲涅尔锐边全部为 0fps 静态层。
    美学灵感来自公开仓库 RMvdesi/obsidian-prism 的 README 设计理念，本文件全部代码独立编写。 */
 :root {
   /* 只在 :root 声明一次，原生控件、滚动条与 <dialog> 随系统明暗切换。 */
@@ -197,10 +198,16 @@
   }
 }
 
+/* 手动锁定浅色时覆写原生控件与滚动条配色，避免系统暗色下原生 UI 仍停留在暗色。 */
+:root[data-appearance="light"] {
+  color-scheme: light;
+}
+
 /* 曜黑银刃（A2-Pro + 1A）：极净黑曜画布 + 顶部克制冷银漫射 + 蓝宝石切面卡 + 1A 刀锋银刃曜石键。
-   --primary 采用沉静冷钛灰蓝用于日历派生与控件强调，绝不作文字前景；文字链接走冷银蓝 --link。 */
+   --primary 采用沉静冷钛灰蓝用于日历派生与控件强调，绝不作文字前景；文字链接走冷银蓝 --link。
+   同时支持系统暗色（未手动锁浅色时）与手动锁定深色；单测守卫两块令牌键值 100% 一致，防止漂移。 */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-appearance="light"]) {
     --primary: #536382;
     --primary-hover: #607294;
     --primary-active: #44526d;
@@ -340,6 +347,141 @@
   }
 }
 
+:root[data-appearance="dark"] {
+  color-scheme: dark;
+  --primary: #536382;
+  --primary-hover: #607294;
+  --primary-active: #44526d;
+  --primary-soft: #171a24;
+  --primary-border: #363d52;
+  --on-primary: #ffffff;
+  --on-primary-hover: #ffffff;
+  --link: #b8cdf5;
+  --link-hover: #d8e5ff;
+  --focus: #dce6fa;
+  --focus-ring: rgb(200 218 255 / 18%);
+
+  --sidebar-bg: #050507;
+  --topbar-bg: #0b0b0f;
+  --page: #08080b;
+  --surface: #111116;
+  --surface-sunk: #0c0c10;
+  --surface-well: #18181f;
+  --media-well: #ecebe7;
+
+  --ink-strong: #f6f6f9;
+  --text: #e5e5ec;
+  --ink-mid: #c8c9d4;
+  --ink-soft: #a8aab8;
+  --muted: #9093a3;
+
+  --line: #2b2d3a;
+  --line-strong: #3d4052;
+  --control-border: #6c6f82;
+  --line-soft: #595c6e;
+
+  --disabled-bg: #15161c;
+  --disabled-ink: #6d7080;
+  --disabled-border: #252733;
+
+  --success: #5cc595;
+  --success-soft: #0f2219;
+  --success-border: #1f4d37;
+  --warning: #f2b84b;
+  --warning-soft: #261d0d;
+  --warning-border: #5a4418;
+  --danger: #f0716a;
+  --danger-soft: #2a1214;
+  --danger-border: #5c2427;
+  --on-danger: #111116;
+  --info: #7cc4f0;
+  --info-soft: #0f1d2a;
+  --info-border: #24435e;
+  --scope-global-bg: #11241d;
+  --scope-global-fg: #6cd0a8;
+  --scope-global-bd: #24503f;
+  --scope-room-bg: #1c1a36;
+  --scope-room-fg: #b3a6ff;
+  --scope-room-bd: #3b3672;
+  --scope-public-bg: #1a1a22;
+  --scope-public-fg: #b4b6c4;
+  --scope-public-bd: #333542;
+
+  --selection-bg: rgb(184 205 245 / 26%);
+  --tap-highlight: rgb(184 205 245 / 16%);
+  --backdrop: rgb(4 4 6 / 74%);
+  --toast-bg: #18181f;
+  --toast-ink: #f6f6f9;
+  --on-ink-strong: #08080b;
+  --keycap-active-bg: #1b1d26;
+
+  --facet-highlight: inset 0 1px 0 rgb(255 255 255 / 14%);
+  --well-inset: inset 0 2px 5px rgb(0 0 0 / 62%), inset 0 -1px 0 rgb(255 255 255 / 6%);
+  --vial-sheen: linear-gradient(180deg, rgb(255 255 255 / 16%) 0%, rgb(255 255 255 / 0%) 58%);
+  --aura:
+    radial-gradient(ellipse 64% 34% at 54% -10%, rgb(224 234 255 / 10%), transparent 68%),
+    radial-gradient(ellipse 42% 30% at 88% -4%, rgb(148 182 255 / 10%), transparent 72%),
+    radial-gradient(ellipse 36% 28% at 14% 96%, rgb(170 194 245 / 5%), transparent 74%);
+  --aura-auth:
+    radial-gradient(ellipse 58% 42% at 50% 6%, rgb(210 225 255 / 15%), transparent 66%),
+    radial-gradient(ellipse 46% 34% at 22% 88%, rgb(148 182 255 / 8%), transparent 70%),
+    radial-gradient(ellipse 40% 30% at 82% 82%, rgb(255 255 255 / 4%), transparent 70%);
+  --topbar-hairline: linear-gradient(90deg, transparent 4%, rgb(215 228 255 / 22%) 46%, rgb(215 228 255 / 8%) 78%, transparent 96%);
+  --sidebar-hairline: linear-gradient(180deg, rgb(210 226 255 / 0%) 0%, rgb(210 226 255 / 18%) 24%, rgb(210 226 255 / 5%) 68%, transparent 100%);
+
+  --card-gradient: radial-gradient(88% 42% at 50% 0%, rgb(222 232 255 / 6.5%) 0%, transparent 72%), linear-gradient(180deg, #17181f 0%, #111116 58%, #0f0f14 100%);
+  --card-border: rgb(206 220 255 / 10%);
+  --card-shadow: inset 0 1px 0 rgb(255 255 255 / 16%), inset 0 -1px 0 rgb(0 0 0 / 55%), 0 2px 4px rgb(0 0 0 / 60%), 0 18px 38px -16px rgb(0 0 0 / 88%);
+  --card-focus-border: rgb(215 228 255 / 16%);
+  --card-focus-shadow: inset 0 1px 0 rgb(255 255 255 / 22%), inset 0 -1px 0 rgb(0 0 0 / 55%), 0 2px 5px rgb(0 0 0 / 62%), 0 20px 44px -18px rgb(0 0 0 / 90%), 0 0 28px -12px rgb(190 212 255 / 14%);
+  --card-risk-gradient: radial-gradient(85% 48% at 20% 0%, rgb(240 113 106 / 13%) 0%, transparent 70%), linear-gradient(180deg, #1a1417 0%, #121115 62%, #100f13 100%);
+  --card-risk-border: rgb(240 113 106 / 34%);
+  --card-risk-shadow: inset 0 1px 0 rgb(255 182 178 / 26%), inset 0 -1px 0 rgb(0 0 0 / 55%), 0 2px 4px rgb(0 0 0 / 60%), 0 16px 34px -14px rgb(240 113 106 / 26%);
+  --rim: linear-gradient(180deg, rgb(235 242 255 / 32%) 0%, rgb(185 206 250 / 15%) 28%, rgb(185 206 250 / 6%) 68%, rgb(255 255 255 / 4%) 100%);
+  --rim-float: linear-gradient(180deg, rgb(238 244 255 / 42%) 0%, rgb(190 210 250 / 18%) 34%, rgb(255 255 255 / 6%) 100%);
+  --rim-risk: linear-gradient(180deg, rgb(255 160 154 / 58%) 0%, rgb(240 113 106 / 22%) 38%, rgb(240 113 106 / 8%) 100%);
+
+  --float-bg: rgb(18 19 25 / 74%);
+  --float-gradient: radial-gradient(95% 45% at 50% 0%, rgb(225 236 255 / 9%) 0%, transparent 68%), linear-gradient(180deg, rgb(255 255 255 / 4%) 0%, transparent 48%);
+  --float-border: rgb(212 226 255 / 15%);
+  --float-blur: blur(26px) saturate(150%);
+  --float-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), inset 0 -1px 0 rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 58%), 0 32px 68px -16px rgb(0 0 0 / 90%), 0 0 36px -14px rgb(190 212 255 / 16%);
+
+  --btn-primary-bg: #1c1e26;
+  --btn-primary-bg-hover: #252836;
+  --btn-primary-bg-active: #14161d;
+  --btn-primary-gradient: linear-gradient(180deg, #242733 0%, #191b23 100%);
+  --btn-primary-gradient-hover: linear-gradient(180deg, #2d3142 0%, #20232f 100%);
+  --btn-primary-border: rgb(225 234 255 / 26%);
+  --btn-primary-border-hover: rgb(232 240 255 / 40%);
+  --btn-primary-ink: #f4f6fc;
+  --btn-primary-shadow: inset 0 1px 0 rgb(255 255 255 / 34%), inset 0 -1px 0 rgb(0 0 0 / 50%), 0 0 0 1px rgb(0 0 0 / 75%), 0 4px 12px -4px rgb(0 0 0 / 75%);
+  --btn-primary-shadow-hover: inset 0 1px 0 rgb(255 255 255 / 44%), inset 0 -1px 0 rgb(0 0 0 / 52%), 0 0 0 1px rgb(0 0 0 / 78%), 0 6px 16px -4px rgb(0 0 0 / 82%);
+
+  --btn-sec-bg: rgb(255 255 255 / 3%);
+  --btn-sec-bg-hover: rgb(255 255 255 / 7%);
+  --btn-sec-gradient: none;
+  --btn-sec-border: rgb(255 255 255 / 13%);
+  --btn-sec-border-hover: rgb(220 232 255 / 28%);
+  --btn-sec-ink: #c8ccd8;
+  --btn-sec-shadow: inset 0 1px 0 rgb(255 255 255 / 9%), 0 1px 2px rgb(0 0 0 / 35%);
+
+  --field-bg: #0a0a0e;
+  --field-inset: inset 0 2px 4px rgb(0 0 0 / 65%), inset 0 -1px 0 rgb(255 255 255 / 7%);
+  --keycap-sheen: linear-gradient(180deg, rgb(255 255 255 / 12%) 0%, rgb(255 255 255 / 4%) 100%);
+  --keycap-border: rgb(215 228 255 / 18%);
+  --keycap-ink: #f6f7fb;
+  --keycap-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), inset 0 -1px 0 rgb(0 0 0 / 45%), 0 4px 12px -3px rgb(0 0 0 / 70%);
+  --nav-indicator-bg: linear-gradient(180deg, #ffffff 0%, #b8cdf5 100%);
+  --nav-indicator-shadow: 0 0 10px rgb(190 214 255 / 70%);
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 50%), var(--facet-highlight);
+  --shadow-facet: var(--card-shadow);
+  --shadow-card: var(--float-shadow);
+  --shadow-overlay: 0 28px 60px -12px rgb(0 0 0 / 85%), 0 2px 10px rgb(0 0 0 / 50%), var(--facet-highlight);
+  --glow-danger: 0 6px 22px -6px rgb(240 113 106 / 28%), var(--facet-highlight);
+  --glow-warning: 0 6px 20px -6px rgb(242 184 75 / 22%), var(--facet-highlight);
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 /* 根元素按扣除滚动条后的可用宽度布局，避免 320px 视口被最小宽度撑出横向滚动。 */
 html { scroll-behavior: smooth; }
@@ -380,8 +522,10 @@ h2, h3 { margin-top: 0; }
 .skip-link:focus { transform: translateY(0); }
 .icon { flex: 0 0 auto; }
 
-/* 认证页与基础卡片组件：居中真玻璃浮卡落在克制环境光晕画布上（0fps）；保持不加载后台脚本的安全边界。 */
+/* 认证页与基础卡片组件：居中真玻璃浮卡落在克制环境光晕画布上（0fps）；保持不加载后台 admin.js 的安全边界。 */
 body:not(.admin-body) { display: grid; align-content: center; padding: 16px; background-color: var(--page); background-image: var(--aura-auth); background-repeat: no-repeat; background-attachment: scroll; }
+.auth-toolbar { position: relative; z-index: 1; display: flex; justify-content: flex-end; width: min(100%, 432px); margin: 0 auto 12px; }
+html:not(.theme-ready) .auth-toolbar, html:not(.theme-ready) .appearance-toggle { display: none; }
 .card { position: relative; z-index: 1; width: min(100%, 432px); margin: 0 auto; padding: 26px; border: 1px solid var(--float-border); border-radius: 16px; background-color: var(--float-bg); background-image: var(--float-gradient); box-shadow: var(--float-shadow); }
 .card .brand__mark { margin-bottom: 14px; }
 .card h2 { margin-top: 26px; font-size: var(--t-md); }
@@ -675,15 +819,19 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .topbar__crumb { display: none; align-items: center; gap: 8px; color: var(--muted); font-size: var(--t-sm); }
 .topbar__crumb strong { color: var(--ink-strong); font-weight: 650; }
 .topbar__sep { color: var(--line-soft); }
-.topbar__account { display: inline-flex; min-height: 36px; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-sunk); color: var(--ink-mid); font-size: var(--t-sm); font-weight: 600; text-decoration: none; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
-.topbar__account:hover { border-color: var(--line-strong); color: var(--ink-strong); background: var(--surface-well); }
-.topbar__account span { display: none; }
+.topbar__actions { display: inline-flex; flex: none; align-items: center; gap: 8px; }
+.topbar__account, .appearance-toggle { display: inline-flex; min-height: 36px; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-sunk); color: var(--ink-mid); font-size: var(--t-sm); font-weight: 600; text-decoration: none; white-space: nowrap; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.topbar__account:hover, .appearance-toggle:hover { border-color: var(--line-strong); color: var(--ink-strong); background: var(--surface-well); }
+.appearance-toggle:active { transform: scale(.97); }
+.appearance-icon { display: inline-flex; align-items: center; justify-content: center; }
+.appearance-icon[hidden] { display: none; }
+.topbar__account span, .topbar__theme-label { display: none; }
 
-/* 触屏设备上导航、页签与账号入口至少 44×44（Hallmark H03）；纯鼠标桌面保持紧凑密度。 */
+/* 触屏设备上导航、页签、外观切换与账号入口至少 44×44（Hallmark H03）；纯鼠标桌面保持紧凑密度。 */
 @media (any-pointer: coarse) {
   .side-nav a, .sidebar-footer .account-link { min-height: 44px; }
   .tab-nav a { display: inline-flex; align-items: center; min-height: 44px; }
-  .topbar__account { min-width: 44px; min-height: 44px; justify-content: center; }
+  .topbar__account, .topbar__theme, .auth-theme { min-width: 44px; min-height: 44px; justify-content: center; }
 }
 
 .no-script-nav { margin: 12px 14px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
@@ -848,7 +996,7 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   .panel, .panel--padded { padding: 22px; }
   .page-content { padding: 22px 22px 48px; }
   .topbar { padding-inline: 22px; }
-  .topbar__account span { display: inline; }
+  .topbar__account span, .topbar__theme-label { display: inline; }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
   .metric-item { min-height: 112px; grid-template-areas: "label" "value" "meta" "action"; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 16px 18px; }
   .metric-item > strong { align-self: start; font-size: var(--t-2xl); }
@@ -913,7 +1061,7 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   .card { padding: 20px; }
   form > button { width: 100%; }
   .pagination { justify-content: center; }
-  .topbar__account span { display: none; }
+  .topbar__account span, .topbar__theme-label { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1108,7 +1256,7 @@ span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
     --cal-warn-line: #dcc9b4;
   }
   @media (prefers-color-scheme: dark) {
-    .cal {
+    :root:not([data-appearance="light"]) .cal {
       --cal-future-line: #222631;
       --cal-current-bg: #1b1d26;
       --cal-current-line: #2d3343;
@@ -1116,6 +1264,14 @@ span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
       --cal-overlap-stripe: #765c2e;
       --cal-warn-line: #544326;
     }
+  }
+  :root[data-appearance="dark"] .cal {
+    --cal-future-line: #222631;
+    --cal-current-bg: #1b1d26;
+    --cal-current-line: #2d3343;
+    --cal-current-ink: #a4acbe;
+    --cal-overlap-stripe: #765c2e;
+    --cal-warn-line: #544326;
   }
 }
 @media (max-width: 520px) {
@@ -1209,7 +1365,7 @@ span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
 body.admin-body { background-color: var(--page); background-image: var(--aura); background-repeat: no-repeat; background-attachment: scroll; }
 .admin-shell { position: relative; z-index: 1; isolation: isolate; }
 @media (prefers-color-scheme: dark) {
-  body::after {
+  :root:not([data-appearance="light"]) body::after {
     position: fixed;
     inset: 0;
     z-index: 0;
@@ -1220,6 +1376,17 @@ body.admin-body { background-color: var(--page); background-image: var(--aura); 
     content: "";
     pointer-events: none;
   }
+}
+:root[data-appearance="dark"] body::after {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-image: url("/static/noise.png");
+  background-repeat: repeat;
+  opacity: .028;
+  mix-blend-mode: overlay;
+  content: "";
+  pointer-events: none;
 }
 
 /* L0 顶栏与侧栏：不透明哑光实色（守卫 test_topbar_background_is_opaque）+ 暗色微光发线。 */
@@ -1335,14 +1502,14 @@ select:focus:not(:focus-visible), textarea:focus:not(:focus-visible) { outline: 
   background-image: var(--btn-primary-gradient);
   box-shadow: var(--btn-primary-shadow);
 }
-.table-action, .topbar__account {
+.table-action, .topbar__account, .appearance-toggle {
   border-color: var(--btn-sec-border);
   color: var(--btn-sec-ink);
   background-color: var(--btn-sec-bg);
   background-image: var(--btn-sec-gradient);
   box-shadow: var(--btn-sec-shadow);
 }
-.table-action:hover, .topbar__account:hover {
+.table-action:hover, .topbar__account:hover, .appearance-toggle:hover {
   border-color: var(--btn-sec-border-hover);
   color: var(--ink-strong);
   background-color: var(--btn-sec-bg-hover);
@@ -1354,11 +1521,25 @@ select:focus:not(:focus-visible), textarea:focus:not(:focus-visible) { outline: 
 .status-dot--cleaning, .status-dot--pending_inspection { box-shadow: 0 0 0 3px var(--warning-soft); }
 .status-dot--maintenance { box-shadow: 0 0 0 3px var(--danger-soft); }
 @media (prefers-color-scheme: dark) {
-  .status-dot--ready, .readiness-bar__seg--ready { box-shadow: 0 0 8px var(--success); }
-  .status-dot--cleaning, .status-dot--pending_inspection, .readiness-bar__seg--cleaning, .readiness-bar__seg--pending_inspection { box-shadow: 0 0 8px var(--warning); }
-  .status-dot--maintenance, .readiness-bar__seg--maintenance { box-shadow: 0 0 8px var(--danger); }
-  .metric-item--risk strong { text-shadow: 0 0 16px rgb(240 113 106 / 38%); }
+  :root:not([data-appearance="light"]) .status-dot--ready,
+  :root:not([data-appearance="light"]) .readiness-bar__seg--ready { box-shadow: 0 0 8px var(--success); }
+  :root:not([data-appearance="light"]) .status-dot--cleaning,
+  :root:not([data-appearance="light"]) .status-dot--pending_inspection,
+  :root:not([data-appearance="light"]) .readiness-bar__seg--cleaning,
+  :root:not([data-appearance="light"]) .readiness-bar__seg--pending_inspection { box-shadow: 0 0 8px var(--warning); }
+  :root:not([data-appearance="light"]) .status-dot--maintenance,
+  :root:not([data-appearance="light"]) .readiness-bar__seg--maintenance { box-shadow: 0 0 8px var(--danger); }
+  :root:not([data-appearance="light"]) .metric-item--risk strong { text-shadow: 0 0 16px rgb(240 113 106 / 38%); }
 }
+:root[data-appearance="dark"] .status-dot--ready,
+:root[data-appearance="dark"] .readiness-bar__seg--ready { box-shadow: 0 0 8px var(--success); }
+:root[data-appearance="dark"] .status-dot--cleaning,
+:root[data-appearance="dark"] .status-dot--pending_inspection,
+:root[data-appearance="dark"] .readiness-bar__seg--cleaning,
+:root[data-appearance="dark"] .readiness-bar__seg--pending_inspection { box-shadow: 0 0 8px var(--warning); }
+:root[data-appearance="dark"] .status-dot--maintenance,
+:root[data-appearance="dark"] .readiness-bar__seg--maintenance { box-shadow: 0 0 8px var(--danger); }
+:root[data-appearance="dark"] .metric-item--risk strong { text-shadow: 0 0 16px rgb(240 113 106 / 38%); }
 
 /* 紧急行：左侧 2px 发光红条，红色只留在条和原因文字上，避免红底过载。 */
 .first-list__item--urgent::before { position: absolute; top: 10px; bottom: 10px; left: 0; width: 2px; border-radius: 999px; background: var(--danger); box-shadow: 0 0 10px var(--danger); content: ""; }

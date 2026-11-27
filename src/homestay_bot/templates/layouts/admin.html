@@ -12,6 +12,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f4f0">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#08080b">
     <title>{% block title %}{{ page_title }} · {{ app_name }}{% endblock %}</title>
+    <script src="/static/theme.js?v={{ app_version }}"></script>
     <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
     <script src="/static/admin.js?v={{ app_version }}" defer></script>
   </head>
@@ -69,7 +70,15 @@
             <span class="topbar__brand">YuMi 民宿运营台</span>
             <div class="topbar__crumb" aria-hidden="true"><span>YuMi 运营台</span><span class="topbar__sep">/</span><strong>{{ nav_group_name }}</strong></div>
           </div>
-          <a class="topbar__account" href="/employee/account" aria-label="账号安全">{{ icons.icon("user", 17) }}<span>账号安全</span></a>
+          <div class="topbar__actions">
+            <button class="appearance-toggle topbar__theme" type="button" data-theme-control data-appearance-mode="auto" aria-label="外观：跟随系统，点击切换">
+              <span class="appearance-icon" data-theme-icon="auto">{{ icons.icon("monitor", 16) }}</span>
+              <span class="appearance-icon" data-theme-icon="light" hidden>{{ icons.icon("sun", 16) }}</span>
+              <span class="appearance-icon" data-theme-icon="dark" hidden>{{ icons.icon("moon", 16) }}</span>
+              <span class="topbar__theme-label" data-theme-label>跟随系统</span>
+            </button>
+            <a class="topbar__account" href="/employee/account" aria-label="账号安全">{{ icons.icon("user", 17) }}<span>账号安全</span></a>
+          </div>
         </header>
         <details class="no-script-nav">
           <summary>打开页面导航</summary>

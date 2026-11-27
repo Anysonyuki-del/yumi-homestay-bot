@@ -150,7 +150,88 @@ def test_unified_theme_renders_on_first_content_frame(theme_site, browser, path,
                 assert page.locator(
                     f'meta[name="theme-color"][media="(prefers-color-scheme: {mode})"]'
                 ).get_attribute("content") == color
-            assert page.locator("[data-theme-control]").count() == 0
+            toggle = page.locator("[data-theme-control]")
+            assert toggle.count() == 1
+            assert toggle.is_visible()
+            assert toggle.get_attribute("data-appearance-mode") == "auto"
+        assert writes == []
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize(
+    ("system_scheme", "expected_sequence"),
+    [
+        ("light", [("dark", "dark"), ("light", "light"), ("auto", "light")]),
+        ("dark", [("light", "light"), ("dark", "dark"), ("auto", "dark")]),
+    ],
+)
+def test_appearance_toggle_cycles_persists_and_renders_on_first_frame(
+    theme_site, browser, system_scheme, expected_sequence,  # noqa: F811
+):
+    """外观切换按钮首次点击必立刻改观，支持三态循环、跨页/刷新首帧无闪屏与 theme-color 同步。"""
+    script = """
+      function observeContent() {
+        const heading = document.querySelector('h1');
+        if (heading && heading.getBoundingClientRect().height > 0) {
+          window.firstContentFrame = {
+            background: getComputedStyle(document.body).backgroundColor,
+            appearance: document.documentElement.getAttribute('data-appearance'),
+          };
+        } else requestAnimationFrame(observeContent);
+      }
+      requestAnimationFrame(observeContent);
+    """
+    context, page, writes = _context(
+        browser, theme_site, script=script, color_scheme=system_scheme,
+    )
+    try:
+        origin = theme_site[0]
+        page.goto(origin + "/employee/admin")
+        toggle = page.locator("[data-theme-control]")
+        assert toggle.is_visible()
+        assert toggle.get_attribute("data-appearance-mode") == "auto"
+
+        # 第一下必然切到与当前系统相反的外观，并持久化到 localStorage 与跨页首帧。
+        first_mode, first_visual = expected_sequence[0]
+        toggle.click()
+        assert toggle.get_attribute("data-appearance-mode") == first_mode
+        assert page.locator("body").evaluate(
+            "node => getComputedStyle(node).backgroundColor"
+        ) == PAGE_BACKGROUND[first_visual]
+        assert page.evaluate(
+            "() => getComputedStyle(document.documentElement).colorScheme"
+        ) == first_visual
+        for meta_mode in ("light", "dark"):
+            assert page.locator(
+                f'meta[name="theme-color"][media="(prefers-color-scheme: {meta_mode})"]'
+            ).get_attribute("content") == THEME_COLOR[first_visual]
+
+        # 跳到认证页并刷新后台：首帧即落目标色，绝不先闪系统色。
+        for target in ("/employee/login", "/employee/admin"):
+            page.goto(origin + target)
+            page.wait_for_function("window.firstContentFrame !== undefined")
+            assert page.evaluate("window.firstContentFrame") == {
+                "background": PAGE_BACKGROUND[first_visual],
+                "appearance": first_mode,
+            }
+            assert page.locator("[data-theme-control]").get_attribute(
+                "data-appearance-mode"
+            ) == first_mode
+
+        # 继续完成剩余两下点击：切到另一套固定外观，再恢复跟随系统。
+        toggle = page.locator("[data-theme-control]")
+        for mode, visual in expected_sequence[1:]:
+            toggle.click()
+            assert toggle.get_attribute("data-appearance-mode") == mode
+            assert page.locator("body").evaluate(
+                "node => getComputedStyle(node).backgroundColor"
+            ) == PAGE_BACKGROUND[visual]
+        assert page.evaluate("() => window.localStorage.getItem('yumi-appearance')") is None
+        for meta_mode, color in THEME_COLOR.items():
+            assert page.locator(
+                f'meta[name="theme-color"][media="(prefers-color-scheme: {meta_mode})"]'
+            ).get_attribute("content") == color
         assert writes == []
     finally:
         context.close()
@@ -158,7 +239,7 @@ def test_unified_theme_renders_on_first_content_frame(theme_site, browser, path,
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_no_javascript_keeps_unified_theme_and_core_pages_usable(theme_site, browser, scheme):  # noqa: F811
-    """禁用 JavaScript 时，认证页与任务页在两种系统明暗下都保持统一外观且核心控件可操作。"""
+    """禁用 JavaScript 时，外观切换按钮隐藏，认证页与任务页仍跟随系统明暗且核心控件可用。"""
     context, page, writes = _context(
         browser, theme_site, java_script_enabled=False, color_scheme=scheme,
     )
@@ -168,6 +249,7 @@ def test_no_javascript_keeps_unified_theme_and_core_pages_usable(theme_site, bro
             assert page.locator("body").evaluate(
                 "node => getComputedStyle(node).backgroundColor"
             ) == PAGE_BACKGROUND[scheme]
+            assert not page.locator("[data-theme-control]").is_visible()
             assert page.locator("h1").is_visible()
             if path.endswith("login"):
                 page.locator("#username").fill("合成草稿")
