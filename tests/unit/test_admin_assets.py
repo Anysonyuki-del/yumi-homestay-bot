@@ -115,14 +115,40 @@ def test_admin_css_declares_dual_scheme_once_and_avoids_blanket_rules() -> None:
 def test_action_fill_tokens_never_paint_foreground() -> None:
     """--primary 系只作填充与描边，绝不作文字或图标前景。
 
-    暗色主色 #b84018 在暖炭卡片上只有约 3:1，拿它写字必然不达标；前景一律走
-    --link / --link-hover。caret-color 与 accent-color 是明确例外，不在拦截范围。
+    暗色 --primary（#536382）在曜黑卡片上为 3.11:1，仅满足非文本边界/填充而不满足 4.5:1 正文；
+    前景一律走 --link / --link-hover。caret-color 与 accent-color 是明确例外，不在拦截范围。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
     offenders = re.findall(
         r"[^{};]*(?<![\w-])color:\s*var\(--primary(?:-hover|-active)?\)", css
     )
     assert not offenders, f"前景色引用了填充用主色：{offenders}"
+
+
+def test_prism_rim_mask_is_guarded_by_supports() -> None:
+    """菲涅尔棱镜 ::before 遮罩必须包在 @supports 内，防止老引擎退化为不透明遮盖层。"""
+    css = _strip_comments((ASSET_ROOT / "static/app.css").read_text())
+    condition = "@supports ((mask-composite: exclude) or (-webkit-mask-composite: xor)) {"
+    assert condition in css, "菲涅尔锐边 ::before 必须受 @supports 保护"
+    start = css.index(condition)
+    end = css.index("\n}\n", start)
+    block = css[start:end]
+    for prop in ("mask-composite:", "-webkit-mask-composite:"):
+        positions = [m.start() for m in re.finditer(re.escape(prop), css)]
+        assert positions, f"缺少 {prop}"
+        assert all(start <= pos < end for pos in positions), f"{prop} 必须位于 @supports 块内"
+    assert "mask-image:" in block and "mask-clip:" in block, "应使用分拆 mask 属性避免简写解析分歧"
+    assert "content-box exclude" not in block, "不应在 mask 简写中混写 exclude"
+
+
+def test_content_cards_stay_solid_without_dot_grid_or_fixed_aura() -> None:
+    """L1 内容卡关闭 backdrop-filter、去掉全屏 12px 点阵与 fixed 光晕，守住 60fps 与移动定位。"""
+    css = _strip_comments((ASSET_ROOT / "static/app.css").read_text())
+    assert ".admin-shell::before" not in css, "不应再铺全屏点阵背景"
+    assert "background-attachment: fixed" not in css, "背景光晕应随页面滚动，避免滚动重绘"
+    assert not re.search(
+        r"\.panel[^{}]*\{[^}]*backdrop-filter:", css, re.S
+    ), "L1 .panel 不应挂 backdrop-filter（会拖慢滚动并在窄屏建立 fixed 包含块）"
 
 
 def test_spring_easings_follow_the_damped_oscillator_formula() -> None:
@@ -353,7 +379,7 @@ def test_calendar_grid_lines_stay_visible_against_the_track() -> None:
 
     这个问题出现过两次：表头竖线与行程分隔线都用过 #F1F5F9，在白底上对比度只有
     约 1.10:1，肉眼等同于没有线，网格结构因此读不出来（用户原话「边框和背景融在
-    一起了」）。暗色轨道换成暖炭后同样要守住 1.2:1；迷你轨未来段曾经只有约 1.1:1。
+    一起了」）。暗色轨道换成黑曜后同样要守住 1.2:1；迷你轨未来段曾经只有约 1.1:1。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()
     block = _room_card_block(css)
@@ -623,7 +649,7 @@ def test_page_alerts_have_a_single_owner() -> None:
 def test_status_colors_never_borrow_the_action_color() -> None:
     """房间状态的点和占比条不得使用主操作色。
 
-    陶红是「这里可以点」的唯一信号；状态色借用它，员工会把只读的状态当成可操作项，
+    操作色与链接色只表示「这里可以点」；状态色借用它们，员工会把只读的状态当成可操作项，
     或把「已入住」读成告警。状态只能用中性、成功、告警、危险这些语义色。
     """
     css = (ASSET_ROOT / "static/app.css").read_text()

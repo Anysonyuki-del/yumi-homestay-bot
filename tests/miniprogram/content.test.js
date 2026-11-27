@@ -663,17 +663,17 @@ test('app.json 开启 darkmode，窗口与标签栏的颜色和图标全部引�
   assert.deepEqual(Object.keys(theme.light).sort(), Object.keys(theme.dark).sort())
   assert.deepEqual(
     [theme.light.navBgColor, theme.light.tabBgColor, theme.light.tabSelectedColor],
-    ['#f6f4ee', '#ffffff', '#c24322'],
+    ['#f5f4f0', '#ffffff', '#18191f'],
   )
   assert.deepEqual(
     [theme.dark.navBgColor, theme.dark.tabBgColor, theme.dark.tabSelectedColor, theme.dark.navTxtStyle],
-    ['#151413', '#100f0e', '#f09a5e', 'white'],
+    ['#08080b', '#050507', '#b8cdf5', 'white'],
   )
 })
 
-test('12 枚标签栏图标都是 81×81 单色剪影：浅色沿用原色，暗色与 theme.json 同色且轮廓与浅色逐像素一致', () => {
+test('12 枚标签栏图标都是 81×81 单色剪影：浅暗两态都与 theme.json 同色，暗色轮廓与浅色逐像素一致', () => {
   const theme = JSON.parse(readClient('theme.json'))
-  const lightColor = { Icon: '#58524a', ActiveIcon: '#c24322' }
+  const lightColor = { Icon: theme.light.tabColor, ActiveIcon: theme.light.tabSelectedColor }
   const darkColor = { Icon: theme.dark.tabColor, ActiveIcon: theme.dark.tabSelectedColor }
   let checked = 0
   for (const name of ['home', 'services', 'me']) {

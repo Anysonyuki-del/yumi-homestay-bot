@@ -20,18 +20,44 @@ from homestay_bot.web import templates
 STATIC_ROOT = Path(__file__).resolve().parents[2] / "src/homestay_bot/static"
 PREVIEW_ROOT = Path("/tmp/yumi-ae-theme-preview")
 # 两套配色方案下的画布色（app.css 的 --page），首帧与无脚本页面都必须直接落在这里。
-PAGE_BACKGROUND = {"light": "rgb(246, 244, 238)", "dark": "rgb(21, 20, 19)"}
-THEME_COLOR = {"light": "#f6f4ee", "dark": "#151413"}
-# 页面内计算 WCAG 对比度的脚本片段：rgb/rgba 字符串 → 相对亮度 → 对比度。
+PAGE_BACKGROUND = {"light": "rgb(245, 244, 240)", "dark": "rgb(8, 8, 11)"}
+THEME_COLOR = {"light": "#f5f4f0", "dark": "#08080b"}
+# 页面内计算 WCAG 对比度的脚本片段：支持 RGBA 逐层 Alpha 合成，避免把半透明背景误判成纯色。
 _CONTRAST_JS = """
-  const rgb = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
-  const luminance = value => rgb(value).map(x => x / 255)
+  const parseRgba = value => {
+    const nums = value.match(/[\\d.]+/g).map(Number);
+    return [nums[0], nums[1], nums[2], nums.length >= 4 ? nums[3] : 1];
+  };
+  const compositeOver = (top, bottom) => {
+    const a = top[3];
+    return [
+      top[0] * a + bottom[0] * (1 - a),
+      top[1] * a + bottom[1] * (1 - a),
+      top[2] * a + bottom[2] * (1 - a),
+      1,
+    ];
+  };
+  const effectiveBg = (node, includeSelf = true) => {
+    const chain = [];
+    for (let cur = includeSelf ? node : node.parentElement; cur; cur = cur.parentElement) {
+      chain.push(parseRgba(getComputedStyle(cur).backgroundColor));
+    }
+    let color = [255, 255, 255, 1];
+    for (let i = chain.length - 1; i >= 0; i--) {
+      if (chain[i][3] > 0) color = compositeOver(chain[i], color);
+    }
+    return color;
+  };
+  const luminance = rgba => rgba.slice(0, 3).map(x => x / 255)
     .map(x => x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4)
     .reduce((sum, x, i) => sum + x * [.2126, .7152, .0722][i], 0);
-  const contrast = (fg, bg) => {
-    const values = [luminance(fg), luminance(bg)].sort((a, b) => a - b);
+  const contrastRgba = (fg, bg) => {
+    const resolvedFg = fg[3] < 1 ? compositeOver(fg, bg) : fg;
+    const values = [luminance(resolvedFg), luminance(bg)].sort((a, b) => a - b);
     return (values[1] + .05) / (values[0] + .05);
   };
+  const contrast = (fg, bg) => contrastRgba(parseRgba(fg), parseRgba(bg));
+  const rgb = value => parseRgba(value).slice(0, 3);
 """
 
 
@@ -224,26 +250,19 @@ def test_text_and_action_contrast_uses_actual_computed_surfaces(theme_site, brow
             ".eyebrow, .muted, .first-list__why, .first-list__room span,"
             " .badge, a.button, .topbar__account"
         )
-        results = page.locator(selectors).evaluate_all("""nodes => {
-          const rgb = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
-          const luminance = value => rgb(value).map(x => x / 255)
-            .map(x => x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4)
-            .reduce((sum, x, i) => sum + x * [.2126, .7152, .0722][i], 0);
-          const contrast = (fg, bg) => {
-            const values = [luminance(fg), luminance(bg)].sort((a,b) => a-b);
-            return (values[1] + .05) / (values[0] + .05);
-          };
+        results = page.locator(selectors).evaluate_all("nodes => {" + _CONTRAST_JS + """
           return nodes.filter(node => node.getClientRects().length).flatMap(node => {
-            let ancestor = node;
-            while (getComputedStyle(ancestor).backgroundColor === 'rgba(0, 0, 0, 0)')
-              ancestor = ancestor.parentElement;
             const style = getComputedStyle(node);
-            const bg = getComputedStyle(ancestor).backgroundColor;
-            const samples = [{ className: node.className, foreground: style.color,
-                              background: bg, ratio: contrast(style.color, bg), min: 4.5 }];
+            const bg = effectiveBg(node, true);
+            const fg = parseRgba(style.color);
+            const samples = [{
+              className: node.className, foreground: style.color,
+              background: bg.map(Math.round), ratio: contrastRgba(fg, bg), min: 4.5,
+            }];
             if (node.matches(':focus-visible')) {
+              const outside = effectiveBg(node, false);
               samples.push({ className: 'focus', min: 3,
-                             ratio: contrast(style.outlineColor, bg) });
+                             ratio: contrastRgba(parseRgba(style.outlineColor), outside) });
             }
             return samples;
           });
@@ -298,21 +317,15 @@ def test_visible_control_boundaries_and_focus_have_sufficient_contrast(theme_sit
                     control.focus()
                 elif state == "invalid":
                     control.evaluate("node => node.setAttribute('aria-invalid', 'true')")
-                ratios = control.evaluate("""node => {
-                  const lum = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number)
-                    .map(x => x / 255).map(x => x <= .04045 ? x / 12.92 : ((x + .055)/1.055)**2.4)
-                    .reduce((sum, x, i) => sum + x * [.2126, .7152, .0722][i], 0);
-                  const contrast = (a, b) =>
-                    (Math.max(lum(a),lum(b))+.05)/(Math.min(lum(a),lum(b))+.05);
-                  let parent = node.parentElement;
-                  while (getComputedStyle(parent).backgroundColor === 'rgba(0, 0, 0, 0)')
-                    parent = parent.parentElement;
+                ratios = control.evaluate("node => {" + _CONTRAST_JS + """
                   const style = getComputedStyle(node);
-                  const outside = getComputedStyle(parent).backgroundColor;
-                  return { inside: contrast(style.borderTopColor, style.backgroundColor),
-                    outside: contrast(style.borderTopColor, outside),
+                  const insideBg = effectiveBg(node, true);
+                  const outsideBg = effectiveBg(node, false);
+                  const border = parseRgba(style.borderTopColor);
+                  return { inside: contrastRgba(border, insideBg),
+                    outside: contrastRgba(border, outsideBg),
                     focus: node.matches(':focus-visible')
-                      ? contrast(style.outlineColor, outside) : null };
+                      ? contrastRgba(parseRgba(style.outlineColor), outsideBg) : null };
                 }""")
                 assert ratios["inside"] >= 3 and ratios["outside"] >= 3, (
                     selector, state, ratios
@@ -378,7 +391,7 @@ def test_optical_surfaces_stay_readable_in_both_schemes(theme_site, browser, sch
         }""")
         assert result["toast"] >= 4.5, result
         assert result["skip"] >= 4.5, result
-        assert result["media"] == "rgb(236, 232, 225)", result
+        assert result["media"] == "rgb(236, 235, 231)", result
         assert result["alpha"] <= 0.16, result
         for segment in result["segments"]:
             assert segment["ratio"] >= 3, (scheme, segment)

@@ -1,4 +1,4 @@
-/* 首页：暖纸画布托起细描边光学切面卡片（暗色随系统切暖炭）；快捷导航一行四格；房间为 4:3 大图卡片与紧凑无图卡片。 */
+/* 首页：象牙瓷白画布托起细描边光学切面卡片（暗色随系统切曜黑银刃）；快捷导航一行四格；房间为 4:3 大图卡片与紧凑无图卡片。 */
 .banner { display: block; margin-bottom: 40rpx; --td-swiper-radius: 24rpx; }
 .banner--placeholder { height: 386rpx; border-radius: 24rpx; background: var(--yumi-surface-well); }
 
@@ -12,7 +12,7 @@
   overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
 
-/* 房间卡片：纯白 24rpx 卡片 + 1rpx 暖石细描边，与暖白画布层次清晰分明。 */
+/* 房间卡片：纯白 24rpx 卡片 + 1rpx 细描边，与画布层次清晰分明。 */
 .room {
   display: flex; flex-direction: column; gap: 8rpx;
   margin-bottom: 28rpx; padding: 24rpx; border-radius: 24rpx;
@@ -43,7 +43,7 @@
 .room-skeleton__line { height: 26rpx; width: 52%; margin-top: 16rpx; border-radius: 8rpx; background: var(--yumi-surface-well); }
 .room-skeleton__line--title { height: 40rpx; width: 40%; margin-top: 0; }
 
-/* 快捷导航：细描边卡片内一行四格，每格图标落在内凹暖石底托上，图标继承这里的前景强调色。 */
+/* 快捷导航：细描边卡片内一行四格，每格图标落在内凹底托上，图标继承这里的前景强调色。 */
 .quick-nav {
   display: flex; margin-bottom: 48rpx; padding: 24rpx 12rpx;
   border-radius: 24rpx; border: 1rpx solid var(--yumi-hairline); background: var(--yumi-surface); box-shadow: var(--yumi-shadow-card);

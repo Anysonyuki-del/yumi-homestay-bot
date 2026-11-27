@@ -1,87 +1,89 @@
-/* YuMi 管理后台与认证页统一样式（暖纸光学 × 暖炭光学 · Warm Paper Optical × Warm Charcoal Optical）。
-   浅色为主，纯 CSS 跟随系统暗色（无切换器、零闪屏）；侧栏压暗建立明度景深，唯一动作色晶陶红只作填充与描边。
+/* YuMi 管理后台与认证页统一样式（象牙瓷白 × 曜黑银刃 · Ivory Porcelain × Obsidian Platinum）。
+   浅色为主，纯 CSS 跟随系统暗色（无切换器、零闪屏）；按 L0 外壳 / L1 光学切面卡 / L2 悬浮玻璃三层建立景深；
+   暗色主动作采用 1A 刀锋银刃曜石键，浅色采用钢琴黑曜键；环境光晕、微噪点与菲涅尔锐边全部为 0fps 静态层。
    美学灵感来自公开仓库 RMvdesi/obsidian-prism 的 README 设计理念，本文件全部代码独立编写。 */
 :root {
   /* 只在 :root 声明一次，原生控件、滚动条与 <dialog> 随系统明暗切换。 */
   color-scheme: light dark;
-  /* 唯一饱和动作色：只作填充底色或描边，绝不作文字/图标前景（单测守卫）；前景用 --link / --link-hover。 */
-  --primary: #c24322;
-  --primary-hover: #a73619;
-  --primary-active: #8f2d14;
-  --primary-soft: #fbede8;
-  --primary-border: #eabeb0;
+  /* 核心语义动作色：只作填充、日历派生与描边，绝不作文字/图标前景（单测守卫）；前景统一走 --link / --link-hover。 */
+  --primary: #18191f;
+  --primary-hover: #292b35;
+  --primary-active: #0c0d10;
+  --primary-soft: #eeedf0;
+  --primary-border: #c9c7cf;
   --on-primary: #ffffff;
   --on-primary-hover: #ffffff;
-  --link: #b53a1b;
-  --link-hover: #962f15;
-  --focus: #c24322;
-  --focus-ring: rgb(194 67 34 / 18%);
+  --link: #29497a;
+  --link-hover: #1b3359;
+  --focus: #18191f;
+  --focus-ring: rgb(24 25 31 / 13%);
 
-  /* 明度景深：侧栏压暗、画布暖纸、卡片纯白；凹槽与图片预览底各自独立，避免隐式依赖 --surface 为白。 */
-  --sidebar-bg: #ebe6dc;
-  --page: #f6f4ee;
+  /* 明度景深：侧栏压暗、画布象牙瓷白、卡片纯白；顶栏与图片预览底各自独立，避免隐式依赖 --surface。 */
+  --sidebar-bg: #eceae4;
+  --topbar-bg: #fbfaf8;
+  --page: #f5f4f0;
   --surface: #ffffff;
-  --surface-sunk: #f2eee6;
-  --surface-well: #e8e2d7;
-  /* 图片预览双态固定浅中性底：暗色下深色线条的透明 PNG 仍然可见。 */
-  --media-well: #ece8e1;
+  --surface-sunk: #f2f1ec;
+  --surface-well: #e6e4dd;
+  /* 图片预览双态固定浅中性底：暗色下深色线条的透明 PNG 仍然清晰可见。 */
+  --media-well: #ecebe7;
 
-  /* 暖墨层级：正文与次级说明在卡片、画布与侧栏上均达到 WCAG AA >= 4.5:1。 */
-  --ink-strong: #1c1916;
-  --text: #282420;
-  --ink-mid: #413b35;
-  --ink-soft: #575048;
-  --muted: #5e574f;
+  /* 墨色层级：正文与次级说明在卡片、画布、沉降面与侧栏上均达到 WCAG AA >= 4.5:1。 */
+  --ink-strong: #121316;
+  --text: #22242a;
+  --ink-mid: #383b44;
+  --ink-soft: #50545f;
+  --muted: #5a5e6a;
 
   /* 线条与控件识别边界：--line 兼作日历网格线（>= 1.2:1），--control-border >= 3:1。 */
-  --line: #dad2c5;
-  --line-strong: #c2b7a6;
-  --control-border: #766e64;
-  --line-soft: #968d82;
+  --line: #dad7cf;
+  --line-strong: #c2bfb6;
+  --control-border: #6f7075;
+  --line-soft: #82848c;
 
   /* 禁用态彻底去色、零高光，与可点击的主按钮形成明确视觉分界。 */
-  --disabled-bg: #ece7df;
-  --disabled-ink: #6b645b;
-  --disabled-border: #d5cdc0;
+  --disabled-bg: #ecebe7;
+  --disabled-ink: #6a6d76;
+  --disabled-border: #d6d3cb;
 
   /* 业务状态语义色：柔底 + 高对比前景，不与动作色争夺「可点击」语义。 */
-  --success: #0f5c3a;
-  --success-soft: #eaf8f0;
-  --success-border: #b0e3c6;
-  --warning: #874c05;
-  --warning-soft: #fdf6e3;
-  --warning-border: #e8ca82;
-  --danger: #9f1d1d;
-  --danger-soft: #fdf0f0;
-  --danger-border: #efb8b8;
+  --success: #067647;
+  --success-soft: #e7f6ee;
+  --success-border: #a9dcc0;
+  --warning: #8a4b06;
+  --warning-soft: #fdf5e6;
+  --warning-border: #ecc98a;
+  --danger: #b42318;
+  --danger-soft: #fdeeec;
+  --danger-border: #f2b8b2;
   /* 危险按钮悬停反色时的前景：暗色下 --danger 是浅红填充，前景必须换成深色。 */
   --on-danger: #ffffff;
-  --info: #1b4b6e;
-  --info-soft: #edf4fa;
-  --info-border: #bad3e8;
+  --info: #0e5a8a;
+  --info-soft: #e8f2f9;
+  --info-border: #b5d3e8;
   /* 知识范围语义色（2026-11-25 知识库重构 Spec F3）：只表示「这条知识归谁」，不可点击，
-     因此绝不借用主操作色；前景色对各自底色的对比度均 ≥ 4.5:1。 */
-  --scope-global-bg: #e6f3ee;
-  --scope-global-fg: #1a5a44;
-  --scope-global-bd: #b6dbce;
-  --scope-room-bg: #eaeef8;
-  --scope-room-fg: #2d3e78;
-  --scope-room-bd: #c3cde8;
-  --scope-public-bg: #eeeae3;
-  --scope-public-fg: #524c44;
-  --scope-public-bd: #d5cdc1;
+     因此绝不借用主操作色；前景色对各自底色的对比度均 >= 4.5:1。 */
+  --scope-global-bg: #e4f4ee;
+  --scope-global-fg: #14583f;
+  --scope-global-bd: #b0dbc9;
+  --scope-room-bg: #ecebfb;
+  --scope-room-fg: #3b3a8f;
+  --scope-room-bd: #c9c7ef;
+  --scope-public-bg: #efeeea;
+  --scope-public-fg: #474a54;
+  --scope-public-bd: #d5d3cc;
 
-  /* 浏览器表面、反相小件与遮罩：轻提示与跳转链接各用专属前景，不再借 --surface 充当白字。 */
-  --selection-bg: #fbede8;
-  --tap-highlight: rgb(194 67 34 / 14%);
-  --backdrop: rgb(28 25 22 / 46%);
-  --toast-bg: #1c1916;
+  /* 浏览器表面、反相小件与遮罩：轻提示与跳转链接各用专属前景，不借 --surface 充当白字。 */
+  --selection-bg: #dfe6f4;
+  --tap-highlight: rgb(24 25 31 / 12%);
+  --backdrop: rgb(18 19 22 / 46%);
+  --toast-bg: #121316;
   --toast-ink: #ffffff;
   --on-ink-strong: #ffffff;
-  /* 侧栏当前项与页签当前项的实体键帽底：浅色浮白，暗色改走柔晶陶底。 */
-  --keycap-active-bg: var(--surface);
+  /* 侧栏当前项与页签当前项的实体键帽底：浅色浮白，暗色改走深冷钛键帽。 */
+  --keycap-active-bg: #ffffff;
 
-  /* 排版与几何尺规：卡片 12px / 控件 9px。 */
+  /* 排版与几何尺规：卡片 12px / 控件 8px（精密几何圆角）。 */
   --t-2xs: .6875rem;
   --t-xs: .75rem;
   --t-sm: .8125rem;
@@ -90,7 +92,7 @@
   --t-xl: 1.5rem;
   --t-2xl: 1.875rem;
   --r-xs: 6px;
-  --r-sm: 9px;
+  --r-sm: 8px;
   --radius: 12px;
   --measure-page: 1260px;
   --measure-prose: 68ch;
@@ -98,19 +100,77 @@
   --sidebar-width: 224px;
   --topbar-height: 52px;
 
-  /* 光学材质：1px 顶部镜面高光、晶体按钮顶边、控制台凹槽、硼硅占比条顶光与认证页静态光晕（0fps）。 */
-  --facet-highlight: inset 0 1px 0 rgb(255 255 255 / 92%);
-  --primary-highlight: inset 0 1px 0 rgb(255 242 232 / 34%);
-  --well-inset: inset 0 1px 2px rgb(28 25 22 / 6%);
+  /* L0 环境与基础材质：单主光克制顶光 + 内凹槽 + 硼硅占比条 16% 顶光（0fps）。 */
+  --facet-highlight: inset 0 1px 0 rgb(255 255 255 / 95%);
+  --well-inset: inset 0 1px 2px rgb(20 21 25 / 7%);
   --vial-sheen: linear-gradient(180deg, rgb(255 255 255 / 16%) 0%, rgb(255 255 255 / 0%) 58%);
-  --auth-glow: radial-gradient(ellipse 68% 48% at 50% 0%, rgb(194 67 34 / 7%), transparent 72%);
-  --shadow-raised: 0 1px 2px rgb(28 25 22 / 5%), var(--facet-highlight);
-  --shadow-facet: 0 2px 6px rgb(28 25 22 / 4%), var(--facet-highlight);
-  --shadow-card: 0 14px 32px rgb(28 25 22 / 10%), var(--facet-highlight);
-  --shadow-overlay: 0 16px 34px rgb(28 25 22 / 18%), 0 2px 8px rgb(28 25 22 / 8%), var(--facet-highlight);
+  --aura:
+    radial-gradient(ellipse 75% 42% at 50% -14%, rgb(255 255 255 / 95%), transparent 68%),
+    radial-gradient(ellipse 46% 32% at 88% -6%, rgb(175 168 152 / 11%), transparent 72%);
+  --aura-auth:
+    radial-gradient(ellipse 68% 46% at 50% 0%, rgb(175 168 152 / 15%), transparent 68%),
+    radial-gradient(ellipse 48% 36% at 18% 92%, rgb(135 148 175 / 9%), transparent 70%);
+  --topbar-hairline: none;
+  --sidebar-hairline: none;
+
+  /* L1 瓷釉光学切面卡片（不加 backdrop-filter，保证 60fps 与零包含块副作用）。 */
+  --card-gradient: linear-gradient(180deg, #ffffff 0%, #fbfaf7 100%);
+  --card-border: rgb(20 21 25 / 10%);
+  --card-shadow: inset 0 1px 0 #ffffff, inset 0 -1px 0 rgb(20 21 25 / 4%), 0 2px 4px rgb(20 21 25 / 5%), 0 14px 30px -14px rgb(20 21 25 / 12%);
+  --card-focus-border: #c5c2b9;
+  --card-focus-shadow: inset 0 1px 0 #ffffff, 0 2px 6px rgb(20 21 25 / 6%), 0 16px 34px -14px rgb(20 21 25 / 14%);
+  --card-risk-gradient: linear-gradient(160deg, #fff6f5 0%, #ffffff 48%, #fbfaf7 100%);
+  --card-risk-border: rgb(180 35 24 / 28%);
+  --card-risk-shadow: inset 0 1px 0 #ffffff, 0 2px 4px rgb(180 35 24 / 6%), 0 14px 28px -14px rgb(180 35 24 / 16%);
+  /* 浅色卡片无需暗色式棱镜外框，保持透明零噪声；暗色再开启单色冷银菲涅尔锐边。 */
+  --rim: transparent;
+  --rim-float: transparent;
+  --rim-risk: transparent;
+
+  /* L2 真·磨砂玻璃浮层：仅用于认证浮卡、确认弹窗与轻提示。 */
+  --float-bg: rgb(255 255 255 / 86%);
+  --float-gradient: linear-gradient(180deg, rgb(255 255 255 / 72%) 0%, rgb(250 249 246 / 60%) 100%);
+  --float-border: rgb(20 21 25 / 11%);
+  --float-blur: blur(24px) saturate(145%);
+  --float-shadow: inset 0 1px 0 #ffffff, 0 4px 10px rgb(20 21 25 / 6%), 0 28px 56px -20px rgb(20 21 25 / 16%);
+
+  /* 主按钮材质令牌（浅色：钢琴黑曜键；暗色：1A 刀锋银刃曜石键）。 */
+  --btn-primary-bg: #18191f;
+  --btn-primary-bg-hover: #292b35;
+  --btn-primary-bg-active: #0c0d10;
+  --btn-primary-gradient: linear-gradient(180deg, #272932 0%, #14151a 100%);
+  --btn-primary-gradient-hover: linear-gradient(180deg, #323542 0%, #1d1f28 100%);
+  --btn-primary-border: #0e0f12;
+  --btn-primary-border-hover: #1f212a;
+  --btn-primary-ink: #ffffff;
+  --btn-primary-shadow: inset 0 1px 0 rgb(255 255 255 / 22%), inset 0 -1px 0 rgb(0 0 0 / 35%), 0 2px 4px rgb(15 16 20 / 16%), 0 8px 18px -8px rgb(15 16 20 / 32%);
+  --btn-primary-shadow-hover: inset 0 1px 0 rgb(255 255 255 / 28%), inset 0 -1px 0 rgb(0 0 0 / 38%), 0 3px 6px rgb(15 16 20 / 20%), 0 10px 22px -8px rgb(15 16 20 / 38%);
+
+  /* 次级按钮与轻透工具键（浅色：清透瓷白键；暗色：极轻透幽灵微边键）。 */
+  --btn-sec-bg: #ffffff;
+  --btn-sec-bg-hover: #f4f3ef;
+  --btn-sec-gradient: linear-gradient(180deg, #ffffff 0%, #f4f3ef 100%);
+  --btn-sec-border: #cfc9be;
+  --btn-sec-border-hover: #b4afa4;
+  --btn-sec-ink: #25272e;
+  --btn-sec-shadow: inset 0 1px 0 #ffffff, inset 0 -1px 0 rgb(20 21 25 / 5%), 0 1px 3px rgb(20 21 25 / 7%);
+
+  /* 输入框内凹槽与键帽激活态。 */
+  --field-bg: #ffffff;
+  --field-inset: inset 0 1px 2px rgb(20 21 25 / 7%), 0 1px 0 #ffffff;
+  --keycap-sheen: linear-gradient(180deg, #ffffff 0%, #faf9f6 100%);
+  --keycap-border: #d2cfc7;
+  --keycap-ink: #121316;
+  --keycap-shadow: inset 0 1px 0 #ffffff, 0 2px 6px -1px rgb(20 21 25 / 10%);
+  --nav-indicator-bg: #18191f;
+  --nav-indicator-shadow: none;
+  --shadow-raised: 0 1px 2px rgb(20 21 25 / 6%), var(--facet-highlight);
+  --shadow-facet: 0 2px 8px -2px rgb(20 21 25 / 10%), var(--facet-highlight);
+  --shadow-card: var(--float-shadow);
+  --shadow-overlay: 0 24px 48px -12px rgb(18 19 22 / 24%), 0 2px 8px rgb(18 19 22 / 8%), var(--facet-highlight);
   /* 静态边缘余晖只留外发光：圆角卡片上的 inset 竖条会弯成月牙。 */
-  --glow-danger: 0 4px 16px rgb(159 29 29 / 8%), var(--facet-highlight);
-  --glow-warning: 0 4px 14px rgb(135 76 5 / 7%), var(--facet-highlight);
+  --glow-danger: 0 6px 20px -6px rgb(180 35 24 / 20%), var(--facet-highlight);
+  --glow-warning: 0 6px 18px -6px rgb(138 75 6 / 14%), var(--facet-highlight);
 
   /* 动效：颜色/按压/箭头走 --ease-out，出场走 --ease-in；两条弹簧只给入场位移，
      默认先用旧浏览器可识别的 cubic-bezier，支持 linear() 时再在下方 @supports 升级。 */
@@ -137,85 +197,146 @@
   }
 }
 
-/* 暖炭光学：系统暗色时整套令牌切换；--primary 仍只作填充，暗色前景统一走暖琥珀 --link。 */
+/* 曜黑银刃（A2-Pro + 1A）：极净黑曜画布 + 顶部克制冷银漫射 + 蓝宝石切面卡 + 1A 刀锋银刃曜石键。
+   --primary 采用沉静冷钛灰蓝用于日历派生与控件强调，绝不作文字前景；文字链接走冷银蓝 --link。 */
 @media (prefers-color-scheme: dark) {
   :root {
-    --primary: #b84018;
-    --primary-hover: #c74a1f;
-    --primary-active: #9e3512;
-    --primary-soft: #2c1b14;
-    --primary-border: #663924;
+    --primary: #536382;
+    --primary-hover: #607294;
+    --primary-active: #44526d;
+    --primary-soft: #171a24;
+    --primary-border: #363d52;
     --on-primary: #ffffff;
     --on-primary-hover: #ffffff;
-    --link: #f09a5e;
-    --link-hover: #f7b887;
-    --focus: #f09a5e;
-    --focus-ring: rgb(240 154 94 / 24%);
+    --link: #b8cdf5;
+    --link-hover: #d8e5ff;
+    --focus: #dce6fa;
+    --focus-ring: rgb(200 218 255 / 18%);
 
-    --sidebar-bg: #100f0e;
-    --page: #151413;
-    --surface: #1d1b19;
-    --surface-sunk: #181614;
-    --surface-well: #272420;
-    --media-well: #ece8e1;
+    --sidebar-bg: #050507;
+    --topbar-bg: #0b0b0f;
+    --page: #08080b;
+    --surface: #111116;
+    --surface-sunk: #0c0c10;
+    --surface-well: #18181f;
+    --media-well: #ecebe7;
 
-    --ink-strong: #f5f1ea;
-    --text: #e4ded4;
-    --ink-mid: #ccc4b8;
-    --ink-soft: #afa69a;
-    --muted: #9f968a;
+    --ink-strong: #f6f6f9;
+    --text: #e5e5ec;
+    --ink-mid: #c8c9d4;
+    --ink-soft: #a8aab8;
+    --muted: #9093a3;
 
-    --line: #36312c;
-    --line-strong: #4a443c;
-    --control-border: #7e756a;
-    --line-soft: #665e55;
+    --line: #2b2d3a;
+    --line-strong: #3d4052;
+    --control-border: #6c6f82;
+    --line-soft: #595c6e;
 
-    --disabled-bg: #22201d;
-    --disabled-ink: #857d73;
-    --disabled-border: #332f2a;
+    --disabled-bg: #15161c;
+    --disabled-ink: #6d7080;
+    --disabled-border: #252733;
 
-    --success: #63d297;
-    --success-soft: #13271e;
-    --success-border: #24543d;
-    --warning: #f0b85c;
-    --warning-soft: #292012;
-    --warning-border: #5f461d;
-    --danger: #f28b82;
-    --danger-soft: #2d1616;
-    --danger-border: #662c2c;
-    --on-danger: #1d1b19;
-    --info: #7eb9e8;
-    --info-soft: #15222e;
-    --info-border: #294966;
-    --scope-global-bg: #152822;
+    --success: #5cc595;
+    --success-soft: #0f2219;
+    --success-border: #1f4d37;
+    --warning: #f2b84b;
+    --warning-soft: #261d0d;
+    --warning-border: #5a4418;
+    --danger: #f0716a;
+    --danger-soft: #2a1214;
+    --danger-border: #5c2427;
+    --on-danger: #111116;
+    --info: #7cc4f0;
+    --info-soft: #0f1d2a;
+    --info-border: #24435e;
+    --scope-global-bg: #11241d;
     --scope-global-fg: #6cd0a8;
-    --scope-global-bd: #295647;
-    --scope-room-bg: #1b2033;
-    --scope-room-fg: #9cb0f5;
-    --scope-room-bd: #33416b;
-    --scope-public-bg: #25221e;
-    --scope-public-fg: #c4bbb0;
-    --scope-public-bd: #474139;
+    --scope-global-bd: #24503f;
+    --scope-room-bg: #1c1a36;
+    --scope-room-fg: #b3a6ff;
+    --scope-room-bd: #3b3672;
+    --scope-public-bg: #1a1a22;
+    --scope-public-fg: #b4b6c4;
+    --scope-public-bd: #333542;
 
-    --selection-bg: rgb(240 154 94 / 24%);
-    --tap-highlight: rgb(240 154 94 / 18%);
-    --backdrop: rgb(8 7 6 / 68%);
-    --toast-bg: #282420;
-    --toast-ink: #f5f1ea;
-    --on-ink-strong: #151413;
-    --keycap-active-bg: var(--primary-soft);
+    --selection-bg: rgb(184 205 245 / 26%);
+    --tap-highlight: rgb(184 205 245 / 16%);
+    --backdrop: rgb(4 4 6 / 74%);
+    --toast-bg: #18181f;
+    --toast-ink: #f6f6f9;
+    --on-ink-strong: #08080b;
+    --keycap-active-bg: #1b1d26;
 
-    --facet-highlight: inset 0 1px 0 rgb(255 248 240 / 8%);
-    --primary-highlight: inset 0 1px 0 rgb(255 232 214 / 26%);
-    --well-inset: inset 0 1px 3px rgb(0 0 0 / 38%);
+    --facet-highlight: inset 0 1px 0 rgb(255 255 255 / 14%);
+    --well-inset: inset 0 2px 5px rgb(0 0 0 / 62%), inset 0 -1px 0 rgb(255 255 255 / 6%);
     --vial-sheen: linear-gradient(180deg, rgb(255 255 255 / 16%) 0%, rgb(255 255 255 / 0%) 58%);
-    --auth-glow: radial-gradient(ellipse 68% 48% at 50% 0%, rgb(240 154 94 / 10%), transparent 72%);
-    --shadow-raised: 0 1px 2px rgb(0 0 0 / 36%), var(--facet-highlight);
-    --shadow-facet: 0 2px 8px rgb(0 0 0 / 32%), var(--facet-highlight);
-    --shadow-card: 0 18px 40px rgb(0 0 0 / 56%), var(--facet-highlight);
-    --shadow-overlay: 0 20px 44px rgb(0 0 0 / 68%), 0 2px 10px rgb(0 0 0 / 42%), var(--facet-highlight);
-    --glow-danger: 0 4px 18px rgb(242 139 130 / 12%), var(--facet-highlight);
-    --glow-warning: 0 4px 16px rgb(240 184 92 / 10%), var(--facet-highlight);
+    /* 单源顶部冷银月光穹顶 + 极轻右下平衡光（0fps），彻底弃用五层高浓彩虹雾。 */
+    --aura:
+      radial-gradient(ellipse 64% 34% at 54% -10%, rgb(224 234 255 / 10%), transparent 68%),
+      radial-gradient(ellipse 42% 30% at 88% -4%, rgb(148 182 255 / 10%), transparent 72%),
+      radial-gradient(ellipse 36% 28% at 14% 96%, rgb(170 194 245 / 5%), transparent 74%);
+    --aura-auth:
+      radial-gradient(ellipse 58% 42% at 50% 6%, rgb(210 225 255 / 15%), transparent 66%),
+      radial-gradient(ellipse 46% 34% at 22% 88%, rgb(148 182 255 / 8%), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 82% 82%, rgb(255 255 255 / 4%), transparent 70%);
+    --topbar-hairline: linear-gradient(90deg, transparent 4%, rgb(215 228 255 / 22%) 46%, rgb(215 228 255 / 8%) 78%, transparent 96%);
+    --sidebar-hairline: linear-gradient(180deg, rgb(210 226 255 / 0%) 0%, rgb(210 226 255 / 18%) 24%, rgb(210 226 255 / 5%) 68%, transparent 100%);
+
+    /* L1 蓝宝石光学切面卡（实面微梯 + 6.5% 顶部掠光 + 双层深黑投影）。 */
+    --card-gradient: radial-gradient(88% 42% at 50% 0%, rgb(222 232 255 / 6.5%) 0%, transparent 72%), linear-gradient(180deg, #17181f 0%, #111116 58%, #0f0f14 100%);
+    --card-border: rgb(206 220 255 / 10%);
+    --card-shadow: inset 0 1px 0 rgb(255 255 255 / 16%), inset 0 -1px 0 rgb(0 0 0 / 55%), 0 2px 4px rgb(0 0 0 / 60%), 0 18px 38px -16px rgb(0 0 0 / 88%);
+    --card-focus-border: rgb(215 228 255 / 16%);
+    --card-focus-shadow: inset 0 1px 0 rgb(255 255 255 / 22%), inset 0 -1px 0 rgb(0 0 0 / 55%), 0 2px 5px rgb(0 0 0 / 62%), 0 20px 44px -18px rgb(0 0 0 / 90%), 0 0 28px -12px rgb(190 212 255 / 14%);
+    --card-risk-gradient: radial-gradient(85% 48% at 20% 0%, rgb(240 113 106 / 13%) 0%, transparent 70%), linear-gradient(180deg, #1a1417 0%, #121115 62%, #100f13 100%);
+    --card-risk-border: rgb(240 113 106 / 34%);
+    --card-risk-shadow: inset 0 1px 0 rgb(255 182 178 / 26%), inset 0 -1px 0 rgb(0 0 0 / 55%), 0 2px 4px rgb(0 0 0 / 60%), 0 16px 34px -14px rgb(240 113 106 / 26%);
+    --rim: linear-gradient(180deg, rgb(235 242 255 / 32%) 0%, rgb(185 206 250 / 15%) 28%, rgb(185 206 250 / 6%) 68%, rgb(255 255 255 / 4%) 100%);
+    --rim-float: linear-gradient(180deg, rgb(238 244 255 / 42%) 0%, rgb(190 210 250 / 18%) 34%, rgb(255 255 255 / 6%) 100%);
+    --rim-risk: linear-gradient(180deg, rgb(255 160 154 / 58%) 0%, rgb(240 113 106 / 22%) 38%, rgb(240 113 106 / 8%) 100%);
+
+    /* L2 悬浮磨砂玻璃（认证浮卡、确认弹窗）。 */
+    --float-bg: rgb(18 19 25 / 74%);
+    --float-gradient: radial-gradient(95% 45% at 50% 0%, rgb(225 236 255 / 9%) 0%, transparent 68%), linear-gradient(180deg, rgb(255 255 255 / 4%) 0%, transparent 48%);
+    --float-border: rgb(212 226 255 / 15%);
+    --float-blur: blur(26px) saturate(150%);
+    --float-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), inset 0 -1px 0 rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 58%), 0 32px 68px -16px rgb(0 0 0 / 90%), 0 0 36px -14px rgb(190 212 255 / 16%);
+
+    /* 1A 刀锋银刃曜石键：极平深曜石钛面 + 外嵌物理黑缝 + 顶部 1px 刀锋银线 + 纯白高亮字。 */
+    --btn-primary-bg: #1c1e26;
+    --btn-primary-bg-hover: #252836;
+    --btn-primary-bg-active: #14161d;
+    --btn-primary-gradient: linear-gradient(180deg, #242733 0%, #191b23 100%);
+    --btn-primary-gradient-hover: linear-gradient(180deg, #2d3142 0%, #20232f 100%);
+    --btn-primary-border: rgb(225 234 255 / 26%);
+    --btn-primary-border-hover: rgb(232 240 255 / 40%);
+    --btn-primary-ink: #f4f6fc;
+    --btn-primary-shadow: inset 0 1px 0 rgb(255 255 255 / 34%), inset 0 -1px 0 rgb(0 0 0 / 50%), 0 0 0 1px rgb(0 0 0 / 75%), 0 4px 12px -4px rgb(0 0 0 / 75%);
+    --btn-primary-shadow-hover: inset 0 1px 0 rgb(255 255 255 / 44%), inset 0 -1px 0 rgb(0 0 0 / 52%), 0 0 0 1px rgb(0 0 0 / 78%), 0 6px 16px -4px rgb(0 0 0 / 82%);
+
+    /* 次级按钮：极轻透幽灵微边键，与主按钮拉开层次。 */
+    --btn-sec-bg: rgb(255 255 255 / 3%);
+    --btn-sec-bg-hover: rgb(255 255 255 / 7%);
+    --btn-sec-gradient: none;
+    --btn-sec-border: rgb(255 255 255 / 13%);
+    --btn-sec-border-hover: rgb(220 232 255 / 28%);
+    --btn-sec-ink: #c8ccd8;
+    --btn-sec-shadow: inset 0 1px 0 rgb(255 255 255 / 9%), 0 1px 2px rgb(0 0 0 / 35%);
+
+    --field-bg: #0a0a0e;
+    --field-inset: inset 0 2px 4px rgb(0 0 0 / 65%), inset 0 -1px 0 rgb(255 255 255 / 7%);
+    --keycap-sheen: linear-gradient(180deg, rgb(255 255 255 / 12%) 0%, rgb(255 255 255 / 4%) 100%);
+    --keycap-border: rgb(215 228 255 / 18%);
+    --keycap-ink: #f6f7fb;
+    --keycap-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), inset 0 -1px 0 rgb(0 0 0 / 45%), 0 4px 12px -3px rgb(0 0 0 / 70%);
+    --nav-indicator-bg: linear-gradient(180deg, #ffffff 0%, #b8cdf5 100%);
+    --nav-indicator-shadow: 0 0 10px rgb(190 214 255 / 70%);
+    --shadow-raised: 0 1px 2px rgb(0 0 0 / 50%), var(--facet-highlight);
+    --shadow-facet: var(--card-shadow);
+    --shadow-card: var(--float-shadow);
+    --shadow-overlay: 0 28px 60px -12px rgb(0 0 0 / 85%), 0 2px 10px rgb(0 0 0 / 50%), var(--facet-highlight);
+    --glow-danger: 0 6px 22px -6px rgb(240 113 106 / 28%), var(--facet-highlight);
+    --glow-warning: 0 6px 20px -6px rgb(242 184 75 / 22%), var(--facet-highlight);
   }
 }
 
@@ -259,14 +380,14 @@ h2, h3 { margin-top: 0; }
 .skip-link:focus { transform: translateY(0); }
 .icon { flex: 0 0 auto; }
 
-/* 认证页与基础卡片组件：居中浮卡落在暖纸画布上，顶部一层静态微光晕（0fps）；保持不加载后台脚本的安全边界。 */
-body:not(.admin-body) { display: grid; align-content: center; padding: 16px; background-color: var(--page); background-image: var(--auth-glow); background-repeat: no-repeat; }
-.card { width: min(100%, 432px); margin: 0 auto; padding: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-card); }
+/* 认证页与基础卡片组件：居中真玻璃浮卡落在克制环境光晕画布上（0fps）；保持不加载后台脚本的安全边界。 */
+body:not(.admin-body) { display: grid; align-content: center; padding: 16px; background-color: var(--page); background-image: var(--aura-auth); background-repeat: no-repeat; background-attachment: scroll; }
+.card { position: relative; z-index: 1; width: min(100%, 432px); margin: 0 auto; padding: 26px; border: 1px solid var(--float-border); border-radius: 16px; background-color: var(--float-bg); background-image: var(--float-gradient); box-shadow: var(--float-shadow); }
 .card .brand__mark { margin-bottom: 14px; }
 .card h2 { margin-top: 26px; font-size: var(--t-md); }
 .card form + form { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
 .card .page-header { margin-bottom: 20px; }
-.card form > button { justify-self: stretch; margin-top: 4px; }
+.card form > button { justify-self: stretch; min-height: 44px; margin-top: 4px; border-radius: 9px; font-size: 14px; }
 .page-header { margin-bottom: 22px; }
 .page-header h1, .content-header h1 { margin: 0; font-size: var(--t-xl); font-weight: 700; line-height: 1.2; letter-spacing: -.02em; }
 .eyebrow { margin: 0 0 4px; color: var(--muted); font-size: var(--t-xs); font-weight: 650; letter-spacing: .04em; }
@@ -276,20 +397,20 @@ dd { margin: 0; }
 .checkbox { grid-template-columns: auto 1fr; align-items: center; font-weight: 500; }
 .checkbox input, .check-row input, .confirmation-check input { width: 20px; min-height: 20px; }
 
-/* 按钮体系：主动作唯一使用晶陶红填充并带顶边折射高光，次级为浮起键帽，危险操作描边、悬停反色。 */
-button, .button { border: 1px solid var(--primary); border-radius: var(--r-sm); color: var(--on-primary); background: var(--primary); box-shadow: var(--primary-highlight); font-weight: 600; letter-spacing: .01em; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
-button:hover:not(:disabled), .button:hover { border-color: var(--primary-hover); color: var(--on-primary-hover); background: var(--primary-hover); }
-button:active:not(:disabled), .button:active { transform: scale(.985); }
+/* 按钮体系：浅色钢琴黑曜键 / 暗色 1A 刀锋银刃曜石键；次级键置于主按钮之后确保层叠权重正确，危险操作悬停反色。 */
+button, .button { border: 1px solid var(--btn-primary-border); border-radius: var(--r-sm); color: var(--btn-primary-ink); background-color: var(--btn-primary-bg); background-image: var(--btn-primary-gradient); box-shadow: var(--btn-primary-shadow); font-weight: 600; letter-spacing: .015em; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+button:hover:not(:disabled), .button:hover:not(:disabled) { border-color: var(--btn-primary-border-hover); color: var(--btn-primary-ink); background-color: var(--btn-primary-bg-hover); background-image: var(--btn-primary-gradient-hover); box-shadow: var(--btn-primary-shadow-hover); }
+button:active:not(:disabled), .button:active:not(:disabled) { background-color: var(--btn-primary-bg-active); background-image: none; transform: scale(.985); }
 .button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 6px; padding: 9px 15px; border-radius: var(--r-sm); font-weight: 600; text-decoration: none; }
-.button--secondary { border-color: var(--line-strong); color: var(--ink-mid); background: var(--surface); box-shadow: var(--shadow-raised); }
-.button--secondary:hover:not(:disabled) { border-color: var(--line-soft); color: var(--ink-strong); background: var(--surface-well); }
-.button--danger { border-color: var(--danger-border); color: var(--danger); background: var(--surface); box-shadow: var(--shadow-raised); }
-.button--danger:hover:not(:disabled) { border-color: var(--danger); color: var(--on-danger); background: var(--danger); }
+.button.button--secondary, button.button--secondary { border-color: var(--btn-sec-border); color: var(--btn-sec-ink); background-color: var(--btn-sec-bg); background-image: var(--btn-sec-gradient); box-shadow: var(--btn-sec-shadow); font-weight: 500; }
+.button.button--secondary:hover:not(:disabled), button.button--secondary:hover:not(:disabled) { border-color: var(--btn-sec-border-hover); color: var(--ink-strong); background-color: var(--btn-sec-bg-hover); background-image: none; box-shadow: var(--btn-sec-shadow); }
+.button.button--danger, button.button--danger { border-color: var(--danger-border); color: var(--danger); background-color: var(--surface); background-image: none; box-shadow: var(--shadow-raised); }
+.button.button--danger:hover:not(:disabled), button.button--danger:hover:not(:disabled) { border-color: var(--danger); color: var(--on-danger); background-color: var(--danger); background-image: none; }
 
 .clean-list, .room-status-list, .stack-list, .photo-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .record-link:hover { background: var(--surface-sunk); }
 
-/* 业务状态徽章：圆角胶囊 + 清透高对比柔底，绝不冒充可点击的陶红主按钮。 */
+/* 业务状态徽章：圆角胶囊 + 清透高对比柔底，绝不冒充可点击的主按钮。 */
 .badge { display: inline-flex; min-height: 24px; align-items: center; padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-soft); background: var(--surface-well); font-size: var(--t-xs); font-weight: 600; line-height: 1.45; white-space: nowrap; }
 .badge--success { border-color: var(--success-border); color: var(--success); background: var(--success-soft); }
 .badge--warning, .badge--gold { border-color: var(--warning-border); color: var(--warning); background: var(--warning-soft); }
@@ -373,7 +494,7 @@ button:active:not(:disabled), .button:active { transform: scale(.985); }
 .config-check-list { display: grid; gap: 5px; margin: 0; padding-left: 20px; color: var(--muted); }
 .config-check-list li span { color: var(--text); }
 
-/* 内层卡片在父面板内改用暖沉降面，避免双层白框抹平层级。 */
+/* 内层卡片在父面板内改用沉降面，避免双层白框抹平层级。 */
 .candidate-card, .entry-card, .message-item, .list-card { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .panel .candidate-card, .panel .entry-card, .panel .message-item, .panel .list-card { background: var(--surface-sunk); }
 .candidate-card { display: flex; flex-direction: column; gap: 10px; }
@@ -395,7 +516,7 @@ button:active:not(:disabled), .button:active { transform: scale(.985); }
 .record-link { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 8px; color: inherit; text-decoration: none; border-radius: var(--r-xs); }
 .record-link small { display: block; margin-top: 3px; color: var(--muted); }
 
-/* 高密度数据表格（E 级清爽表头 + 清晰的暖石细线） */
+/* 高密度数据表格（E 级清爽表头 + 清晰的冷石细线） */
 .responsive-table { display: none; max-width: 100%; overflow-x: auto; }
 .table-scroll { display: block; max-width: 100%; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -482,23 +603,24 @@ tbody tr:last-child td { border-bottom: 0; }
 .room-operation-card__title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
 .room-operation-card__title a { color: var(--ink-strong); text-decoration: none; }
 
-/* 工作台「先处理」重点区：柔陶红细描边 + 柔和行悬停 + 明确房号徽章与主动作。 */
-.workbench-first { margin-bottom: 20px; border-color: var(--primary-border); box-shadow: var(--shadow-facet); }
+/* 工作台「先处理」重点区：高一档刃口描边 + 柔和行悬停 + 明确房号徽章与主动作。 */
+.workbench-first { margin-bottom: 20px; border-color: var(--card-focus-border); box-shadow: var(--card-focus-shadow); }
 .workbench-first .section-heading { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .first-list { gap: 4px; }
 /* 行间分隔线画在 li 底边上，li 不能带圆角，否则分隔线两端会弯成半张卡片的边。 */
 .first-list li { display: grid; min-height: 56px; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding: 11px 12px; margin-inline: -12px; border-bottom: 1px solid var(--line); transition: background-color var(--motion-fast) var(--ease-out); }
 .first-list li:hover { background: var(--surface-sunk); }
 .first-list li:last-child { border-bottom: 0; }
-.first-list__item--urgent { background: var(--danger-soft); }
-.first-list__item--urgent:hover { background: var(--danger-soft); }
+/* 紧急行不铺红底（整行红底叠红字会红色过载），只在左侧画一道发光红条，见文末光学层。 */
+.first-list__item--urgent { position: relative; }
 .first-list__room { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ink-strong); font-weight: 600; text-decoration: none; }
 .first-list__room:hover { color: var(--link); }
 .first-list__room span { color: var(--ink-mid); font-size: var(--t-sm); font-weight: 600; }
 .first-list__why { min-width: 0; color: var(--text); font-size: var(--t-sm); }
 .first-list__why--urgent { color: var(--danger); font-weight: 650; }
-.first-list .button { padding: 6px 14px; min-height: 36px; border-color: var(--primary); color: var(--on-primary); background: var(--primary); box-shadow: var(--primary-highlight); white-space: nowrap; }
-.first-list .button:hover { border-color: var(--primary-hover); color: var(--on-primary-hover); background: var(--primary-hover); }
+.first-list .button:not(:disabled) { padding: 6px 15px; min-height: 36px; border-color: var(--btn-primary-border); color: var(--btn-primary-ink); background-color: var(--btn-primary-bg); background-image: var(--btn-primary-gradient); box-shadow: var(--btn-primary-shadow); font-size: 13px; white-space: nowrap; }
+.first-list .button:hover:not(:disabled) { border-color: var(--btn-primary-border-hover); color: var(--btn-primary-ink); background-color: var(--btn-primary-bg-hover); background-image: var(--btn-primary-gradient-hover); box-shadow: var(--btn-primary-shadow-hover); }
+.first-list .button:active:not(:disabled) { background-color: var(--btn-primary-bg-active); background-image: none; }
 /* 手机端行贴齐卡片内容边；逾期行有淡红底色，补左右内边距，底色才不会紧贴文字。 */
 @media (max-width: 620px) { .first-list li { grid-template-columns: minmax(0, 1fr); margin-inline: 0; padding: 12px 0; } .first-list li.first-list__item--urgent { padding-inline: 10px; } }
 
@@ -511,7 +633,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .operations-overview summary { cursor: pointer; font-weight: 700; }
 .operations-overview[open] summary { margin-bottom: 12px; }
 
-/* 统一后台外壳：压暗侧栏 + 暖石细线 + 暖纸主工作区，形成明度景深。 */
+/* 统一后台外壳：压暗侧栏 + 冷石细线 + 光晕主工作区，形成明度景深。 */
 .admin-shell { min-height: 100vh; }
 .admin-workspace, .metric-item, .panel, .clean-list li, .diagnostics-list dd { min-width: 0; overflow-wrap: anywhere; }
 .drawer-is-open { overflow: hidden; overscroll-behavior: none; }
@@ -622,7 +744,7 @@ h4 { margin: 0 0 6px; color: var(--ink-mid); font-size: var(--t-sm); font-weight
 .readiness-bar::after { position: absolute; inset: 0; border-radius: inherit; background: var(--vial-sheen); content: ""; pointer-events: none; }
 .readiness-bar__seg { min-width: 6px; border-radius: 999px; background: var(--line-strong); }
 .readiness-bar__seg--ready { background: var(--success); }
-/* 已入住只是本系统准备记录，与房态徽章一样用中性色；陶红只留给可操作元素。 */
+/* 已入住只是本系统准备记录，与房态徽章一样用中性色；强调色只留给可操作元素。 */
 .readiness-bar__seg--occupied { background: var(--muted); }
 .readiness-bar__seg--cleaning, .readiness-bar__seg--pending_inspection { background: var(--warning); }
 .readiness-bar__seg--maintenance { background: var(--danger); }
@@ -719,8 +841,9 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
 @media (min-width: 768px) {
   body:not(.admin-body) { padding: 28px; }
   .card { padding: 30px; }
-  button, input, select { min-height: 38px; padding-block: 7px; font-size: 14px; }
-  .button { min-height: 38px; padding-block: 7px; }
+  button, input, select { min-height: 36px; padding-block: 6px; font-size: 14px; }
+  .button { min-height: 36px; padding: 6px 15px; font-size: 13.5px; }
+  .card form > button { min-height: 42px; font-size: 14px; }
   .tag-grid, .compare-grid, .decision-grid, .stay-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .panel, .panel--padded { padding: 22px; }
   .page-content { padding: 22px 22px 48px; }
@@ -925,8 +1048,9 @@ a.cal__bar:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
 .cal__trip-list a { display: inline-flex; align-items: center; min-height: 44px; }
 .room-operation-card .room-next-action:not(.room-next-action--urgent) { background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 14px 0 0; }
 .room-operation-card .room-next-action strong { font-size: 13.5px; line-height: 1.6; color: var(--ink-strong); }
-.room-operation-card .room-next-action .button { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-size: 13px; }
-.room-operation-card .room-next-action .button:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: var(--on-primary-hover); }
+.room-operation-card .room-next-action .button:not(:disabled) { background-color: var(--btn-primary-bg); background-image: var(--btn-primary-gradient); border-color: var(--btn-primary-border); color: var(--btn-primary-ink); box-shadow: var(--btn-primary-shadow); font-size: 13px; }
+.room-operation-card .room-next-action .button:hover:not(:disabled) { background-color: var(--btn-primary-bg-hover); background-image: var(--btn-primary-gradient-hover); box-shadow: var(--btn-primary-shadow-hover); border-color: var(--btn-primary-border-hover); color: var(--btn-primary-ink); }
+.room-operation-card .room-next-action .button:active:not(:disabled) { background-color: var(--btn-primary-bg-active); background-image: none; }
 .room-operation-card__aux .field-help { font-size: 12px; }
 
 /* 手机版式时间轴（Spec 2026-09-16）：不分段，迷你占用轨 + 整卡点击订单项。 */
@@ -976,21 +1100,21 @@ span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
 /* 不支持 color-mix() 的旧浏览器（Safari 15.4–16.1）：按 sRGB 线性插值预算的浅/暗两组静态值，单测按同一公式核对。 */
 @supports not (color: color-mix(in srgb, red 50%, blue)) {
   .cal {
-    --cal-future-line: #f0d0c8;
-    --cal-current-bg: #f6e3de;
-    --cal-current-line: #e5b0a2;
-    --cal-current-ink: #6f2e1c;
-    --cal-overlap-stripe: #c9ae8e;
-    --cal-warn-line: #dbc9b4;
+    --cal-future-line: #c5c6c7;
+    --cal-current-bg: #dcdcdd;
+    --cal-current-line: #9e9ea1;
+    --cal-current-ink: #15161a;
+    --cal-overlap-stripe: #caae8f;
+    --cal-warn-line: #dcc9b4;
   }
   @media (prefers-color-scheme: dark) {
     .cal {
-      --cal-future-line: #442419;
-      --cal-current-bg: #342119;
-      --cal-current-line: #5e2b19;
-      --cal-current-ink: #d69881;
-      --cal-overlap-stripe: #7c6237;
-      --cal-warn-line: #5c4a2d;
+      --cal-future-line: #222631;
+      --cal-current-bg: #1b1d26;
+      --cal-current-line: #2d3343;
+      --cal-current-ink: #a4acbe;
+      --cal-overlap-stripe: #765c2e;
+      --cal-warn-line: #544326;
     }
   }
 }
@@ -1077,3 +1201,164 @@ span.cal-m__hit .cal-m__name { color: var(--ink-soft); }
   .kb-room-directory { position: sticky; top: calc(var(--topbar-height) + 18px); flex-direction: column; max-height: calc(100vh - var(--topbar-height) - 28px); max-height: calc(100dvh - var(--topbar-height) - 28px); overflow-y: auto; }
   .kb-room-link { flex: none; white-space: normal; }
 }
+
+/* ── 光学材质层（1.79.0 象牙瓷白 × 曜黑银刃 A2-Pro + 1A）：L0 外壳 / L1 实面切面卡 / L2 真玻璃浮层，0fps 静态层。──
+   放在文件末尾，覆盖前面桌面媒体查询里 .topbar / .admin-sidebar 的 background 简写，同时显式保留语义变体的更高优先级。 */
+
+/* L0 画布与外壳：克制单源环境光晕（scroll 避免滚动重绘），暗色叠加同源静态微噪点防色带；外壳 z-index: 1 确保噪点不压内容。 */
+body.admin-body { background-color: var(--page); background-image: var(--aura); background-repeat: no-repeat; background-attachment: scroll; }
+.admin-shell { position: relative; z-index: 1; isolation: isolate; }
+@media (prefers-color-scheme: dark) {
+  body::after {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background-image: url("/static/noise.png");
+    background-repeat: repeat;
+    opacity: .028;
+    mix-blend-mode: overlay;
+    content: "";
+    pointer-events: none;
+  }
+}
+
+/* L0 顶栏与侧栏：不透明哑光实色（守卫 test_topbar_background_is_opaque）+ 暗色微光发线。 */
+.topbar {
+  background-color: var(--topbar-bg);
+  background-image: var(--topbar-hairline);
+  background-position: left bottom;
+  background-size: 100% 1px;
+  background-repeat: no-repeat;
+}
+.admin-sidebar {
+  background-color: var(--sidebar-bg);
+  background-image: var(--sidebar-hairline);
+  background-position: right top;
+  background-size: 1px 100%;
+  background-repeat: no-repeat;
+}
+
+/* L1 内容卡片：浅色瓷釉微梯 / 暗色蓝宝石光学切面（彻底关闭每卡 backdrop-filter，稳 60fps 且无 fixed 包含块隐患）。 */
+:where(.panel, .metric-item, .room-operation-card) { position: relative; }
+.panel, .metric-item, .room-operation-card {
+  border-color: var(--card-border);
+  background-color: var(--surface);
+  background-image: var(--card-gradient);
+  box-shadow: var(--card-shadow);
+}
+/* 重点卡、风险卡与危险面板放在通用 L1 规则之后，确保语义描边与外发光不被覆盖。 */
+.workbench-first { border-color: var(--card-focus-border); box-shadow: var(--card-focus-shadow); }
+.danger-panel { border-color: var(--danger-border); }
+.metric-item--risk {
+  border-color: var(--card-risk-border);
+  background-color: var(--surface);
+  background-image: var(--card-risk-gradient);
+  box-shadow: var(--card-risk-shadow);
+}
+.metric-item--risk:hover { border-color: var(--danger); }
+
+/* L2 悬浮真玻璃：仅真正悬浮的认证浮卡、确认弹窗与轻提示启用 backdrop-filter。 */
+.card, .confirm-dialog {
+  border-color: var(--float-border);
+  background-color: var(--float-bg);
+  background-image: var(--float-gradient);
+  box-shadow: var(--float-shadow);
+  -webkit-backdrop-filter: var(--float-blur);
+  backdrop-filter: var(--float-blur);
+}
+.toast-region { -webkit-backdrop-filter: blur(18px) saturate(140%); backdrop-filter: blur(18px) saturate(140%); }
+
+/* 菲涅尔顶光锐边：整段包裹在 @supports 内，旧浏览器不支持遮罩合成时自然退回实体 border，绝不遮盖整卡正文。
+   分拆 mask-image / mask-clip / mask-composite，避免标准 mask 简写在不同引擎间的解析分歧。 */
+@supports ((mask-composite: exclude) or (-webkit-mask-composite: xor)) {
+  .panel::before, .metric-item::before, .card::before, .room-operation-card::before, .confirm-dialog::before {
+    position: absolute;
+    inset: -1px;
+    padding: 1px;
+    border-radius: inherit;
+    background: var(--rim);
+    content: "";
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    -webkit-mask-clip: content-box, border-box;
+    -webkit-mask-composite: xor;
+    mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    mask-clip: content-box, border-box;
+    mask-composite: exclude;
+  }
+  .card::before, .confirm-dialog::before { background: var(--rim-float); }
+  .metric-item--risk::before { background: var(--rim-risk); }
+}
+
+/* 内嵌子表面统一沉降阶梯：表头、内嵌卡、动线分栏、事件块、筛选条与空状态保持统一微凹质感。 */
+.panel .candidate-card, .panel .entry-card, .panel .message-item, .panel .list-card,
+.room-event, .stay-pane, .filter-toolbar, .empty-state, .filter-disclosure > summary {
+  background-color: var(--surface-sunk);
+  box-shadow: var(--well-inset);
+}
+th { background-color: var(--surface-sunk); }
+
+/* 输入框与下拉框：保留 var(--control-border) >= 3:1 识别边框 + 内凹槽；单层干净聚焦环，鼠标点击不叠双框。 */
+input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not(:disabled),
+select:not(:disabled), textarea:not(:disabled) {
+  background-color: var(--field-bg);
+  box-shadow: var(--field-inset);
+}
+input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not(:disabled):focus,
+select:not(:disabled):focus, textarea:not(:disabled):focus {
+  border-color: var(--focus);
+  box-shadow: var(--field-inset), 0 0 0 3px var(--focus-ring);
+}
+input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):focus:not(:focus-visible),
+select:focus:not(:focus-visible), textarea:focus:not(:focus-visible) { outline: none; }
+
+/* 页签槽与侧栏当前项：深陷槽 + 浮起金属键帽 + 克制冷银指示条。 */
+.tab-nav a[aria-current="page"], .side-nav a[aria-current="page"] {
+  border-color: var(--keycap-border);
+  color: var(--keycap-ink);
+  background-color: var(--keycap-active-bg);
+  background-image: var(--keycap-sheen);
+  box-shadow: var(--keycap-shadow);
+}
+.side-nav a[aria-current="page"]::before {
+  width: 2.5px;
+  background: var(--nav-indicator-bg);
+  box-shadow: var(--nav-indicator-shadow);
+}
+.side-nav a[aria-current="page"] .icon { color: var(--keycap-ink); }
+
+/* 品牌标、顶栏账号与表格操作键：同步主/次键精工质感。 */
+.brand__mark {
+  border: 1px solid var(--btn-primary-border);
+  color: var(--btn-primary-ink);
+  background-color: var(--btn-primary-bg);
+  background-image: var(--btn-primary-gradient);
+  box-shadow: var(--btn-primary-shadow);
+}
+.table-action, .topbar__account {
+  border-color: var(--btn-sec-border);
+  color: var(--btn-sec-ink);
+  background-color: var(--btn-sec-bg);
+  background-image: var(--btn-sec-gradient);
+  box-shadow: var(--btn-sec-shadow);
+}
+.table-action:hover, .topbar__account:hover {
+  border-color: var(--btn-sec-border-hover);
+  color: var(--ink-strong);
+  background-color: var(--btn-sec-bg-hover);
+  background-image: none;
+}
+
+/* 状态光：浅色用柔底光圈，暗色用各自语义色微辉（绝不借用主操作色）。 */
+.status-dot--ready { box-shadow: 0 0 0 3px var(--success-soft); }
+.status-dot--cleaning, .status-dot--pending_inspection { box-shadow: 0 0 0 3px var(--warning-soft); }
+.status-dot--maintenance { box-shadow: 0 0 0 3px var(--danger-soft); }
+@media (prefers-color-scheme: dark) {
+  .status-dot--ready, .readiness-bar__seg--ready { box-shadow: 0 0 8px var(--success); }
+  .status-dot--cleaning, .status-dot--pending_inspection, .readiness-bar__seg--cleaning, .readiness-bar__seg--pending_inspection { box-shadow: 0 0 8px var(--warning); }
+  .status-dot--maintenance, .readiness-bar__seg--maintenance { box-shadow: 0 0 8px var(--danger); }
+  .metric-item--risk strong { text-shadow: 0 0 16px rgb(240 113 106 / 38%); }
+}
+
+/* 紧急行：左侧 2px 发光红条，红色只留在条和原因文字上，避免红底过载。 */
+.first-list__item--urgent::before { position: absolute; top: 10px; bottom: 10px; left: 0; width: 2px; border-radius: 999px; background: var(--danger); box-shadow: 0 0 10px var(--danger); content: ""; }

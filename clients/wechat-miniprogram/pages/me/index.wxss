@@ -1,4 +1,4 @@
-/* 我的：顶部问候与账号状态 + 细描边切面菜单卡，行间以暖石细线分隔；行首图标继承行的前景强调色。 */
+/* 我的：顶部问候与账号状态 + 细描边切面菜单卡，行间以细线分隔；行首图标继承行的前景强调色。 */
 .account { display: flex; align-items: center; gap: 24rpx; padding: 16rpx 0 40rpx; }
 .account__action { margin: -8rpx 0 40rpx; }
 .account__avatar {
