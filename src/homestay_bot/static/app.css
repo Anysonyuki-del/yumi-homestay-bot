@@ -821,8 +821,7 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .topbar__sep { color: var(--line-soft); }
 .topbar__actions { display: inline-flex; flex: none; align-items: center; gap: 8px; }
 .topbar__account, .appearance-toggle { display: inline-flex; min-height: 36px; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-sunk); color: var(--ink-mid); font-size: var(--t-sm); font-weight: 600; text-decoration: none; white-space: nowrap; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
-.topbar__account:hover, .appearance-toggle:hover { border-color: var(--line-strong); color: var(--ink-strong); background: var(--surface-well); }
-.appearance-toggle:active { transform: scale(.97); }
+.topbar__account:hover { border-color: var(--line-strong); color: var(--ink-strong); background: var(--surface-well); }
 .appearance-icon { display: inline-flex; align-items: center; justify-content: center; }
 .appearance-icon[hidden] { display: none; }
 .topbar__account span, .topbar__theme-label { display: none; }
@@ -1509,12 +1508,23 @@ select:focus:not(:focus-visible), textarea:focus:not(:focus-visible) { outline: 
   background-image: var(--btn-sec-gradient);
   box-shadow: var(--btn-sec-shadow);
 }
-.table-action:hover, .topbar__account:hover, .appearance-toggle:hover {
+.table-action:hover, .topbar__account:hover {
   border-color: var(--btn-sec-border-hover);
   color: var(--ink-strong);
   background-color: var(--btn-sec-bg-hover);
   background-image: none;
 }
+/* 外观切换键是 <button>：基础规则 button:hover/active:not(:disabled) 特异度 (0,2,1) 高于单类伪类 (0,2,0)，
+   会把它刷成主按钮黑键（且背景图不参与过渡，浅色悬停瞬间深字压深底）。这里用 button.appearance-toggle
+   前缀 (0,3,1) 压回与账号胶囊一致的幽灵悬停；按下态同样回退，键盘空格按下（无 :hover）也不会变黑键。 */
+button.appearance-toggle:hover:not(:disabled), button.appearance-toggle:active:not(:disabled) {
+  border-color: var(--btn-sec-border-hover);
+  color: var(--ink-strong);
+  background-color: var(--btn-sec-bg-hover);
+  background-image: none;
+  box-shadow: var(--btn-sec-shadow);
+}
+button.appearance-toggle:active:not(:disabled) { transform: scale(.97); }
 
 /* 状态光：浅色用柔底光圈，暗色用各自语义色微辉（绝不借用主操作色）。 */
 .status-dot--ready { box-shadow: 0 0 0 3px var(--success-soft); }

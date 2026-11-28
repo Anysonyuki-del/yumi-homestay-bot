@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-05T09:00:05Z",
-  "updated_at": "2026-11-28T00:11:05Z",
+  "updated_at": "2026-11-28T14:26:31Z",
   "files": {
     ".codex/hooks.json": {
       "role": "index",
@@ -125,9 +125,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "bb0979ab9e2fbee27d9fdeb96b794d3054616d9ddb6abcd39d1c5074dcdac224",
-      "size": 417737,
-      "normalized_sha256": "bb0979ab9e2fbee27d9fdeb96b794d3054616d9ddb6abcd39d1c5074dcdac224"
+      "sha256": "535231de7dac2f843569a545747930c9bc06f230cabe6aef7ebf789b163f555c",
+      "size": 419189,
+      "normalized_sha256": "535231de7dac2f843569a545747930c9bc06f230cabe6aef7ebf789b163f555c"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -2892,6 +2892,12 @@
       "size": 14423,
       "normalized_sha256": "af4b8d55d75f21f2b6009f1ebd5614536d8b2ff7ab8b8ebbf89b055cd5c614f1"
     },
+    "docs/reviews/2026-11-28_claude-to-gemini-1.79.0-1.79.1-delivery-review.md": {
+      "role": "index",
+      "sha256": "4e0489dacb4379b48c78cbdbce821b375657206b50dfe90a2716803b0888c7ff",
+      "size": 21780,
+      "normalized_sha256": "4e0489dacb4379b48c78cbdbce821b375657206b50dfe90a2716803b0888c7ff"
+    },
     "docs/reviews/2026-11-28_claude-to-gemini-obsidian-cobalt-glass-delivery-review-handoff.md": {
       "role": "index",
       "sha256": "8f8510100504dcc42eaa75af76706993554eaa203244094dcc167278b3bef0aa",
@@ -2903,6 +2909,12 @@
       "sha256": "233753e891d139cc0a877c0d02409e8d51631d13ecf8e339611c03dcc2aa08aa",
       "size": 18558,
       "normalized_sha256": "233753e891d139cc0a877c0d02409e8d51631d13ecf8e339611c03dcc2aa08aa"
+    },
+    "docs/reviews/2026-11-28_gemini-to-claude-1.79.0-1.79.1-delivery-review-handoff.md": {
+      "role": "index",
+      "sha256": "41e76d642f0970a3067c0d5517df999d7e8fa4ac28d72447c2ef80e8aa552393",
+      "size": 17813,
+      "normalized_sha256": "41e76d642f0970a3067c0d5517df999d7e8fa4ac28d72447c2ef80e8aa552393"
     },
     "docs/reviews/2026-11-28_gemini-to-claude-obsidian-cobalt-glass-delivery-review.md": {
       "role": "index",
@@ -4546,15 +4558,15 @@
     },
     "src/homestay_bot/static/app.css": {
       "role": "index",
-      "sha256": "be8313e56a61b3eb40255f72dca013548368e053ba7d25a0afd4cbab8ce374fc",
-      "size": 109325,
-      "normalized_sha256": "be8313e56a61b3eb40255f72dca013548368e053ba7d25a0afd4cbab8ce374fc"
+      "sha256": "4bd8a4b58b17cce53cb0e7570aa965d9b43a961b3f2c4890e9e3c078cbf30968",
+      "size": 109988,
+      "normalized_sha256": "4bd8a4b58b17cce53cb0e7570aa965d9b43a961b3f2c4890e9e3c078cbf30968"
     },
     "src/homestay_bot/static/theme.js": {
       "role": "index",
-      "sha256": "ee36d5c7293d8a4c2784cbeb835cb2151e8689522111a062bb5f3e90c91f24e5",
-      "size": 5421,
-      "normalized_sha256": "ee36d5c7293d8a4c2784cbeb835cb2151e8689522111a062bb5f3e90c91f24e5"
+      "sha256": "d2079ff073947001e48493af03b666713cc2373531fd49d136c410ec0481517c",
+      "size": 5529,
+      "normalized_sha256": "d2079ff073947001e48493af03b666713cc2373531fd49d136c410ec0481517c"
     },
     "src/homestay_bot/templates/account/detail.html": {
       "role": "index",
@@ -4876,9 +4888,9 @@
     },
     "tests/browser/test_admin_theme.py": {
       "role": "observe",
-      "sha256": "a318be4dce7efe40b49611ad2f4d1b3128fe01094889d791c524e013f6838e6c",
-      "size": 35458,
-      "normalized_sha256": "a318be4dce7efe40b49611ad2f4d1b3128fe01094889d791c524e013f6838e6c"
+      "sha256": "bf7afa89d2c612b0ee9203c4db0fab2617b63cb422464d90e734a3673b505309",
+      "size": 38844,
+      "normalized_sha256": "bf7afa89d2c612b0ee9203c4db0fab2617b63cb422464d90e734a3673b505309"
     },
     "tests/browser/test_approval_late_results.py": {
       "role": "observe",

@@ -120,10 +120,11 @@
     applyAppearance(readPreference());
   });
 
-  // 跟随系统模式下，操作系统明暗变化时同步刷新按钮提示文案。
+  // 操作系统明暗变化时刷新按钮提示文案：手动模式的「下一步」同样取决于系统明暗
+  // （见 nextPreference），只刷新 auto 会让 aria-label / title 指向过期的目标模式。
   if (media) {
     const onSystemChange = () => {
-      if (currentMode === "auto") syncButtons("auto");
+      syncButtons(currentMode);
     };
     if (typeof media.addEventListener === "function") {
       media.addEventListener("change", onSystemChange);

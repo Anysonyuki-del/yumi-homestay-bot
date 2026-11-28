@@ -237,6 +237,84 @@ def test_appearance_toggle_cycles_persists_and_renders_on_first_frame(
         context.close()
 
 
+_SURFACE_JS = """node => {
+  const s = getComputedStyle(node);
+  return [s.backgroundColor, s.backgroundImage, s.color, s.borderColor, s.boxShadow];
+}"""
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_appearance_toggle_hover_and_press_stay_ghost_capsule(theme_site, browser, scheme):  # noqa: F811
+    """外观切换键是 <button>：悬停与鼠标、键盘按下都须同账号胶囊悬停态，不被刷成主按钮黑键。"""
+    # 减少动态让过渡瞬时完成，读到的是最终计算样式而非过渡中间值。
+    context, page, writes = _context(
+        browser, theme_site, color_scheme=scheme, reduced_motion="reduce",
+    )
+    try:
+        origin = theme_site[0]
+        page.goto(origin + "/employee/admin")
+        account = page.locator(".topbar__account")
+        toggle = page.locator(".topbar__theme")
+
+        def ghost_hover():
+            """以当前外观下账号胶囊的悬停态为基准；每次点击切换外观后都要重新取。"""
+            account.hover()
+            surface = account.evaluate(_SURFACE_JS)
+            assert surface[1] == "none"
+            return surface
+
+        expected = ghost_hover()
+        toggle.hover()
+        assert toggle.evaluate(_SURFACE_JS) == expected
+        page.mouse.down()
+        assert toggle.evaluate(_SURFACE_JS) == expected
+        assert toggle.evaluate("node => getComputedStyle(node).transform").startswith(
+            "matrix(0.97,"
+        )
+        page.mouse.up()  # 松开即点击，外观随之切换
+
+        # 键盘空格按下只有 :active 没有 :hover，同样不能落到主按钮按下态。
+        expected = ghost_hover()
+        page.mouse.move(0, 600)
+        toggle.focus()
+        page.keyboard.down("Space")
+        assert toggle.evaluate(_SURFACE_JS) == expected
+        page.keyboard.up("Space")  # 松开即点击，外观再次切换
+
+        expected = ghost_hover()
+        page.goto(origin + "/employee/login")
+        auth_toggle = page.locator(".auth-theme")
+        auth_toggle.hover()
+        assert auth_toggle.evaluate(_SURFACE_JS) == expected
+        assert writes == []
+    finally:
+        context.close()
+
+
+def test_appearance_toggle_hint_tracks_system_change_in_manual_mode(theme_site, browser):  # noqa: F811
+    """手动锁定外观后系统明暗变化，按钮提示必须同步为点击后的真实目标模式。"""
+    context, page, writes = _context(browser, theme_site, color_scheme="light")
+    try:
+        page.goto(theme_site[0] + "/employee/admin")
+        toggle = page.locator("[data-theme-control]")
+        toggle.click()
+        assert toggle.get_attribute("data-appearance-mode") == "dark"
+        assert toggle.get_attribute("aria-label") == "外观：深色，点击切换为浅色"
+
+        # 系统也转为暗色后，深色的下一步变为跟随系统；提示与悬停标题都必须同步。
+        page.emulate_media(color_scheme="dark")
+        page.wait_for_function(
+            "document.querySelector('[data-theme-control]').getAttribute('aria-label')"
+            " === '外观：深色，点击切换为跟随系统'"
+        )
+        assert toggle.get_attribute("title") == "外观：深色，点击切换为跟随系统"
+        toggle.click()
+        assert toggle.get_attribute("data-appearance-mode") == "auto"
+        assert writes == []
+    finally:
+        context.close()
+
+
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_no_javascript_keeps_unified_theme_and_core_pages_usable(theme_site, browser, scheme):  # noqa: F811
     """禁用 JavaScript 时，外观切换按钮隐藏，认证页与任务页仍跟随系统明暗且核心控件可用。"""
