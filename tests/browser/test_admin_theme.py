@@ -174,9 +174,17 @@ def test_appearance_toggle_cycles_persists_and_renders_on_first_frame(
       function observeContent() {
         const heading = document.querySelector('h1');
         if (heading && heading.getBoundingClientRect().height > 0) {
+          const visibleIcons = [...document.querySelectorAll('[data-theme-icon]')]
+            .filter(el => getComputedStyle(el).display !== 'none')
+            .map(el => el.getAttribute('data-theme-icon'));
+          const visibleLabels = [...document.querySelectorAll('[data-theme-label]')]
+            .filter(el => getComputedStyle(el).display !== 'none')
+            .map(el => el.getAttribute('data-theme-label'));
           window.firstContentFrame = {
             background: getComputedStyle(document.body).backgroundColor,
             appearance: document.documentElement.getAttribute('data-appearance'),
+            icons: visibleIcons,
+            labels: visibleLabels,
           };
         } else requestAnimationFrame(observeContent);
       }
@@ -207,13 +215,15 @@ def test_appearance_toggle_cycles_persists_and_renders_on_first_frame(
                 f'meta[name="theme-color"][media="(prefers-color-scheme: {meta_mode})"]'
             ).get_attribute("content") == THEME_COLOR[first_visual]
 
-        # 跳到认证页并刷新后台：首帧即落目标色，绝不先闪系统色。
+        # 跳到认证页并刷新后台：首帧即落目标色且按钮图标/文案由纯 CSS 首帧同步，绝不先闪系统色。
         for target in ("/employee/login", "/employee/admin"):
             page.goto(origin + target)
             page.wait_for_function("window.firstContentFrame !== undefined")
             assert page.evaluate("window.firstContentFrame") == {
                 "background": PAGE_BACKGROUND[first_visual],
                 "appearance": first_mode,
+                "icons": [first_mode],
+                "labels": [first_mode],
             }
             assert page.locator("[data-theme-control]").get_attribute(
                 "data-appearance-mode"
@@ -739,15 +749,21 @@ def test_hallmark_event_duration_fits_available_width(theme_site, browser, tmp_p
 
 
 def test_hallmark_touch_navigation_targets_remain_reachable(theme_site, browser):  # noqa: F811
-    """H03：触屏下导航、页签与账号入口至少 44×44；纯鼠标桌面保持紧凑密度。"""
-    for width in (390, 768):
+    """H03：触屏下导航、页签、切换键与账号入口至少 44×44 且 320px 零溢出；桌面保持紧凑密度。"""
+    for width in (320, 390, 768):
         context, page, writes = _context(browser, theme_site, width=width, has_touch=True)
         try:
             page.goto(theme_site[0] + "/employee/admin")
             assert page.evaluate("matchMedia('(any-pointer: coarse)').matches")
+            assert page.evaluate(
+                "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+            ), width
             account = page.locator(".topbar__account").bounding_box()
             assert account["height"] >= _MIN_TARGET and account["width"] >= _MIN_TARGET, (
                 width, account)
+            theme_toggle = page.locator(".topbar__theme").bounding_box()
+            assert theme_toggle["height"] >= _MIN_TARGET and theme_toggle["width"] >= _MIN_TARGET, (
+                width, theme_toggle)
             tabs = page.locator(".tab-nav a:visible").evaluate_all(
                 "nodes => nodes.map(node => node.getBoundingClientRect().height)")
             assert tabs and min(tabs) >= _MIN_TARGET, (width, tabs)
@@ -768,6 +784,15 @@ def test_hallmark_touch_navigation_targets_remain_reachable(theme_site, browser)
             page.keyboard.press("Escape")
             page.wait_for_function(
                 "document.activeElement === document.querySelector('[data-drawer-open]')")
+            if width == 320:
+                page.goto(theme_site[0] + "/employee/login")
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+                ), width
+                auth_toggle = page.locator(".auth-theme").bounding_box()
+                assert (
+                    auth_toggle["height"] >= _MIN_TARGET and auth_toggle["width"] >= _MIN_TARGET
+                ), (width, auth_toggle)
             assert writes == []
         finally:
             context.close()

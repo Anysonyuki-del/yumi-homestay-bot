@@ -61,7 +61,7 @@
     if (darkMeta) darkMeta.setAttribute("content", THEME_COLOR.dark);
   }
 
-  /** 刷新页面内所有外观切换按钮的图标、文字和无障碍说明。 */
+  /** 刷新页面内所有外观切换按钮的模式属性与无障碍说明（图标与文案由根属性纯 CSS 驱动，首帧即正确）。 */
   function syncButtons(mode) {
     const next = nextPreference(mode);
     const label = LABELS[mode] || LABELS.auto;
@@ -70,11 +70,6 @@
       button.setAttribute("data-appearance-mode", mode);
       button.setAttribute("aria-label", hint);
       button.setAttribute("title", hint);
-      button.querySelectorAll("[data-theme-icon]").forEach((icon) => {
-        icon.hidden = icon.getAttribute("data-theme-icon") !== mode;
-      });
-      const text = button.querySelector("[data-theme-label]");
-      if (text) text.textContent = label;
     });
   }
 

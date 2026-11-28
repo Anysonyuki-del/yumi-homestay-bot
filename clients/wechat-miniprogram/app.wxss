@@ -217,19 +217,19 @@ page {
     --td-success-color-light: #0f2219;
     --td-success-color-light-active: #143021;
 
-    /* 在用组件特化令牌：主按钮同步 1A 刀锋银刃曜石键（深曜石钛底 + 亮银细边 + 纯白字）。 */
+    /* 在用组件特化令牌：主按钮同步 1A 刀锋银刃曜石键（深曜石钛底 + 亮银细边 #586382，对画布 3.35:1 / 对卡片 3.16:1）。 */
     --td-button-primary-color: #f4f6fc;
     --td-button-primary-bg-color: #1f222c;
-    --td-button-primary-border-color: #464e66;
+    --td-button-primary-border-color: #586382;
     --td-button-primary-active-bg-color: #15171f;
-    --td-button-primary-active-border-color: #5d6887;
+    --td-button-primary-active-border-color: #6f7da3;
     --td-button-primary-disabled-color: #6d7080;
     --td-button-primary-disabled-bg: #15161c;
     --td-button-primary-disabled-border-color: #252733;
     --td-button-primary-outline-color: #b8cdf5;
-    --td-button-primary-outline-border-color: #464e66;
+    --td-button-primary-outline-border-color: #586382;
     --td-button-primary-outline-active-bg-color: #171a24;
-    --td-button-primary-outline-active-border-color: #607294;
+    --td-button-primary-outline-active-border-color: #6f7da3;
     --td-button-primary-outline-disabled-color: #6d7080;
     --td-button-primary-text-color: #b8cdf5;
     --td-button-primary-text-active-bg-color: #171a24;

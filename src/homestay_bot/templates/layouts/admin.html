@@ -73,9 +73,11 @@
           <div class="topbar__actions">
             <button class="appearance-toggle topbar__theme" type="button" data-theme-control data-appearance-mode="auto" aria-label="外观：跟随系统，点击切换">
               <span class="appearance-icon" data-theme-icon="auto">{{ icons.icon("monitor", 16) }}</span>
-              <span class="appearance-icon" data-theme-icon="light" hidden>{{ icons.icon("sun", 16) }}</span>
-              <span class="appearance-icon" data-theme-icon="dark" hidden>{{ icons.icon("moon", 16) }}</span>
-              <span class="topbar__theme-label" data-theme-label>跟随系统</span>
+              <span class="appearance-icon" data-theme-icon="light">{{ icons.icon("sun", 16) }}</span>
+              <span class="appearance-icon" data-theme-icon="dark">{{ icons.icon("moon", 16) }}</span>
+              <span class="topbar__theme-label" data-theme-label="auto">跟随系统</span>
+              <span class="topbar__theme-label" data-theme-label="light">浅色</span>
+              <span class="topbar__theme-label" data-theme-label="dark">深色</span>
             </button>
             <a class="topbar__account" href="/employee/account" aria-label="账号安全">{{ icons.icon("user", 17) }}<span>账号安全</span></a>
           </div>

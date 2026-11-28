@@ -823,8 +823,15 @@ html:not(.js-enabled) .topbar { grid-template-columns: 1fr auto; }
 .topbar__account, .appearance-toggle { display: inline-flex; min-height: 36px; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-sunk); color: var(--ink-mid); font-size: var(--t-sm); font-weight: 600; text-decoration: none; white-space: nowrap; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
 .topbar__account:hover { border-color: var(--line-strong); color: var(--ink-strong); background: var(--surface-well); }
 .appearance-icon { display: inline-flex; align-items: center; justify-content: center; }
-.appearance-icon[hidden] { display: none; }
-.topbar__account span, .topbar__theme-label { display: none; }
+/* 外观切换键图标与文案由 <html data-appearance> 纯 CSS 驱动，DOMContentLoaded 前的渐进首帧也不会闪回「跟随系统」。 */
+.appearance-toggle [data-theme-icon], .appearance-toggle [data-theme-label] { display: none; }
+:root:not([data-appearance]) .appearance-toggle [data-theme-icon="auto"],
+:root[data-appearance="light"] .appearance-toggle [data-theme-icon="light"],
+:root[data-appearance="dark"] .appearance-toggle [data-theme-icon="dark"] { display: inline-flex; }
+:root:not([data-appearance]) .auth-theme [data-theme-label="auto"],
+:root[data-appearance="light"] .auth-theme [data-theme-label="light"],
+:root[data-appearance="dark"] .auth-theme [data-theme-label="dark"] { display: inline; }
+.topbar__account span { display: none; }
 
 /* 触屏设备上导航、页签、外观切换与账号入口至少 44×44（Hallmark H03）；纯鼠标桌面保持紧凑密度。 */
 @media (any-pointer: coarse) {
@@ -995,7 +1002,10 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   .panel, .panel--padded { padding: 22px; }
   .page-content { padding: 22px 22px 48px; }
   .topbar { padding-inline: 22px; }
-  .topbar__account span, .topbar__theme-label { display: inline; }
+  .topbar__account span { display: inline; }
+  :root:not([data-appearance]) .topbar__theme [data-theme-label="auto"],
+  :root[data-appearance="light"] .topbar__theme [data-theme-label="light"],
+  :root[data-appearance="dark"] .topbar__theme [data-theme-label="dark"] { display: inline; }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
   .metric-item { min-height: 112px; grid-template-areas: "label" "value" "meta" "action"; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 16px 18px; }
   .metric-item > strong { align-self: start; font-size: var(--t-2xl); }
@@ -1060,7 +1070,7 @@ button.is-submitting::before { width: 12px; height: 12px; flex: 0 0 auto; border
   .card { padding: 20px; }
   form > button { width: 100%; }
   .pagination { justify-content: center; }
-  .topbar__account span, .topbar__theme-label { display: none; }
+  .topbar__account span { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

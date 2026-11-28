@@ -121,7 +121,7 @@ def test_admin_css_declares_dual_scheme_once_and_avoids_blanket_rules() -> None:
 
 
 def test_manual_and_system_dark_blocks_stay_in_sync() -> None:
-    """手动深色块与系统暗色块的自定义属性和日历回退必须 100% 同步，防止改一漏一。"""
+    """手动深色块与系统暗色块的令牌、日历回退、微噪点与状态光必须 100% 同步，防止改一漏一。"""
     css = (ASSET_ROOT / "static/app.css").read_text()
     prop_pattern = r"(--[\w-]+):\s*([^;]+);"
     system_props = {
@@ -137,6 +137,37 @@ def test_manual_and_system_dark_blocks_stay_in_sync() -> None:
 
     _, _, system_cal_dark, manual_cal_dark = _calendar_fallbacks_all(css)
     assert manual_cal_dark == system_cal_dark, "手动深色与系统暗色的日历回退色不一致"
+
+    # 校验 body::after 微噪点双路暗色块 100% 一致。
+    sys_noise = re.search(
+        r'@media \(prefers-color-scheme: dark\) \{\s*'
+        r':root:not\(\[data-appearance="light"\]\) body::after \{([^}]*)\}\s*\}',
+        css,
+        re.S,
+    )
+    man_noise = re.search(r':root\[data-appearance="dark"\] body::after \{([^}]*)\}', css, re.S)
+    assert sys_noise and man_noise, "缺少双路暗色 body::after 微噪点规则"
+    assert " ".join(sys_noise.group(1).split()) == " ".join(man_noise.group(1).split())
+
+    # 校验状态点光晕与风险大数字微辉双路暗色块 100% 一致。
+    sys_glow = re.search(
+        r'@media \(prefers-color-scheme: dark\) \{\s*'
+        r'(:root:not\(\[data-appearance="light"\]\) \.status-dot--ready.*?)\n\}',
+        css,
+        re.S,
+    )
+    man_glow = re.search(
+        r'(:root\[data-appearance="dark"\] \.status-dot--ready.*?'
+        r'\.metric-item--risk strong \{[^}]*\})',
+        css,
+        re.S,
+    )
+    assert sys_glow and man_glow, "缺少双路暗色状态光晕规则"
+    norm_sys = " ".join(
+        sys_glow.group(1).replace(':root:not([data-appearance="light"])', "").split()
+    )
+    norm_man = " ".join(man_glow.group(1).replace(':root[data-appearance="dark"]', "").split())
+    assert norm_sys == norm_man, "手动深色与系统暗色的状态光晕规则不一致"
 
 
 def test_action_fill_tokens_never_paint_foreground() -> None:

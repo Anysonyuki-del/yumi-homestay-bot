@@ -268,6 +268,6 @@ components:
 ### 微信小程序住客自助端统一规范
 - `app.json` 开启 `"darkmode": true` 与 `"themeLocation": "theme.json"`；窗口、标签栏颜色与 6 处图标路径全部引用 `theme.json` 变量。浅色：导航与页面 `#f5f4f0`、标签栏底 `#ffffff`、未选 `#5a5e6a`、选中 `#18191f`；暗色：`#08080b`、标签栏底 `#050507`、未选 `#9093a3`、选中 `#b8cdf5`。
 - 标签栏图标 12 枚（81×81）：按 Alpha 通道重新填色，浅色 `#5a5e6a` / `#18191f`，暗色 `*-dark.png` 为 `#9093a3` / `#b8cdf5`，与 `theme.json` 同色、轮廓逐像素一致（由 `tests/miniprogram/content.test.js` 核对）。
-- `app.wxss` 浅色块对齐 Web 令牌并保留 `--yumi-facet-highlight`、`--yumi-well-inset`、`--yumi-shadow-card` 与克制顶部单源光晕 `--yumi-aura`；暗色块覆写全部 `--yumi-*` 与 TDesign 1.17.0 暗色语义基座（背景、文字、灰阶、描边遮罩、品牌与状态色阶）及在用组件令牌（主按钮同步 1A 深曜石钛底 `#1f222c` + 亮银细边 `#464e66` + `#f4f6fc` 纯白字）。
+- `app.wxss` 浅色块对齐 Web 令牌并保留 `--yumi-facet-highlight`、`--yumi-well-inset`、`--yumi-shadow-card` 与克制顶部单源光晕 `--yumi-aura`；暗色块覆写全部 `--yumi-*` 与 TDesign 1.17.0 暗色语义基座（背景、文字、灰阶、描边遮罩、品牌与状态色阶）及在用组件令牌（主按钮同步 1A 深曜石钛底 `#1f222c` + 亮银细边 `#586382` + `#f4f6fc` 纯白字，描边对暗色画布对比度 3.35:1）。
 - `--yumi-primary` 只作填充；图标与强调文字用 `--yumi-primary-deep`（暗色冷银蓝）。WXML 不写颜色：`t-icon` 不传 `color`，由父容器 `color` 继承，行尾箭头用 `t-class="yumi-chevron"` 压成弱化色。
 - 所有「问管家」入口严格保留原生 `<button open-type="contact">`，不改为 JS 调起或拨号兜底；不显示价格、房态或评分。
